@@ -13,6 +13,8 @@ class ImageRequestPolicyTest {
     fun paidImageRequestsUseLongNonReplayingClient() {
         val client = OkHttpClient.Builder().applyImageRequestPolicy().build()
 
+        assertEquals(90L, IMAGE_READ_TIMEOUT_MINUTES)
+        assertEquals(20L, IMAGE_WRITE_TIMEOUT_MINUTES)
         assertEquals(TimeUnit.MINUTES.toMillis(IMAGE_READ_TIMEOUT_MINUTES).toInt(), client.readTimeoutMillis)
         assertEquals(TimeUnit.MINUTES.toMillis(IMAGE_WRITE_TIMEOUT_MINUTES).toInt(), client.writeTimeoutMillis)
         assertEquals(0, client.callTimeoutMillis)
@@ -31,10 +33,21 @@ class ImageRequestPolicyTest {
     fun mangaAnalysisUsesLongNonReplayingMultimodalClient() {
         val client = OkHttpClient.Builder().applyMangaAnalysisRequestPolicy().build()
 
+        assertEquals(45L, MANGA_ANALYSIS_READ_TIMEOUT_MINUTES)
+        assertEquals(10L, MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES)
         assertEquals(TimeUnit.MINUTES.toMillis(MANGA_ANALYSIS_READ_TIMEOUT_MINUTES).toInt(), client.readTimeoutMillis)
         assertEquals(TimeUnit.MINUTES.toMillis(MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES).toInt(), client.writeTimeoutMillis)
         assertEquals(0, client.callTimeoutMillis)
         assertFalse(client.retryOnConnectionFailure)
         assertEquals(listOf(Protocol.HTTP_1_1), client.protocols)
+    }
+
+    @Test
+    fun longTaskDispatcherAllowsTwelveIndependentRequests() {
+        val dispatcher = longTaskDispatcher()
+
+        assertEquals(12, MAX_CONCURRENT_IMAGE_TASKS)
+        assertEquals(MAX_CONCURRENT_IMAGE_TASKS, dispatcher.maxRequests)
+        assertEquals(MAX_CONCURRENT_IMAGE_TASKS, dispatcher.maxRequestsPerHost)
     }
 }

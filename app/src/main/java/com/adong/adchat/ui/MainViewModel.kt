@@ -11,12 +11,15 @@ import androidx.lifecycle.viewModelScope
 import com.adong.adchat.data.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -27,6 +30,16 @@ import org.json.JSONObject
 enum class ConnectionPhase { Idle, Testing, Success, Error }
 enum class ImageGenerationPhase { Idle, AnalyzingManga, UploadingReference, Rendering, Saving }
 enum class ImageWorkflow { Standard, MangaTranslation }
+
+data class ImageTaskUiState(
+    val id: String,
+    val startedAt: Long,
+    val phase: ImageGenerationPhase,
+    val mangaTranslation: Boolean,
+    val referenceCount: Int,
+    val completed: Int = 0,
+    val total: Int = 0
+)
 
 data class ConnectionUiState(
     val phase: ConnectionPhase = ConnectionPhase.Idle,
@@ -43,7 +56,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val chatSessionStore = ChatSessionStore(application)
     private val artworkStore = ArtworkStore(application)
     private val conversationSaveMutex = Mutex()
+    private val artworkSaveMutex = Mutex()
     private var conversationSaveRevision = 0L
+    private var artworkSaveRevision = 0L
     @Volatile private var pendingStreamRecoveryClearId: Long? = null
     private val chatDrafts = linkedMapOf<String, String>()
     private var lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
@@ -118,20 +133,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var chatJob: Job? = null
     private var chatStopRequested = false
-    var isImageLoading by mutableStateOf(false)
-        private set
-    var imageGenerationPhase by mutableStateOf(ImageGenerationPhase.Idle)
-        private set
-    var imageGenerationStartedAt by mutableLongStateOf(0L)
-        private set
-    var imageBatchCompleted by mutableIntStateOf(0)
-        private set
-    var imageBatchTotal by mutableIntStateOf(0)
-        private set
-    private var imageJob: Job? = null
-    private var imageStopRequested = false
-    private var mangaRetryPlan: MangaTranslationRetryPlan? = null
-    private var mangaAnalysisCache: MangaAnalysisCache? = null
+    private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
+    private val imageTaskJobs = linkedMapOf<String, Job>()
+    private val manuallyStoppedImageTasks = hashSetOf<String>()
+    private val imageRequestSlots = Semaphore(MAX_CONCURRENT_IMAGE_TASKS)
+    private val mangaRetryPlans = linkedMapOf<String, MangaTranslationRetryPlan>()
+    private val mangaAnalysisCache = linkedMapOf<String, MangaTranslationAnalysis>()
+    private val activeImageSignatures = hashSetOf<String>()
+    private val latestImageTask: ImageTaskUiState?
+        get() = imageTaskStates.values.maxByOrNull(ImageTaskUiState::startedAt)
+    val isImageLoading: Boolean get() = imageTaskStates.isNotEmpty()
+    val activeImageTaskCount: Int get() = imageTaskStates.size
+    val maxConcurrentImageTasks: Int get() = MAX_CONCURRENT_IMAGE_TASKS
+    val canStartImageTask: Boolean get() = activeImageTaskCount < MAX_CONCURRENT_IMAGE_TASKS
+    val imageGenerationPhase: ImageGenerationPhase get() = latestImageTask?.phase ?: ImageGenerationPhase.Idle
+    val imageGenerationStartedAt: Long get() = latestImageTask?.startedAt ?: 0L
+    val imageBatchCompleted: Int get() = latestImageTask?.completed ?: 0
+    val imageBatchTotal: Int get() = latestImageTask?.total ?: 0
+    val activeImageTaskIsManga: Boolean get() = latestImageTask?.mangaTranslation == true
+    val activeImageTaskReferenceCount: Int get() = latestImageTask?.referenceCount ?: 0
     var imageError by mutableStateOf<String?>(null)
         private set
     var notice by mutableStateOf<String?>(null)
@@ -229,10 +249,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             notice = "当前对话正在使用此 API，请等待生成完成后再删除"
             return
         }
-        if (isImageLoading && (imageProfile.id == profileId || mangaAnalysisProfile.id == profileId)) {
-            notice = "当前漫画或绘图任务正在使用此 API，请等待任务完成后再删除"
-            return
-        }
         val affectedConversationIds = conversations
             .filter { conversation ->
                 resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId).profileId == profileId
@@ -289,7 +305,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectMangaAnalysisModel(profileId: String, model: String) {
-        if (isImageLoading) { notice = "请等待当前图片任务完成后再切换辅助模型"; return }
         val profile = profiles.firstOrNull { it.id == profileId } ?: return
         val selectedModel = model.trim()
         if (selectedModel.isBlank()) return
@@ -758,7 +773,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun generateImage() {
         val prompt = drawPrompt.trim()
-        if (prompt.isEmpty() || isImageLoading) return
+        if (prompt.isEmpty()) return
+        if (!canStartImageTask) {
+            imageError = "同时运行的任务已达到 $MAX_CONCURRENT_IMAGE_TASKS 项，请等待任意一项完成后再提交"
+            return
+        }
         if (isReferenceLoading) {
             notice = "参考图仍在读取，请稍候"
             return
@@ -781,23 +800,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val selectedReferenceInputs = selectedPages.map { it.second }
         val targetSnapshot = mangaTranslationTarget
-        imageError = null
-        isImageLoading = true
-        imageStopRequested = false
-        imageGenerationStartedAt = SystemClock.elapsedRealtime()
-        imageBatchCompleted = 0
-        imageBatchTotal = if (mangaTranslation) selectedPages.size else 0
-        imageGenerationPhase = if (mangaTranslation) {
-            ImageGenerationPhase.AnalyzingManga
-        } else if (selectedReferenceInputs.isNotEmpty()) {
-            ImageGenerationPhase.UploadingReference
-        } else {
-            ImageGenerationPhase.Rendering
-        }
+        val sizeSnapshot = imageSize
+        val styleSnapshot = imageStyle
         val apiPrompt = if (mangaTranslation) {
             prompt
         } else {
-            when (imageStyle) {
+            when (styleSnapshot) {
                 "摄影" -> "$prompt，专业摄影，真实光影，高细节"
                 "插画" -> "$prompt，精致数字插画，清晰构图"
                 "电影" -> "$prompt，电影感画面，戏剧性光影，宽容度丰富"
@@ -805,22 +813,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 else -> prompt
             }
         }
-        val generatedStyle = if (mangaTranslation) "漫画翻译" else imageStyle
-        val mangaBatchSignature = if (mangaTranslation) {
-            buildString {
-                append(profile.id).append('|').append(model).append('|')
-                    .append(analysisProfile.id).append('|').append(analysisModel).append('|')
-                    .append(apiPrompt).append('|').append(targetSnapshot.name)
-                selectedPages.forEach { (attachment, _) ->
-                    append('|').append(attachment.id).append(':').append(attachment.size)
-                        .append(':').append(attachment.width).append('x').append(attachment.height)
-                }
+        val generatedStyle = if (mangaTranslation) "漫画翻译" else styleSnapshot
+        val taskSignature = buildString {
+            append(if (mangaTranslation) "manga" else "image").append('|')
+                .append(profile.id).append('|').append(model).append('|')
+                .append(apiPrompt).append('|').append(sizeSnapshot).append('|').append(styleSnapshot)
+            if (mangaTranslation) {
+                append('|').append(analysisProfile.id).append('|').append(analysisModel)
+                    .append('|').append(targetSnapshot.name)
             }
-        } else {
-            ""
+            selectedPages.forEach { (attachment, _) ->
+                append('|').append(attachment.id).append(':').append(attachment.size)
+                    .append(':').append(attachment.width).append('x').append(attachment.height)
+            }
         }
-        val retryPlan = mangaRetryPlan?.takeIf {
-            mangaTranslation && it.reusableFor(mangaBatchSignature, selectedPages.size, SystemClock.elapsedRealtime())
+        if (taskSignature in activeImageSignatures) {
+            notice = "相同任务已经在处理中，可继续编辑参数后提交下一项"
+            return
+        }
+
+        val now = SystemClock.elapsedRealtime()
+        val retryPlan = mangaRetryPlans[taskSignature]?.takeIf {
+            mangaTranslation && it.reusableFor(taskSignature, selectedPages.size, now)
         }
         val requestedPageIndices = if (mangaTranslation) {
             retryPlan?.pageIndices ?: selectedPages.indices.toSet()
@@ -835,43 +849,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val mangaSeriesId = if (mangaTranslation) retryPlan?.seriesId ?: UUID.randomUUID().toString() else ""
         val mangaSeriesTotal = if (mangaTranslation) retryPlan?.seriesTotal ?: selectedPages.size else 0
         if (mangaTranslation) {
-            imageBatchTotal = requestedPageIndices.size
-            mangaRetryPlan = MangaTranslationRetryPlan(
-                signature = mangaBatchSignature,
+            mangaRetryPlans[taskSignature] = MangaTranslationRetryPlan(
+                signature = taskSignature,
                 pageIndices = requestedPageIndices,
                 requestKeys = pageRequestKeys,
-                createdAt = SystemClock.elapsedRealtime(),
+                createdAt = now,
                 seriesId = mangaSeriesId,
                 seriesTotal = mangaSeriesTotal
             )
-            if (retryPlan != null) notice = "仅重试上次未完成的 ${requestedPageIndices.size} 张漫画，已完成页面不会重复提交"
         }
+
+        val taskId = UUID.randomUUID().toString()
         val standardImageRequestKey = if (mangaTranslation) "" else newImageRequestKey()
-        imageJob = viewModelScope.launch {
+        val initialPhase = if (mangaTranslation) {
+            ImageGenerationPhase.AnalyzingManga
+        } else if (selectedReferenceInputs.isNotEmpty()) {
+            ImageGenerationPhase.UploadingReference
+        } else {
+            ImageGenerationPhase.Rendering
+        }
+        imageError = null
+        activeImageSignatures += taskSignature
+        imageTaskStates[taskId] = ImageTaskUiState(
+            id = taskId,
+            startedAt = now,
+            phase = initialPhase,
+            mangaTranslation = mangaTranslation,
+            referenceCount = selectedReferenceInputs.size,
+            total = if (mangaTranslation) requestedPageIndices.size else 0
+        )
+        if (retryPlan != null) {
+            notice = "仅重试上次未完成的 ${requestedPageIndices.size} 张漫画，其他任务可继续提交"
+        } else if (activeImageTaskCount > 1) {
+            notice = "任务已并行提交 · 当前 $activeImageTaskCount/$MAX_CONCURRENT_IMAGE_TASKS"
+        }
+
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            var mangaAnalysisReady = !mangaTranslation
             try {
                 if (mangaTranslation) {
-                    imageGenerationPhase = ImageGenerationPhase.AnalyzingManga
-                    val mangaAnalysis = mangaAnalysisCache
-                        ?.takeIf { it.signature == mangaBatchSignature }
-                        ?.analysis
-                        ?: try {
+                    updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.AnalyzingManga) }
+                    val mangaAnalysis = mangaAnalysisCache[taskSignature] ?: try {
+                        imageRequestSlots.withPermit {
                             repository.analyzeMangaTranslation(
                                 profile = analysisProfile,
                                 model = analysisModel,
                                 target = targetSnapshot,
                                 pages = selectedReferenceInputs,
                                 requestKey = "adchat-manga-analysis-$mangaSeriesId"
-                            ).also { analysis ->
-                                mangaAnalysisCache = MangaAnalysisCache(mangaBatchSignature, analysis)
-                            }
-                        } catch (error: CancellationException) {
-                            throw error
-                        } catch (error: Throwable) {
-                            imageError = "辅助模型分析失败：${friendlyError(error)}\n尚未提交生图任务，不会产生本批次的生图费用。"
-                            notice = "漫画理解未完成，已停止后续生图"
-                            return@launch
-                        }
-                    imageGenerationPhase = ImageGenerationPhase.UploadingReference
+                            )
+                        }.also { analysis -> mangaAnalysisCache[taskSignature] = analysis }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        mangaRetryPlans.remove(taskSignature)
+                        imageError = "辅助模型分析失败：${friendlyError(error)}\n尚未提交生图任务，不会产生本批次的生图费用。下次提交会获得完整的新等待窗口。"
+                        notice = "漫画理解未完成；该任务已结束，其他任务不受影响"
+                        return@launch
+                    }
+                    mangaAnalysisReady = true
+                    updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.UploadingReference) }
                     val pageResults = coroutineScope {
                         selectedPages.mapIndexedNotNull { index, (attachment, input) ->
                             if (index !in requestedPageIndices) return@mapIndexedNotNull null
@@ -884,14 +921,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         index = index,
                                         name = attachment.name,
                                         size = pageSize,
-                                        sources = repository.generateImage(
-                                            profile = profile,
-                                            model = model,
-                                            prompt = mangaAnalysis.imageEditPrompt(apiPrompt, index),
-                                            size = pageSize,
-                                            references = listOf(input),
-                                            requestKey = requestKey
-                                        ),
+                                        sources = imageRequestSlots.withPermit {
+                                            repository.generateImage(
+                                                profile = profile,
+                                                model = model,
+                                                prompt = mangaAnalysis.imageEditPrompt(apiPrompt, index),
+                                                size = pageSize,
+                                                references = listOf(input),
+                                                requestKey = requestKey
+                                            )
+                                        },
                                         requestKey = requestKey,
                                         durationMs = SystemClock.elapsedRealtime() - pageStartedAt
                                     )
@@ -909,32 +948,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         durationMs = SystemClock.elapsedRealtime() - pageStartedAt
                                     )
                                 } finally {
-                                    imageBatchCompleted += 1
+                                    updateImageTask(taskId) { state ->
+                                        state.copy(completed = (state.completed + 1).coerceAtMost(state.total))
+                                    }
                                 }
                             }
                         }.awaitAll()
                     }
-                    mangaRetryPlan = nextMangaRetryPlan(
-                        signature = mangaBatchSignature,
+                    val nextRetryPlan = nextMangaRetryPlan(
+                        signature = taskSignature,
                         results = pageResults,
                         now = SystemClock.elapsedRealtime(),
                         seriesId = mangaSeriesId,
                         seriesTotal = mangaSeriesTotal,
                         newRequestKey = { newImageRequestKey() }
                     )
+                    if (nextRetryPlan == null) mangaRetryPlans.remove(taskSignature)
+                    else mangaRetryPlans[taskSignature] = nextRetryPlan
                     val orderedSuccesses = orderedMangaSuccesses(pageResults)
                     val failureSummary = mangaFailureSummary(pageResults)
                     val successfulPages = pageResults.count(MangaTranslationPageResult::successful)
                     if (orderedSuccesses.isEmpty()) {
                         imageError = failureSummary.ifBlank { "所有漫画页均翻译失败" }
                         notice = if (pageResults.any(MangaTranslationPageResult::deliveryUncertain)) {
-                            "请求可能已到达供应商；应用未自动重试，以避免再次扣费"
+                            "请求可能已到达供应商；应用未自动重试，其他任务仍可继续"
                         } else {
-                            "本次 ${pageResults.size} 张漫画均未完成"
+                            "本次 ${pageResults.size} 张漫画均未完成，其他任务不受影响"
                         }
                         return@launch
                     }
-                    imageGenerationPhase = ImageGenerationPhase.Saving
+                    updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.Saving) }
                     val cachedSuccesses = withContext(Dispatchers.IO) {
                         orderedSuccesses.map { (page, source) ->
                             page to runCatching { artworkStore.cacheSource(source) }.getOrDefault(source)
@@ -955,25 +998,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     images.addAll(0, generatedImages)
-                    artworkStore.save(images)
+                    persistArtworkSnapshot()
                     if (failureSummary.isBlank()) {
-                        notice = "${successfulPages} 张漫画已按顺序翻译完成"
+                        notice = "$successfulPages 张漫画已按顺序翻译完成"
                     } else {
                         notice = "已完成 $successfulPages/${pageResults.size} 张，失败页已说明"
                         imageError = "以下页面翻译失败，成功结果已保留：\n$failureSummary"
                     }
                 } else {
-                    val sources = withContext(Dispatchers.IO) {
+                    val sources = imageRequestSlots.withPermit {
                         repository.generateImage(
                             profile = profile,
                             model = model,
                             prompt = apiPrompt,
-                            size = imageSize,
+                            size = sizeSnapshot,
                             references = selectedReferenceInputs,
                             requestKey = standardImageRequestKey
                         )
                     }
-                    imageGenerationPhase = ImageGenerationPhase.Saving
+                    updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.Saving) }
                     val cachedSources = withContext(Dispatchers.IO) {
                         sources.map { source -> runCatching { artworkStore.cacheSource(source) }.getOrDefault(source) }
                     }
@@ -981,37 +1024,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         GeneratedImage(
                             prompt = prompt,
                             source = source,
-                            size = imageSize,
+                            size = sizeSnapshot,
                             style = generatedStyle,
                             profileName = profile.name,
                             model = model
                         )
                     }
                     images.addAll(0, generatedImages)
-                    artworkStore.save(images)
+                    persistArtworkSnapshot()
                     notice = "图片已生成并保存在作品记录中"
                 }
             } catch (error: Throwable) {
                 when {
-                    imageStopRequested -> notice = "已停止等待；供应商端任务可能仍在处理，请勿立即重复提交"
+                    taskId in manuallyStoppedImageTasks -> notice = "已停止最近任务的等待；其他任务仍在继续"
                     error is CancellationException -> throw error
                     else -> imageError = friendlyError(error)
                 }
             } finally {
-                isImageLoading = false
-                imageStopRequested = false
-                imageGenerationPhase = ImageGenerationPhase.Idle
-                imageBatchCompleted = 0
-                imageBatchTotal = 0
-                imageJob = null
+                if (mangaTranslation && !mangaAnalysisReady) mangaRetryPlans.remove(taskSignature)
+                manuallyStoppedImageTasks.remove(taskId)
+                activeImageSignatures.remove(taskSignature)
+                imageTaskStates.remove(taskId)
+                imageTaskJobs.remove(taskId)
             }
         }
+        imageTaskJobs[taskId] = job
+        job.start()
     }
 
     fun stopImageGeneration() {
-        if (!isImageLoading) return
-        imageStopRequested = true
-        imageJob?.cancel(CancellationException("User stopped image generation"))
+        val task = latestImageTask ?: return
+        manuallyStoppedImageTasks += task.id
+        imageTaskJobs[task.id]?.cancel(CancellationException("User stopped image generation"))
     }
 
     fun deleteImage(imageId: Long) {
@@ -1019,7 +1063,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (index < 0) return
         val image = images.removeAt(index)
         artworkStore.delete(image)
-        artworkStore.save(images)
+        persistArtworkSnapshot()
         notice = "\u5df2\u5220\u9664\u4f5c\u54c1"
     }
 
@@ -1119,7 +1163,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         uris: List<Uri>,
         onLoaded: (List<LoadedReferenceImage>, failureCount: Int) -> Unit
     ) {
-        if (isImageLoading || isReferenceLoading) return
+        if (isReferenceLoading) return
         imageError = null
         isReferenceLoading = true
         viewModelScope.launch {
@@ -1293,6 +1337,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appConfig = appConfig.copy(profiles = profiles.map { if (it.id == id) transform(it) else it })
     }
 
+    private fun updateImageTask(id: String, transform: (ImageTaskUiState) -> ImageTaskUiState) {
+        imageTaskStates[id]?.let { state -> imageTaskStates[id] = transform(state) }
+    }
+
+    private fun persistArtworkSnapshot() {
+        val snapshot = images.toList()
+        val revision = ++artworkSaveRevision
+        viewModelScope.launch(Dispatchers.IO) {
+            artworkSaveMutex.withLock {
+                if (revision == artworkSaveRevision) artworkStore.save(snapshot)
+            }
+        }
+    }
+
     private fun persist() = store.save(appConfig)
 
     private fun friendlyError(error: Throwable): String {
@@ -1349,11 +1407,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 private data class LoadedReferenceImage(
     val attachment: ReferenceImageAttachment,
     val input: ReferenceImageInput
-)
-
-private data class MangaAnalysisCache(
-    val signature: String,
-    val analysis: MangaTranslationAnalysis
 )
 
 private fun String.isImageLike(): Boolean {

@@ -125,7 +125,7 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         item(key = "manga-translation") {
             MangaTranslationToggle(
                 active = vm.imageWorkflow == ImageWorkflow.MangaTranslation,
-                locked = vm.isImageLoading,
+                locked = vm.isReferenceLoading,
                 analysisModel = vm.mangaAnalysisProfile.mangaAnalysisModel,
                 onSelectAnalysisModel = { showAnalysisSwitcher = true },
                 onToggle = { enabled ->
@@ -172,6 +172,11 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 generationStartedAt = vm.imageGenerationStartedAt,
                 batchCompleted = vm.imageBatchCompleted,
                 batchTotal = vm.imageBatchTotal,
+                activeTaskCount = vm.activeImageTaskCount,
+                maxTaskCount = vm.maxConcurrentImageTasks,
+                canStartTask = vm.canStartImageTask,
+                statusMangaTranslation = vm.activeImageTaskIsManga,
+                statusReferenceCount = vm.activeImageTaskReferenceCount,
                 error = vm.imageError,
                 onDismissError = vm::dismissImageError,
                 onGenerate = { focus.clearFocus(); vm.generateImage() },
@@ -393,6 +398,11 @@ private fun PromptStudio(
     generationStartedAt: Long,
     batchCompleted: Int,
     batchTotal: Int,
+    activeTaskCount: Int,
+    maxTaskCount: Int,
+    canStartTask: Boolean,
+    statusMangaTranslation: Boolean,
+    statusReferenceCount: Int,
     error: String?,
     onDismissError: () -> Unit,
     onGenerate: () -> Unit,
@@ -435,7 +445,6 @@ private fun PromptStudio(
                 OutlinedTextField(
                     value = prompt,
                     onValueChange = onPrompt,
-                    readOnly = loading,
                     modifier = Modifier.fillMaxWidth().heightIn(min = 132.dp, max = 230.dp),
                     placeholder = { Text("描述主体、场景、光线、色彩和氛围…", color = Color(0xFF918C85)) },
                     minLines = 4,
@@ -469,12 +478,12 @@ private fun PromptStudio(
                 if (referenceImages.isEmpty()) {
                     Surface(
                         onClick = {
-                            if (!loading && !referenceLoading) {
+                            if (!referenceLoading) {
                                 haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 onPickReferences()
                             }
                         },
-                        enabled = !loading && !referenceLoading,
+                        enabled = !referenceLoading,
                         color = Canvas,
                         contentColor = Ink,
                         shape = RoundedCornerShape(17.dp),
@@ -515,7 +524,7 @@ private fun PromptStudio(
                         ReferenceImageRow(
                             reference = reference,
                             index = index,
-                            locked = loading || referenceLoading,
+                            locked = referenceLoading,
                             onPreview = { onPreviewReference(reference) },
                             onReplace = { onReplaceReference(reference.id) },
                             onRemove = { onRemoveReference(reference.id) }
@@ -525,12 +534,12 @@ private fun PromptStudio(
                     if (referenceImages.size < maximum) {
                         Surface(
                             onClick = {
-                                if (!loading && !referenceLoading) {
+                                if (!referenceLoading) {
                                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     onAddReference()
                                 }
                             },
-                            enabled = !loading && !referenceLoading,
+                            enabled = !referenceLoading,
                             color = Color.Transparent,
                             contentColor = Accent,
                             shape = RoundedCornerShape(15.dp),
@@ -553,7 +562,7 @@ private fun PromptStudio(
                     }
                     Text(
                         if (mangaTranslation) {
-                            "最多 4 张并发翻译，全部完成后按上传顺序返回。"
+                            "单批最多 4 张；最多可同时运行 12 项任务。"
                         } else {
                             "多图能力取决于当前绘图模型与 API；上传顺序会被保留。"
                         },
@@ -580,10 +589,8 @@ private fun PromptStudio(
                             icon,
                             selected = style == name,
                             onClick = {
-                                if (!loading) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onStyle(name)
-                                }
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onStyle(name)
                             }
                         )
                     }
@@ -597,10 +604,8 @@ private fun PromptStudio(
                             label,
                             selected = size == value,
                             onClick = {
-                                if (!loading) {
-                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    onSize(value)
-                                }
+                                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onSize(value)
                             },
                             modifier = Modifier.weight(1f)
                         )
@@ -628,44 +633,52 @@ private fun PromptStudio(
                     GenerationStatus(
                         generationPhase,
                         elapsedMs,
-                        referenceImages.size,
-                        mangaTranslation,
+                        statusReferenceCount,
+                        statusMangaTranslation,
                         batchCompleted,
-                        batchTotal
+                        batchTotal,
+                        activeTaskCount,
+                        maxTaskCount,
+                        onStop
                     )
                 }
             }
             Spacer(Modifier.height(18.dp))
             Button(
                 onClick = {
-                    haptics.performHapticFeedback(if (loading) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove)
-                    if (loading) onStop() else onGenerate()
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onGenerate()
                 },
-                enabled = loading || (prompt.isNotBlank() && !referenceLoading && (!mangaTranslation || referenceImages.size in 1..4)),
+                enabled = canStartTask && prompt.isNotBlank() && !referenceLoading && (!mangaTranslation || referenceImages.size in 1..4),
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (loading) Night else Accent,
+                    containerColor = Accent,
                     disabledContainerColor = Hairline
                 )
             ) {
                 AnimatedContent(
-                    targetState = loading,
+                    targetState = activeTaskCount > 0,
                     transitionSpec = {
                         (fadeIn(tween(140)) + scaleIn(tween(180), initialScale = 0.78f)) togetherWith
                             (fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.78f))
                     },
                     label = "generate-stop"
-                ) { isLoading ->
+                ) { hasActiveTasks ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
-                            if (isLoading) Icons.Rounded.Stop else if (mangaTranslation) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome,
+                            if (mangaTranslation) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome,
                             null,
                             Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(9.dp))
                         Text(
-                            if (isLoading) "停止等待" else if (mangaTranslation) "开始翻译漫画" else "开始生成",
+                            when {
+                                !canStartTask -> "并发任务已满"
+                                hasActiveTasks -> "并行提交下一项 · $activeTaskCount/$maxTaskCount"
+                                mangaTranslation -> "开始翻译漫画"
+                                else -> "开始生成"
+                            },
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -732,7 +745,10 @@ private fun GenerationStatus(
     referenceCount: Int,
     mangaTranslation: Boolean,
     batchCompleted: Int,
-    batchTotal: Int
+    batchTotal: Int,
+    activeTaskCount: Int,
+    maxTaskCount: Int,
+    onStopLatest: () -> Unit
 ) {
     val title = if (mangaTranslation) {
         when (phase) {
@@ -760,20 +776,39 @@ private fun GenerationStatus(
                 }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.labelLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                        Text(
+                            "$activeTaskCount/$maxTaskCount",
+                            color = Accent,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     Text(
                         if (mangaTranslation) {
                             when {
-                                phase == ImageGenerationPhase.AnalyzingManga -> "已用时 $elapsed · 正在统一设定、术语与逐页译文"
-                                elapsedMs >= 3 * 60_000L -> "已用时 $elapsed · 服务端仍在处理，请勿重复提交"
-                                else -> "已用时 $elapsed · 复杂页面可能需要数分钟"
+                                phase == ImageGenerationPhase.AnalyzingManga -> "已用时 $elapsed · 辅助分析最长等待 45 分钟"
+                                elapsedMs >= 3 * 60_000L -> "已用时 $elapsed · 生图最长等待 90 分钟，可继续提交"
+                                else -> "已用时 $elapsed · 当前任务不会阻塞下一项"
                             }
                         } else {
-                            "已用时 $elapsed · 停止等待后服务端仍可能继续处理"
+                            "已用时 $elapsed · 最长等待 90 分钟，可继续提交下一项"
                         },
                         color = MutedInk,
                         style = MaterialTheme.typography.labelMedium
                     )
+                }
+                Spacer(Modifier.width(8.dp))
+                IconButton(
+                    onClick = onStopLatest,
+                    modifier = Modifier.size(34.dp),
+                    colors = IconButtonDefaults.iconButtonColors(
+                        containerColor = Color.White.copy(alpha = .72f),
+                        contentColor = Night
+                    )
+                ) {
+                    Icon(Icons.Rounded.Stop, "停止最近提交的任务", Modifier.size(17.dp))
                 }
             }
             Spacer(Modifier.height(11.dp))

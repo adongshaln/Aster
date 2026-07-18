@@ -4,14 +4,21 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 
-internal const val IMAGE_CONNECT_TIMEOUT_SECONDS = 30L
-internal const val IMAGE_READ_TIMEOUT_MINUTES = 30L
-internal const val IMAGE_WRITE_TIMEOUT_MINUTES = 10L
-internal const val MANGA_ANALYSIS_READ_TIMEOUT_MINUTES = 15L
-internal const val MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES = 5L
+internal const val IMAGE_CONNECT_TIMEOUT_SECONDS = 90L
+internal const val IMAGE_READ_TIMEOUT_MINUTES = 90L
+internal const val IMAGE_WRITE_TIMEOUT_MINUTES = 20L
+internal const val MANGA_ANALYSIS_READ_TIMEOUT_MINUTES = 45L
+internal const val MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES = 10L
+internal const val MAX_CONCURRENT_IMAGE_TASKS = 12
+
+internal fun longTaskDispatcher(): Dispatcher = Dispatcher().apply {
+    maxRequests = MAX_CONCURRENT_IMAGE_TASKS
+    maxRequestsPerHost = MAX_CONCURRENT_IMAGE_TASKS
+}
 
 internal fun OkHttpClient.Builder.applyImageRequestPolicy(): OkHttpClient.Builder = apply {
     // Image edits can spend many minutes processing after the upload has completed.

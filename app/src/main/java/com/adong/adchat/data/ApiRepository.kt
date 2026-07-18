@@ -49,11 +49,15 @@ class ApiRepository {
         .retryOnConnectionFailure(true)
         .build()
 
+    private val paidImageDispatcher = longTaskDispatcher()
+
     private val imageClient = client.newBuilder()
+        .dispatcher(paidImageDispatcher)
         .applyImageRequestPolicy()
         .build()
 
     private val mangaAnalysisClient = client.newBuilder()
+        .dispatcher(paidImageDispatcher)
         .applyMangaAnalysisRequestPolicy()
         .build()
 
