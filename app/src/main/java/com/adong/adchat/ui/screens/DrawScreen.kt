@@ -78,6 +78,7 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var showSwitcher by remember { mutableStateOf(false) }
+    var showAnalysisSwitcher by remember { mutableStateOf(false) }
     var selectedArtwork by remember { mutableStateOf<GeneratedImage?>(null) }
     var previewReference by remember { mutableStateOf<ReferenceImageAttachment?>(null) }
     var replacingReferenceId by remember { mutableStateOf<String?>(null) }
@@ -125,6 +126,8 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             MangaTranslationToggle(
                 active = vm.imageWorkflow == ImageWorkflow.MangaTranslation,
                 locked = vm.isImageLoading,
+                analysisModel = vm.mangaAnalysisProfile.mangaAnalysisModel,
+                onSelectAnalysisModel = { showAnalysisSwitcher = true },
                 onToggle = { enabled ->
                     focus.clearFocus()
                     if (enabled) {
@@ -251,6 +254,14 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             onDismiss = { previewReference = null }
         )
     }
+    if (showAnalysisSwitcher) {
+        QuickModelSwitcher(
+            kind = RouteKind.Analysis,
+            vm = vm,
+            onDismiss = { showAnalysisSwitcher = false },
+            onManageApis = onOpenSettings
+        )
+    }
     deleteCandidate?.let { image ->
         AdConfirmDialog(
             title = "删除这张作品？",
@@ -299,6 +310,8 @@ private fun DrawHeader(profileName: String, model: String, onSwitch: () -> Unit,
 private fun MangaTranslationToggle(
     active: Boolean,
     locked: Boolean,
+    analysisModel: String,
+    onSelectAnalysisModel: () -> Unit,
     onToggle: (Boolean) -> Unit
 ) {
     Surface(
@@ -320,6 +333,29 @@ private fun MangaTranslationToggle(
                 Text("漫画翻译", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 Text(if (active) "模式已开启" else "模式未开启", color = if (active) Accent else MutedInk, style = MaterialTheme.typography.bodySmall)
             }
+            Surface(
+                onClick = onSelectAnalysisModel,
+                enabled = !locked,
+                color = if (active) Color.White.copy(alpha = .78f) else Canvas,
+                shape = RoundedCornerShape(11.dp),
+                modifier = Modifier.widthIn(max = 126.dp)
+            ) {
+                Row(Modifier.padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Psychology, null, Modifier.size(15.dp), tint = Accent)
+                    Spacer(Modifier.width(6.dp))
+                    Column(Modifier.weight(1f, fill = false)) {
+                        Text("辅助", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            analysisModel.ifBlank { "未选择" },
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.width(7.dp))
             Switch(
                 checked = active,
                 onCheckedChange = onToggle,
@@ -700,12 +736,14 @@ private fun GenerationStatus(
 ) {
     val title = if (mangaTranslation) {
         when (phase) {
+            ImageGenerationPhase.AnalyzingManga -> "辅助模型正在理解 $batchTotal 页漫画"
             ImageGenerationPhase.UploadingReference -> "正在并发翻译 ${batchCompleted.coerceAtMost(batchTotal)}/$batchTotal"
             ImageGenerationPhase.Saving -> "正在按上传顺序整理结果"
             else -> "正在准备漫画翻译"
         }
     } else {
         when (phase) {
+            ImageGenerationPhase.AnalyzingManga -> "正在分析漫画设定"
             ImageGenerationPhase.UploadingReference -> if (referenceCount > 1) "正在上传 $referenceCount 张参考图并渲染" else "正在上传参考图并渲染"
             ImageGenerationPhase.Rendering -> "模型正在渲染画面"
             ImageGenerationPhase.Saving -> "正在整理并保存作品"
@@ -725,8 +763,11 @@ private fun GenerationStatus(
                     Text(title, style = MaterialTheme.typography.labelLarge)
                     Text(
                         if (mangaTranslation) {
-                            if (elapsedMs >= 3 * 60_000L) "已用时 $elapsed · 服务端仍在处理，请勿重复提交"
-                            else "已用时 $elapsed · 复杂页面可能需要数分钟"
+                            when {
+                                phase == ImageGenerationPhase.AnalyzingManga -> "已用时 $elapsed · 正在统一设定、术语与逐页译文"
+                                elapsedMs >= 3 * 60_000L -> "已用时 $elapsed · 服务端仍在处理，请勿重复提交"
+                                else -> "已用时 $elapsed · 复杂页面可能需要数分钟"
+                            }
                         } else {
                             "已用时 $elapsed · 停止等待后服务端仍可能继续处理"
                         },

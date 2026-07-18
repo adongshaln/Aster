@@ -24,6 +24,7 @@ import java.io.EOFException
 import java.io.IOException
 import java.net.ProtocolException
 import java.net.SocketTimeoutException
+import java.util.Base64
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import kotlin.coroutines.cancellation.CancellationException
@@ -50,6 +51,10 @@ class ApiRepository {
 
     private val imageClient = client.newBuilder()
         .applyImageRequestPolicy()
+        .build()
+
+    private val mangaAnalysisClient = client.newBuilder()
+        .applyMangaAnalysisRequestPolicy()
         .build()
 
     suspend fun fetchModels(profile: ApiProfile): ConnectionResult = withContext(Dispatchers.IO) {
@@ -478,14 +483,14 @@ class ApiRepository {
         val responseText = if (references.isEmpty()) {
             val body = JSONObject().put("model", model).put("prompt", prompt).put("n", 1).put("size", size)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imagePath))
-                .applyImageRequestKey(requestKey)
+                .applyIdempotencyKey(requestKey)
                 .post(body.toString().toRequestBody(jsonMedia))
                 .build()
             executeTextCall(imageClient.newCall(request))
         } else {
             val multipart = buildImageEditMultipart(model, prompt, size, references)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imageEditPath))
-                .applyImageRequestKey(requestKey)
+                .applyIdempotencyKey(requestKey)
                 .post(multipart)
                 .build()
             executeTextCall(imageClient.newCall(request))
@@ -499,6 +504,56 @@ class ApiRepository {
                 when { url.isNotBlank() -> add(url); b64.isNotBlank() -> add("data:image/png;base64,$b64") }
             }
         }.ifEmpty { throw IllegalStateException("API 没有返回图片地址或图片数据") }
+    }
+
+    suspend fun analyzeMangaTranslation(
+        profile: ApiProfile,
+        model: String,
+        target: MangaTranslationTarget,
+        pages: List<ReferenceImageInput>,
+        requestKey: String
+    ): MangaTranslationAnalysis = withContext(Dispatchers.IO) {
+        validateProfile(profile)
+        require(model.isNotBlank()) { "辅助模型不能为空" }
+        require(pages.isNotEmpty()) { "漫画分析至少需要一张图片" }
+        val analysisPrompt = MangaTranslationAnalysisPrompt.build(target, pages.size)
+        val pageData = pages.map { page ->
+            "data:${page.mimeType.ifBlank { "image/png" }};base64,${Base64.getEncoder().encodeToString(page.bytes)}"
+        }
+        val body = if (profile.chatApiMode == "responses") {
+            JSONObject()
+                .put("model", model)
+                .put("instructions", analysisPrompt)
+                .put("input", JSONArray().put(JSONObject()
+                    .put("role", "user")
+                    .put("content", JSONArray().apply {
+                        put(JSONObject().put("type", "input_text").put("text", "以下图片按上传顺序编号为第 1 页到第 ${pages.size} 页。请严格按要求返回逐页 JSON。"))
+                        pageData.forEach { data ->
+                            put(JSONObject().put("type", "input_image").put("image_url", data).put("detail", "high"))
+                        }
+                    })))
+        } else {
+            JSONObject()
+                .put("model", model)
+                .put("stream", false)
+                .put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", analysisPrompt))
+                    .put(JSONObject().put("role", "user").put("content", JSONArray().apply {
+                        put(JSONObject().put("type", "text").put("text", "以下图片按上传顺序编号为第 1 页到第 ${pages.size} 页。请严格按要求返回逐页 JSON。"))
+                        pageData.forEach { data ->
+                            put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", data).put("detail", "high")))
+                        }
+                    })))
+        }
+        val path = if (profile.chatApiMode == "responses") profile.responsesPath else profile.chatPath
+        val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path))
+            .applyIdempotencyKey(requestKey)
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build()
+        val root = runCatching { JSONObject(executeTextCall(mangaAnalysisClient.newCall(request))) }
+            .getOrElse { throw IllegalStateException("辅助模型返回的不是有效 JSON 响应") }
+        val text = if (profile.chatApiMode == "responses") parseResponsesText(root) else parseMessageContent(root)
+        parseMangaTranslationAnalysis(text, pages.size)
     }
 
     private suspend fun executeTextCall(call: Call): String {
@@ -639,7 +694,7 @@ class ApiRepository {
         return builder
     }
 
-    private fun Request.Builder.applyImageRequestKey(requestKey: String): Request.Builder = apply {
+    private fun Request.Builder.applyIdempotencyKey(requestKey: String): Request.Builder = apply {
         requestKey.trim().takeIf { it.isNotBlank() }?.let { key ->
             header("Idempotency-Key", key.take(128))
         }

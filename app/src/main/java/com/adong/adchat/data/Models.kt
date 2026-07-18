@@ -33,6 +33,7 @@ data class ApiProfile(
     val imageEditPath: String = "/v1/images/edits",
     val chatModel: String = "",
     val imageModel: String = "",
+    val mangaAnalysisModel: String = "",
     val extraHeaders: String = "",
     val cachedModels: List<ApiModel> = emptyList(),
     val lastLatencyMs: Long? = null
@@ -52,6 +53,7 @@ fun ApiProfile.normalized(): ApiProfile = copy(
     imageEditPath = imageEditPath.trim().ifBlank { "/v1/images/edits" },
     chatModel = chatModel.trim(),
     imageModel = imageModel.trim(),
+    mangaAnalysisModel = mangaAnalysisModel.trim(),
     extraHeaders = extraHeaders.lineSequence().map(String::trim).filter(String::isNotBlank).joinToString("\n")
 )
 
@@ -74,10 +76,12 @@ data class AppConfig(
     val profiles: List<ApiProfile>,
     val activeChatProfileId: String,
     val activeImageProfileId: String,
+    val activeMangaAnalysisProfileId: String = activeChatProfileId,
     val systemPrompt: String = "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。"
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
+    fun mangaAnalysisProfile(): ApiProfile = profiles.firstOrNull { it.id == activeMangaAnalysisProfileId } ?: chatProfile()
 }
 
 class ConfigStore(context: Context) {
@@ -122,6 +126,7 @@ class ConfigStore(context: Context) {
             profiles = listOf(profile),
             activeChatProfileId = profile.id,
             activeImageProfileId = profile.id,
+            activeMangaAnalysisProfileId = profile.id,
             systemPrompt = prefs.getString("systemPrompt", null)
                 ?: "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。"
         ).also(::save)
@@ -130,6 +135,7 @@ class ConfigStore(context: Context) {
     private fun encode(config: AppConfig): JSONObject = JSONObject()
         .put("activeChatProfileId", config.activeChatProfileId)
         .put("activeImageProfileId", config.activeImageProfileId)
+        .put("activeMangaAnalysisProfileId", config.activeMangaAnalysisProfileId)
         .put("systemPrompt", config.systemPrompt)
         .put("profiles", JSONArray().apply {
             config.profiles.forEach { profile ->
@@ -150,6 +156,7 @@ class ConfigStore(context: Context) {
                     .put("imageEditPath", profile.imageEditPath)
                     .put("chatModel", profile.chatModel)
                     .put("imageModel", profile.imageModel)
+                    .put("mangaAnalysisModel", profile.mangaAnalysisModel)
                     .put("extraHeaders", profile.extraHeaders)
                     .put("lastLatencyMs", profile.lastLatencyMs)
                     .put("cachedModels", JSONArray().apply {
@@ -184,6 +191,7 @@ class ConfigStore(context: Context) {
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
+                    mangaAnalysisModel = item.optString("mangaAnalysisModel"),
                     extraHeaders = item.optString("extraHeaders"),
                     cachedModels = decodeModels(item.optJSONArray("cachedModels")),
                     lastLatencyMs = item.optLong("lastLatencyMs").takeIf { item.has("lastLatencyMs") && !item.isNull("lastLatencyMs") }
@@ -194,6 +202,10 @@ class ConfigStore(context: Context) {
             profiles = profiles,
             activeChatProfileId = root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id,
             activeImageProfileId = root.optString("activeImageProfileId").takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id,
+            activeMangaAnalysisProfileId = root.optString("activeMangaAnalysisProfileId")
+                .takeIf { id -> profiles.any { it.id == id } }
+                ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
+                ?: profiles.first().id,
             systemPrompt = root.optString("systemPrompt").ifBlank { "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。" }
         )
     }

@@ -10,6 +10,8 @@ import okhttp3.Protocol
 internal const val IMAGE_CONNECT_TIMEOUT_SECONDS = 30L
 internal const val IMAGE_READ_TIMEOUT_MINUTES = 30L
 internal const val IMAGE_WRITE_TIMEOUT_MINUTES = 10L
+internal const val MANGA_ANALYSIS_READ_TIMEOUT_MINUTES = 15L
+internal const val MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES = 5L
 
 internal fun OkHttpClient.Builder.applyImageRequestPolicy(): OkHttpClient.Builder = apply {
     // Image edits can spend many minutes processing after the upload has completed.
@@ -19,6 +21,16 @@ internal fun OkHttpClient.Builder.applyImageRequestPolicy(): OkHttpClient.Builde
     connectTimeout(IMAGE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
     readTimeout(IMAGE_READ_TIMEOUT_MINUTES, TimeUnit.MINUTES)
     writeTimeout(IMAGE_WRITE_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+    callTimeout(0, TimeUnit.MILLISECONDS)
+    retryOnConnectionFailure(false)
+}
+
+internal fun OkHttpClient.Builder.applyMangaAnalysisRequestPolicy(): OkHttpClient.Builder = apply {
+    protocols(listOf(Protocol.HTTP_1_1))
+    connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+    connectTimeout(IMAGE_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    readTimeout(MANGA_ANALYSIS_READ_TIMEOUT_MINUTES, TimeUnit.MINUTES)
+    writeTimeout(MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES, TimeUnit.MINUTES)
     callTimeout(0, TimeUnit.MILLISECONDS)
     retryOnConnectionFailure(false)
 }

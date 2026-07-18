@@ -25,7 +25,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 enum class ConnectionPhase { Idle, Testing, Success, Error }
-enum class ImageGenerationPhase { Idle, UploadingReference, Rendering, Saving }
+enum class ImageGenerationPhase { Idle, AnalyzingManga, UploadingReference, Rendering, Saving }
 enum class ImageWorkflow { Standard, MangaTranslation }
 
 data class ConnectionUiState(
@@ -131,6 +131,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var imageJob: Job? = null
     private var imageStopRequested = false
     private var mangaRetryPlan: MangaTranslationRetryPlan? = null
+    private var mangaAnalysisCache: MangaAnalysisCache? = null
     var imageError by mutableStateOf<String?>(null)
         private set
     var notice by mutableStateOf<String?>(null)
@@ -145,6 +146,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return if (route.model == profile.chatModel) profile else profile.copy(chatModel = route.model)
         }
     val imageProfile: ApiProfile get() = appConfig.imageProfile()
+    val mangaAnalysisProfile: ApiProfile
+        get() {
+            val profile = appConfig.mangaAnalysisProfile()
+            val model = profile.mangaAnalysisModel.ifBlank { profile.chatModel }
+            return if (model == profile.mangaAnalysisModel) profile else profile.copy(mangaAnalysisModel = model)
+        }
 
     val activeMangaTranslationPrompt: String
         get() = MangaTranslationPrompt.build(mangaTranslationTarget)
@@ -222,6 +229,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             notice = "当前对话正在使用此 API，请等待生成完成后再删除"
             return
         }
+        if (isImageLoading && (imageProfile.id == profileId || mangaAnalysisProfile.id == profileId)) {
+            notice = "当前漫画或绘图任务正在使用此 API，请等待任务完成后再删除"
+            return
+        }
         val affectedConversationIds = conversations
             .filter { conversation ->
                 resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId).profileId == profileId
@@ -232,7 +243,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appConfig = appConfig.copy(
             profiles = remaining,
             activeChatProfileId = if (appConfig.activeChatProfileId == profileId) fallbackProfile.id else appConfig.activeChatProfileId,
-            activeImageProfileId = if (appConfig.activeImageProfileId == profileId) fallbackProfile.id else appConfig.activeImageProfileId
+            activeImageProfileId = if (appConfig.activeImageProfileId == profileId) fallbackProfile.id else appConfig.activeImageProfileId,
+            activeMangaAnalysisProfileId = if (appConfig.activeMangaAnalysisProfileId == profileId) fallbackProfile.id else appConfig.activeMangaAnalysisProfileId
         )
         if (affectedConversationIds.isNotEmpty()) {
             conversations.indices.forEach { index ->
@@ -276,6 +288,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (appConfig.activeImageProfileId != profileId) selectImageProfile(profileId) else persist()
     }
 
+    fun selectMangaAnalysisModel(profileId: String, model: String) {
+        if (isImageLoading) { notice = "请等待当前图片任务完成后再切换辅助模型"; return }
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        val selectedModel = model.trim()
+        if (selectedModel.isBlank()) return
+        updateProfile(profile.id) { it.copy(mangaAnalysisModel = selectedModel) }
+        appConfig = appConfig.copy(activeMangaAnalysisProfileId = profile.id)
+        persist()
+        notice = "漫画辅助模型已切换到 ${profile.name} · $selectedModel"
+    }
+
     fun setChatReasoningEffort(effort: String) {
         val normalized = effort.takeIf { it in REASONING_EFFORTS } ?: "medium"
         updateProfile(chatProfile.id) { it.copy(reasoningEffort = normalized) }
@@ -317,6 +340,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     var updated = tested.copy(cachedModels = result.models, lastLatencyMs = result.latencyMs)
                     if (tested.chatModel.isBlank() && chatCandidate != null) updated = updated.copy(chatModel = chatCandidate)
                     if (tested.imageModel.isBlank() && imageCandidate != null) updated = updated.copy(imageModel = imageCandidate)
+                    if (tested.mangaAnalysisModel.isBlank() && chatCandidate != null) updated = updated.copy(mangaAnalysisModel = chatCandidate)
                     if (onUpdatedDraft == null && profiles.any { it.id == updated.id }) {
                         updateProfile(updated.id) { updated }
                         persist()
@@ -376,6 +400,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun testActiveRoutes() {
         testProfile(chatProfile)
         if (imageProfile.id != chatProfile.id) testProfile(imageProfile)
+        if (mangaAnalysisProfile.id != chatProfile.id && mangaAnalysisProfile.id != imageProfile.id) testProfile(mangaAnalysisProfile)
     }
 
     fun exportProfiles(includeApiKeys: Boolean): String {
@@ -400,6 +425,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("imageEditPath", profile.imageEditPath)
                         .put("chatModel", profile.chatModel)
                         .put("imageModel", profile.imageModel)
+                        .put("mangaAnalysisModel", profile.mangaAnalysisModel)
                         .put("extraHeaders", profile.extraHeaders)
                     )
                 }
@@ -433,6 +459,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
+                    mangaAnalysisModel = item.optString("mangaAnalysisModel"),
                     extraHeaders = item.optString("extraHeaders")
                 ))
             }
@@ -738,12 +765,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val profile = imageProfile
         val model = profile.imageModel
+        val analysisProfile = mangaAnalysisProfile
+        val analysisModel = analysisProfile.mangaAnalysisModel
         val selectedPages = referenceImages.mapNotNull { attachment ->
             referenceImageInputs[attachment.id]?.let { input -> attachment to input }
         }
         val mangaTranslation = imageWorkflow == ImageWorkflow.MangaTranslation
         if (mangaTranslation && selectedPages.size !in 1..MAX_MANGA_IMAGES) {
             imageError = "漫画翻译需要添加 1–$MAX_MANGA_IMAGES 张清晰原图"
+            return
+        }
+        if (mangaTranslation && analysisModel.isBlank()) {
+            imageError = "请先选择支持图片输入的漫画辅助模型"
             return
         }
         val selectedReferenceInputs = selectedPages.map { it.second }
@@ -754,7 +787,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         imageGenerationStartedAt = SystemClock.elapsedRealtime()
         imageBatchCompleted = 0
         imageBatchTotal = if (mangaTranslation) selectedPages.size else 0
-        imageGenerationPhase = if (selectedReferenceInputs.isNotEmpty()) {
+        imageGenerationPhase = if (mangaTranslation) {
+            ImageGenerationPhase.AnalyzingManga
+        } else if (selectedReferenceInputs.isNotEmpty()) {
             ImageGenerationPhase.UploadingReference
         } else {
             ImageGenerationPhase.Rendering
@@ -773,7 +808,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val generatedStyle = if (mangaTranslation) "漫画翻译" else imageStyle
         val mangaBatchSignature = if (mangaTranslation) {
             buildString {
-                append(profile.id).append('|').append(model).append('|').append(apiPrompt).append('|').append(targetSnapshot.name)
+                append(profile.id).append('|').append(model).append('|')
+                    .append(analysisProfile.id).append('|').append(analysisModel).append('|')
+                    .append(apiPrompt).append('|').append(targetSnapshot.name)
                 selectedPages.forEach { (attachment, _) ->
                     append('|').append(attachment.id).append(':').append(attachment.size)
                         .append(':').append(attachment.width).append('x').append(attachment.height)
@@ -813,6 +850,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         imageJob = viewModelScope.launch {
             try {
                 if (mangaTranslation) {
+                    imageGenerationPhase = ImageGenerationPhase.AnalyzingManga
+                    val mangaAnalysis = mangaAnalysisCache
+                        ?.takeIf { it.signature == mangaBatchSignature }
+                        ?.analysis
+                        ?: try {
+                            repository.analyzeMangaTranslation(
+                                profile = analysisProfile,
+                                model = analysisModel,
+                                target = targetSnapshot,
+                                pages = selectedReferenceInputs,
+                                requestKey = "adchat-manga-analysis-$mangaSeriesId"
+                            ).also { analysis ->
+                                mangaAnalysisCache = MangaAnalysisCache(mangaBatchSignature, analysis)
+                            }
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            imageError = "辅助模型分析失败：${friendlyError(error)}\n尚未提交生图任务，不会产生本批次的生图费用。"
+                            notice = "漫画理解未完成，已停止后续生图"
+                            return@launch
+                        }
+                    imageGenerationPhase = ImageGenerationPhase.UploadingReference
                     val pageResults = coroutineScope {
                         selectedPages.mapIndexedNotNull { index, (attachment, input) ->
                             if (index !in requestedPageIndices) return@mapIndexedNotNull null
@@ -828,7 +887,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         sources = repository.generateImage(
                                             profile = profile,
                                             model = model,
-                                            prompt = apiPrompt,
+                                            prompt = mangaAnalysis.imageEditPrompt(apiPrompt, index),
                                             size = pageSize,
                                             references = listOf(input),
                                             requestKey = requestKey
@@ -1290,6 +1349,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 private data class LoadedReferenceImage(
     val attachment: ReferenceImageAttachment,
     val input: ReferenceImageInput
+)
+
+private data class MangaAnalysisCache(
+    val signature: String,
+    val analysis: MangaTranslationAnalysis
 )
 
 private fun String.isImageLike(): Boolean {

@@ -401,10 +401,15 @@ private fun RouteAssignmentCard(
 ) {
     var showProfileSheet by remember { mutableStateOf(false) }
     var showModelSheet by remember { mutableStateOf(false) }
-    val configured = if (kind == RouteKind.Chat) profile.chatModel else profile.imageModel
+    val configured = when (kind) {
+        RouteKind.Chat -> profile.chatModel
+        RouteKind.Image -> profile.imageModel
+        RouteKind.Analysis -> profile.mangaAnalysisModel.ifBlank { profile.chatModel }
+    }
     val candidates = when (kind) {
         RouteKind.Chat -> models.filterNot { it.id.isImageLike() }.ifEmpty { models }
         RouteKind.Image -> models.filter { it.id.isImageLike() }.ifEmpty { models }
+        RouteKind.Analysis -> models
     }
     val displayModels = buildList {
         if (configured.isNotBlank() && candidates.none { it.id == configured }) add(ApiModel(configured))
