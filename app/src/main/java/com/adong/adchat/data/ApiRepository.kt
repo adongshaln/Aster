@@ -48,6 +48,10 @@ class ApiRepository {
         .retryOnConnectionFailure(true)
         .build()
 
+    private val imageClient = client.newBuilder()
+        .applyImageRequestPolicy()
+        .build()
+
     suspend fun fetchModels(profile: ApiProfile): ConnectionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
         val url = resolveUrl(profile.baseUrl, profile.modelsPath)
@@ -466,17 +470,25 @@ class ApiRepository {
         model: String,
         prompt: String,
         size: String,
-        references: List<ReferenceImageInput> = emptyList()
+        references: List<ReferenceImageInput> = emptyList(),
+        requestKey: String = ""
     ): List<String> = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
         val responseText = if (references.isEmpty()) {
             val body = JSONObject().put("model", model).put("prompt", prompt).put("n", 1).put("size", size)
-            executePost(profile, profile.imagePath, body)
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imagePath))
+                .applyImageRequestKey(requestKey)
+                .post(body.toString().toRequestBody(jsonMedia))
+                .build()
+            executeTextCall(imageClient.newCall(request))
         } else {
             val multipart = buildImageEditMultipart(model, prompt, size, references)
-            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imageEditPath)).post(multipart).build()
-            executeTextCall(client.newCall(request))
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imageEditPath))
+                .applyImageRequestKey(requestKey)
+                .post(multipart)
+                .build()
+            executeTextCall(imageClient.newCall(request))
         }
         val data = JSONObject(responseText).optJSONArray("data") ?: throw IllegalStateException("API 返回中没有 data 数组")
         buildList {
@@ -487,13 +499,6 @@ class ApiRepository {
                 when { url.isNotBlank() -> add(url); b64.isNotBlank() -> add("data:image/png;base64,$b64") }
             }
         }.ifEmpty { throw IllegalStateException("API 没有返回图片地址或图片数据") }
-    }
-
-    private suspend fun executePost(profile: ApiProfile, path: String, json: JSONObject): String {
-        val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path))
-            .post(json.toString().toRequestBody(jsonMedia))
-            .build()
-        return executeTextCall(client.newCall(request))
     }
 
     private suspend fun executeTextCall(call: Call): String {
@@ -632,6 +637,12 @@ class ApiRepository {
             }
         }
         return builder
+    }
+
+    private fun Request.Builder.applyImageRequestKey(requestKey: String): Request.Builder = apply {
+        requestKey.trim().takeIf { it.isNotBlank() }?.let { key ->
+            header("Idempotency-Key", key.take(128))
+        }
     }
 
     private class ResumeDeltaDeduplicator(

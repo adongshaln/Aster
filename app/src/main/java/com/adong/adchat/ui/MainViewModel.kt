@@ -130,6 +130,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private var imageJob: Job? = null
     private var imageStopRequested = false
+    private var mangaRetryPlan: MangaTranslationRetryPlan? = null
     var imageError by mutableStateOf<String?>(null)
         private set
     var notice by mutableStateOf<String?>(null)
@@ -770,13 +771,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val generatedStyle = if (mangaTranslation) "漫画翻译" else imageStyle
+        val mangaBatchSignature = if (mangaTranslation) {
+            buildString {
+                append(profile.id).append('|').append(model).append('|').append(apiPrompt).append('|').append(targetSnapshot.name)
+                selectedPages.forEach { (attachment, _) ->
+                    append('|').append(attachment.id).append(':').append(attachment.size)
+                        .append(':').append(attachment.width).append('x').append(attachment.height)
+                }
+            }
+        } else {
+            ""
+        }
+        val retryPlan = mangaRetryPlan?.takeIf {
+            mangaTranslation && it.reusableFor(mangaBatchSignature, selectedPages.size, SystemClock.elapsedRealtime())
+        }
+        val requestedPageIndices = if (mangaTranslation) {
+            retryPlan?.pageIndices ?: selectedPages.indices.toSet()
+        } else {
+            emptySet()
+        }
+        val pageRequestKeys = if (mangaTranslation) {
+            requestedPageIndices.associateWith { index -> retryPlan?.requestKeys?.get(index) ?: newImageRequestKey() }
+        } else {
+            emptyMap()
+        }
+        if (mangaTranslation) {
+            imageBatchTotal = requestedPageIndices.size
+            mangaRetryPlan = MangaTranslationRetryPlan(
+                signature = mangaBatchSignature,
+                pageIndices = requestedPageIndices,
+                requestKeys = pageRequestKeys,
+                createdAt = SystemClock.elapsedRealtime()
+            )
+            if (retryPlan != null) notice = "仅重试上次未完成的 ${requestedPageIndices.size} 张漫画，已完成页面不会重复提交"
+        }
+        val standardImageRequestKey = if (mangaTranslation) "" else newImageRequestKey()
         imageJob = viewModelScope.launch {
             try {
                 if (mangaTranslation) {
                     val pageResults = coroutineScope {
-                        selectedPages.mapIndexed { index, (attachment, input) ->
+                        selectedPages.mapIndexedNotNull { index, (attachment, input) ->
+                            if (index !in requestedPageIndices) return@mapIndexedNotNull null
                             async {
                                 val pageSize = canvasSizeForReference(attachment.width, attachment.height)
+                                val pageStartedAt = SystemClock.elapsedRealtime()
+                                val requestKey = pageRequestKeys.getValue(index)
                                 try {
                                     MangaTranslationPageResult(
                                         index = index,
@@ -787,17 +826,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                             model = model,
                                             prompt = apiPrompt,
                                             size = pageSize,
-                                            references = listOf(input)
-                                        )
+                                            references = listOf(input),
+                                            requestKey = requestKey
+                                        ),
+                                        requestKey = requestKey,
+                                        durationMs = SystemClock.elapsedRealtime() - pageStartedAt
                                     )
                                 } catch (error: CancellationException) {
                                     throw error
                                 } catch (error: Throwable) {
+                                    val deliveryUncertain = imageDeliveryMayBeUncertain(error)
                                     MangaTranslationPageResult(
                                         index = index,
                                         name = attachment.name,
                                         size = pageSize,
-                                        errorMessage = safeMangaError(error)
+                                        errorMessage = safeMangaError(error, deliveryUncertain),
+                                        requestKey = requestKey,
+                                        deliveryUncertain = deliveryUncertain,
+                                        durationMs = SystemClock.elapsedRealtime() - pageStartedAt
                                     )
                                 } finally {
                                     imageBatchCompleted += 1
@@ -805,12 +851,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }.awaitAll()
                     }
+                    mangaRetryPlan = nextMangaRetryPlan(
+                        signature = mangaBatchSignature,
+                        results = pageResults,
+                        now = SystemClock.elapsedRealtime(),
+                        newRequestKey = { newImageRequestKey() }
+                    )
                     val orderedSuccesses = orderedMangaSuccesses(pageResults)
                     val failureSummary = mangaFailureSummary(pageResults)
                     val successfulPages = pageResults.count(MangaTranslationPageResult::successful)
                     if (orderedSuccesses.isEmpty()) {
                         imageError = failureSummary.ifBlank { "所有漫画页均翻译失败" }
-                        notice = "本次 ${pageResults.size} 张漫画均未完成"
+                        notice = if (pageResults.any(MangaTranslationPageResult::deliveryUncertain)) {
+                            "请求可能已到达供应商；应用未自动重试，以避免再次扣费"
+                        } else {
+                            "本次 ${pageResults.size} 张漫画均未完成"
+                        }
                         return@launch
                     }
                     imageGenerationPhase = ImageGenerationPhase.Saving
@@ -839,7 +895,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 } else {
                     val sources = withContext(Dispatchers.IO) {
-                        repository.generateImage(profile, model, apiPrompt, imageSize, selectedReferenceInputs)
+                        repository.generateImage(
+                            profile = profile,
+                            model = model,
+                            prompt = apiPrompt,
+                            size = imageSize,
+                            references = selectedReferenceInputs,
+                            requestKey = standardImageRequestKey
+                        )
                     }
                     imageGenerationPhase = ImageGenerationPhase.Saving
                     val cachedSources = withContext(Dispatchers.IO) {
@@ -861,7 +924,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } catch (error: Throwable) {
                 when {
-                    imageStopRequested -> notice = "已停止本次图片生成"
+                    imageStopRequested -> notice = "已停止等待；供应商端任务可能仍在处理，请勿立即重复提交"
                     error is CancellationException -> throw error
                     else -> imageError = friendlyError(error)
                 }
@@ -1176,7 +1239,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun safeMangaError(error: Throwable): String {
+    private fun safeMangaError(error: Throwable, deliveryUncertain: Boolean): String {
+        if (deliveryUncertain) {
+            return "长时间等待后连接中断；请求可能已被供应商接收，应用没有自动重试以避免重复扣费"
+        }
         val value = friendlyError(error)
         return if (
             value.contains("最高优先级规则") ||
@@ -1188,6 +1254,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             value.take(220)
         }
     }
+
+    private fun newImageRequestKey(): String = "adchat-image-${UUID.randomUUID()}"
 
     private fun replaceMessage(id: Long, transform: (ChatMessage) -> ChatMessage) {
         messages.indexOfFirst { it.id == id }.takeIf { it >= 0 }?.let { messages[it] = transform(messages[it]) }

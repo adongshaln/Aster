@@ -606,7 +606,7 @@ private fun PromptStudio(
                         )
                         Spacer(Modifier.width(9.dp))
                         Text(
-                            if (isLoading) "停止生成" else if (mangaTranslation) "开始翻译漫画" else "开始生成",
+                            if (isLoading) "停止等待" else if (mangaTranslation) "开始翻译漫画" else "开始生成",
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -700,7 +700,16 @@ private fun GenerationStatus(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.labelLarge)
-                    Text("已用时 $elapsed · 可随时停止", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        if (mangaTranslation) {
+                            if (elapsedMs >= 3 * 60_000L) "已用时 $elapsed · 服务端仍在处理，请勿重复提交"
+                            else "已用时 $elapsed · 复杂页面可能需要数分钟"
+                        } else {
+                            "已用时 $elapsed · 停止等待后服务端仍可能继续处理"
+                        },
+                        color = MutedInk,
+                        style = MaterialTheme.typography.labelMedium
+                    )
                 }
             }
             Spacer(Modifier.height(11.dp))
