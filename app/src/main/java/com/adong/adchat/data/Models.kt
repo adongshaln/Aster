@@ -299,7 +299,11 @@ data class GeneratedImage(
     val size: String = "1024x1024",
     val style: String = "原始",
     val profileName: String = "",
-    val model: String = ""
+    val model: String = "",
+    val seriesId: String = "",
+    val seriesIndex: Int = 0,
+    val seriesTotal: Int = 0,
+    val seriesTitle: String = ""
 )
 
 

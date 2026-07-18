@@ -36,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -54,8 +55,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.adong.adchat.data.ArtworkCollection
 import com.adong.adchat.data.GeneratedImage
 import com.adong.adchat.data.ReferenceImageAttachment
+import com.adong.adchat.data.groupArtworkCollections
 import com.adong.adchat.ui.ImageGenerationPhase
 import com.adong.adchat.ui.ImageWorkflow
 import com.adong.adchat.ui.MainViewModel
@@ -80,6 +83,7 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     var replacingReferenceId by remember { mutableStateOf<String?>(null) }
     var deleteCandidate by remember { mutableStateOf<GeneratedImage?>(null) }
     var observedImageCount by remember { mutableIntStateOf(vm.images.size) }
+    val galleryCollections by remember { derivedStateOf { groupArtworkCollections(vm.images.toList()) } }
     val referencePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(2)) { uris ->
         if (uris.isNotEmpty()) vm.attachReferenceImages(uris)
     }
@@ -180,18 +184,37 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     Text("${vm.images.size} 张", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
             }
-            items(vm.images, key = { it.id }, contentType = { "artwork" }) { image ->
-                ArtworkCard(
-                    image = image,
-                    modifier = Modifier.animateItem(),
-                    onPreview = { selectedArtwork = image },
-                    onSave = { vm.saveImageToGallery(image) },
-                    onReuse = {
-                        vm.reuseImagePrompt(image)
-                        scope.launch { listState.animateScrollToItem(2) }
-                    },
-                    onDelete = { deleteCandidate = image }
-                )
+            items(
+                items = galleryCollections,
+                key = { it.key },
+                contentType = { if (it.isSeries) "artwork-series" else "artwork" }
+            ) { collection ->
+                if (collection.isSeries) {
+                    MangaArtworkSeriesCard(
+                        collection = collection,
+                        modifier = Modifier.animateItem(),
+                        onPreview = { selectedArtwork = it },
+                        onSave = vm::saveImageToGallery,
+                        onReuse = { image ->
+                            vm.reuseImagePrompt(image)
+                            scope.launch { listState.animateScrollToItem(2) }
+                        },
+                        onDelete = { deleteCandidate = it }
+                    )
+                } else {
+                    val image = collection.images.first()
+                    ArtworkCard(
+                        image = image,
+                        modifier = Modifier.animateItem(),
+                        onPreview = { selectedArtwork = image },
+                        onSave = { vm.saveImageToGallery(image) },
+                        onReuse = {
+                            vm.reuseImagePrompt(image)
+                            scope.launch { listState.animateScrollToItem(2) }
+                        },
+                        onDelete = { deleteCandidate = image }
+                    )
+                }
             }
         }
         item(key = "bottom-space") { Spacer(Modifier.height(18.dp)) }
@@ -810,6 +833,114 @@ private fun EmptyGallery() {
         Text("第一张作品，等待你的想法", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(4.dp))
         Text("生成结果会保留在本次使用记录中", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun MangaArtworkSeriesCard(
+    collection: ArtworkCollection,
+    modifier: Modifier = Modifier,
+    onPreview: (GeneratedImage) -> Unit,
+    onSave: (GeneratedImage) -> Unit,
+    onReuse: (GeneratedImage) -> Unit,
+    onDelete: (GeneratedImage) -> Unit
+) {
+    var expanded by rememberSaveable(collection.seriesId) { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, tween(220), label = "series-arrow")
+    val first = collection.images.first()
+    Column(modifier.animateContentSize(tween(260, easing = FastOutSlowInEasing))) {
+        Surface(color = Surface, shape = RoundedCornerShape(24.dp), shadowElevation = 1.dp) {
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().clickable { expanded = !expanded }
+                        .padding(horizontal = 15.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Translate, null, Modifier.size(21.dp), tint = Accent)
+                    }
+                    Spacer(Modifier.width(11.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(collection.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            "同批次系列 · 已完成 ${collection.images.size}/${collection.expectedTotal} 页",
+                            color = MutedInk,
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                    Box(Modifier.size(36.dp).clip(CircleShape).background(Canvas), contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Rounded.ExpandMore,
+                            if (expanded) "折叠系列" else "展开系列",
+                            Modifier.size(20.dp).graphicsLayer { rotationZ = arrowRotation },
+                            tint = MutedInk
+                        )
+                    }
+                }
+                AnimatedVisibility(visible = !expanded, enter = fadeIn(tween(180)), exit = fadeOut(tween(100))) {
+                    Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 13.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth().height(148.dp).clip(RoundedCornerShape(18.dp)),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            collection.images.take(4).forEach { image ->
+                                Box(
+                                    Modifier.weight(1f).fillMaxHeight().background(Color(0xFFE9E5DF))
+                                        .clickable { onPreview(image) },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    AsyncImage(
+                                        model = imageModel(image.source),
+                                        contentDescription = "系列第 ${image.seriesIndex + 1} 页",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                    Surface(
+                                        color = Night.copy(alpha = .76f),
+                                        contentColor = Color.White,
+                                        shape = CircleShape,
+                                        modifier = Modifier.align(Alignment.BottomStart).padding(7.dp)
+                                    ) {
+                                        Text(
+                                            "${image.seriesIndex + 1}",
+                                            Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            MetadataPill(first.profileName)
+                            Spacer(Modifier.width(7.dp))
+                            MetadataPill(first.model)
+                            Spacer(Modifier.weight(1f))
+                            Text("点击展开", color = Accent, style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                }
+            }
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(190)) + scaleIn(tween(240), initialScale = .98f),
+            exit = fadeOut(tween(110)) + scaleOut(tween(150), targetScale = .98f)
+        ) {
+            Column {
+                collection.images.forEach { image ->
+                    Spacer(Modifier.height(12.dp))
+                    ArtworkCard(
+                        image = image,
+                        onPreview = { onPreview(image) },
+                        onSave = { onSave(image) },
+                        onReuse = { onReuse(image) },
+                        onDelete = { onDelete(image) }
+                    )
+                }
+            }
+        }
     }
 }
 

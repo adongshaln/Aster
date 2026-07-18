@@ -37,12 +37,16 @@ class MangaTranslationBatchTest {
                 MangaTranslationPageResult(2, "3.png", "1024x1536", errorMessage = "HTTP 429", requestKey = "old-key")
             ),
             now = 1_000L,
+            seriesId = "series-1",
+            seriesTotal = 3,
             newRequestKey = { index -> "new-$index" }
         )!!
 
         assertEquals(setOf(1, 2), plan.pageIndices)
         assertEquals("paid-key", plan.requestKeys.getValue(1))
         assertEquals("new-2", plan.requestKeys.getValue(2))
+        assertEquals("series-1", plan.seriesId)
+        assertEquals(3, plan.seriesTotal)
         assertTrue(plan.reusableFor("same-batch", pageCount = 3, now = 2_000L))
     }
 

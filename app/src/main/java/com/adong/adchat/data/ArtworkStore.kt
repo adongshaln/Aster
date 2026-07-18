@@ -38,7 +38,11 @@ class ArtworkStore(private val context: Context) {
                     size = item.optString("size", "1024x1024"),
                     style = item.optString("style", "原始"),
                     profileName = item.optString("profileName"),
-                    model = item.optString("model")
+                    model = item.optString("model"),
+                    seriesId = item.optString("seriesId"),
+                    seriesIndex = item.optInt("seriesIndex"),
+                    seriesTotal = item.optInt("seriesTotal"),
+                    seriesTitle = item.optString("seriesTitle")
                 ))
             }
         }
@@ -54,7 +58,11 @@ class ArtworkStore(private val context: Context) {
                 .put("size", image.size)
                 .put("style", image.style)
                 .put("profileName", image.profileName)
-                .put("model", image.model))
+                .put("model", image.model)
+                .put("seriesId", image.seriesId)
+                .put("seriesIndex", image.seriesIndex)
+                .put("seriesTotal", image.seriesTotal)
+                .put("seriesTitle", image.seriesTitle))
         }
         prefs.edit().putString(KEY, array.toString()).apply()
         val retained = images.take(MAX_ITEMS).mapNotNull { it.source.takeIf { source -> source.startsWith("file://") }?.removePrefix("file://") }.toSet()

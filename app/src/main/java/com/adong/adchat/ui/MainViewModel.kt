@@ -795,13 +795,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             emptyMap()
         }
+        val mangaSeriesId = if (mangaTranslation) retryPlan?.seriesId ?: UUID.randomUUID().toString() else ""
+        val mangaSeriesTotal = if (mangaTranslation) retryPlan?.seriesTotal ?: selectedPages.size else 0
         if (mangaTranslation) {
             imageBatchTotal = requestedPageIndices.size
             mangaRetryPlan = MangaTranslationRetryPlan(
                 signature = mangaBatchSignature,
                 pageIndices = requestedPageIndices,
                 requestKeys = pageRequestKeys,
-                createdAt = SystemClock.elapsedRealtime()
+                createdAt = SystemClock.elapsedRealtime(),
+                seriesId = mangaSeriesId,
+                seriesTotal = mangaSeriesTotal
             )
             if (retryPlan != null) notice = "仅重试上次未完成的 ${requestedPageIndices.size} 张漫画，已完成页面不会重复提交"
         }
@@ -855,6 +859,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         signature = mangaBatchSignature,
                         results = pageResults,
                         now = SystemClock.elapsedRealtime(),
+                        seriesId = mangaSeriesId,
+                        seriesTotal = mangaSeriesTotal,
                         newRequestKey = { newImageRequestKey() }
                     )
                     val orderedSuccesses = orderedMangaSuccesses(pageResults)
@@ -882,7 +888,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             size = page.size,
                             style = generatedStyle,
                             profileName = profile.name,
-                            model = model
+                            model = model,
+                            seriesId = mangaSeriesId,
+                            seriesIndex = page.index,
+                            seriesTotal = mangaSeriesTotal,
+                            seriesTitle = "漫画翻译 · ${targetSnapshot.shortLabel}"
                         )
                     }
                     images.addAll(0, generatedImages)

@@ -17,7 +17,9 @@ internal data class MangaTranslationRetryPlan(
     val signature: String,
     val pageIndices: Set<Int>,
     val requestKeys: Map<Int, String>,
-    val createdAt: Long
+    val createdAt: Long,
+    val seriesId: String,
+    val seriesTotal: Int
 )
 
 internal fun orderedMangaSuccesses(
@@ -49,6 +51,8 @@ internal fun nextMangaRetryPlan(
     signature: String,
     results: List<MangaTranslationPageResult>,
     now: Long,
+    seriesId: String,
+    seriesTotal: Int,
     newRequestKey: (Int) -> String
 ): MangaTranslationRetryPlan? {
     val failures = results.filterNot(MangaTranslationPageResult::successful)
@@ -60,7 +64,9 @@ internal fun nextMangaRetryPlan(
             page.index to page.requestKey.takeIf { page.deliveryUncertain && it.isNotBlank() }
                 .orEmpty().ifBlank { newRequestKey(page.index) }
         },
-        createdAt = now
+        createdAt = now,
+        seriesId = seriesId,
+        seriesTotal = seriesTotal
     )
 }
 
