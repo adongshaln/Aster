@@ -13,11 +13,18 @@ internal const val IMAGE_READ_TIMEOUT_MINUTES = 90L
 internal const val IMAGE_WRITE_TIMEOUT_MINUTES = 20L
 internal const val MANGA_ANALYSIS_READ_TIMEOUT_MINUTES = 45L
 internal const val MANGA_ANALYSIS_WRITE_TIMEOUT_MINUTES = 10L
-internal const val MAX_CONCURRENT_IMAGE_TASKS = 12
+internal const val MAX_CONCURRENT_IMAGE_COUNT = 20
+internal const val MAX_MANGA_BATCH_IMAGES = 20
+
+internal fun canReserveImageCapacity(activeImages: Int, requestedImages: Int): Boolean =
+    activeImages >= 0 && requestedImages > 0 && activeImages + requestedImages <= MAX_CONCURRENT_IMAGE_COUNT
+
+internal fun remainingActiveImages(reservedImages: Int, completedImages: Int): Int =
+    (reservedImages - completedImages).coerceAtLeast(0)
 
 internal fun longTaskDispatcher(): Dispatcher = Dispatcher().apply {
-    maxRequests = MAX_CONCURRENT_IMAGE_TASKS
-    maxRequestsPerHost = MAX_CONCURRENT_IMAGE_TASKS
+    maxRequests = MAX_CONCURRENT_IMAGE_COUNT
+    maxRequestsPerHost = MAX_CONCURRENT_IMAGE_COUNT
 }
 
 internal fun OkHttpClient.Builder.applyImageRequestPolicy(): OkHttpClient.Builder = apply {

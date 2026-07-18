@@ -43,11 +43,24 @@ class ImageRequestPolicyTest {
     }
 
     @Test
-    fun longTaskDispatcherAllowsTwelveIndependentRequests() {
+    fun longTaskDispatcherAllowsTwentyConcurrentImages() {
         val dispatcher = longTaskDispatcher()
 
-        assertEquals(12, MAX_CONCURRENT_IMAGE_TASKS)
-        assertEquals(MAX_CONCURRENT_IMAGE_TASKS, dispatcher.maxRequests)
-        assertEquals(MAX_CONCURRENT_IMAGE_TASKS, dispatcher.maxRequestsPerHost)
+        assertEquals(20, MAX_CONCURRENT_IMAGE_COUNT)
+        assertEquals(20, MAX_MANGA_BATCH_IMAGES)
+        assertEquals(MAX_CONCURRENT_IMAGE_COUNT, dispatcher.maxRequests)
+        assertEquals(MAX_CONCURRENT_IMAGE_COUNT, dispatcher.maxRequestsPerHost)
+    }
+
+    @Test
+    fun imageCapacitySupportsSplitBatchesWithoutExceedingTwenty() {
+        assertEquals(true, canReserveImageCapacity(activeImages = 0, requestedImages = 20))
+        assertEquals(true, canReserveImageCapacity(activeImages = 10, requestedImages = 10))
+        assertEquals(true, canReserveImageCapacity(activeImages = 15, requestedImages = 5))
+        assertEquals(false, canReserveImageCapacity(activeImages = 16, requestedImages = 5))
+        assertEquals(false, canReserveImageCapacity(activeImages = 20, requestedImages = 1))
+        assertEquals(10, remainingActiveImages(reservedImages = 10, completedImages = 0))
+        assertEquals(5, remainingActiveImages(reservedImages = 10, completedImages = 5))
+        assertEquals(0, remainingActiveImages(reservedImages = 10, completedImages = 10))
     }
 }

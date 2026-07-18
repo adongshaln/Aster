@@ -88,8 +88,11 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val referencePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(2)) { uris ->
         if (uris.isNotEmpty()) vm.attachReferenceImages(uris)
     }
-    val mangaReferencePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
+    val mangaReferencePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
         if (uris.isNotEmpty()) vm.attachReferenceImages(uris)
+    }
+    val mangaAppendPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris ->
+        if (uris.isNotEmpty()) vm.appendReferenceImages(uris)
     }
     val singleReferencePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         val replacementId = replacingReferenceId
@@ -158,8 +161,12 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     }
                 },
                 onAddReference = {
-                    replacingReferenceId = null
-                    singleReferencePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    if (vm.imageWorkflow == ImageWorkflow.MangaTranslation) {
+                        mangaAppendPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    } else {
+                        replacingReferenceId = null
+                        singleReferencePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    }
                 },
                 onPreviewReference = { previewReference = it },
                 onReplaceReference = { id ->
@@ -173,7 +180,8 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 batchCompleted = vm.imageBatchCompleted,
                 batchTotal = vm.imageBatchTotal,
                 activeTaskCount = vm.activeImageTaskCount,
-                maxTaskCount = vm.maxConcurrentImageTasks,
+                activeImageCount = vm.activeImageCount,
+                maxImageCount = vm.maxConcurrentImageCount,
                 canStartTask = vm.canStartImageTask,
                 statusMangaTranslation = vm.activeImageTaskIsManga,
                 statusReferenceCount = vm.activeImageTaskReferenceCount,
@@ -399,7 +407,8 @@ private fun PromptStudio(
     batchCompleted: Int,
     batchTotal: Int,
     activeTaskCount: Int,
-    maxTaskCount: Int,
+    activeImageCount: Int,
+    maxImageCount: Int,
     canStartTask: Boolean,
     statusMangaTranslation: Boolean,
     statusReferenceCount: Int,
@@ -465,7 +474,7 @@ private fun PromptStudio(
                 Text(if (mangaTranslation) "漫画原图（必选）" else "参考图（可选）", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.weight(1f))
                 Text(
-                    "${referenceImages.size}/${if (mangaTranslation) 4 else 2}",
+                    "${referenceImages.size}/${if (mangaTranslation) 20 else 2}",
                     color = if (referenceImages.isNotEmpty()) Accent else MutedInk,
                     style = MaterialTheme.typography.labelMedium
                 )
@@ -505,13 +514,13 @@ private fun PromptStudio(
                                 Text(
                                     when {
                                         referenceLoading -> "正在读取图片"
-                                        mangaTranslation -> "添加 1–4 张漫画原图"
+                                        mangaTranslation -> "添加 1–20 张漫画原图"
                                         else -> "添加 1–2 张参考图"
                                     },
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    if (mangaTranslation) "可一次多选 · 每张最大 20 MB" else "可一次多选；每张最大 20 MB",
+                                    if (mangaTranslation) "可一次多选 · 每张最大 20 MB · 自动优化分析副本" else "可一次多选；每张最大 20 MB",
                                     color = MutedInk,
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -530,7 +539,7 @@ private fun PromptStudio(
                             onRemove = { onRemoveReference(reference.id) }
                         )
                     }
-                    val maximum = if (mangaTranslation) 4 else 2
+                    val maximum = if (mangaTranslation) 20 else 2
                     if (referenceImages.size < maximum) {
                         Surface(
                             onClick = {
@@ -562,7 +571,7 @@ private fun PromptStudio(
                     }
                     Text(
                         if (mangaTranslation) {
-                            "单批最多 4 张；最多可同时运行 12 项任务。"
+                            "单批最多 20 张；所有任务合计最多并发 20 张。"
                         } else {
                             "多图能力取决于当前绘图模型与 API；上传顺序会被保留。"
                         },
@@ -638,7 +647,8 @@ private fun PromptStudio(
                         batchCompleted,
                         batchTotal,
                         activeTaskCount,
-                        maxTaskCount,
+                        activeImageCount,
+                        maxImageCount,
                         onStop
                     )
                 }
@@ -649,7 +659,7 @@ private fun PromptStudio(
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onGenerate()
                 },
-                enabled = canStartTask && prompt.isNotBlank() && !referenceLoading && (!mangaTranslation || referenceImages.size in 1..4),
+                enabled = canStartTask && prompt.isNotBlank() && !referenceLoading && (!mangaTranslation || referenceImages.size in 1..20),
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -675,7 +685,7 @@ private fun PromptStudio(
                         Text(
                             when {
                                 !canStartTask -> "并发任务已满"
-                                hasActiveTasks -> "并行提交下一项 · $activeTaskCount/$maxTaskCount"
+                                hasActiveTasks -> "提交下一批 · $activeImageCount/$maxImageCount 张"
                                 mangaTranslation -> "开始翻译漫画"
                                 else -> "开始生成"
                             },
@@ -747,7 +757,8 @@ private fun GenerationStatus(
     batchCompleted: Int,
     batchTotal: Int,
     activeTaskCount: Int,
-    maxTaskCount: Int,
+    activeImageCount: Int,
+    maxImageCount: Int,
     onStopLatest: () -> Unit
 ) {
     val title = if (mangaTranslation) {
@@ -779,7 +790,7 @@ private fun GenerationStatus(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(title, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
                         Text(
-                            "$activeTaskCount/$maxTaskCount",
+                            "$activeTaskCount 项 · $activeImageCount/$maxImageCount 张",
                             color = Accent,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold

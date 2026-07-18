@@ -1,8 +1,13 @@
 package com.adong.adchat.ui
 
 import android.app.Application
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ImageDecoder
 import android.net.Uri
+import android.os.Build
 import android.provider.OpenableColumns
 import android.os.SystemClock
 import androidx.compose.runtime.*
@@ -23,6 +28,8 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.io.ByteArrayOutputStream
+import java.nio.ByteBuffer
 import kotlin.coroutines.cancellation.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
@@ -37,6 +44,7 @@ data class ImageTaskUiState(
     val phase: ImageGenerationPhase,
     val mangaTranslation: Boolean,
     val referenceCount: Int,
+    val imageCount: Int,
     val completed: Int = 0,
     val total: Int = 0
 )
@@ -127,6 +135,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     val referenceImages = mutableStateListOf<ReferenceImageAttachment>()
     private val referenceImageInputs = linkedMapOf<String, ReferenceImageInput>()
+    private val referenceAnalysisInputs = linkedMapOf<String, ReferenceImageInput>()
     var isReferenceLoading by mutableStateOf(false)
         private set
     var isChatLoading by mutableStateOf(false)
@@ -136,7 +145,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
     private val imageTaskJobs = linkedMapOf<String, Job>()
     private val manuallyStoppedImageTasks = hashSetOf<String>()
-    private val imageRequestSlots = Semaphore(MAX_CONCURRENT_IMAGE_TASKS)
+    private val imageRequestSlots = Semaphore(MAX_CONCURRENT_IMAGE_COUNT)
     private val mangaRetryPlans = linkedMapOf<String, MangaTranslationRetryPlan>()
     private val mangaAnalysisCache = linkedMapOf<String, MangaTranslationAnalysis>()
     private val activeImageSignatures = hashSetOf<String>()
@@ -144,8 +153,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         get() = imageTaskStates.values.maxByOrNull(ImageTaskUiState::startedAt)
     val isImageLoading: Boolean get() = imageTaskStates.isNotEmpty()
     val activeImageTaskCount: Int get() = imageTaskStates.size
-    val maxConcurrentImageTasks: Int get() = MAX_CONCURRENT_IMAGE_TASKS
-    val canStartImageTask: Boolean get() = activeImageTaskCount < MAX_CONCURRENT_IMAGE_TASKS
+    val activeImageCount: Int
+        get() = imageTaskStates.values.sumOf { state -> remainingActiveImages(state.imageCount, state.completed) }
+    val maxConcurrentImageCount: Int get() = MAX_CONCURRENT_IMAGE_COUNT
+    val canStartImageTask: Boolean get() = activeImageCount < MAX_CONCURRENT_IMAGE_COUNT
     val imageGenerationPhase: ImageGenerationPhase get() = latestImageTask?.phase ?: ImageGenerationPhase.Idle
     val imageGenerationStartedAt: Long get() = latestImageTask?.startedAt ?: 0L
     val imageBatchCompleted: Int get() = latestImageTask?.completed ?: 0
@@ -184,7 +195,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         drawPrompt = MangaTranslationPrompt.build(target)
         imageError = null
         notice = if (referenceImages.isEmpty()) {
-            "漫画翻译模式已启用，请添加 1–4 张漫画原图"
+            "漫画翻译模式已启用，请添加 1–20 张漫画原图"
         } else {
             "漫画翻译模式已启用，可并发处理 ${referenceImages.size} 张"
         }
@@ -198,7 +209,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val preset = MangaTranslationPrompt.build(mangaTranslationTarget)
         if (drawPrompt.trim() == preset.trim()) drawPrompt = ""
         if (referenceImages.size > MAX_REFERENCE_IMAGES) {
-            referenceImages.drop(MAX_REFERENCE_IMAGES).forEach { referenceImageInputs.remove(it.id) }
+            referenceImages.drop(MAX_REFERENCE_IMAGES).forEach {
+                referenceImageInputs.remove(it.id)
+                referenceAnalysisInputs.remove(it.id)
+            }
             while (referenceImages.size > MAX_REFERENCE_IMAGES) referenceImages.removeAt(referenceImages.lastIndex)
         }
         imageWorkflow = ImageWorkflow.Standard
@@ -774,10 +788,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun generateImage() {
         val prompt = drawPrompt.trim()
         if (prompt.isEmpty()) return
-        if (!canStartImageTask) {
-            imageError = "同时运行的任务已达到 $MAX_CONCURRENT_IMAGE_TASKS 项，请等待任意一项完成后再提交"
-            return
-        }
         if (isReferenceLoading) {
             notice = "参考图仍在读取，请稍候"
             return
@@ -787,7 +797,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val analysisProfile = mangaAnalysisProfile
         val analysisModel = analysisProfile.mangaAnalysisModel
         val selectedPages = referenceImages.mapNotNull { attachment ->
-            referenceImageInputs[attachment.id]?.let { input -> attachment to input }
+            referenceImageInputs[attachment.id]?.let { input ->
+                SelectedReferencePage(
+                    attachment = attachment,
+                    input = input,
+                    analysisInput = referenceAnalysisInputs[attachment.id] ?: input
+                )
+            }
         }
         val mangaTranslation = imageWorkflow == ImageWorkflow.MangaTranslation
         if (mangaTranslation && selectedPages.size !in 1..MAX_MANGA_IMAGES) {
@@ -798,7 +814,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             imageError = "请先选择支持图片输入的漫画辅助模型"
             return
         }
-        val selectedReferenceInputs = selectedPages.map { it.second }
+        val selectedReferenceInputs = selectedPages.map { it.input }
+        val selectedAnalysisInputs = selectedPages.map { it.analysisInput }
         val targetSnapshot = mangaTranslationTarget
         val sizeSnapshot = imageSize
         val styleSnapshot = imageStyle
@@ -822,7 +839,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append('|').append(analysisProfile.id).append('|').append(analysisModel)
                     .append('|').append(targetSnapshot.name)
             }
-            selectedPages.forEach { (attachment, _) ->
+            selectedPages.forEach { page ->
+                val attachment = page.attachment
                 append('|').append(attachment.id).append(':').append(attachment.size)
                     .append(':').append(attachment.width).append('x').append(attachment.height)
             }
@@ -840,6 +858,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             retryPlan?.pageIndices ?: selectedPages.indices.toSet()
         } else {
             emptySet()
+        }
+        val requestedImageCount = if (mangaTranslation) requestedPageIndices.size else 1
+        if (!canReserveImageCapacity(activeImageCount, requestedImageCount)) {
+            imageError = "当前已有 $activeImageCount 张图片在处理中，本批需要 $requestedImageCount 张；全局并发上限为 $MAX_CONCURRENT_IMAGE_COUNT 张"
+            return
         }
         val pageRequestKeys = if (mangaTranslation) {
             requestedPageIndices.associateWith { index -> retryPlan?.requestKeys?.get(index) ?: newImageRequestKey() }
@@ -876,12 +899,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             phase = initialPhase,
             mangaTranslation = mangaTranslation,
             referenceCount = selectedReferenceInputs.size,
-            total = if (mangaTranslation) requestedPageIndices.size else 0
+            imageCount = requestedImageCount,
+            total = requestedImageCount
         )
         if (retryPlan != null) {
             notice = "仅重试上次未完成的 ${requestedPageIndices.size} 张漫画，其他任务可继续提交"
         } else if (activeImageTaskCount > 1) {
-            notice = "任务已并行提交 · 当前 $activeImageTaskCount/$MAX_CONCURRENT_IMAGE_TASKS"
+            notice = "任务已并行提交 · 当前共 $activeImageCount/$MAX_CONCURRENT_IMAGE_COUNT 张"
         }
 
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
@@ -895,7 +919,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 profile = analysisProfile,
                                 model = analysisModel,
                                 target = targetSnapshot,
-                                pages = selectedReferenceInputs,
+                                pages = selectedAnalysisInputs,
                                 requestKey = "adchat-manga-analysis-$mangaSeriesId"
                             )
                         }.also { analysis -> mangaAnalysisCache[taskSignature] = analysis }
@@ -910,9 +934,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     mangaAnalysisReady = true
                     updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.UploadingReference) }
                     val pageResults = coroutineScope {
-                        selectedPages.mapIndexedNotNull { index, (attachment, input) ->
+                        selectedPages.mapIndexedNotNull { index, page ->
                             if (index !in requestedPageIndices) return@mapIndexedNotNull null
                             async {
+                                val attachment = page.attachment
+                                val input = page.input
                                 val pageSize = canvasSizeForReference(attachment.width, attachment.height)
                                 val pageStartedAt = SystemClock.elapsedRealtime()
                                 val requestKey = pageRequestKeys.getValue(index)
@@ -1016,7 +1042,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             requestKey = standardImageRequestKey
                         )
                     }
-                    updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.Saving) }
+                    updateImageTask(taskId) { it.copy(phase = ImageGenerationPhase.Saving, completed = 1) }
                     val cachedSources = withContext(Dispatchers.IO) {
                         sources.map { source -> runCatching { artworkStore.cacheSource(source) }.getOrDefault(source) }
                     }
@@ -1097,12 +1123,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadReferenceImages(candidates) { loaded, failureCount ->
             referenceImages.clear()
             referenceImageInputs.clear()
+            referenceAnalysisInputs.clear()
             loaded.forEach(::storeReferenceImage)
             notice = when {
                 failureCount > 0 -> "已添加 ${loaded.size} 张参考图，$failureCount 张读取失败"
                 imageWorkflow == ImageWorkflow.MangaTranslation && loaded.size > 1 -> "${loaded.size} 张漫画原图已就绪"
                 loaded.size > 1 -> "${loaded.size} 张参考图已就绪"
                 else -> "参考图已就绪"
+            }
+        }
+    }
+
+    fun appendReferenceImages(uris: List<Uri>) {
+        val maximum = if (imageWorkflow == ImageWorkflow.MangaTranslation) MAX_MANGA_IMAGES else MAX_REFERENCE_IMAGES
+        val remaining = (maximum - referenceImages.size).coerceAtLeast(0)
+        if (remaining == 0) {
+            notice = "当前已达到 $maximum 张图片上限"
+            return
+        }
+        val existingUris = referenceImages.mapTo(hashSetOf()) { it.uri }
+        val candidates = uris.distinctBy(Uri::toString)
+            .filterNot { it.toString() in existingUris }
+            .take(remaining)
+        if (candidates.isEmpty()) {
+            notice = "没有可继续添加的新图片"
+            return
+        }
+        loadReferenceImages(candidates) { loaded, failureCount ->
+            loaded.forEach(::storeReferenceImage)
+            notice = when {
+                failureCount > 0 -> "已追加 ${loaded.size} 张，$failureCount 张读取失败"
+                imageWorkflow == ImageWorkflow.MangaTranslation -> "已添加至 ${referenceImages.size}/$MAX_MANGA_IMAGES 张漫画原图"
+                else -> "参考图已追加"
             }
         }
     }
@@ -1137,8 +1189,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadReferenceImages(listOf(uri)) { loaded, _ ->
             val replacement = loaded.firstOrNull() ?: return@loadReferenceImages
             referenceImageInputs.remove(id)
+            referenceAnalysisInputs.remove(id)
             referenceImages[index] = replacement.attachment.copy(id = id)
             referenceImageInputs[id] = replacement.input
+            referenceAnalysisInputs[id] = replacement.analysisInput
             syncMangaCanvasToReference()
             notice = "参考图已替换"
         }
@@ -1149,6 +1203,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (index < 0) return
         referenceImages.removeAt(index)
         referenceImageInputs.remove(id)
+        referenceAnalysisInputs.remove(id)
         syncMangaCanvasToReference()
         notice = if (referenceImages.isEmpty()) "已移除参考图" else "已移除一张参考图"
     }
@@ -1156,6 +1211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun clearReferenceImages() {
         referenceImages.clear()
         referenceImageInputs.clear()
+        referenceAnalysisInputs.clear()
         syncMangaCanvasToReference()
     }
 
@@ -1166,10 +1222,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (isReferenceLoading) return
         imageError = null
         isReferenceLoading = true
+        val optimizeForManga = imageWorkflow == ImageWorkflow.MangaTranslation
         viewModelScope.launch {
             try {
                 val results = withContext(Dispatchers.IO) {
-                    uris.map { uri -> runCatching { loadReferenceImage(uri) } }
+                    uris.map { uri -> runCatching { loadReferenceImage(uri, optimizeForManga) } }
                 }
                 val loaded = results.mapNotNull(Result<LoadedReferenceImage>::getOrNull)
                 val failures = results.count(Result<LoadedReferenceImage>::isFailure)
@@ -1185,7 +1242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun loadReferenceImage(uri: Uri): LoadedReferenceImage {
+    private fun loadReferenceImage(uri: Uri, optimizeForManga: Boolean): LoadedReferenceImage {
         val resolver = getApplication<Application>().contentResolver
         var name = "reference-image"
         var declaredSize: Long? = null
@@ -1209,14 +1266,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!mime.startsWith("image/", ignoreCase = true)) throw IllegalArgumentException("所选文件不是图片")
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val originalInput = ReferenceImageInput(bytes, mime, name)
+        val renderInput = if (optimizeForManga) {
+            optimizeReferenceInput(
+                input = originalInput,
+                width = bounds.outWidth,
+                height = bounds.outHeight,
+                maxDimension = MANGA_RENDER_MAX_DIMENSION,
+                quality = MANGA_RENDER_JPEG_QUALITY,
+                byteThreshold = MANGA_RENDER_REENCODE_BYTES,
+                enforceDimension = false,
+                suffix = "optimized"
+            )
+        } else {
+            originalInput
+        }
+        val analysisInput = if (optimizeForManga) {
+            optimizeReferenceInput(
+                input = renderInput,
+                width = bounds.outWidth,
+                height = bounds.outHeight,
+                maxDimension = MANGA_ANALYSIS_MAX_DIMENSION,
+                quality = MANGA_ANALYSIS_JPEG_QUALITY,
+                byteThreshold = MANGA_ANALYSIS_REENCODE_BYTES,
+                enforceDimension = true,
+                suffix = "analysis"
+            )
+        } else {
+            renderInput
+        }
         val attachment = ReferenceImageAttachment(
             uri = uri.toString(),
             name = name,
-            size = bytes.size.toLong(),
+            size = renderInput.bytes.size.toLong(),
             width = bounds.outWidth.coerceAtLeast(0),
             height = bounds.outHeight.coerceAtLeast(0)
         )
-        return LoadedReferenceImage(attachment, ReferenceImageInput(bytes, mime, name))
+        return LoadedReferenceImage(attachment, renderInput, analysisInput)
     }
 
     private fun storeReferenceImage(loaded: LoadedReferenceImage) {
@@ -1224,8 +1310,83 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (referenceImages.size >= maximum) return
         referenceImages += loaded.attachment
         referenceImageInputs[loaded.attachment.id] = loaded.input
+        referenceAnalysisInputs[loaded.attachment.id] = loaded.analysisInput
         syncMangaCanvasToReference()
     }
+
+    private fun optimizeReferenceInput(
+        input: ReferenceImageInput,
+        width: Int,
+        height: Int,
+        maxDimension: Int,
+        quality: Int,
+        byteThreshold: Int,
+        enforceDimension: Boolean,
+        suffix: String
+    ): ReferenceImageInput {
+        val largestDimension = maxOf(width, height)
+        val dimensionAcceptable = !enforceDimension || largestDimension in 1..maxDimension
+        val apiFriendlyMime = input.mimeType.lowercase() in setOf("image/jpeg", "image/jpg", "image/png", "image/webp")
+        if (dimensionAcceptable && input.bytes.size <= byteThreshold && apiFriendlyMime) return input
+        return runCatching {
+            val bitmap = decodeScaledBitmap(input.bytes, width, height, maxDimension)
+            val flattened = if (bitmap.hasAlpha()) {
+                Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888).also { target ->
+                    Canvas(target).apply {
+                        drawColor(Color.WHITE)
+                        drawBitmap(bitmap, 0f, 0f, null)
+                    }
+                }
+            } else {
+                bitmap
+            }
+            val output = ByteArrayOutputStream()
+            flattened.compress(Bitmap.CompressFormat.JPEG, quality, output)
+            if (flattened !== bitmap) flattened.recycle()
+            bitmap.recycle()
+            val encoded = output.toByteArray()
+            if (encoded.isEmpty()) input else ReferenceImageInput(
+                bytes = encoded,
+                mimeType = "image/jpeg",
+                fileName = jpegFileName(input.fileName, suffix)
+            )
+        }.getOrDefault(input)
+    }
+
+    private fun decodeScaledBitmap(bytes: ByteArray, width: Int, height: Int, maxDimension: Int): Bitmap {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            return ImageDecoder.decodeBitmap(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val sourceWidth = info.size.width.coerceAtLeast(1)
+                val sourceHeight = info.size.height.coerceAtLeast(1)
+                val scale = (maxDimension.toFloat() / maxOf(sourceWidth, sourceHeight)).coerceAtMost(1f)
+                decoder.setTargetSize(
+                    (sourceWidth * scale).toInt().coerceAtLeast(1),
+                    (sourceHeight * scale).toInt().coerceAtLeast(1)
+                )
+            }
+        }
+        var sample = 1
+        val largest = maxOf(width, height).coerceAtLeast(1)
+        while (largest / (sample * 2) >= maxDimension) sample *= 2
+        val decoded = BitmapFactory.decodeByteArray(
+            bytes,
+            0,
+            bytes.size,
+            BitmapFactory.Options().apply { inSampleSize = sample }
+        ) ?: throw IllegalArgumentException("无法解码参考图")
+        val scale = (maxDimension.toFloat() / maxOf(decoded.width, decoded.height)).coerceAtMost(1f)
+        if (scale >= 1f) return decoded
+        return Bitmap.createScaledBitmap(
+            decoded,
+            (decoded.width * scale).toInt().coerceAtLeast(1),
+            (decoded.height * scale).toInt().coerceAtLeast(1),
+            true
+        ).also { scaled -> if (scaled !== decoded) decoded.recycle() }
+    }
+
+    private fun jpegFileName(fileName: String, suffix: String): String =
+        "${fileName.substringBeforeLast('.', fileName)}-$suffix.jpg"
 
     private fun syncMangaCanvasToReference() {
         if (imageWorkflow != ImageWorkflow.MangaTranslation) return
@@ -1391,7 +1552,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val MAX_REFERENCE_BYTES = 20 * 1024 * 1024
         const val MAX_REFERENCE_IMAGES = 2
-        const val MAX_MANGA_IMAGES = 4
+        const val MAX_MANGA_IMAGES = MAX_MANGA_BATCH_IMAGES
+        const val MANGA_RENDER_MAX_DIMENSION = 4_096
+        const val MANGA_RENDER_JPEG_QUALITY = 94
+        const val MANGA_RENDER_REENCODE_BYTES = 6 * 1024 * 1024
+        const val MANGA_ANALYSIS_MAX_DIMENSION = 1_600
+        const val MANGA_ANALYSIS_JPEG_QUALITY = 82
+        const val MANGA_ANALYSIS_REENCODE_BYTES = 700 * 1024
         const val STREAM_RECOVERY_INTERVAL_MS = 1_400L
 
         fun streamUiIntervalMs(contentLength: Int): Long = when {
@@ -1406,7 +1573,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
 private data class LoadedReferenceImage(
     val attachment: ReferenceImageAttachment,
-    val input: ReferenceImageInput
+    val input: ReferenceImageInput,
+    val analysisInput: ReferenceImageInput
+)
+
+private data class SelectedReferencePage(
+    val attachment: ReferenceImageAttachment,
+    val input: ReferenceImageInput,
+    val analysisInput: ReferenceImageInput
 )
 
 private fun String.isImageLike(): Boolean {
