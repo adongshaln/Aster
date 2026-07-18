@@ -47,7 +47,13 @@ fun QuickModelSwitcher(
         RouteKind.Chat -> cached.filterNot { it.id.isImageLike() }.ifEmpty { cached }
         RouteKind.Image -> cached.filter { it.id.isImageLike() }.ifEmpty { cached }
     }
-    val configuredModel = if (kind == RouteKind.Chat) selectedProfile.chatModel else selectedProfile.imageModel
+    val activeProfileId = if (kind == RouteKind.Chat) vm.chatProfile.id else vm.imageProfile.id
+    val activeModel = if (kind == RouteKind.Chat) vm.chatProfile.chatModel else vm.imageProfile.imageModel
+    val configuredModel = when {
+        selectedProfile.id == activeProfileId -> activeModel
+        kind == RouteKind.Chat -> selectedProfile.chatModel
+        else -> selectedProfile.imageModel
+    }
     val allModels = buildList {
         if (configuredModel.isNotBlank() && filteredByKind.none { it.id == configuredModel }) add(ApiModel(configuredModel, "当前配置"))
         addAll(filteredByKind)
@@ -56,9 +62,6 @@ fun QuickModelSwitcher(
         if (query.isBlank()) allModels
         else allModels.filter { it.id.contains(query.trim(), ignoreCase = true) || it.ownedBy.contains(query.trim(), ignoreCase = true) }
     }
-    val activeProfileId = if (kind == RouteKind.Chat) vm.chatProfile.id else vm.imageProfile.id
-    val activeModel = if (kind == RouteKind.Chat) vm.chatProfile.chatModel else vm.imageProfile.imageModel
-
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -75,7 +78,7 @@ fun QuickModelSwitcher(
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(if (kind == RouteKind.Chat) "选择对话模型" else "选择绘图模型", style = MaterialTheme.typography.titleLarge)
-                    Text("先确认 API 路由，再选择模型", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+                    Text(if (kind == RouteKind.Chat) "仅应用于当前对话，不影响其他任务" else "先确认 API 路由，再选择模型", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
                 }
                 IconButton(onClick = onDismiss, colors = IconButtonDefaults.iconButtonColors(containerColor = Surface, contentColor = MutedInk)) {
                     Icon(Icons.Rounded.Close, "关闭")

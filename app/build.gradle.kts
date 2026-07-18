@@ -20,8 +20,8 @@ android {
         applicationId = "com.adong.adchat"
         minSdk = 26
         targetSdk = 36
-        versionCode = 38
-        versionName = "1.24.0"
+        versionCode = 39
+        versionName = "1.25.0"
 
         vectorDrawables { useSupportLibrary = true }
     }

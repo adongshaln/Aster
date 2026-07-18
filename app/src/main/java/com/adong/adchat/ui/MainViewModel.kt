@@ -75,7 +75,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
-        conversations.addAll(conversationStore.load())
+        val storedConversations = conversationStore.load()
+        val routedConversations = storedConversations.map { conversation ->
+            val route = resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId)
+            if (conversation.profileId == route.profileId && conversation.model == route.model) conversation
+            else conversation.copy(profileId = route.profileId, model = route.model)
+        }
+        conversations.addAll(routedConversations)
+        if (routedConversations != storedConversations) scheduleConversationSave(routedConversations)
         val session = chatSessionStore.load()
         chatDrafts.putAll(session.drafts)
         val restoredConversation = session.lastActiveKey
@@ -129,7 +136,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     val profiles: List<ApiProfile> get() = appConfig.profiles
-    val chatProfile: ApiProfile get() = appConfig.chatProfile()
+    val chatProfile: ApiProfile
+        get() {
+            val conversation = activeConversationId?.let { id -> conversations.firstOrNull { it.id == id } }
+            val route = resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId)
+            val profile = profiles.firstOrNull { it.id == route.profileId } ?: appConfig.chatProfile()
+            return if (route.model == profile.chatModel) profile else profile.copy(chatModel = route.model)
+        }
     val imageProfile: ApiProfile get() = appConfig.imageProfile()
 
     val activeMangaTranslationPrompt: String
@@ -204,21 +217,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteProfile(profileId: String) {
         if (profiles.size <= 1) { notice = "至少需要保留一个 API 配置"; return }
+        if (isChatLoading && chatProfile.id == profileId) {
+            notice = "当前对话正在使用此 API，请等待生成完成后再删除"
+            return
+        }
+        val affectedConversationIds = conversations
+            .filter { conversation ->
+                resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId).profileId == profileId
+            }
+            .mapTo(hashSetOf()) { it.id }
         val remaining = profiles.filterNot { it.id == profileId }
-        val fallback = remaining.first().id
+        val fallbackProfile = remaining.first()
         appConfig = appConfig.copy(
             profiles = remaining,
-            activeChatProfileId = if (appConfig.activeChatProfileId == profileId) fallback else appConfig.activeChatProfileId,
-            activeImageProfileId = if (appConfig.activeImageProfileId == profileId) fallback else appConfig.activeImageProfileId
+            activeChatProfileId = if (appConfig.activeChatProfileId == profileId) fallbackProfile.id else appConfig.activeChatProfileId,
+            activeImageProfileId = if (appConfig.activeImageProfileId == profileId) fallbackProfile.id else appConfig.activeImageProfileId
         )
+        if (affectedConversationIds.isNotEmpty()) {
+            conversations.indices.forEach { index ->
+                val conversation = conversations[index]
+                if (conversation.id in affectedConversationIds) {
+                    conversations[index] = conversation.copy(
+                        profileId = fallbackProfile.id,
+                        model = fallbackProfile.chatModel
+                    )
+                }
+            }
+            scheduleConversationSave(conversations.toList())
+        }
         modelCache.remove(profileId); connectionStates.remove(profileId)
         persist(); notice = "API 配置已删除"
     }
 
     fun selectChatProfile(profileId: String) {
-        if (profiles.none { it.id == profileId }) return
-        appConfig = appConfig.copy(activeChatProfileId = profileId)
-        persist(); notice = "对话已切换到 ${chatProfile.name}"
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        if (isChatLoading) { notice = "请等待当前回复完成后再切换 API"; return }
+        val model = if (chatProfile.id == profileId) chatProfile.chatModel else profile.chatModel
+        bindCurrentConversationRoute(profile, model)
     }
 
     fun selectImageProfile(profileId: String) {
@@ -228,8 +263,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectChatModel(profileId: String, model: String) {
-        updateProfile(profileId) { it.copy(chatModel = model) }
-        if (appConfig.activeChatProfileId != profileId) selectChatProfile(profileId) else persist()
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        val selectedModel = model.trim()
+        if (selectedModel.isBlank()) return
+        if (isChatLoading) { notice = "请等待当前回复完成后再切换模型"; return }
+        bindCurrentConversationRoute(profile, selectedModel)
     }
 
     fun selectImageModel(profileId: String, model: String) {
@@ -488,7 +526,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                         streamRecoveryCount = automaticRecoveryCount
                                     ),
                                     createdAt = recoveryCreatedAt,
-                                    updatedAt = System.currentTimeMillis()
+                                    updatedAt = System.currentTimeMillis(),
+                                    profileId = profile.id,
+                                    model = model
                                 )
                             )
                         }
@@ -1035,9 +1075,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val title = stableMessages.firstOrNull { it.role == "user" }?.content
             ?.replace(Regex("\\s+"), " ")?.trim()?.take(24)?.ifBlank { null } ?: "\u65b0\u5bf9\u8bdd"
         val createdAt = conversations.getOrNull(index)?.createdAt ?: now
-        val conversation = Conversation(id, conversations.getOrNull(index)?.title ?: title, stableMessages, createdAt, now)
+        val selectedProfile = chatProfile
+        val conversation = Conversation(
+            id = id,
+            title = conversations.getOrNull(index)?.title ?: title,
+            messages = stableMessages,
+            createdAt = createdAt,
+            updatedAt = now,
+            profileId = selectedProfile.id,
+            model = selectedProfile.chatModel
+        )
         if (index >= 0) conversations[index] = conversation else conversations.add(conversation)
         sortAndSaveConversations(clearRecoveryMessageId)
+    }
+
+    private fun bindCurrentConversationRoute(profile: ApiProfile, model: String) {
+        val conversationId = activeConversationId
+        if (conversationId == null) {
+            updateProfile(profile.id) { it.copy(chatModel = model) }
+            appConfig = appConfig.copy(activeChatProfileId = profile.id)
+            persist()
+            notice = "新对话默认使用 ${profile.name} · ${model.ifBlank { "未选择模型" }}"
+            return
+        }
+
+        val index = conversations.indexOfFirst { it.id == conversationId }
+        if (index < 0) return
+        conversations[index] = conversations[index].copy(profileId = profile.id, model = model)
+        scheduleConversationSave(conversations.toList())
+        notice = "当前对话已切换到 ${profile.name} · ${model.ifBlank { "未选择模型" }}"
     }
 
     private fun sortAndSaveConversations(clearRecoveryMessageId: Long? = null) {

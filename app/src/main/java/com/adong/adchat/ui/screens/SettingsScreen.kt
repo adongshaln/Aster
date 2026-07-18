@@ -134,7 +134,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
             item { IndependenceBanner(vm) }
             item {
                 Column {
-                    SectionTitle("ACTIVE ROUTES", "当前路由", "在这里决定对话和绘图分别使用哪一个 API。")
+                    SectionTitle("ACTIVE ROUTES", "当前路由", "对话路由仅影响当前窗口，绘图路由保持独立。")
                 Spacer(Modifier.height(12.dp))
                 RouteAssignmentCard(
                     kind = RouteKind.Chat,
@@ -372,8 +372,8 @@ private fun IndependenceBanner(vm: MainViewModel) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text("双路由已启用", style = MaterialTheme.typography.titleMedium)
-                Text("对话和绘图可使用不同 URL 与 Key。", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.bodyMedium)
+                Text("独立路由已启用", style = MaterialTheme.typography.titleMedium)
+                Text("每个对话窗口都可独立选择 API 与模型。", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.bodyMedium)
             }
             Spacer(Modifier.width(8.dp))
             FilledTonalButton(
@@ -421,8 +421,8 @@ private fun RouteAssignmentCard(
                 }
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(if (kind == RouteKind.Chat) "对话路由" else "绘图路由", style = MaterialTheme.typography.titleMedium)
-                    Text("独立 API 与模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                    Text(if (kind == RouteKind.Chat) "当前对话路由" else "绘图路由", style = MaterialTheme.typography.titleMedium)
+                    Text(if (kind == RouteKind.Chat) "仅作用于当前窗口" else "独立 API 与模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
                 Surface(color = soft, contentColor = accent, shape = CircleShape) {
                     Text(if (kind == RouteKind.Chat) "CHAT" else "IMAGE", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)

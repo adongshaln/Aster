@@ -309,7 +309,9 @@ data class Conversation(
     val title: String,
     val messages: List<ChatMessage>,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val profileId: String = "",
+    val model: String = ""
 )
 
 data class ReferenceImageInput(
