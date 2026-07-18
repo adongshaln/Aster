@@ -788,7 +788,7 @@ private fun GenerationStatus(
                     Text(
                         if (mangaTranslation) {
                             when {
-                                phase == ImageGenerationPhase.AnalyzingManga -> "已用时 $elapsed · 辅助分析最长等待 45 分钟"
+                                phase == ImageGenerationPhase.AnalyzingManga -> "已用时 $elapsed · 流式保活，最长等待 45 分钟"
                                 elapsedMs >= 3 * 60_000L -> "已用时 $elapsed · 生图最长等待 90 分钟，可继续提交"
                                 else -> "已用时 $elapsed · 当前任务不会阻塞下一项"
                             }

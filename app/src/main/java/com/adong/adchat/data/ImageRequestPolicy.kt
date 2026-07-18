@@ -47,7 +47,8 @@ internal fun imageDeliveryMayBeUncertain(error: Throwable): Boolean {
     if (causes.any { it is SocketTimeoutException }) return true
     val detail = causes.joinToString(" ") { it.message.orEmpty() }.lowercase()
     if (detail.contains("timeout") || detail.contains("timed out") || detail.contains("unexpected end") || detail.contains("connection reset") ||
-        detail.contains("http 502") || detail.contains("http 503") || detail.contains("http 504") || detail.contains("http 524")
+        detail.contains("http 408") || detail.contains("http 502") || detail.contains("http 503") ||
+        detail.contains("http 504") || detail.contains("http 524")
     ) {
         return true
     }

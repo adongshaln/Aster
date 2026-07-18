@@ -527,6 +527,7 @@ class ApiRepository {
         val body = if (profile.chatApiMode == "responses") {
             JSONObject()
                 .put("model", model)
+                .put("stream", true)
                 .put("instructions", analysisPrompt)
                 .put("input", JSONArray().put(JSONObject()
                     .put("role", "user")
@@ -539,7 +540,7 @@ class ApiRepository {
         } else {
             JSONObject()
                 .put("model", model)
-                .put("stream", false)
+                .put("stream", true)
                 .put("messages", JSONArray()
                     .put(JSONObject().put("role", "system").put("content", analysisPrompt))
                     .put(JSONObject().put("role", "user").put("content", JSONArray().apply {
@@ -551,13 +552,46 @@ class ApiRepository {
         }
         val path = if (profile.chatApiMode == "responses") profile.responsesPath else profile.chatPath
         val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path))
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("Accept-Encoding", "identity")
+            .header("Connection", "close")
             .applyIdempotencyKey(requestKey)
             .post(body.toString().toRequestBody(jsonMedia))
             .build()
-        val root = runCatching { JSONObject(executeTextCall(mangaAnalysisClient.newCall(request))) }
-            .getOrElse { throw IllegalStateException("辅助模型返回的不是有效 JSON 响应") }
-        val text = if (profile.chatApiMode == "responses") parseResponsesText(root) else parseMessageContent(root)
+        val text = executeMangaAnalysisCall(
+            call = mangaAnalysisClient.newCall(request),
+            responsesApi = profile.chatApiMode == "responses"
+        )
         parseMangaTranslationAnalysis(text, pages.size)
+    }
+
+    private suspend fun executeMangaAnalysisCall(call: Call, responsesApi: Boolean): String {
+        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+            try {
+                awaitCancellation()
+            } finally {
+                call.cancel()
+            }
+        }
+        return try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                val body = response.body ?: throw IllegalStateException("漫画辅助模型返回了空响应")
+                if (response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
+                    val collector = MangaAnalysisStreamCollector(responsesApi)
+                    readSsePayloads(body.source(), collector::accept)
+                    collector.requireResult()
+                } else {
+                    val text = body.string()
+                    val root = runCatching { JSONObject(text) }
+                        .getOrElse { throw IllegalStateException("辅助模型返回的不是有效 JSON 响应") }
+                    if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+                }
+            }
+        } finally {
+            cancellationWatcher.cancel()
+        }
     }
 
     private suspend fun executeTextCall(call: Call): String {
@@ -662,6 +696,7 @@ class ApiRepository {
         val hint = when (response.code) {
             401, 403 -> "认证失败，请检查此 API 配置的 Key 或请求头"
             404 -> "接口不存在，请检查此 API 配置的 URL 和路径"
+            408, 504, 524 -> "供应商网关主动结束了长请求"
             429 -> "请求过于频繁或额度不足"
             in 500..599 -> "服务端暂时不可用"
             else -> "请求失败"
