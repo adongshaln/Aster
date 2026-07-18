@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="InsecureBaseConfiguration">
+    <!-- Cleartext remains opt-in at the user-configured endpoint level so local/self-hosted APIs keep working. -->
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
