@@ -16,6 +16,18 @@ class MangaTranslationPromptTest {
     }
 
     @Test
+    fun promptUnderstandsSettingBeforeTranslatingWithoutInventingLore() {
+        val prompt = MangaTranslationPrompt.build(MangaTranslationTarget.SimplifiedChinese)
+
+        assertTrue(prompt.contains("先理解设定，再决定译法"))
+        assertTrue(prompt.contains("身份关系"))
+        assertTrue(prompt.contains("建立本页内部术语表"))
+        assertTrue(prompt.contains("广泛认可的官方译名"))
+        assertTrue(prompt.contains("不得猜测作品来源、虚构背景"))
+        assertTrue(prompt.contains("不要输出分析过程"))
+    }
+
+    @Test
     fun choosesClosestSupportedCanvasOrientation() {
         assertEquals("1024x1536", canvasSizeForReference(1000, 1600))
         assertEquals("1536x1024", canvasSizeForReference(1600, 1000))
