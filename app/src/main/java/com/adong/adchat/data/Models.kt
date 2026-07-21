@@ -297,6 +297,7 @@ data class ChatMessage(
     val id: Long = System.nanoTime(),
     val role: String,
     val content: String,
+    val attachments: List<ChatImageAttachment> = emptyList(),
     val isError: Boolean = false,
     val isStreaming: Boolean = false,
     val isInterrupted: Boolean = false,
@@ -306,6 +307,22 @@ data class ChatMessage(
     val profileName: String = "",
     val model: String = "",
     val usage: TokenUsage? = null
+)
+
+/**
+ * An image attached to a chat message.  [bytes] is intentionally transient:
+ * it is used to build the current API request, while the URI and metadata are
+ * persisted so that a restored conversation can reload the image when needed.
+ */
+data class ChatImageAttachment(
+    val id: String = UUID.randomUUID().toString(),
+    val uri: String,
+    val name: String,
+    val mimeType: String = "image/jpeg",
+    val size: Long = 0L,
+    val width: Int = 0,
+    val height: Int = 0,
+    val bytes: ByteArray? = null
 )
 
 data class GeneratedImage(

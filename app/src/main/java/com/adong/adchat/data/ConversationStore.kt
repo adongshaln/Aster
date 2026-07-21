@@ -89,6 +89,7 @@ class ConversationStore(context: Context) {
                     id = message.optLong("id", System.nanoTime()),
                     role = message.optString("role"),
                     content = message.optString("content"),
+                    attachments = decodeAttachments(message.optJSONArray("attachments")),
                     isError = message.optBoolean("isError"),
                     isStreaming = false,
                     isInterrupted = message.optBoolean("isInterrupted"),
@@ -131,6 +132,7 @@ class ConversationStore(context: Context) {
                     .put("id", message.id)
                     .put("role", message.role)
                     .put("content", message.content)
+                    .put("attachments", encodeAttachments(message.attachments))
                     .put("isError", message.isError)
                     .put("isInterrupted", message.isInterrupted)
                     .put("isStopped", message.isStopped)
@@ -140,6 +142,36 @@ class ConversationStore(context: Context) {
                     .put("usage", message.usage?.let(::encodeUsage)))
             }
         })
+
+    private fun encodeAttachments(attachments: List<ChatImageAttachment>): JSONArray = JSONArray().apply {
+        attachments.forEach { attachment ->
+            put(JSONObject()
+                .put("id", attachment.id)
+                .put("uri", attachment.uri)
+                .put("name", attachment.name)
+                .put("mimeType", attachment.mimeType)
+                .put("size", attachment.size)
+                .put("width", attachment.width)
+                .put("height", attachment.height))
+        }
+    }
+
+    private fun decodeAttachments(array: JSONArray?): List<ChatImageAttachment> = buildList {
+        if (array == null) return@buildList
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val uri = item.optString("uri").takeIf { it.isNotBlank() } ?: continue
+            add(ChatImageAttachment(
+                id = item.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+                uri = uri,
+                name = item.optString("name").ifBlank { "image" },
+                mimeType = item.optString("mimeType").ifBlank { "image/jpeg" },
+                size = item.optLong("size"),
+                width = item.optInt("width"),
+                height = item.optInt("height")
+            ))
+        }
+    }
 
     private fun encodeUsage(usage: TokenUsage): JSONObject = JSONObject()
         .put("inputTokens", usage.inputTokens)

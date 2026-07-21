@@ -1,6 +1,9 @@
 package com.adong.adchat.ui.screens
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -42,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
@@ -60,6 +64,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.adong.adchat.data.ChatImageAttachment
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.MainViewModel
@@ -88,6 +94,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val scope = rememberCoroutineScope()
     var showSwitcher by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(true) }
+    val chatImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
+        if (uris.isNotEmpty()) vm.attachChatImages(uris)
+    }
     val showJumpToBottom by remember { derivedStateOf { vm.messages.isNotEmpty() && listState.canScrollForward } }
     val questionIndices by remember {
         derivedStateOf { vm.messages.mapIndexedNotNull { index, message -> index.takeIf { message.role == "user" } } }
@@ -247,13 +256,19 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         }
         ChatComposer(
             value = vm.chatInput,
+            attachments = vm.chatAttachments,
             profileName = vm.chatProfile.name,
             model = vm.chatProfile.chatModel,
             loading = vm.isChatLoading,
+            attachmentLoading = vm.isChatAttachmentLoading,
             reasoningEffort = vm.chatProfile.reasoningEffort,
             onModelClick = { showSwitcher = true },
             onReasoningEffortChange = vm::setChatReasoningEffort,
             onValueChange = vm::updateChatInput,
+            onPickImages = {
+                chatImagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onRemoveImage = vm::removeChatImage,
             onSend = { autoFollow = true; vm.sendMessage() },
             onStop = vm::stopGeneration
         )
@@ -376,8 +391,19 @@ private fun ChatMessageItem(
         ) {
             if (user) {
                 Surface(color = Night, contentColor = Color.White, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
-                    SelectionContainer {
-                        Text(message.content, Modifier.padding(horizontal = 16.dp, vertical = 12.dp), style = MaterialTheme.typography.bodyLarge)
+                    Column(Modifier.padding(7.dp)) {
+                        if (message.attachments.isNotEmpty()) {
+                            ChatImageRow(message.attachments)
+                        }
+                        if (message.content.isNotBlank()) {
+                            SelectionContainer {
+                                Text(
+                                    message.content,
+                                    Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -1167,6 +1193,29 @@ private fun inlineMarkdown(text: String): AnnotatedString {
     }
 }
 
+@Composable
+private fun ChatImageRow(attachments: List<ChatImageAttachment>) {
+    Row(
+        Modifier.horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        attachments.forEach { attachment ->
+            Surface(
+                color = Color.White.copy(alpha = .12f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, Color.White.copy(alpha = .16f))
+            ) {
+                AsyncImage(
+                    model = attachment.uri,
+                    contentDescription = attachment.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(116.dp).clip(RoundedCornerShape(13.dp))
+                )
+            }
+        }
+    }
+}
+
 private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
     var index = 0
     val tokens = listOf("**", "__", "~~", "`", "*", "_")
@@ -1205,13 +1254,17 @@ private const val AUTO_SCROLL_INTERVAL_MS = 110L
 @Composable
 private fun ChatComposer(
     value: String,
+    attachments: List<ChatImageAttachment>,
     profileName: String,
     model: String,
     loading: Boolean,
+    attachmentLoading: Boolean,
     reasoningEffort: String,
     onModelClick: () -> Unit,
     onReasoningEffortChange: (String) -> Unit,
     onValueChange: (String) -> Unit,
+    onPickImages: () -> Unit,
+    onRemoveImage: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -1264,6 +1317,14 @@ private fun ChatComposer(
             }
         }
         Spacer(Modifier.height(8.dp))
+        if (attachments.isNotEmpty()) {
+            ChatAttachmentComposerPreview(
+                attachments = attachments,
+                loading = attachmentLoading,
+                onRemove = onRemoveImage
+            )
+            Spacer(Modifier.height(8.dp))
+        }
         Surface(
             color = Surface,
             shape = RoundedCornerShape(25.dp),
@@ -1272,6 +1333,22 @@ private fun ChatComposer(
             modifier = Modifier.fillMaxWidth().animateContentSize(tween(150))
         ) {
             Row(Modifier.padding(6.dp), verticalAlignment = Alignment.Bottom) {
+                IconButton(
+                    onClick = onPickImages,
+                    enabled = !loading && !attachmentLoading && attachments.size < 4,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    if (attachmentLoading) {
+                        CircularProgressIndicator(Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            Icons.Rounded.AddPhotoAlternate,
+                            "添加图片",
+                            tint = if (attachments.size < 4) Accent else MutedInk
+                        )
+                    }
+                }
+                Spacer(Modifier.width(2.dp))
                 TextField(
                     value = value,
                     onValueChange = onValueChange,
@@ -1284,7 +1361,7 @@ private fun ChatComposer(
                         imeAction = ImeAction.Send
                     ),
                     keyboardActions = KeyboardActions(onSend = {
-                        if (value.isNotBlank() && !loading) {
+                        if ((value.isNotBlank() || attachments.isNotEmpty()) && !loading && !attachmentLoading) {
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             focus.clearFocus()
                             onSend()
@@ -1308,7 +1385,7 @@ private fun ChatComposer(
                             onSend()
                         }
                     },
-                    enabled = loading || value.isNotBlank(),
+                    enabled = loading || value.isNotBlank() || attachments.isNotEmpty(),
                     modifier = Modifier.size(48.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -1367,6 +1444,39 @@ private fun ChatComposer(
             searchEnabled = false,
             headerIcon = Icons.Rounded.Psychology
         )
+    }
+}
+
+@Composable
+private fun ChatAttachmentComposerPreview(
+    attachments: List<ChatImageAttachment>,
+    loading: Boolean,
+    onRemove: (String) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        attachments.forEach { attachment ->
+            Box(Modifier.size(76.dp)) {
+                AsyncImage(
+                    model = attachment.uri,
+                    contentDescription = attachment.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(15.dp))
+                )
+                Surface(
+                    onClick = { onRemove(attachment.id) },
+                    enabled = !loading,
+                    color = Night.copy(alpha = .82f),
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(3.dp)
+                ) {
+                    Icon(Icons.Rounded.Close, "移除图片", Modifier.padding(3.dp).size(14.dp))
+                }
+            }
+        }
     }
 }
 

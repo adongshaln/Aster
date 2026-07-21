@@ -212,14 +212,10 @@ class ApiRepository {
         }
         val stableHistory = history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }
         stableHistory.forEachIndexed { index, message ->
-            val content: Any = if (explicitCache && index == stableHistory.lastIndex) {
-                JSONArray().put(JSONObject()
-                    .put("type", "text")
-                    .put("text", message.content)
-                    .put("prompt_cache_breakpoint", JSONObject().put("mode", "explicit")))
-            } else {
-                message.content
-            }
+            val content: Any = chatCompletionContent(
+                message = message,
+                explicitCacheBreakpoint = explicitCache && index == stableHistory.lastIndex
+            )
             messages.put(JSONObject().put("role", message.role).put("content", content))
         }
         val body = JSONObject()
@@ -314,7 +310,9 @@ class ApiRepository {
     ): ChatCompletionResult {
         val input = JSONArray()
         history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }.forEach {
-            input.put(JSONObject().put("role", it.role).put("content", it.content))
+            input.put(JSONObject()
+                .put("role", it.role)
+                .put("content", responsesMessageContent(it)))
         }
         val body = JSONObject().put("model", model).put("input", input).put("stream", true)
         if (systemPrompt.isNotBlank()) body.put("instructions", systemPrompt)
@@ -388,6 +386,50 @@ class ApiRepository {
             cacheStrategy = if (profile.promptCacheEnabled && model.isGpt56Family()) "automatic" else "off"
         )
         return ChatCompletionResult(full.toString().ifBlank { throw IllegalStateException("Responses API returned no text") }, finalUsage)
+    }
+
+    private fun chatCompletionContent(
+        message: ChatMessage,
+        explicitCacheBreakpoint: Boolean
+    ): Any {
+        if (message.attachments.isEmpty() && !explicitCacheBreakpoint) return message.content
+        val content = JSONArray()
+        if (message.content.isNotBlank() || message.attachments.isEmpty()) {
+            content.put(JSONObject()
+                .put("type", "text")
+                .put("text", message.content)
+                .apply {
+                    if (explicitCacheBreakpoint) {
+                        put("prompt_cache_breakpoint", JSONObject().put("mode", "explicit"))
+                    }
+                })
+        }
+        message.attachments.forEach { attachment ->
+            content.put(JSONObject()
+                .put("type", "image_url")
+                .put("image_url", JSONObject().put("url", attachmentDataUrl(attachment))))
+        }
+        return content
+    }
+
+    private fun responsesMessageContent(message: ChatMessage): Any {
+        if (message.attachments.isEmpty()) return message.content
+        val content = JSONArray()
+        if (message.content.isNotBlank()) {
+            content.put(JSONObject().put("type", "input_text").put("text", message.content))
+        }
+        message.attachments.forEach { attachment ->
+            content.put(JSONObject()
+                .put("type", "input_image")
+                .put("image_url", attachmentDataUrl(attachment)))
+        }
+        return content
+    }
+
+    private fun attachmentDataUrl(attachment: ChatImageAttachment): String {
+        val bytes = attachment.bytes ?: throw IllegalStateException("无法读取对话图片：${attachment.name}")
+        val mime = attachment.mimeType.ifBlank { "image/jpeg" }
+        return "data:$mime;base64,${Base64.getEncoder().encodeToString(bytes)}"
     }
 
     private fun applyGptOptimizations(

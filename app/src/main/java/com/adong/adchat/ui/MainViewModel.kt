@@ -1,6 +1,7 @@
 package com.adong.adchat.ui
 
 import android.app.Application
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -83,6 +84,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val modelCache = mutableStateMapOf<String, List<ApiModel>>()
     val connectionStates = mutableStateMapOf<String, ConnectionUiState>()
     var chatInput by mutableStateOf("")
+        private set
+    val chatAttachments = mutableStateListOf<ChatImageAttachment>()
+    var isChatAttachmentLoading by mutableStateOf(false)
         private set
 
     init {
@@ -508,14 +512,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scheduleSessionSave()
     }
 
+    fun attachChatImages(uris: List<Uri>) {
+        val remaining = (MAX_CHAT_IMAGES - chatAttachments.size).coerceAtLeast(0)
+        if (remaining == 0) {
+            notice = "最多添加 $MAX_CHAT_IMAGES 张图片"
+            return
+        }
+        val existingUris = chatAttachments.mapTo(hashSetOf()) { it.uri }
+        val candidates = uris.asSequence()
+            .distinctBy(Uri::toString)
+            .filterNot { it.toString() in existingUris }
+            .take(remaining)
+            .toList()
+        if (candidates.isEmpty()) return
+        isChatAttachmentLoading = true
+        viewModelScope.launch {
+            val results = withContext(Dispatchers.IO) {
+                candidates.map { uri -> runCatching { loadChatImage(uri) } }
+            }
+            val loaded = results.mapNotNull(Result<ChatImageAttachment>::getOrNull)
+            val failures = results.count(Result<ChatImageAttachment>::isFailure)
+            loaded.forEach { attachment ->
+                persistReadPermission(attachment.uri)
+                chatAttachments += attachment
+            }
+            isChatAttachmentLoading = false
+            notice = when {
+                loaded.isNotEmpty() && failures > 0 -> "已添加 ${loaded.size} 张图片，$failures 张读取失败"
+                loaded.isNotEmpty() -> "已添加 ${loaded.size} 张图片"
+                else -> "图片读取失败，请重新选择"
+            }
+        }
+    }
+
+    fun removeChatImage(id: String) {
+        chatAttachments.indexOfFirst { it.id == id }
+            .takeIf { it >= 0 }
+            ?.let(chatAttachments::removeAt)
+    }
+
     fun sendMessage(textOverride: String? = null) {
         val fromComposer = textOverride == null
         val text = (textOverride ?: chatInput).trim()
-        if (text.isEmpty() || isChatLoading) return
+        if ((text.isEmpty() && (textOverride != null || chatAttachments.isEmpty())) || isChatLoading || isChatAttachmentLoading) return
         val profile = chatProfile
         val model = profile.chatModel
-        if (fromComposer) clearCurrentDraft()
-        messages += ChatMessage(role = "user", content = text)
+        val attachments = if (fromComposer) chatAttachments.toList() else emptyList()
+        if (fromComposer) {
+            clearCurrentDraft()
+            chatAttachments.clear()
+        }
+        messages += ChatMessage(role = "user", content = text, attachments = attachments)
         persistCurrentConversation()
         val history = messages.toList()
         val assistantId = System.nanoTime()
@@ -539,11 +586,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var lastRecoveryAt = 0L
             var automaticRecoveryCount = 0
             try {
+                val requestHistory = withContext(Dispatchers.IO) { prepareChatHistory(history) }
                 val result = repository.streamChat(
                     profile = profile,
                     model = model,
                     systemPrompt = appConfig.systemPrompt,
-                    history = history,
+                    history = requestHistory,
                     cacheKey = "adchat-${activeConversationId ?: profile.id}",
                     onRecovery = { event ->
                         automaticRecoveryCount = maxOf(automaticRecoveryCount, event.attempt)
@@ -1307,6 +1355,74 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return LoadedReferenceImage(attachment, renderInput, analysisInput)
     }
 
+    private fun prepareChatHistory(history: List<ChatMessage>): List<ChatMessage> = history.map { message ->
+        if (message.attachments.isEmpty()) return@map message
+        message.copy(attachments = message.attachments.map { attachment ->
+            if (attachment.bytes != null) attachment
+            else loadChatImage(Uri.parse(attachment.uri)).copy(id = attachment.id)
+        })
+    }
+
+    private fun loadChatImage(uri: Uri): ChatImageAttachment {
+        val resolver = getApplication<Application>().contentResolver
+        var name = "image"
+        var declaredSize: Long? = null
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }?.let {
+                    name = cursor.getString(it) ?: name
+                }
+                cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !cursor.isNull(it) }?.let {
+                    declaredSize = cursor.getLong(it)
+                }
+            }
+        }
+        if (declaredSize != null && declaredSize!! > MAX_CHAT_RAW_BYTES) {
+            throw IllegalArgumentException("单张对话图片不能超过 20 MB")
+        }
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: throw IllegalArgumentException("无法读取对话图片")
+        if (bytes.size > MAX_CHAT_RAW_BYTES) throw IllegalArgumentException("单张对话图片不能超过 20 MB")
+        val mime = resolver.getType(uri).orEmpty().ifBlank { "image/jpeg" }
+        if (!mime.startsWith("image/", ignoreCase = true)) throw IllegalArgumentException("所选文件不是图片")
+
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val width = bounds.outWidth
+        val height = bounds.outHeight
+        if (width <= 0 || height <= 0) throw IllegalArgumentException("无法解析图片尺寸")
+        val optimized = optimizeReferenceInput(
+            input = ReferenceImageInput(bytes, mime, name),
+            width = width,
+            height = height,
+            maxDimension = CHAT_IMAGE_MAX_DIMENSION,
+            quality = CHAT_IMAGE_JPEG_QUALITY,
+            byteThreshold = CHAT_IMAGE_REENCODE_BYTES,
+            enforceDimension = true,
+            suffix = "chat"
+        )
+        return ChatImageAttachment(
+            uri = uri.toString(),
+            name = name,
+            mimeType = optimized.mimeType,
+            size = optimized.bytes.size.toLong(),
+            width = width,
+            height = height,
+            bytes = optimized.bytes
+        )
+    }
+
+    private fun persistReadPermission(uriString: String) {
+        val uri = Uri.parse(uriString)
+        if (uri.scheme != "content") return
+        runCatching {
+            getApplication<Application>().contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+        }
+    }
+
     private fun storeReferenceImage(loaded: LoadedReferenceImage) {
         val maximum = if (imageWorkflow == ImageWorkflow.MangaTranslation) MAX_MANGA_IMAGES else MAX_REFERENCE_IMAGES
         if (referenceImages.size >= maximum) return
@@ -1554,6 +1670,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val MAX_REFERENCE_BYTES = 20 * 1024 * 1024
         const val MAX_REFERENCE_IMAGES = 2
+        const val MAX_CHAT_IMAGES = 4
+        const val MAX_CHAT_RAW_BYTES = 20 * 1024 * 1024
+        const val CHAT_IMAGE_MAX_DIMENSION = 2_048
+        const val CHAT_IMAGE_JPEG_QUALITY = 88
+        const val CHAT_IMAGE_REENCODE_BYTES = 3 * 1024 * 1024
         const val MAX_MANGA_IMAGES = MAX_MANGA_BATCH_IMAGES
         const val MANGA_RENDER_MAX_DIMENSION = 4_096
         const val MANGA_RENDER_JPEG_QUALITY = 94
