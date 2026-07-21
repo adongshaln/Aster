@@ -484,6 +484,9 @@ class ApiRepository {
     ): List<String> = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
+        if (profile.resolvedImageApiMode(model) == IMAGE_API_MODE_GEMINI) {
+            return@withContext generateGeminiImage(profile, model, prompt, size, references, requestKey)
+        }
         val responseText = if (references.isEmpty()) {
             val body = JSONObject().put("model", model).put("prompt", prompt).put("n", 1).put("size", size)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imagePath))
@@ -508,6 +511,66 @@ class ApiRepository {
                 when { url.isNotBlank() -> add(url); b64.isNotBlank() -> add("data:image/png;base64,$b64") }
             }
         }.ifEmpty { throw IllegalStateException("API 没有返回图片地址或图片数据") }
+    }
+
+    private suspend fun generateGeminiImage(
+        profile: ApiProfile,
+        model: String,
+        prompt: String,
+        size: String,
+        references: List<ReferenceImageInput>,
+        requestKey: String
+    ): List<String> {
+        val content = JSONArray().put(JSONObject().put("type", "text").put("text", prompt)).apply {
+            references.forEach { reference ->
+                val dataUrl = "data:${reference.mimeType.ifBlank { "image/png" }};base64,${Base64.getEncoder().encodeToString(reference.bytes)}"
+                put(JSONObject()
+                    .put("type", "image_url")
+                    .put("image_url", JSONObject().put("url", dataUrl).put("detail", "high")))
+            }
+        }
+        val body = JSONObject()
+            .put("model", model)
+            .put("messages", JSONArray().put(JSONObject()
+                .put("role", "user")
+                .put("content", if (references.isEmpty()) prompt else content)))
+            .put("modalities", JSONArray().put("text").put("image"))
+            .put("stream", true)
+            .put("size", size)
+        val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
+            .header("Accept", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("Accept-Encoding", "identity")
+            .header("Connection", "close")
+            .applyIdempotencyKey(requestKey)
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build()
+        return executeGeminiImageCall(imageClient.newCall(request))
+    }
+
+    private suspend fun executeGeminiImageCall(call: Call): List<String> {
+        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+            try {
+                awaitCancellation()
+            } finally {
+                call.cancel()
+            }
+        }
+        return try {
+            call.execute().use { response ->
+                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                val body = response.body ?: throw IllegalStateException("Gemini 图片接口返回了空响应")
+                if (response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
+                    val collector = GeminiImageResponseCollector()
+                    readSsePayloads(body.source(), collector::accept)
+                    collector.result()
+                } else {
+                    parseGeminiImageResponse(JSONObject(body.string()))
+                }
+            }
+        } finally {
+            cancellationWatcher.cancel()
+        }
     }
 
     suspend fun analyzeMangaTranslation(

@@ -44,6 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adong.adchat.data.ApiModel
 import com.adong.adchat.data.ApiProfile
+import com.adong.adchat.data.IMAGE_API_MODE_AUTO
+import com.adong.adchat.data.IMAGE_API_MODE_GEMINI
+import com.adong.adchat.data.IMAGE_API_MODE_OPENAI
 import com.adong.adchat.data.hasValidBaseUrl
 import com.adong.adchat.data.invalidExtraHeaderLines
 import com.adong.adchat.data.normalized
@@ -648,6 +651,28 @@ private fun GptOption(text: String, selected: Boolean, modifier: Modifier = Modi
         }
     }
 }
+
+@Composable
+private fun ImageProtocolOption(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier,
+        color = if (selected) AccentSoft else Canvas,
+        contentColor = if (selected) Accent else Ink,
+        border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .48f) else Hairline),
+        shape = RoundedCornerShape(13.dp)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 10.dp)
+        )
+    }
+}
+
 @Composable
 private fun ProfileEditor(
     initial: ApiProfile,
@@ -778,6 +803,31 @@ private fun ProfileEditor(
                         }
                         AnimatedVisibility(advanced) {
                             Column(Modifier.padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                                Column {
+                                    Text("绘图协议", style = MaterialTheme.typography.labelLarge)
+                                    Spacer(Modifier.height(7.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        ImageProtocolOption("自动识别", draft.imageApiMode == IMAGE_API_MODE_AUTO, Modifier.weight(1f)) {
+                                            draft = draft.copy(imageApiMode = IMAGE_API_MODE_AUTO)
+                                        }
+                                        ImageProtocolOption("OpenAI Images", draft.imageApiMode == IMAGE_API_MODE_OPENAI, Modifier.weight(1f)) {
+                                            draft = draft.copy(imageApiMode = IMAGE_API_MODE_OPENAI)
+                                        }
+                                        ImageProtocolOption("Gemini", draft.imageApiMode == IMAGE_API_MODE_GEMINI, Modifier.weight(1f)) {
+                                            draft = draft.copy(imageApiMode = IMAGE_API_MODE_GEMINI)
+                                        }
+                                    }
+                                    Text(
+                                        if (draft.imageApiMode == IMAGE_API_MODE_GEMINI) {
+                                            "通过 Chat Completions 的多模态 image 输出绘图，支持参考图。"
+                                        } else {
+                                            "自动模式会根据 gemini-*image 模型切换到 Gemini 绘图协议。"
+                                        },
+                                        color = MutedInk,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(top = 6.dp)
+                                    )
+                                }
                                 EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
                                 EditorField("对话接口路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
                                 EditorField("Responses API path", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)

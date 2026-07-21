@@ -31,6 +31,7 @@ data class ApiProfile(
     val promptCacheMode: String = "adaptive",
     val imagePath: String = "/v1/images/generations",
     val imageEditPath: String = "/v1/images/edits",
+    val imageApiMode: String = IMAGE_API_MODE_AUTO,
     val chatModel: String = "",
     val imageModel: String = "",
     val mangaAnalysisModel: String = "",
@@ -51,6 +52,7 @@ fun ApiProfile.normalized(): ApiProfile = copy(
     promptCacheMode = promptCacheMode.takeIf { it in setOf("adaptive", "compatibility") } ?: "adaptive",
     imagePath = imagePath.trim().ifBlank { "/v1/images/generations" },
     imageEditPath = imageEditPath.trim().ifBlank { "/v1/images/edits" },
+    imageApiMode = imageApiMode.takeIf { it in setOf(IMAGE_API_MODE_AUTO, IMAGE_API_MODE_OPENAI, IMAGE_API_MODE_GEMINI) } ?: IMAGE_API_MODE_AUTO,
     chatModel = chatModel.trim(),
     imageModel = imageModel.trim(),
     mangaAnalysisModel = mangaAnalysisModel.trim(),
@@ -154,6 +156,7 @@ class ConfigStore(context: Context) {
                     .put("promptCacheMode", profile.promptCacheMode)
                     .put("imagePath", profile.imagePath)
                     .put("imageEditPath", profile.imageEditPath)
+                    .put("imageApiMode", profile.imageApiMode)
                     .put("chatModel", profile.chatModel)
                     .put("imageModel", profile.imageModel)
                     .put("mangaAnalysisModel", profile.mangaAnalysisModel)
@@ -189,6 +192,7 @@ class ConfigStore(context: Context) {
                     },
                     imagePath = item.optString("imagePath").ifBlank { "/v1/images/generations" },
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
+                    imageApiMode = item.optString("imageApiMode").ifBlank { IMAGE_API_MODE_AUTO },
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),

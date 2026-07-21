@@ -452,6 +452,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("promptCacheMode", profile.promptCacheMode)
                         .put("imagePath", profile.imagePath)
                         .put("imageEditPath", profile.imageEditPath)
+                        .put("imageApiMode", profile.imageApiMode)
                         .put("chatModel", profile.chatModel)
                         .put("imageModel", profile.imageModel)
                         .put("mangaAnalysisModel", profile.mangaAnalysisModel)
@@ -486,6 +487,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     promptCacheMode = item.optString("promptCacheMode").ifBlank { "implicit" },
                     imagePath = item.optString("imagePath").ifBlank { "/v1/images/generations" },
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
+                    imageApiMode = item.optString("imageApiMode").ifBlank { IMAGE_API_MODE_AUTO },
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),

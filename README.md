@@ -2,6 +2,22 @@
 
 ADChat 是一个原生 Android 多 API 客户端，支持将对话和绘图分别路由到不同的 OpenAI 兼容服务。
 
+## v1.32.0
+
+### Gemini 图片模型绘图支持
+
+- 新增 Gemini 图片绘图协议，已针对 `gemini-3.1-flash-image` 完成真实接口验证
+- Gemini 绘图通过 Chat Completions 多模态消息请求，使用 `modalities: ["text", "image"]`
+- 支持文生图、参考图编辑、单张与多张参考图以及 SSE 流式返回
+- 自动解析 `message.images[].image_url.url`、内联 Base64、Data URL 和常见图片内容块
+- 不再把 Gemini 图片模型错误地发送到 `/images/generations` 或 `/images/edits`
+- 设置页新增紧凑“绘图协议”：自动识别、OpenAI Images、Gemini
+- 自动模式会根据 `gemini-*image` 模型名切换到 Gemini 协议，其他模型继续使用 OpenAI Images
+- Gemini 请求继续复用现有长任务超时、SSE 保活、幂等 Key、20 张全局图片容量和失败页保护
+- 漫画翻译逐页请求可直接使用 Gemini 图片模型，辅助模型 JSON 与绘图模型路由保持独立
+- 供应商返回文字但没有图片、图片响应为空或流式中断时会明确失败，不会把文字伪装成作品
+- 已使用用户提供的 Gemini API 完成模型列表、文生图、参考图编辑、流式返回和应用仓库真实调用测试
+
 ## v1.31.0
 
 ### 20 张全局图片并发容量
