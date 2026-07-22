@@ -469,31 +469,17 @@ private fun ChatMessageItem(
                         Modifier.fillMaxWidth().padding(top = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(
+                        ChatActionButton(
+                            icon = Icons.Outlined.ContentCopy,
+                            label = "复制",
                             onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("ADChat", message.content)) },
-                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Icon(Icons.Outlined.ContentCopy, null, Modifier.size(14.dp)); Spacer(Modifier.width(5.dp)); Text("复制", fontSize = 12.sp)
-                        }
+                        )
                         if (message.isError) {
-                            TextButton(onClick = onRetry, modifier = Modifier.height(32.dp)) {
-                                Icon(Icons.Rounded.Refresh, null, Modifier.size(15.dp))
-                                Spacer(Modifier.width(5.dp))
-                                Text("重试", fontSize = 12.sp)
-                            }
+                            ChatActionButton(Icons.Rounded.Refresh, "重试", onRetry)
                         } else if (message.isInterrupted || message.isStopped) {
-                            TextButton(onClick = onRetry, modifier = Modifier.height(32.dp)) {
-                                Icon(Icons.Rounded.PlayArrow, null, Modifier.size(16.dp))
-                                Spacer(Modifier.width(5.dp))
-                                Text("继续生成", fontSize = 12.sp)
-                            }
+                            ChatActionButton(Icons.Rounded.PlayArrow, "继续生成", onRetry)
                         } else if (canRegenerate) {
-                            TextButton(onClick = onRegenerate, modifier = Modifier.height(32.dp)) {
-                                Icon(Icons.Rounded.Refresh, null, Modifier.size(15.dp))
-                                Spacer(Modifier.width(5.dp))
-                                Text("重新生成", fontSize = 12.sp)
-                            }
+                            ChatActionButton(Icons.Rounded.Refresh, "重新生成", onRegenerate, accent = true)
                         }
                     }
                 }
@@ -1195,6 +1181,34 @@ private fun inlineMarkdown(text: String): AnnotatedString {
                 accent.start,
                 accent.end
             )
+        }
+    }
+}
+
+@Composable
+private fun ChatActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    accent: Boolean = false
+) {
+    // TextButton adds a platform minimum width and horizontal content padding.
+    // That padding was the source of the apparent offset/cropping on narrow
+    // assistant columns. This button measures only its actual content.
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        contentColor = if (accent) Accent else Ink,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.heightIn(min = 36.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 7.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = label, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
         }
     }
 }
