@@ -383,7 +383,10 @@ private fun ChatMessageItem(
         val messageWidth = if (user) {
             Modifier.widthIn(max = 520.dp)
         } else {
-            Modifier.weight(1f, fill = false).widthIn(max = 680.dp)
+            // Keep the assistant column inside the available row width.  The
+            // previous non-filling weight made the action row measure wider
+            // than short replies, which could push “重新生成” off-screen.
+            Modifier.weight(1f).widthIn(max = 680.dp)
         }
         Column(
             messageWidth,
@@ -462,7 +465,10 @@ private fun ChatMessageItem(
                     TokenUsagePanel(usage = usage)
                 }
                 AnimatedVisibility(!message.isStreaming && message.content.isNotBlank()) {
-                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         TextButton(
                             onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("ADChat", message.content)) },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),

@@ -821,7 +821,7 @@ private fun ProfileEditor(
                                         if (draft.imageApiMode == IMAGE_API_MODE_GEMINI) {
                                             "通过 Chat Completions 的多模态 image 输出绘图，支持参考图。"
                                         } else {
-                                            "自动模式会根据 gemini-*image 模型切换到 Gemini 绘图协议。"
+                                            "自动识别 Gemini 图片模型；NAI Diffusion 等模型使用 OpenAI Images 兼容协议。"
                                         },
                                         color = MutedInk,
                                         style = MaterialTheme.typography.bodySmall,
@@ -1148,7 +1148,18 @@ private fun editorFieldColors() = OutlinedTextFieldDefaults.colors(
 
 private fun String.isImageLike(): Boolean {
     val id = lowercase()
-    return listOf("image", "dall", "flux", "stable-diffusion", "sdxl", "ideogram", "recraft").any(id::contains)
+    return listOf(
+        "image",
+        "dall",
+        "flux",
+        "stable-diffusion",
+        "sdxl",
+        "ideogram",
+        "recraft",
+        "nai",
+        "novelai",
+        "diffusion"
+    ).any(id::contains)
 }
 
 

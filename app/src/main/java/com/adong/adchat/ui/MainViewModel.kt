@@ -1708,7 +1708,18 @@ private data class SelectedReferencePage(
 
 private fun String.isImageLike(): Boolean {
     val id = lowercase()
-    return listOf("image", "dall", "flux", "stable-diffusion", "sdxl", "ideogram", "recraft").any(id::contains)
+    return listOf(
+        "image",
+        "dall",
+        "flux",
+        "stable-diffusion",
+        "sdxl",
+        "ideogram",
+        "recraft",
+        "nai",
+        "novelai",
+        "diffusion"
+    ).any(id::contains)
 }
 
 
