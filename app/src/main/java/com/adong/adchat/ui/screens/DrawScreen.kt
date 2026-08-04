@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import com.adong.adchat.BuildConfig
 import com.adong.adchat.data.ArtworkCollection
 import com.adong.adchat.data.GeneratedImage
 import com.adong.adchat.data.ReferenceImageAttachment
@@ -1067,7 +1068,9 @@ private fun ArtworkCard(
                     onError = { state ->
                         imageLoaded = false
                         imageFailed = true
-                        Log.e("ADChatImage", "Artwork load failed: ${image.source.take(96)}", state.result.throwable)
+                        if (BuildConfig.DEBUG) {
+                            Log.e("ADChatImage", "Artwork load failed", state.result.throwable)
+                        }
                     }
                 )
                 if (!imageLoaded && !imageFailed) {
@@ -1222,7 +1225,9 @@ private fun ImageLightbox(
                 onError = { state ->
                     imageLoaded = false
                     imageFailed = true
-                    Log.e("ADChatImage", "Lightbox load failed: ${source.take(96)}", state.result.throwable)
+                    if (BuildConfig.DEBUG) {
+                        Log.e("ADChatImage", "Lightbox load failed", state.result.throwable)
+                    }
                 }
             )
             if (!imageLoaded && !imageFailed) {
