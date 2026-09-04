@@ -1,0 +1,84 @@
+name: Apply chat performance pass
+
+on:
+  push:
+    branches:
+      - fix/icon-ime-collapse
+    paths:
+      - .github/workflows/apply-chat-perf-pass.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/icon-ime-collapse
+          fetch-depth: 0
+
+      - name: Apply chat performance optimizations
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          gradle = Path("app/build.gradle.kts")
+          g = gradle.read_text(encoding="utf-8-sig")
+          if 'implementation("dev.chrisbanes.haze:haze:1.6.6")' not in g:
+              raise SystemExit("Haze dependency anchor not found")
+          g = g.replace(
+              'implementation("dev.chrisbanes.haze:haze:1.6.6")',
+              'implementation("dev.chrisbanes.haze:haze:1.6.10")',
+              1,
+          )
+          gradle.write_text(g, encoding="utf-8")
+
+          path = Path("app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt")
+          text = path.read_text(encoding="utf-8")
+
+          import_anchor = "import dev.chrisbanes.haze.HazeProgressive\n"
+          if import_anchor not in text:
+              raise SystemExit("Haze import anchor not found")
+          text = text.replace(
+              import_anchor,
+              "import dev.chrisbanes.haze.HazeInputScale\n" + import_anchor,
+              1,
+          )
+
+          old_ime = """            .collect { (imeBottom, imeTargetBottom) ->\n                if (imeBottom > 0) {\n                    imeWasVisible = true\n                    if (vm.messages.isNotEmpty()) {\n                        listState.scrollToItem(vm.messages.size)\n                    }\n                }\n\n                if (imeWasVisible && imeTargetBottom == 0) {\n"""
+          new_ime = """            .collect { (imeBottom, imeTargetBottom) ->\n                if (imeBottom > 0) {\n                    imeWasVisible = true\n                }\n\n                if (imeWasVisible && imeTargetBottom == 0) {\n"""
+          if old_ime not in text:
+              raise SystemExit("IME per-frame scroll anchor not found")
+          text = text.replace(old_ime, new_ime, 1)
+
+          old_effect = """                        backgroundColor = Canvas\n                        blurRadius = 32.dp\n                        noiseFactor = .01f\n                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .36f)))\n                        progressive = HazeProgressive.verticalGradient(\n                            startIntensity = 0f,\n                            endIntensity = 1f\n                        )\n"""
+          new_effect = """                        backgroundColor = Canvas\n                        blurRadius = 32.dp\n                        inputScale = HazeInputScale.Auto\n                        noiseFactor = 0f\n                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .36f)))\n                        progressive = HazeProgressive.verticalGradient(\n                            startIntensity = 0f,\n                            endIntensity = 1f,\n                            preferPerformance = true\n                        )\n"""
+          if old_effect not in text:
+              raise SystemExit("Haze effect anchor not found")
+          text = text.replace(old_effect, new_effect, 1)
+
+          old_interval = "private const val AUTO_SCROLL_INTERVAL_MS = 110L"
+          if old_interval not in text:
+              raise SystemExit("Auto-scroll interval anchor not found")
+          text = text.replace(old_interval, "private const val AUTO_SCROLL_INTERVAL_MS = 160L", 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit performance pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/build.gradle.kts app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "Optimize chat rendering performance"
+          git push origin HEAD:fix/icon-ime-collapse
