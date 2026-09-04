@@ -53,7 +53,7 @@ class MediaGallerySaver(context: Context) {
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName(record))
             put(MediaStore.Video.Media.MIME_TYPE, record.mimeType.ifBlank { "video/mp4" })
-            put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ADChat")
+            put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Aster")
             put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1_000L)
             put(MediaStore.Video.Media.DATE_TAKEN, record.createdAt)
             put(MediaStore.Video.Media.IS_PENDING, 1)
@@ -79,10 +79,10 @@ class MediaGallerySaver(context: Context) {
         }
         val directory = File(
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-            "ADChat"
+            "Aster"
         ).apply { if (!exists() && !mkdirs()) error("无法创建相册目录") }
         val target = nextAvailableFile(directory, displayName(record))
-        val temporary = File(directory, ".${target.name}.adchat")
+        val temporary = File(directory, ".${target.name}.aster")
         try {
             FileOutputStream(temporary).use { output -> copyFile(source, output) }
             if (!temporary.renameTo(target)) {

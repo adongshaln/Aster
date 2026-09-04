@@ -1,6 +1,17 @@
-﻿# ADChat
+﻿# Aster
 
-ADChat 是一个原生 Android 多 API 客户端，支持将对话和绘图分别路由到不同的 OpenAI 兼容服务。
+Aster（原 ADChat）是一个原生 Android 多 API 客户端，支持将对话和绘图分别路由到不同的 OpenAI 兼容服务。
+
+## v2.0.0
+
+### Aster 品牌升级与聚焦输入体验
+
+- 项目正式更名为 Aster，替换应用名称、启动图标、系统提示词和新保存媒体的目录名称
+- 保留原有 `com.adong.adchat` 应用 ID、配置格式、首选项与密钥别名，确保覆盖安装后既有数据仍可使用
+- 点击输入栏后，聊天内容与输入区随输入法同步上移，并持续锚定当前对话底部
+- 输入胶囊以 260ms 缓动平滑展开，提供更大的多行编辑空间
+- 聚焦输入时在发送键旁显示当前模型，点击可直接唤出原有模型切换弹窗
+- 版本号升级为 `2.0.0`（`versionCode 52`）；发布 APK 仍须使用原固定签名证书
 
 ## v1.35.0
 
@@ -573,7 +584,6 @@ Release 构建使用 `keystore.properties` 与 `keystore/adchat-release.jks`。�
 仓库不会提交真实签名文件和密码。首次配置时可复制 `keystore.properties.example` 为
 `keystore.properties`，再填写自己的 JKS 路径与凭据；未配置签名时仍可正常构建 Debug，Release
 会生成未签名产物。
-
 
 
 

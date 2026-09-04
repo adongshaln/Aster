@@ -92,12 +92,12 @@ class ArtworkStore(private val context: Context) {
 
     fun saveToGallery(image: GeneratedImage): String {
         val bytes = readBytes(image.source)
-        val fileName = "ADChat-${System.currentTimeMillis()}.png"
+        val fileName = "Aster-${System.currentTimeMillis()}.png"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
                 put(MediaStore.Images.Media.MIME_TYPE, "image/png")
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ADChat")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Aster")
                 put(MediaStore.Images.Media.IS_PENDING, 1)
             }
             val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
@@ -106,7 +106,7 @@ class ArtworkStore(private val context: Context) {
             values.clear(); values.put(MediaStore.Images.Media.IS_PENDING, 0)
             context.contentResolver.update(uri, values, null, null)
         } else {
-            val dir = File(context.getExternalFilesDir(null), "ADChat").apply { mkdirs() }
+            val dir = File(context.getExternalFilesDir(null), "Aster").apply { mkdirs() }
             File(dir, fileName).writeBytes(bytes)
         }
         return fileName

@@ -14,6 +14,9 @@ import org.json.JSONObject
 import java.util.UUID
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
+private const val DEFAULT_SYSTEM_PROMPT = "你是 Aster 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。"
+private const val LEGACY_DEFAULT_SYSTEM_PROMPT = "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。"
+
 data class ApiModel(val id: String, val ownedBy: String = "")
 
 data class ApiProfile(
@@ -81,7 +84,7 @@ data class AppConfig(
     val activeChatProfileId: String,
     val activeImageProfileId: String,
     val activeMangaAnalysisProfileId: String = activeChatProfileId,
-    val systemPrompt: String = "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。"
+    val systemPrompt: String = DEFAULT_SYSTEM_PROMPT
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
@@ -95,8 +98,11 @@ class ConfigStore(context: Context) {
         prefs.getString("appConfigV2", null)?.let { json ->
             runCatching {
                 val config = decode(JSONObject(json))
-                if (config.profiles.any { it.apiKey.isNotBlank() } && !json.contains("enc:v1:")) save(config)
-                return config
+                val migrated = config.copy(systemPrompt = migrateSystemPrompt(config.systemPrompt))
+                if (migrated != config || (config.profiles.any { it.apiKey.isNotBlank() } && !json.contains("enc:v1:"))) {
+                    save(migrated)
+                }
+                return migrated
             }
         }
         return migrateLegacy()
@@ -133,8 +139,7 @@ class ConfigStore(context: Context) {
             activeChatProfileId = profile.id,
             activeImageProfileId = profile.id,
             activeMangaAnalysisProfileId = profile.id,
-            systemPrompt = prefs.getString("systemPrompt", null)
-                ?: "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。"
+            systemPrompt = migrateSystemPrompt(prefs.getString("systemPrompt", null) ?: DEFAULT_SYSTEM_PROMPT)
         ).also(::save)
     }
 
@@ -218,9 +223,12 @@ class ConfigStore(context: Context) {
                 .takeIf { id -> profiles.any { it.id == id } }
                 ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
                 ?: profiles.first().id,
-            systemPrompt = root.optString("systemPrompt").ifBlank { "你是 ADChat 中可靠、友好的 AI 助手。请使用清晰、自然的中文回答。" }
+            systemPrompt = migrateSystemPrompt(root.optString("systemPrompt").ifBlank { DEFAULT_SYSTEM_PROMPT })
         )
     }
+
+    private fun migrateSystemPrompt(value: String): String =
+        if (value == LEGACY_DEFAULT_SYSTEM_PROMPT) DEFAULT_SYSTEM_PROMPT else value
 
 
     private fun encryptSecret(value: String): String {

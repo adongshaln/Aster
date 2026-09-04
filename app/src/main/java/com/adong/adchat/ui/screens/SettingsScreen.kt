@@ -209,7 +209,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
         }
         }
         item {
-            Text("ADChat ${BuildConfig.VERSION_NAME} \u00b7 Secure multi-route client", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+            Text("Aster ${BuildConfig.VERSION_NAME} \u00b7 Secure multi-route client", color = MutedInk, style = MaterialTheme.typography.labelMedium)
         }
         item { Spacer(Modifier.height(8.dp)) }
     }
@@ -280,7 +280,7 @@ private fun ProfileTransferDialog(
     val exporting = mode == "export"
     AdModalDialog(
         title = if (exporting) "导出 API 配置" else "导入 API 配置",
-        subtitle = if (exporting) "生成可跨设备迁移的 JSON" else "从 ADChat JSON 恢复路由与模型",
+        subtitle = if (exporting) "生成可跨设备迁移的 JSON" else "从 Aster JSON 恢复路由与模型",
         icon = if (exporting) Icons.Rounded.FileDownload else Icons.Rounded.FileUpload,
         onDismiss = onDismiss,
         content = {
@@ -304,7 +304,7 @@ private fun ProfileTransferDialog(
                 )
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("粘贴 ADChat 导出的 JSON", modifier = Modifier.weight(1f), color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+                    Text("粘贴 Aster 导出的 JSON", modifier = Modifier.weight(1f), color = MutedInk, style = MaterialTheme.typography.bodyMedium)
                     Surface(
                         onClick = {
                             val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
@@ -348,7 +348,7 @@ private fun ProfileTransferDialog(
             Button(
                 onClick = {
                     if (exporting) {
-                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("ADChat API Profiles", exportJson))
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Aster API Profiles", exportJson))
                         onDismiss()
                     } else onImport()
                 },
@@ -1214,7 +1214,6 @@ private fun String.isGpt56Model(): Boolean {
     val value = lowercase()
     return value.contains("gpt-5.6") || value.contains("gpt-5_6")
 }
-
 
 
 

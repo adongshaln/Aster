@@ -61,8 +61,8 @@ class MainActivity : ComponentActivity() {
         pendingMediaShare = extractSharedMediaText(intent)
         enableEdgeToEdge()
         setContent {
-            ADChatTheme {
-                ADChatApp(
+            AsterTheme {
+                AsterApp(
                     vm = viewModel,
                     incomingMediaText = pendingMediaShare,
                     onMediaTextConsumed = { pendingMediaShare = null }
@@ -94,7 +94,7 @@ private enum class AppPage(val label: String, val icon: ImageVector) {
 }
 
 @Composable
-private fun ADChatApp(
+private fun AsterApp(
     vm: MainViewModel,
     incomingMediaText: String?,
     onMediaTextConsumed: () -> Unit
@@ -211,7 +211,7 @@ private fun AppDrawer(
                 }
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("ADChat", style = MaterialTheme.typography.titleLarge)
+                    Text("Aster", style = MaterialTheme.typography.titleLarge)
                     Text("你的 AI 工作台", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
                 IconButton(onClick = onClose) { Icon(Icons.Rounded.Close, "关闭侧栏") }
@@ -304,7 +304,7 @@ private fun AppDrawer(
                     )
                 }
             }
-            Text("ADChat ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelSmall,
+            Text("Aster ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelSmall,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         }
     }

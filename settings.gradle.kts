@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "ADChat"
+rootProject.name = "Aster"
 include(":app")

@@ -14,6 +14,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
@@ -47,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -116,11 +119,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
     val hazeState = rememberHazeState()
     var showSwitcher by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(true) }
+    var composerFocused by remember { mutableStateOf(false) }
     var composerHeightPx by remember { mutableIntStateOf(0) }
-    var capsuleHeightPx by remember { mutableIntStateOf(0) }
     var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
     val fileExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val file = pendingFileExport
@@ -171,14 +175,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         }
     }
     val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)
-    val capsuleHeight = with(density) { capsuleHeightPx.toDp() }.coerceAtLeast(58.dp)
-    val bottomInset = with(density) {
-        maxOf(
-            WindowInsets.navigationBars.getBottom(this),
-            WindowInsets.ime.getBottom(this)
-        ).toDp()
-    }
-    val composerClearance = composerHeight + bottomInset + 26.dp
+    val composerClearance = composerHeight + 18.dp
 
     LaunchedEffect(vm.activeConversationId) {
         autoFollow = true
@@ -202,10 +199,21 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 delay(AUTO_SCROLL_INTERVAL_MS)
             }
     }
+    LaunchedEffect(composerFocused, vm.activeConversationId) {
+        if (!composerFocused) return@LaunchedEffect
+        autoFollow = true
+        snapshotFlow { imeInsets.getBottom(density) }
+            .distinctUntilChanged()
+            .collect {
+                if (vm.messages.isNotEmpty()) {
+                    listState.scrollToItem(vm.messages.size)
+                }
+            }
+    }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ChatHeader(vm, onOpenDrawer, onSwitchModel = { showSwitcher = true })
-        Box(Modifier.weight(1f).fillMaxWidth()) {
+        Box(Modifier.weight(1f).fillMaxWidth().imePadding()) {
             Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
                 if (vm.messages.isEmpty()) {
                     EmptyChat(
@@ -252,7 +260,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .height(capsuleHeight + bottomInset + 8.dp)
+                    .height(composerHeight)
                     .hazeEffect(state = hazeState) {
                         backgroundColor = Canvas
                         blurRadius = 32.dp
@@ -331,7 +339,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .padding(bottom = bottomInset)
+                    .onSizeChanged { composerHeightPx = it.height }
+                    .navigationBarsPadding()
             ) {
                 ChatComposer(
                     value = vm.chatInput,
@@ -355,8 +364,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onRemoveImage = vm::removeChatImage,
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
-                    onCapsuleHeightChanged = { capsuleHeightPx = it },
-                    modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeightPx = it.height }
+                    onFocusChange = { composerFocused = it },
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
         }
@@ -571,7 +580,7 @@ private fun ChatMessageItem(
                         ChatActionButton(
                             icon = Icons.Outlined.ContentCopy,
                             label = "复制",
-                            onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("ADChat", message.content)) },
+                            onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Aster", message.content)) },
                         )
                         if (message.isError) {
                             ChatActionButton(Icons.Rounded.Refresh, "重试", onRetry)
@@ -1267,7 +1276,7 @@ private fun MarkdownTableBlock(table: MarkdownTable, selectable: Boolean, error:
                         onClick = {
                             context.getSystemService(android.content.ClipboardManager::class.java)
                                 .setPrimaryClip(
-                                    android.content.ClipData.newPlainText("ADChat 表格", markdownTableToTsv(table))
+                                    android.content.ClipData.newPlainText("Aster 表格", markdownTableToTsv(table))
                                 )
                             Toast.makeText(context, "表格已复制", Toast.LENGTH_SHORT).show()
                         },
@@ -1534,16 +1543,23 @@ private fun ChatComposer(
     onRemoveImage: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    onCapsuleHeightChanged: (Int) -> Unit,
+    onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val focus = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
+    var isFocused by remember { mutableStateOf(false) }
     var showEffortSheet by remember { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
     val enabledToSend = value.isNotBlank() || attachments.isNotEmpty()
     val activeToolCount = listOf(webSearchEnabled, fileCreationEnabled).count { it }
     val capsuleShape = RoundedCornerShape(31.dp)
+    val focusAnimation = tween<Dp>(durationMillis = 260, easing = FastOutSlowInEasing)
+    val minimumHeight by animateDpAsState(if (isFocused) 110.dp else 58.dp, focusAnimation, label = "composer-height")
+    val fieldStart by animateDpAsState(if (isFocused) 18.dp else 58.dp, focusAnimation, label = "composer-field-start")
+    val fieldEnd by animateDpAsState(if (isFocused) 18.dp else 58.dp, focusAnimation, label = "composer-field-end")
+    val fieldTop by animateDpAsState(if (isFocused) 15.dp else 17.dp, focusAnimation, label = "composer-field-top")
+    val fieldBottom by animateDpAsState(if (isFocused) 57.dp else 15.dp, focusAnimation, label = "composer-field-bottom")
 
     Column(
         modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 8.dp, bottom = 8.dp)
@@ -1575,39 +1591,20 @@ private fun ChatComposer(
                     ambientColor = Color.Black.copy(alpha = .07f),
                     spotColor = Color.Black.copy(alpha = .10f)
                 )
-                .animateContentSize(tween(130))
-                .onSizeChanged { onCapsuleHeightChanged(it.height) }
         ) {
-            Row(
-                Modifier.fillMaxWidth().defaultMinSize(minHeight = 58.dp).padding(6.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                Box {
-                    IconButton(
-                        onClick = { showToolsSheet = true },
-                        enabled = !loading,
-                        modifier = Modifier.size(46.dp)
-                    ) {
-                        if (attachmentLoading) {
-                            CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Rounded.Add, "输入选项", Modifier.size(29.dp), tint = Ink)
-                        }
-                    }
-                    if (activeToolCount > 0) {
-                        Box(
-                            Modifier.align(Alignment.TopEnd).offset(x = (-2).dp, y = 2.dp)
-                                .size(16.dp).clip(CircleShape).background(Accent),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(activeToolCount.toString(), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
+            Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = minimumHeight)) {
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f).padding(horizontal = 7.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
+                        .heightIn(min = 24.dp, max = 132.dp)
+                        .onFocusChanged { state ->
+                            if (isFocused != state.isFocused) {
+                                isFocused = state.isFocused
+                                onFocusChange(state.isFocused)
+                            }
+                        },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
                     cursorBrush = SolidColor(Accent),
                     maxLines = 5,
@@ -1631,34 +1628,95 @@ private fun ChatComposer(
                         }
                     }
                 )
-                FilledIconButton(
-                    onClick = {
-                        haptics.performHapticFeedback(if (loading) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove)
-                        if (loading) onStop() else {
-                            focus.clearFocus()
-                            onSend()
-                        }
-                    },
-                    enabled = loading || (enabledToSend && !attachmentLoading),
-                    modifier = Modifier.size(46.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = Night,
-                        contentColor = Color.White,
-                        disabledContainerColor = Color(0xFFE6E1DB),
-                        disabledContentColor = Color(0xFFA9A39C)
-                    )
+                Row(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(58.dp).padding(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AnimatedContent(
-                        targetState = loading,
-                        transitionSpec = {
-                            (fadeIn(tween(140)) + scaleIn(tween(180), initialScale = .72f)) togetherWith
-                                (fadeOut(tween(100)) + scaleOut(tween(120), targetScale = .72f))
+                    Box {
+                        IconButton(
+                            onClick = {
+                                focus.clearFocus()
+                                showToolsSheet = true
+                            },
+                            enabled = !loading,
+                            modifier = Modifier.size(46.dp)
+                        ) {
+                            if (attachmentLoading) {
+                                CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                            } else {
+                                Icon(Icons.Rounded.Add, "输入选项", Modifier.size(29.dp), tint = Ink)
+                            }
+                        }
+                        if (activeToolCount > 0) {
+                            Box(
+                                Modifier.align(Alignment.TopEnd).offset(x = (-2).dp, y = 2.dp)
+                                    .size(16.dp).clip(CircleShape).background(Accent),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(activeToolCount.toString(), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.weight(1f))
+                    AnimatedVisibility(
+                        visible = isFocused,
+                        enter = fadeIn(tween(150)) + scaleIn(tween(220, easing = FastOutSlowInEasing), initialScale = .92f),
+                        exit = fadeOut(tween(90))
+                    ) {
+                        Surface(
+                            onClick = {
+                                focus.clearFocus()
+                                onModelClick()
+                            },
+                            color = Color.Transparent,
+                            contentColor = Ink,
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Row(
+                                Modifier.widthIn(max = 174.dp).padding(horizontal = 9.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    compactModelLabel(model),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Icon(Icons.Rounded.ExpandMore, "更换模型", Modifier.size(16.dp), tint = MutedInk)
+                            }
+                        }
+                    }
+                    FilledIconButton(
+                        onClick = {
+                            haptics.performHapticFeedback(if (loading) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove)
+                            if (loading) onStop() else {
+                                focus.clearFocus()
+                                onSend()
+                            }
                         },
-                        label = "send-stop"
-                    ) { isLoading ->
-                        if (isLoading) Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(21.dp))
-                        else Icon(Icons.AutoMirrored.Rounded.Send, "发送", Modifier.size(21.dp))
+                        enabled = loading || (enabledToSend && !attachmentLoading),
+                        modifier = Modifier.size(46.dp),
+                        shape = CircleShape,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = Night,
+                            contentColor = Color.White,
+                            disabledContainerColor = Color(0xFFE6E1DB),
+                            disabledContentColor = Color(0xFFA9A39C)
+                        )
+                    ) {
+                        AnimatedContent(
+                            targetState = loading,
+                            transitionSpec = {
+                                (fadeIn(tween(140)) + scaleIn(tween(180), initialScale = .72f)) togetherWith
+                                    (fadeOut(tween(100)) + scaleOut(tween(120), targetScale = .72f))
+                            },
+                            label = "send-stop"
+                        ) { isLoading ->
+                            if (isLoading) Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(21.dp))
+                            else Icon(Icons.AutoMirrored.Rounded.Send, "发送", Modifier.size(21.dp))
+                        }
                     }
                 }
             }
@@ -1857,6 +1915,8 @@ private val REASONING_OPTIONS = listOf(
     "xhigh" to "深度",
     "max" to "极致"
 )
+
+private fun compactModelLabel(value: String): String = value.ifBlank { "选择模型" }
 
 private fun reasoningEffortLabel(value: String): String = REASONING_OPTIONS.firstOrNull { it.first == value }?.second ?: "均衡"
 

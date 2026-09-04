@@ -1069,7 +1069,7 @@ private fun ArtworkCard(
                         imageLoaded = false
                         imageFailed = true
                         if (BuildConfig.DEBUG) {
-                            Log.e("ADChatImage", "Artwork load failed", state.result.throwable)
+                            Log.e("AsterImage", "Artwork load failed", state.result.throwable)
                         }
                     }
                 )
@@ -1226,7 +1226,7 @@ private fun ImageLightbox(
                     imageLoaded = false
                     imageFailed = true
                     if (BuildConfig.DEBUG) {
-                        Log.e("ADChatImage", "Lightbox load failed", state.result.throwable)
+                        Log.e("AsterImage", "Lightbox load failed", state.result.throwable)
                     }
                 }
             )
@@ -1325,7 +1325,6 @@ private fun MetadataPill(text: String) {
         Text(text, Modifier.padding(horizontal = 9.dp, vertical = 5.dp), color = MutedInk, style = MaterialTheme.typography.labelMedium)
     }
 }
-
 
 
 

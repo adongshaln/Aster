@@ -493,7 +493,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importProfiles(json: String): Result<Int> = runCatching {
         val root = JSONObject(json)
-        require(root.optString("format") == "adchat-profiles-v1") { "不是有效的 ADChat 配置文件" }
+        require(root.optString("format") == "adchat-profiles-v1") { "不是有效的 Aster 配置文件" }
         val array = root.optJSONArray("profiles") ?: throw IllegalArgumentException("配置中没有 profiles")
         val imported = buildList {
             for (index in 0 until array.length()) {
@@ -1789,6 +1789,5 @@ private fun String.isImageLike(): Boolean {
         "diffusion"
     ).any(id::contains)
 }
-
 
 

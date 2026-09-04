@@ -67,7 +67,6 @@ private val typography = Typography(
 )
 
 @Composable
-fun ADChatTheme(content: @Composable () -> Unit) {
+fun AsterTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = colors, typography = typography, content = content)
 }
-
