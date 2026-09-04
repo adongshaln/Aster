@@ -23,49 +23,8 @@ jobs:
       - name: Restore IME follow scrolling
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt')
-          text = path.read_text(encoding='utf-8')
-
-          old = '''            .collect { (imeBottom, imeTargetBottom) ->
-                if (imeBottom > 0) {
-                    imeWasVisible = true
-                }
-
-                if (imeWasVisible && imeTargetBottom == 0) {
-                    // Start collapsing as soon as the system begins the IME close animation.
-                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
-                    focusManager.clearFocus()
-                }
-            }
-'''
-
-          new = '''            .collect { (imeBottom, imeTargetBottom) ->
-                if (vm.messages.isNotEmpty()) {
-                    // Keep the conversation pinned to the bottom for every IME inset update so
-                    // the visible messages move upward in lockstep with the keyboard animation.
-                    listState.scrollToItem(vm.messages.size)
-                }
-
-                if (imeBottom > 0) {
-                    imeWasVisible = true
-                }
-
-                if (imeWasVisible && imeTargetBottom == 0) {
-                    // Start collapsing as soon as the system begins the IME close animation.
-                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
-                    focusManager.clearFocus()
-                }
-            }
-'''
-
-          if old not in text:
-              raise SystemExit('IME follow-scroll anchor not found')
-          text = text.replace(old, new, 1)
-          path.write_text(text, encoding='utf-8')
-          PY
+          printf '%s' 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpwYXRoID0gUGF0aCgiYXBwL3NyYy9tYWluL2phdmEvY29tL2Fkb25nL2FkY2hhdC91aS9zY3JlZW5zL0NoYXRTY3JlZW4ua3QiKQp0ZXh0ID0gcGF0aC5yZWFkX3RleHQoZW5jb2Rpbmc9InV0Zi04IikKCm9sZCA9ICcnJyAgICAgICAgICAgIC5jb2xsZWN0IHsgKGltZUJvdHRvbSwgaW1lVGFyZ2V0Qm90dG9tKSAtPgogICAgICAgICAgICAgICAgaWYgKGltZUJvdHRvbSA+IDApIHsKICAgICAgICAgICAgICAgICAgICBpbWVXYXNWaXNpYmxlID0gdHJ1ZQogICAgICAgICAgICAgICAgfQoKICAgICAgICAgICAgICAgIGlmIChpbWVXYXNWaXNpYmxlICYmIGltZVRhcmdldEJvdHRvbSA9PSAwKSB7CiAgICAgICAgICAgICAgICAgICAgLy8gU3RhcnQgY29sbGFwc2luZyBhcyBzb29uIGFzIHRoZSBzeXN0ZW0gYmVnaW5zIHRoZSBJTUUgY2xvc2UgYW5pbWF0aW9uLgogICAgICAgICAgICAgICAgICAgIC8vIFdhaXRpbmcgZm9yIGltZUJvdHRvbSA9PSAwIG1ha2VzIHRoZSBrZXlib2FyZCBhbmQgY29tcG9zZXIgYW5pbWF0ZSBzZXJpYWxseS4KICAgICAgICAgICAgICAgICAgICBmb2N1c01hbmFnZXIuY2xlYXJGb2N1cygpCiAgICAgICAgICAgICAgICB9CiAgICAgICAgICAgIH0KJycnCgpuZXcgPSAnJycgICAgICAgICAgICAuY29sbGVjdCB7IChpbWVCb3R0b20sIGltZVRhcmdldEJvdHRvbSkgLT4KICAgICAgICAgICAgICAgIGlmICh2bS5tZXNzYWdlcy5pc05vdEVtcHR5KCkpIHsKICAgICAgICAgICAgICAgICAgICAvLyBLZWVwIHRoZSBjb252ZXJzYXRpb24gcGlubmVkIHRvIHRoZSBib3R0b20gZm9yIGV2ZXJ5IElNRSBpbnNldCB1cGRhdGUgc28KICAgICAgICAgICAgICAgICAgICAvLyB0aGUgdmlzaWJsZSBtZXNzYWdlcyBtb3ZlIHVwd2FyZCBpbiBsb2Nrc3RlcCB3aXRoIHRoZSBrZXlib2FyZCBhbmltYXRpb24uCiAgICAgICAgICAgICAgICAgICAgbGlzdFN0YXRlLnNjcm9sbFRvSXRlbSh2bS5tZXNzYWdlcy5zaXplKQogICAgICAgICAgICAgICAgfQoKICAgICAgICAgICAgICAgIGlmIChpbWVCb3R0b20gPiAwKSB7CiAgICAgICAgICAgICAgICAgICAgaW1lV2FzVmlzaWJsZSA9IHRydWUKICAgICAgICAgICAgICAgIH0KCiAgICAgICAgICAgICAgICBpZiAoaW1lV2FzVmlzaWJsZSAmJiBpbWVUYXJnZXRCb3R0b20gPT0gMCkgewogICAgICAgICAgICAgICAgICAgIC8vIFN0YXJ0IGNvbGxhcHNpbmcgYXMgc29vbiBhcyB0aGUgc3lzdGVtIGJlZ2lucyB0aGUgSU1FIGNsb3NlIGFuaW1hdGlvbi4KICAgICAgICAgICAgICAgICAgICAvLyBXYWl0aW5nIGZvciBpbWVCb3R0b20gPT0gMCBtYWtlcyB0aGUga2V5Ym9hcmQgYW5kIGNvbXBvc2VyIGFuaW1hdGUgc2VyaWFsbHkuCiAgICAgICAgICAgICAgICAgICAgZm9jdXNNYW5hZ2VyLmNsZWFyRm9jdXMoKQogICAgICAgICAgICAgICAgfQogICAgICAgICAgICB9CicnJwoKaWYgb2xkIG5vdCBpbiB0ZXh0OgogICAgcmFpc2UgU3lzdGVtRXhpdCgiSU1FIGZvbGxvdy1zY3JvbGwgYW5jaG9yIG5vdCBmb3VuZCIpCnRleHQgPSB0ZXh0LnJlcGxhY2Uob2xkLCBuZXcsIDEpCnBhdGgud3JpdGVfdGV4dCh0ZXh0LCBlbmNvZGluZz0idXRmLTgiKQo=' | base64 --decode > /tmp/ime_follow_fix.py
+          python3 /tmp/ime_follow_fix.py
 
       - name: Commit fix
         shell: bash
