@@ -17,6 +17,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -100,6 +101,7 @@ import com.adong.adchat.ui.markdown.findReadingAccentRanges
 import com.adong.adchat.ui.markdown.markdownTableToTsv
 import com.adong.adchat.ui.markdown.parseMarkdownTableAt
 import com.adong.adchat.ui.theme.*
+import dev.chrisbanes.haze.HazeInputScale
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -114,16 +116,20 @@ import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -> Unit) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val focusManager = LocalFocusManager.current
     val imeInsets = WindowInsets.ime
+    val imeAnimationTarget = WindowInsets.imeAnimationTarget
     val hazeState = rememberHazeState()
     var showSwitcher by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(true) }
     var composerFocused by remember { mutableStateOf(false) }
+    var imeTransitioning by remember { mutableStateOf(false) }
     var composerHeightPx by remember { mutableIntStateOf(0) }
     var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
     val fileExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -176,6 +182,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)
     val composerClearance = composerHeight + 18.dp
+    val useLiveHaze = !listState.isScrollInProgress && !imeTransitioning && !vm.isChatLoading
 
     LaunchedEffect(vm.activeConversationId) {
         autoFollow = true
@@ -199,14 +206,40 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 delay(AUTO_SCROLL_INTERVAL_MS)
             }
     }
+    LaunchedEffect(imeInsets, imeAnimationTarget) {
+        snapshotFlow {
+            imeInsets.getBottom(density) to imeAnimationTarget.getBottom(density)
+        }
+            .distinctUntilChanged()
+            .collect { (currentBottom, targetBottom) ->
+                val transitioning = currentBottom != targetBottom
+                if (imeTransitioning != transitioning) imeTransitioning = transitioning
+            }
+    }
+
     LaunchedEffect(composerFocused, vm.activeConversationId) {
         if (!composerFocused) return@LaunchedEffect
         autoFollow = true
-        snapshotFlow { imeInsets.getBottom(density) }
+        var imeWasVisible = imeInsets.getBottom(density) > 0
+        snapshotFlow {
+            imeInsets.getBottom(density) to imeAnimationTarget.getBottom(density)
+        }
             .distinctUntilChanged()
-            .collect {
+            .collect { (imeBottom, imeTargetBottom) ->
                 if (vm.messages.isNotEmpty()) {
+                    // Keep the conversation pinned to the bottom for every IME inset update so
+                    // the visible messages move upward in lockstep with the keyboard animation.
                     listState.scrollToItem(vm.messages.size)
+                }
+
+                if (imeBottom > 0) {
+                    imeWasVisible = true
+                }
+
+                if (imeWasVisible && imeTargetBottom == 0) {
+                    // Start collapsing as soon as the system begins the IME close animation.
+                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
+                    focusManager.clearFocus()
                 }
             }
     }
@@ -214,7 +247,11 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ChatHeader(vm, onOpenDrawer, onSwitchModel = { showSwitcher = true })
         Box(Modifier.weight(1f).fillMaxWidth().imePadding()) {
-            Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
+            Box(
+                Modifier.fillMaxSize().then(
+                    if (useLiveHaze) Modifier.hazeSource(hazeState) else Modifier
+                )
+            ) {
                 if (vm.messages.isEmpty()) {
                     EmptyChat(
                         model = vm.chatProfile.chatModel,
@@ -251,31 +288,45 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                                         putExtra(Intent.EXTRA_TITLE, file.name)
                                     })
                                 },
-                                modifier = Modifier.animateItem()
+                                modifier = if (message.isStreaming) Modifier else Modifier.animateItem()
                             )
                         }
                         item { Spacer(Modifier.height(4.dp)) }
                     }
                 }
             }
-            Box(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                    .height(composerHeight)
-                    .hazeEffect(state = hazeState) {
+            val hazeLayerModifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .height(composerHeight)
+            if (useLiveHaze) {
+                Box(
+                    hazeLayerModifier.hazeEffect(state = hazeState) {
                         backgroundColor = Canvas
-                        blurRadius = 32.dp
-                        noiseFactor = .01f
-                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .36f)))
+                        blurRadius = 22.dp
+                        inputScale = HazeInputScale.Auto
+                        noiseFactor = 0f
+                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .34f)))
                         progressive = HazeProgressive.verticalGradient(
                             startIntensity = 0f,
-                            endIntensity = 1f
+                            endIntensity = 1f,
+                            preferPerformance = true
                         )
                         mask = Brush.verticalGradient(
                             0f to Color.Transparent,
                             1f to Color.Black
                         )
                     }
-            )
+                )
+            } else {
+                Box(
+                    hazeLayerModifier.background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            .46f to Canvas.copy(alpha = .38f),
+                            1f to Canvas.copy(alpha = .96f)
+                        )
+                    )
+                )
+            }
             AnimatedContent(
                 targetState = showQuestionNavigator,
                 modifier = Modifier.align(Alignment.BottomStart)
@@ -1518,8 +1569,8 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
 }
 
 private const val INLINE_CODE_TAG = "adchat-inline-code"
-private const val STREAM_TEXT_CHUNK_SIZE = 960
-private const val AUTO_SCROLL_INTERVAL_MS = 110L
+private const val STREAM_TEXT_CHUNK_SIZE = 640
+private const val AUTO_SCROLL_INTERVAL_MS = 160L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1554,12 +1605,19 @@ private fun ChatComposer(
     val enabledToSend = value.isNotBlank() || attachments.isNotEmpty()
     val activeToolCount = listOf(webSearchEnabled, fileCreationEnabled).count { it }
     val capsuleShape = RoundedCornerShape(31.dp)
-    val focusAnimation = tween<Dp>(durationMillis = 260, easing = FastOutSlowInEasing)
-    val minimumHeight by animateDpAsState(if (isFocused) 110.dp else 58.dp, focusAnimation, label = "composer-height")
-    val fieldStart by animateDpAsState(if (isFocused) 18.dp else 58.dp, focusAnimation, label = "composer-field-start")
-    val fieldEnd by animateDpAsState(if (isFocused) 18.dp else 58.dp, focusAnimation, label = "composer-field-end")
-    val fieldTop by animateDpAsState(if (isFocused) 15.dp else 17.dp, focusAnimation, label = "composer-field-top")
-    val fieldBottom by animateDpAsState(if (isFocused) 57.dp else 15.dp, focusAnimation, label = "composer-field-bottom")
+    val focusProgress by animateFloatAsState(
+        targetValue = if (isFocused) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (isFocused) 230 else 180,
+            easing = FastOutSlowInEasing
+        ),
+        label = "composer-focus-progress"
+    )
+    val minimumHeight = 58.dp + 52.dp * focusProgress
+    val fieldStart = 58.dp - 40.dp * focusProgress
+    val fieldEnd = 58.dp - 40.dp * focusProgress
+    val fieldTop = 17.dp - 2.dp * focusProgress
+    val fieldBottom = 15.dp + 42.dp * focusProgress
 
     Column(
         modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 8.dp, bottom = 8.dp)
