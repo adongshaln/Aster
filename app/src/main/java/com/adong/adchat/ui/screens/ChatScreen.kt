@@ -226,6 +226,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         }
             .distinctUntilChanged()
             .collect { (imeBottom, imeTargetBottom) ->
+                if (vm.messages.isNotEmpty()) {
+                    // Keep the conversation pinned to the bottom for every IME inset update so
+                    // the visible messages move upward in lockstep with the keyboard animation.
+                    listState.scrollToItem(vm.messages.size)
+                }
+
                 if (imeBottom > 0) {
                     imeWasVisible = true
                 }
