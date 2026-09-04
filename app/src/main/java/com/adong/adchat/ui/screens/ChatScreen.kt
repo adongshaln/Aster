@@ -100,6 +100,7 @@ import com.adong.adchat.ui.markdown.findReadingAccentRanges
 import com.adong.adchat.ui.markdown.markdownTableToTsv
 import com.adong.adchat.ui.markdown.parseMarkdownTableAt
 import com.adong.adchat.ui.theme.*
+import dev.chrisbanes.haze.HazeInputScale
 import dev.chrisbanes.haze.HazeProgressive
 import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
@@ -212,9 +213,6 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             .collect { (imeBottom, imeTargetBottom) ->
                 if (imeBottom > 0) {
                     imeWasVisible = true
-                    if (vm.messages.isNotEmpty()) {
-                        listState.scrollToItem(vm.messages.size)
-                    }
                 }
 
                 if (imeWasVisible && imeTargetBottom == 0) {
@@ -278,11 +276,13 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .hazeEffect(state = hazeState) {
                         backgroundColor = Canvas
                         blurRadius = 32.dp
-                        noiseFactor = .01f
+                        inputScale = HazeInputScale.Auto
+                        noiseFactor = 0f
                         tints = listOf(HazeTint(color = Canvas.copy(alpha = .36f)))
                         progressive = HazeProgressive.verticalGradient(
                             startIntensity = 0f,
-                            endIntensity = 1f
+                            endIntensity = 1f,
+                            preferPerformance = true
                         )
                         mask = Brush.verticalGradient(
                             0f to Color.Transparent,
@@ -1533,7 +1533,7 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
 
 private const val INLINE_CODE_TAG = "adchat-inline-code"
 private const val STREAM_TEXT_CHUNK_SIZE = 960
-private const val AUTO_SCROLL_INTERVAL_MS = 110L
+private const val AUTO_SCROLL_INTERVAL_MS = 160L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
