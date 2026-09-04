@@ -2,6 +2,18 @@
 
 ADChat 是一个原生 Android 多 API 客户端，支持将对话和绘图分别路由到不同的 OpenAI 兼容服务。
 
+## v1.35.0
+
+### 对话工具与悬浮输入胶囊
+
+- Responses API 新增原生 `web_search`，并支持模型调用 `create_file` 创建可下载的 Markdown、文本、JSON 与 CSV 文件
+- Chat Completions 支持兼容网关的 `web_search_options` 与 `create_file` 函数调用；为避免部分搜索模型拒绝自定义函数，Chat 模式下两类工具互斥
+- 对话会保存工具执行状态、网页来源和已创建文件，历史会话恢复后仍可打开来源或重新下载文件
+- 输入区重构为紧凑悬浮胶囊，图片、模型、思考强度和工具选项集中到 `+` 面板
+- 胶囊下方使用单层渐进背景模糊：胶囊上沿保持完全清晰，越接近屏幕底部模糊越强，并覆盖系统手势导航区域
+- 胶囊使用独立柔和阴影，避免模糊层重复采样造成黑边、重影或不稳定阴影
+- 首个文本片段到达前使用 12 光芒旋转的 `Thinking` 占位动画，不再显示静态省略号
+
 ## v1.34.1
 
 ### 重新生成操作栏对齐修复
@@ -561,7 +573,6 @@ Release 构建使用 `keystore.properties` 与 `keystore/adchat-release.jks`。�
 仓库不会提交真实签名文件和密码。首次配置时可复制 `keystore.properties.example` 为
 `keystore.properties`，再填写自己的 JKS 路径与凭据；未配置签名时仍可正常构建 Debug，Release
 会生成未签名产物。
-
 
 
 

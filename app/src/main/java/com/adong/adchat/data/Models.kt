@@ -29,6 +29,8 @@ data class ApiProfile(
     val autoResumeStream: Boolean = true,
     val promptCacheEnabled: Boolean = true,
     val promptCacheMode: String = "adaptive",
+    val webSearchEnabled: Boolean = false,
+    val fileCreationEnabled: Boolean = false,
     val imagePath: String = "/v1/images/generations",
     val imageEditPath: String = "/v1/images/edits",
     val imageApiMode: String = IMAGE_API_MODE_AUTO,
@@ -118,6 +120,8 @@ class ConfigStore(context: Context) {
             autoResumeStream = true,
             promptCacheEnabled = prefs.getBoolean("promptCacheEnabled", true),
             promptCacheMode = "adaptive",
+            webSearchEnabled = false,
+            fileCreationEnabled = false,
             imagePath = prefs.getString("imagePath", null) ?: "/v1/images/generations",
             imageEditPath = prefs.getString("imageEditPath", null) ?: "/v1/images/edits",
             chatModel = prefs.getString("chatModel", null) ?: "gpt-4.1-mini",
@@ -154,6 +158,8 @@ class ConfigStore(context: Context) {
                     .put("autoResumeStream", profile.autoResumeStream)
                     .put("promptCacheEnabled", profile.promptCacheEnabled)
                     .put("promptCacheMode", profile.promptCacheMode)
+                    .put("webSearchEnabled", profile.webSearchEnabled)
+                    .put("fileCreationEnabled", profile.fileCreationEnabled)
                     .put("imagePath", profile.imagePath)
                     .put("imageEditPath", profile.imageEditPath)
                     .put("imageApiMode", profile.imageApiMode)
@@ -190,6 +196,8 @@ class ConfigStore(context: Context) {
                         "compatibility" -> "compatibility"
                         else -> "adaptive"
                     },
+                    webSearchEnabled = item.optBoolean("webSearchEnabled", false),
+                    fileCreationEnabled = item.optBoolean("fileCreationEnabled", false),
                     imagePath = item.optString("imagePath").ifBlank { "/v1/images/generations" },
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
                     imageApiMode = item.optString("imageApiMode").ifBlank { IMAGE_API_MODE_AUTO },
@@ -265,7 +273,13 @@ class ConfigStore(context: Context) {
 
 data class ConnectionResult(val latencyMs: Long, val models: List<ApiModel>, val endpoint: String)
 
-data class ChatCompletionResult(val text: String, val usage: TokenUsage)
+data class ChatCompletionResult(
+    val text: String,
+    val usage: TokenUsage,
+    val citations: List<ChatCitation> = emptyList(),
+    val generatedFiles: List<GeneratedFileDraft> = emptyList(),
+    val toolActivities: List<ChatToolActivity> = emptyList()
+)
 
 data class StreamRecoveryEvent(
     val attempt: Int,
@@ -306,8 +320,44 @@ data class ChatMessage(
     val streamRecoveryCount: Int = 0,
     val profileName: String = "",
     val model: String = "",
-    val usage: TokenUsage? = null
+    val usage: TokenUsage? = null,
+    val citations: List<ChatCitation> = emptyList(),
+    val generatedFiles: List<ChatFileAttachment> = emptyList(),
+    val toolActivities: List<ChatToolActivity> = emptyList()
 )
+
+data class GeneratedFileDraft(
+    val name: String,
+    val mimeType: String,
+    val content: String
+)
+
+data class ChatFileAttachment(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val mimeType: String,
+    val content: String
+) {
+    val sizeBytes: Int get() = content.toByteArray(Charsets.UTF_8).size
+}
+
+data class ChatCitation(
+    val title: String,
+    val url: String,
+    val startIndex: Int? = null,
+    val endIndex: Int? = null
+)
+
+data class ChatToolActivity(
+    val id: String,
+    val name: String,
+    val label: String,
+    val status: String = TOOL_STATUS_COMPLETED
+)
+
+const val TOOL_STATUS_RUNNING = "running"
+const val TOOL_STATUS_COMPLETED = "completed"
+const val TOOL_STATUS_FAILED = "failed"
 
 /**
  * An image attached to a chat message.  [bytes] is intentionally transient:

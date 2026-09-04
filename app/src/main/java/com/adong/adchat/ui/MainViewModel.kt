@@ -338,6 +338,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persist()
     }
 
+    fun setChatWebSearchEnabled(enabled: Boolean) {
+        val profile = chatProfile
+        updateProfile(profile.id) {
+            it.copy(
+                webSearchEnabled = enabled,
+                fileCreationEnabled = if (enabled && it.chatApiMode == "chat") false else it.fileCreationEnabled
+            )
+        }
+        persist()
+    }
+
+    fun setChatFileCreationEnabled(enabled: Boolean) {
+        val profile = chatProfile
+        updateProfile(profile.id) {
+            it.copy(
+                fileCreationEnabled = enabled,
+                webSearchEnabled = if (enabled && it.chatApiMode == "chat") false else it.webSearchEnabled
+            )
+        }
+        persist()
+    }
+
     fun updateSystemPrompt(value: String) {
         appConfig = appConfig.copy(systemPrompt = value); persist()
     }
@@ -454,6 +476,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("autoResumeStream", profile.autoResumeStream)
                         .put("promptCacheEnabled", profile.promptCacheEnabled)
                         .put("promptCacheMode", profile.promptCacheMode)
+                        .put("webSearchEnabled", profile.webSearchEnabled)
+                        .put("fileCreationEnabled", profile.fileCreationEnabled)
                         .put("imagePath", profile.imagePath)
                         .put("imageEditPath", profile.imageEditPath)
                         .put("imageApiMode", profile.imageApiMode)
@@ -489,6 +513,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     autoResumeStream = item.optBoolean("autoResumeStream", true),
                     promptCacheEnabled = item.optBoolean("promptCacheEnabled", true),
                     promptCacheMode = item.optString("promptCacheMode").ifBlank { "implicit" },
+                    webSearchEnabled = item.optBoolean("webSearchEnabled", false),
+                    fileCreationEnabled = item.optBoolean("fileCreationEnabled", false),
                     imagePath = item.optString("imagePath").ifBlank { "/v1/images/generations" },
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
                     imageApiMode = item.optString("imageApiMode").ifBlank { IMAGE_API_MODE_AUTO },
@@ -603,6 +629,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             }
                         }
+                    },
+                    onToolActivity = { activity ->
+                        withContext(Dispatchers.Main.immediate) {
+                            replaceMessage(assistantId) { message ->
+                                val activities = message.toolActivities.toMutableList()
+                                val index = activities.indexOfFirst { it.id == activity.id }
+                                if (index >= 0) activities[index] = activity else activities += activity
+                                message.copy(toolActivities = activities)
+                            }
+                        }
                     }
                 ) { delta ->
                     streamed.append(delta)
@@ -649,7 +685,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         isStopped = false,
                         isRecovering = false,
                         streamRecoveryCount = maxOf(automaticRecoveryCount, result.usage.streamRecoveryCount),
-                        usage = result.usage
+                        usage = result.usage,
+                        citations = result.citations,
+                        generatedFiles = result.generatedFiles.map { file ->
+                            ChatFileAttachment(name = file.name, mimeType = file.mimeType, content = file.content)
+                        },
+                        toolActivities = result.toolActivities
                     )
                 }
             } catch (error: Throwable) {
@@ -725,10 +766,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } finally {
+                replaceMessage(assistantId) { message ->
+                    message.copy(toolActivities = message.toolActivities.map { activity ->
+                        if (activity.status == TOOL_STATUS_RUNNING) {
+                            activity.copy(
+                                label = "${activity.label.removePrefix("正在").removePrefix("等待模型")}未完成",
+                                status = TOOL_STATUS_FAILED
+                            )
+                        } else activity
+                    })
+                }
                 isChatLoading = false
                 chatStopRequested = false
                 chatJob = null
                 persistCurrentConversation(clearRecoveryMessageId = assistantId)
+            }
+        }
+    }
+
+    fun exportGeneratedFile(file: ChatFileAttachment, target: Uri) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val resolver = getApplication<Application>().contentResolver
+                    resolver.openOutputStream(target, "w")?.use { output ->
+                        output.write(file.content.toByteArray(Charsets.UTF_8))
+                    } ?: throw IllegalStateException("无法打开目标文件")
+                }
+            }.onSuccess {
+                notice = "已保存 ${file.name}"
+            }.onFailure { error ->
+                notice = "保存失败：${error.message ?: "未知错误"}"
             }
         }
     }
@@ -1721,7 +1789,6 @@ private fun String.isImageLike(): Boolean {
         "diffusion"
     ).any(id::contains)
 }
-
 
 
 

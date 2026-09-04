@@ -153,7 +153,8 @@ private fun ADChatApp(
                 }
             }
         ) { padding ->
-            Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) {
+            val pageBottomPadding = if (page == AppPage.Chat) 0.dp else padding.calculateBottomPadding()
+            Box(Modifier.fillMaxSize().padding(bottom = pageBottomPadding)) {
                 AnimatedContent(
                     targetState = page,
                     transitionSpec = {
@@ -437,4 +438,3 @@ private fun ConversationRow(
         )
     }
 }
-

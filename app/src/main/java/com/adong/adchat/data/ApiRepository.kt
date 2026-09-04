@@ -91,33 +91,36 @@ class ApiRepository {
         history: List<ChatMessage>,
         cacheKey: String,
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
+        onToolActivity: suspend (ChatToolActivity) -> Unit = {},
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
+        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled
 
         suspend fun executeAttempt(
             attemptHistory: List<ChatMessage>,
             deltaSink: suspend (String) -> Unit
         ): ChatCompletionResult {
-            val adaptiveCache = profile.promptCacheEnabled && model.isGpt56Family() && profile.promptCacheMode != "compatibility"
+            val adaptiveCache = profile.promptCacheEnabled && model.isGpt56Family() &&
+                profile.promptCacheMode != "compatibility" && !toolsActive
             return if (adaptiveCache) {
                 try {
-                    streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = true, onDelta = deltaSink)
+                    streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = true, onToolActivity = onToolActivity, onDelta = deltaSink)
                 } catch (error: Throwable) {
                     if (error is CancellationException) throw error
                     currentCoroutineContext().ensureActive()
                     if (!error.isCacheCompatibilityError()) throw error
                     if (profile.chatApiMode == "responses") {
-                        streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, deltaSink)
+                        streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, onToolActivity, deltaSink)
                     } else {
-                        streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onDelta = deltaSink)
+                        streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
                     }
                 }
             } else if (profile.chatApiMode == "responses") {
-                streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, deltaSink)
+                streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, onToolActivity, deltaSink)
             } else {
-                streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onDelta = deltaSink)
+                streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
             }
         }
 
@@ -135,7 +138,7 @@ class ApiRepository {
             } catch (error: Throwable) {
                 if (error is CancellationException) throw error
                 currentCoroutineContext().ensureActive()
-                if (emittedInAttempt || !error.isRetryableStreamFailure()) throw error
+                if (toolsActive || emittedInAttempt || !error.isRetryableStreamFailure()) throw error
                 delay(PRE_DELTA_RETRY_DELAY_MS)
                 executeAttempt(attemptHistory, deltaSink)
             }
@@ -152,7 +155,7 @@ class ApiRepository {
         } catch (initialError: Throwable) {
             if (initialError is CancellationException) throw initialError
             currentCoroutineContext().ensureActive()
-            if (combined.isEmpty() || !profile.autoResumeStream || !initialError.isRetryableStreamFailure()) throw initialError
+            if (combined.isEmpty() || toolsActive || !profile.autoResumeStream || !initialError.isRetryableStreamFailure()) throw initialError
         }
 
         val recoveryAttempt = 1
@@ -204,6 +207,7 @@ class ApiRepository {
         history: List<ChatMessage>,
         cacheKey: String,
         explicitCache: Boolean,
+        onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
         val messages = JSONArray()
@@ -218,73 +222,132 @@ class ApiRepository {
             )
             messages.put(JSONObject().put("role", message.role).put("content", content))
         }
-        val body = JSONObject()
-            .put("model", model)
-            .put("messages", messages)
-            .put("stream", true)
-            .put("stream_options", JSONObject().put("include_usage", true))
-        applyGptOptimizations(body, profile, model, cacheKey, responsesApi = false, explicitCache = explicitCache)
-        val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
-            .header("Accept", "text/event-stream")
-            .header("Cache-Control", "no-cache")
-            .header("Accept-Encoding", "identity")
-            .header("Connection", "close")
-            .post(body.toString().toRequestBody(jsonMedia)).build()
         val started = System.nanoTime()
         var firstDeltaAt: Long? = null
         var usage = TokenUsage()
         val full = StringBuilder()
+        val generatedFiles = mutableListOf<GeneratedFileDraft>()
+        val citations = linkedMapOf<String, ChatCitation>()
+        val activities = linkedMapOf<String, ChatToolActivity>()
 
-        val call = streamingClient.newCall(request)
-        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+        suspend fun recordActivity(activity: ChatToolActivity) {
+            activities[activity.id] = activity
+            onToolActivity(activity)
+        }
+
+        suspend fun executeRound(): ProtocolRoundResult {
+            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled, profile.fileCreationEnabled)
+            val body = JSONObject()
+                .put("model", model)
+                .put("messages", messages)
+                .put("stream", true)
+                .put("stream_options", JSONObject().put("include_usage", true))
+            val tools = buildChatTools(toolPolicy.fileCreationEnabled)
+            if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
+            if (toolPolicy.webSearchEnabled) body.put("web_search_options", JSONObject())
+            applyGptOptimizations(body, profile, model, cacheKey, responsesApi = false, explicitCache = explicitCache)
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close")
+                .post(body.toString().toRequestBody(jsonMedia)).build()
+            val call = streamingClient.newCall(request)
+            val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+                try { awaitCancellation() } finally { call.cancel() }
+            }
+            val roundText = StringBuilder()
+            var roundUsage = TokenUsage()
+            val roundCitations = linkedMapOf<String, ChatCitation>()
+            val toolAccumulator = ChatToolCallAccumulator()
             try {
-                awaitCancellation()
+                call.execute().use { response ->
+                    if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                    val contentType = response.header("Content-Type").orEmpty()
+                    if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                        val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
+                        var completed = false
+                        readSsePayloads(source) { payload ->
+                            if (payload.trim() == "[DONE]") {
+                                completed = true
+                                return@readSsePayloads false
+                            }
+                            val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
+                            toolAccumulator.accept(root)
+                            parseCitations(root).forEach { roundCitations[it.url] = it }
+                            val choices = root.optJSONArray("choices")
+                            val choice = choices?.optJSONObject(0)
+                            if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) completed = true
+                            if (root.has("usage") && !root.isNull("usage")) {
+                                roundUsage = parseUsage(root)
+                                if (choices != null && choices.length() == 0) completed = true
+                            }
+                            val delta = parseStreamDelta(root)
+                            if (delta.isNotEmpty()) {
+                                if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                                roundText.append(delta)
+                                full.append(delta)
+                                onDelta(delta)
+                            }
+                            true
+                        }
+                        if (!completed) throw IOException("Streaming connection ended before completion")
+                    } else {
+                        val text = response.body?.string().orEmpty()
+                        if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
+                        val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
+                        toolAccumulator.accept(root)
+                        parseCitations(root).forEach { roundCitations[it.url] = it }
+                        val result = runCatching { parseMessageContent(root) }.getOrDefault("")
+                        if (result.isNotEmpty()) {
+                            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                            roundText.append(result); full.append(result); onDelta(result)
+                        }
+                        roundUsage = parseUsage(root)
+                    }
+                }
             } finally {
-                call.cancel()
+                cancellationWatcher.cancel()
+            }
+            val calls = toolAccumulator.completedCalls()
+            if (roundText.isBlank() && calls.isEmpty()) throw IllegalStateException("No recognizable message content or tool call in API response")
+            return ProtocolRoundResult(roundText.toString(), roundUsage, calls, roundCitations.values.toList())
+        }
+
+        if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
+        var completedNormally = false
+        for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
+            val round = executeRound()
+            usage = usage + round.usage
+            round.citations.forEach { citations[it.url] = it }
+            if (round.toolCalls.isEmpty()) {
+                completedNormally = true
+                break
+            }
+            val assistantToolCalls = JSONArray()
+            round.toolCalls.forEach { call ->
+                assistantToolCalls.put(JSONObject()
+                    .put("id", call.callId)
+                    .put("type", "function")
+                    .put("function", JSONObject().put("name", call.name).put("arguments", call.arguments)))
+            }
+            messages.put(JSONObject()
+                .put("role", "assistant")
+                .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
+                .put("tool_calls", assistantToolCalls))
+            round.toolCalls.forEach { call ->
+                recordActivity(ChatToolActivity(call.callId, call.name, "正在创建文件", TOOL_STATUS_RUNNING))
+                val execution = executeAppTool(call)
+                execution.generatedFile?.let(generatedFiles::add)
+                recordActivity(execution.activity)
+                messages.put(JSONObject()
+                    .put("role", "tool")
+                    .put("tool_call_id", call.callId)
+                    .put("content", execution.output))
             }
         }
-        try {
-            call.execute().use { response ->
-                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
-            val contentType = response.header("Content-Type").orEmpty()
-            if (contentType.contains("text/event-stream", ignoreCase = true)) {
-                val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
-                var completed = false
-                readSsePayloads(source) { payload ->
-                    if (payload.trim() == "[DONE]") {
-                        completed = true
-                        return@readSsePayloads false
-                    }
-                    val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
-                    val choices = root.optJSONArray("choices")
-                    val choice = choices?.optJSONObject(0)
-                    if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) completed = true
-                    if (root.has("usage") && !root.isNull("usage")) {
-                        usage = parseUsage(root)
-                        if (choices != null && choices.length() == 0) completed = true
-                    }
-                    val delta = parseStreamDelta(root)
-                    if (delta.isNotEmpty()) {
-                        if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                        full.append(delta)
-                        onDelta(delta)
-                    }
-                    true
-                }
-                if (!completed) throw IOException("Streaming connection ended before completion")
-            } else {
-                val text = response.body?.string().orEmpty()
-                if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
-                val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
-                val result = parseMessageContent(root)
-                firstDeltaAt = System.nanoTime()
-                full.append(result); onDelta(result)
-                usage = parseUsage(root)
-                }
-            }
-        } finally {
-            cancellationWatcher.cancel()
-        }
+        if (!completedNormally) throw IllegalStateException("工具调用轮次超过上限")
+        if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
         val duration = elapsedMs(started)
         val finalUsage = usage.copy(
             timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
@@ -297,7 +360,17 @@ class ApiRepository {
                 else -> "automatic"
             }
         )
-        return ChatCompletionResult(full.toString().ifBlank { throw IllegalStateException("Streaming response contained no text") }, finalUsage)
+        val resultText = full.toString().ifBlank {
+            generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
+                ?: throw IllegalStateException("Streaming response contained no text")
+        }
+        return ChatCompletionResult(
+            text = resultText,
+            usage = finalUsage,
+            citations = citations.values.toList(),
+            generatedFiles = generatedFiles,
+            toolActivities = activities.values.toList()
+        )
     }
 
     private suspend fun streamResponses(
@@ -306,77 +379,151 @@ class ApiRepository {
         systemPrompt: String,
         history: List<ChatMessage>,
         cacheKey: String,
+        onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
-        val input = JSONArray()
+        val initialInput = JSONArray()
         history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }.forEach {
-            input.put(JSONObject()
+            initialInput.put(JSONObject()
                 .put("role", it.role)
                 .put("content", responsesMessageContent(it)))
         }
-        val body = JSONObject().put("model", model).put("input", input).put("stream", true)
-        if (systemPrompt.isNotBlank()) body.put("instructions", systemPrompt)
-        applyGptOptimizations(body, profile, model, cacheKey, responsesApi = true, explicitCache = false)
-        val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.responsesPath))
-            .header("Accept", "text/event-stream")
-            .header("Cache-Control", "no-cache")
-            .header("Accept-Encoding", "identity")
-            .header("Connection", "close")
-            .post(body.toString().toRequestBody(jsonMedia)).build()
         val started = System.nanoTime()
         var firstDeltaAt: Long? = null
         var usage = TokenUsage()
         val full = StringBuilder()
+        val generatedFiles = mutableListOf<GeneratedFileDraft>()
+        val citations = linkedMapOf<String, ChatCitation>()
+        val activities = linkedMapOf<String, ChatToolActivity>()
+        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled)
 
-        val call = streamingClient.newCall(request)
-        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+        suspend fun recordActivity(activity: ChatToolActivity) {
+            activities[activity.id] = activity
+            onToolActivity(activity)
+        }
+
+        suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?): ProtocolRoundResult {
+            val body = JSONObject().put("model", model).put("input", requestInput).put("stream", true)
+            if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
+            if (profile.fileCreationEnabled) body.put("store", true)
+            previousResponseId?.takeIf(String::isNotBlank)?.let { body.put("previous_response_id", it) }
+            if (systemPrompt.isNotBlank()) body.put("instructions", systemPrompt)
+            applyGptOptimizations(body, profile, model, cacheKey, responsesApi = true, explicitCache = false)
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.responsesPath))
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close")
+                .post(body.toString().toRequestBody(jsonMedia)).build()
+            val call = streamingClient.newCall(request)
+            val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+                try { awaitCancellation() } finally { call.cancel() }
+            }
+            val roundText = StringBuilder()
+            var roundUsage = TokenUsage()
+            var responseId = ""
+            var usedWebSearch = false
+            val roundCitations = linkedMapOf<String, ChatCitation>()
+            val toolAccumulator = ResponsesToolCallAccumulator()
             try {
-                awaitCancellation()
+                call.execute().use { response ->
+                    if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                    val contentType = response.header("Content-Type").orEmpty()
+                    if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                        val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
+                        var completed = false
+                        readSsePayloads(source) { payload ->
+                            if (payload.trim() == "[DONE]") {
+                                completed = true
+                                return@readSsePayloads false
+                            }
+                            val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
+                            toolAccumulator.accept(root)
+                            parseCitations(root).forEach { roundCitations[it.url] = it }
+                            when (root.optString("type")) {
+                                "response.created" -> responseId = root.optJSONObject("response")?.optString("id").orEmpty()
+                                "response.output_text.delta" -> {
+                                    val delta = root.optString("delta")
+                                    if (delta.isNotEmpty()) {
+                                        if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                                        roundText.append(delta); full.append(delta); onDelta(delta)
+                                    }
+                                }
+                                "response.web_search_call.in_progress", "response.web_search_call.searching" -> {
+                                    usedWebSearch = true
+                                    recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
+                                }
+                                "response.web_search_call.completed" -> {
+                                    usedWebSearch = true
+                                    recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+                                }
+                                "response.completed" -> {
+                                    val completedResponse = root.optJSONObject("response") ?: root
+                                    responseId = completedResponse.optString("id").ifBlank { responseId }
+                                    roundUsage = parseUsage(completedResponse)
+                                    usedWebSearch = usedWebSearch || responseUsedWebSearch(root)
+                                    completed = true
+                                }
+                                "response.failed", "response.incomplete" -> throw IllegalStateException(root.optJSONObject("response")?.optJSONObject("error")?.optString("message").orEmpty().ifBlank { "Responses API failed" })
+                                "error" -> throw IllegalStateException(root.optString("message").ifBlank { "Responses API failed" })
+                            }
+                            !completed
+                        }
+                        if (!completed) throw IOException("Streaming connection ended before completion")
+                    } else {
+                        val text = response.body?.string().orEmpty()
+                        if (text.isBlank()) throw IllegalStateException("Responses API returned an empty response")
+                        val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON from Responses API") }
+                        toolAccumulator.acceptResponse(root)
+                        parseCitations(root).forEach { roundCitations[it.url] = it }
+                        responseId = root.optString("id")
+                        usedWebSearch = responseUsedWebSearch(root)
+                        val result = runCatching { parseResponsesText(root) }.getOrDefault("")
+                        if (result.isNotEmpty()) {
+                            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                            roundText.append(result); full.append(result); onDelta(result)
+                        }
+                        roundUsage = parseUsage(root)
+                    }
+                }
             } finally {
-                call.cancel()
+                cancellationWatcher.cancel()
+            }
+            val calls = toolAccumulator.completedCalls()
+            if (roundText.isBlank() && calls.isEmpty()) throw IllegalStateException("Responses API returned no text or tool call")
+            return ProtocolRoundResult(roundText.toString(), roundUsage, calls, roundCitations.values.toList(), responseId, usedWebSearch)
+        }
+
+        if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "等待模型搜索网页", TOOL_STATUS_RUNNING))
+        var requestInput = initialInput
+        var previousResponseId: String? = null
+        var completedNormally = false
+        for (toolRound in 0 until MAX_TOOL_ROUNDS) {
+            val round = executeRound(requestInput, previousResponseId)
+            usage = usage + round.usage
+            round.citations.forEach { citations[it.url] = it }
+            if (round.usedWebSearch) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+            if (round.toolCalls.isEmpty()) {
+                completedNormally = true
+                break
+            }
+            if (round.responseId.isBlank()) throw IllegalStateException("Responses API 未返回 response id，无法提交工具结果")
+            previousResponseId = round.responseId
+            requestInput = JSONArray()
+            round.toolCalls.forEach { call ->
+                recordActivity(ChatToolActivity(call.callId, call.name, "正在创建文件", TOOL_STATUS_RUNNING))
+                val execution = executeAppTool(call)
+                execution.generatedFile?.let(generatedFiles::add)
+                recordActivity(execution.activity)
+                requestInput.put(JSONObject()
+                    .put("type", "function_call_output")
+                    .put("call_id", call.callId)
+                    .put("output", execution.output))
             }
         }
-        try {
-            call.execute().use { response ->
-                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
-            val contentType = response.header("Content-Type").orEmpty()
-            if (contentType.contains("text/event-stream", ignoreCase = true)) {
-                val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
-                var completed = false
-                readSsePayloads(source) { payload ->
-                    if (payload.trim() == "[DONE]") {
-                        completed = true
-                        return@readSsePayloads false
-                    }
-                    val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
-                    when (root.optString("type")) {
-                        "response.output_text.delta" -> {
-                            val delta = root.optString("delta")
-                            if (delta.isNotEmpty()) {
-                                if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                                full.append(delta); onDelta(delta)
-                            }
-                        }
-                        "response.completed" -> {
-                            usage = parseUsage(root.optJSONObject("response") ?: root)
-                            completed = true
-                        }
-                        "response.failed", "response.incomplete" -> throw IllegalStateException(root.optJSONObject("response")?.optJSONObject("error")?.optString("message").orEmpty().ifBlank { "Responses API failed" })
-                    }
-                    !completed
-                }
-                if (!completed) throw IOException("Streaming connection ended before completion")
-            } else {
-                val text = response.body?.string().orEmpty()
-                val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON from Responses API") }
-                val result = parseResponsesText(root)
-                firstDeltaAt = System.nanoTime()
-                full.append(result); onDelta(result)
-                usage = parseUsage(root)
-                }
-            }
-        } finally {
-            cancellationWatcher.cancel()
+        if (!completedNormally) throw IllegalStateException("工具调用轮次超过上限")
+        if (profile.webSearchEnabled && activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
+            recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "本次回复未调用网络搜索", TOOL_STATUS_COMPLETED))
         }
         val finalUsage = usage.copy(
             timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
@@ -385,7 +532,17 @@ class ApiRepository {
             cacheKey = cacheKey.take(64),
             cacheStrategy = if (profile.promptCacheEnabled && model.isGpt56Family()) "automatic" else "off"
         )
-        return ChatCompletionResult(full.toString().ifBlank { throw IllegalStateException("Responses API returned no text") }, finalUsage)
+        val resultText = full.toString().ifBlank {
+            generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
+                ?: throw IllegalStateException("Responses API returned no text")
+        }
+        return ChatCompletionResult(
+            text = resultText,
+            usage = finalUsage,
+            citations = citations.values.toList(),
+            generatedFiles = generatedFiles,
+            toolActivities = activities.values.toList()
+        )
     }
 
     private fun chatCompletionContent(
@@ -943,4 +1100,3 @@ private fun String.isGpt56Family(): Boolean {
     val value = lowercase()
     return value.contains("gpt-5.6") || value.contains("gpt-5_6")
 }
-

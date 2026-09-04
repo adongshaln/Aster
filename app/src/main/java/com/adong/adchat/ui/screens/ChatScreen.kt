@@ -1,5 +1,7 @@
 package com.adong.adchat.ui.screens
 
+import android.app.Activity
+import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -11,15 +13,14 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
@@ -31,11 +32,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -43,13 +46,19 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -66,7 +75,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.ChatFileAttachment
 import com.adong.adchat.data.ChatMessage
+import com.adong.adchat.data.ChatCitation
+import com.adong.adchat.data.ChatToolActivity
+import com.adong.adchat.data.TOOL_STATUS_COMPLETED
+import com.adong.adchat.data.TOOL_STATUS_FAILED
+import com.adong.adchat.data.TOOL_STATUS_RUNNING
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.chat.questionNavigationTargets
@@ -82,18 +97,38 @@ import com.adong.adchat.ui.markdown.findReadingAccentRanges
 import com.adong.adchat.ui.markdown.markdownTableToTsv
 import com.adong.adchat.ui.markdown.parseMarkdownTableAt
 import com.adong.adchat.ui.theme.*
+import dev.chrisbanes.haze.HazeProgressive
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -> Unit) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val hazeState = rememberHazeState()
     var showSwitcher by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(true) }
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    var capsuleHeightPx by remember { mutableIntStateOf(0) }
+    var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
+    val fileExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val file = pendingFileExport
+        pendingFileExport = null
+        if (result.resultCode == Activity.RESULT_OK && file != null) {
+            result.data?.data?.let { target -> vm.exportGeneratedFile(file, target) }
+        }
+    }
     val chatImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         if (uris.isNotEmpty()) vm.attachChatImages(uris)
     }
@@ -135,6 +170,15 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }?.id
         }
     }
+    val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)
+    val capsuleHeight = with(density) { capsuleHeightPx.toDp() }.coerceAtLeast(58.dp)
+    val bottomInset = with(density) {
+        maxOf(
+            WindowInsets.navigationBars.getBottom(this),
+            WindowInsets.ime.getBottom(this)
+        ).toDp()
+    }
+    val composerClearance = composerHeight + bottomInset + 26.dp
 
     LaunchedEffect(vm.activeConversationId) {
         autoFollow = true
@@ -162,42 +206,74 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ChatHeader(vm, onOpenDrawer, onSwitchModel = { showSwitcher = true })
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            if (vm.messages.isEmpty()) {
-                EmptyChat(model = vm.chatProfile.chatModel, onSuggestion = vm::sendMessage, modifier = Modifier.fillMaxSize())
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(
-                        start = 18.dp,
-                        end = 18.dp,
-                        top = 18.dp,
-                        bottom = 18.dp
-                    ),
-                    verticalArrangement = Arrangement.spacedBy(22.dp)
-                ) {
-                    items(
-                        items = vm.messages,
-                        key = { it.id },
-                        contentType = { it.role }
-                    ) { message ->
-                        ChatMessageItem(
-                            message = message,
-                            canRegenerate = message.id == regeneratableMessageId,
-                            onRetry = { vm.retryMessage(message.id) },
-                            onRegenerate = { vm.regenerateMessage(message.id) },
-                            modifier = Modifier.animateItem()
-                        )
+            Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
+                if (vm.messages.isEmpty()) {
+                    EmptyChat(
+                        model = vm.chatProfile.chatModel,
+                        onSuggestion = vm::sendMessage,
+                        modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
+                    )
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            start = 18.dp,
+                            end = 18.dp,
+                            top = 18.dp,
+                            bottom = composerClearance
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(22.dp)
+                    ) {
+                        items(
+                            items = vm.messages,
+                            key = { it.id },
+                            contentType = { it.role }
+                        ) { message ->
+                            ChatMessageItem(
+                                message = message,
+                                canRegenerate = message.id == regeneratableMessageId,
+                                onRetry = { vm.retryMessage(message.id) },
+                                onRegenerate = { vm.regenerateMessage(message.id) },
+                                onSaveFile = { file ->
+                                    pendingFileExport = file
+                                    fileExportLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                        addCategory(Intent.CATEGORY_OPENABLE)
+                                        type = file.mimeType
+                                        putExtra(Intent.EXTRA_TITLE, file.name)
+                                    })
+                                },
+                                modifier = Modifier.animateItem()
+                            )
+                        }
+                        item { Spacer(Modifier.height(4.dp)) }
                     }
-                    item { Spacer(Modifier.height(4.dp)) }
                 }
             }
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .height(capsuleHeight + bottomInset + 8.dp)
+                    .hazeEffect(state = hazeState) {
+                        backgroundColor = Canvas
+                        blurRadius = 32.dp
+                        noiseFactor = .01f
+                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .36f)))
+                        progressive = HazeProgressive.verticalGradient(
+                            startIntensity = 0f,
+                            endIntensity = 1f
+                        )
+                        mask = Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            1f to Color.Black
+                        )
+                    }
+            )
             AnimatedContent(
                 targetState = showQuestionNavigator,
-                modifier = Modifier.align(Alignment.BottomStart).padding(start = 10.dp, bottom = 12.dp),
+                modifier = Modifier.align(Alignment.BottomStart)
+                    .padding(start = 10.dp, bottom = composerClearance + 8.dp),
                 transitionSpec = {
-                    (fadeIn(tween(170)) + scaleIn(tween(210), initialScale = .88f)) togetherWith
-                        (fadeOut(tween(110)) + scaleOut(tween(140), targetScale = .9f))
+                    fadeIn(tween(160)) togetherWith fadeOut(tween(110))
                 },
                 label = "question-navigator"
             ) { visible ->
@@ -222,10 +298,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
             AnimatedContent(
                 targetState = showJumpToBottom,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 12.dp),
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 18.dp, bottom = composerClearance + 8.dp),
                 transitionSpec = {
-                    (fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.86f) + slideInVertically(tween(220)) { it / 2 }) togetherWith
-                        (fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.9f) + slideOutVertically(tween(140)) { it / 2 })
+                    fadeIn(tween(160)) togetherWith fadeOut(tween(110))
                 },
                 label = "jump-to-bottom"
             ) { visible ->
@@ -253,25 +329,37 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     Spacer(Modifier.size(0.dp))
                 }
             }
+            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .padding(bottom = bottomInset)
+            ) {
+                ChatComposer(
+                    value = vm.chatInput,
+                    attachments = vm.chatAttachments,
+                    profileName = vm.chatProfile.name,
+                    model = vm.chatProfile.chatModel,
+                    loading = vm.isChatLoading,
+                    attachmentLoading = vm.isChatAttachmentLoading,
+                    reasoningEffort = vm.chatProfile.reasoningEffort,
+                    apiMode = vm.chatProfile.chatApiMode,
+                    webSearchEnabled = vm.chatProfile.webSearchEnabled,
+                    fileCreationEnabled = vm.chatProfile.fileCreationEnabled,
+                    onModelClick = { showSwitcher = true },
+                    onReasoningEffortChange = vm::setChatReasoningEffort,
+                    onWebSearchToggle = vm::setChatWebSearchEnabled,
+                    onFileCreationToggle = vm::setChatFileCreationEnabled,
+                    onValueChange = vm::updateChatInput,
+                    onPickImages = {
+                        chatImagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    onRemoveImage = vm::removeChatImage,
+                    onSend = { autoFollow = true; vm.sendMessage() },
+                    onStop = vm::stopGeneration,
+                    onCapsuleHeightChanged = { capsuleHeightPx = it },
+                    modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeightPx = it.height }
+                )
+            }
         }
-        ChatComposer(
-            value = vm.chatInput,
-            attachments = vm.chatAttachments,
-            profileName = vm.chatProfile.name,
-            model = vm.chatProfile.chatModel,
-            loading = vm.isChatLoading,
-            attachmentLoading = vm.isChatAttachmentLoading,
-            reasoningEffort = vm.chatProfile.reasoningEffort,
-            onModelClick = { showSwitcher = true },
-            onReasoningEffortChange = vm::setChatReasoningEffort,
-            onValueChange = vm::updateChatInput,
-            onPickImages = {
-                chatImagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-            },
-            onRemoveImage = vm::removeChatImage,
-            onSend = { autoFollow = true; vm.sendMessage() },
-            onStop = vm::stopGeneration
-        )
     }
     if (showSwitcher) {
         QuickModelSwitcher(kind = RouteKind.Chat, vm = vm, onDismiss = { showSwitcher = false }, onManageApis = onOpenSettings)
@@ -341,16 +429,18 @@ private fun ChatMessageItem(
     canRegenerate: Boolean,
     onRetry: () -> Unit,
     onRegenerate: () -> Unit,
+    onSaveFile: (ChatFileAttachment) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val user = message.role == "user"
+    val waitingForFirstToken = !user && message.content.isBlank() && message.isStreaming
     val context = LocalContext.current
     Row(
         modifier.fillMaxWidth(),
         horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        if (!user) {
+        if (!user && !waitingForFirstToken) {
             Box(
                 Modifier.size(30.dp).clip(RoundedCornerShape(10.dp)).background(
                     when {
@@ -410,6 +500,9 @@ private fun ChatMessageItem(
                     }
                 }
             } else {
+                if (message.toolActivities.isNotEmpty()) {
+                    ToolActivitySummary(message.toolActivities)
+                }
                 if (message.content.isBlank() && message.isStreaming) {
                     ThinkingIndicator()
                 } else {
@@ -418,6 +511,12 @@ private fun ChatMessageItem(
                         streaming = message.isStreaming,
                         error = message.isError
                     )
+                }
+                if (message.generatedFiles.isNotEmpty()) {
+                    GeneratedFilesPanel(message.generatedFiles, onSaveFile)
+                }
+                if (message.citations.isNotEmpty()) {
+                    CitationPanel(message.citations)
                 }
                 AnimatedVisibility(message.streamRecoveryCount > 0) {
                     StreamRecoveryStatus(
@@ -585,39 +684,181 @@ private fun StreamRecoveryStatus(
 @Composable
 private fun ThinkingIndicator() {
     val transition = rememberInfiniteTransition(label = "thinking")
+    val rotation by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1450, easing = LinearEasing)),
+        label = "thinking-rays"
+    )
+    val textAlpha by transition.animateFloat(
+        initialValue = .52f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(850), repeatMode = RepeatMode.Reverse),
+        label = "thinking-text"
+    )
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Row(
-            Modifier.height(20.dp).padding(horizontal = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            repeat(3) { index ->
-                val scale by transition.animateFloat(
-                    initialValue = 0.66f,
-                    targetValue = 1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = keyframes {
-                            durationMillis = 900
-                            0.66f at 0
-                            1f at 180 + index * 120
-                            0.66f at 420 + index * 120
-                            0.66f at 900
-                        }
+        ComposeCanvas(Modifier.size(21.dp)) {
+            val centerPoint = center
+            val innerRadius = size.minDimension * .20f
+            val outerRadius = size.minDimension * .46f
+            repeat(12) { index ->
+                val radians = (rotation + index * 30f) * PI / 180.0
+                val opacity = .18f + .82f * ((index + 1f) / 12f)
+                drawLine(
+                    color = Accent.copy(alpha = opacity),
+                    start = androidx.compose.ui.geometry.Offset(
+                        centerPoint.x + (cos(radians) * innerRadius).toFloat(),
+                        centerPoint.y + (sin(radians) * innerRadius).toFloat()
                     ),
-                    label = "thinking-dot-$index"
-                )
-                Box(
-                    Modifier.size(6.dp).clip(CircleShape).background(Accent).graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = 0.55f + (scale - 0.66f)
-                    }
+                    end = androidx.compose.ui.geometry.Offset(
+                        centerPoint.x + (cos(radians) * outerRadius).toFloat(),
+                        centerPoint.y + (sin(radians) * outerRadius).toFloat()
+                    ),
+                    strokeWidth = size.minDimension * .105f,
+                    cap = StrokeCap.Round
                 )
             }
         }
         Spacer(Modifier.width(9.dp))
-        Text("正在思考", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Text("Thinking", color = MutedInk.copy(alpha = textAlpha), style = MaterialTheme.typography.bodyMedium)
     }
+}
+
+@Composable
+private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
+    var expanded by remember(activities.size) { mutableStateOf(false) }
+    val running = activities.any { it.status == TOOL_STATUS_RUNNING }
+    val failed = activities.any { it.status == TOOL_STATUS_FAILED }
+    val latest = activities.last()
+    val tint = when {
+        failed -> Danger
+        running -> Accent
+        else -> Sage
+    }
+    val label = when {
+        running -> latest.label
+        failed -> latest.label
+        activities.size == 1 -> latest.label
+        else -> "已完成 ${activities.size} 项工具操作"
+    }
+    Surface(
+        onClick = { if (activities.size > 1) expanded = !expanded },
+        color = when {
+            failed -> DangerSoft
+            running -> AccentSoft.copy(alpha = .72f)
+            else -> SageSoft.copy(alpha = .72f)
+        },
+        contentColor = Ink,
+        shape = RoundedCornerShape(13.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).animateContentSize(tween(180))
+    ) {
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                when {
+                    running -> CircularProgressIndicator(
+                        modifier = Modifier.size(17.dp),
+                        color = tint,
+                        trackColor = tint.copy(alpha = .16f),
+                        strokeWidth = 2.dp
+                    )
+                    failed -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp), tint = tint)
+                    else -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(18.dp), tint = tint)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(label, style = MaterialTheme.typography.labelLarge, color = if (running) MutedInk else tint, modifier = Modifier.weight(1f))
+                if (activities.size > 1) {
+                    Icon(
+                        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        null,
+                        Modifier.size(18.dp),
+                        tint = MutedInk
+                    )
+                }
+            }
+            AnimatedVisibility(expanded) {
+                Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    activities.forEach { activity ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (activity.name == "web_search") Icons.Rounded.TravelExplore else Icons.Rounded.Description,
+                                null,
+                                Modifier.size(15.dp),
+                                tint = MutedInk
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Text(activity.label, style = MaterialTheme.typography.labelMedium, color = MutedInk, modifier = Modifier.weight(1f))
+                            if (activity.status == TOOL_STATUS_COMPLETED) {
+                                Icon(Icons.Rounded.Check, null, Modifier.size(14.dp), tint = Sage)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GeneratedFilesPanel(files: List<ChatFileAttachment>, onSaveFile: (ChatFileAttachment) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        files.forEach { file ->
+            Surface(
+                color = Surface,
+                shape = RoundedCornerShape(15.dp),
+                border = BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(start = 12.dp, end = 7.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Description, null, Modifier.size(18.dp), tint = Accent)
+                    }
+                    Spacer(Modifier.width(9.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(file.name, style = MaterialTheme.typography.labelLarge, color = Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(formatFileSize(file.sizeBytes), style = MaterialTheme.typography.labelSmall, color = MutedInk)
+                    }
+                    TextButton(onClick = { onSaveFile(file) }) {
+                        Icon(Icons.Rounded.Download, null, Modifier.size(17.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("下载")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CitationPanel(citations: List<ChatCitation>) {
+    val uriHandler = LocalUriHandler.current
+    Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
+        Text("来源", style = MaterialTheme.typography.labelMedium, color = MutedInk)
+        Spacer(Modifier.height(7.dp))
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            citations.forEachIndexed { index, citation ->
+                Surface(
+                    onClick = { runCatching { uriHandler.openUri(citation.url) } },
+                    color = Color(0xFFF0EDE8),
+                    contentColor = Ink,
+                    shape = RoundedCornerShape(13.dp)
+                ) {
+                    Row(Modifier.widthIn(max = 260.dp).padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${index + 1}", color = Accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(7.dp))
+                        Text(citation.title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, Modifier.size(15.dp), tint = MutedInk)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Int): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024f)
+    else -> String.format(Locale.US, "%.1f MB", bytes / (1024f * 1024f))
 }
 
 @Composable
@@ -1271,6 +1512,7 @@ private const val INLINE_CODE_TAG = "adchat-inline-code"
 private const val STREAM_TEXT_CHUNK_SIZE = 960
 private const val AUTO_SCROLL_INTERVAL_MS = 110L
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatComposer(
     value: String,
@@ -1280,123 +1522,115 @@ private fun ChatComposer(
     loading: Boolean,
     attachmentLoading: Boolean,
     reasoningEffort: String,
+    apiMode: String,
+    webSearchEnabled: Boolean,
+    fileCreationEnabled: Boolean,
     onModelClick: () -> Unit,
     onReasoningEffortChange: (String) -> Unit,
+    onWebSearchToggle: (Boolean) -> Unit,
+    onFileCreationToggle: (Boolean) -> Unit,
     onValueChange: (String) -> Unit,
     onPickImages: () -> Unit,
     onRemoveImage: (String) -> Unit,
     onSend: () -> Unit,
-    onStop: () -> Unit
+    onStop: () -> Unit,
+    onCapsuleHeightChanged: (Int) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val focus = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
     var showEffortSheet by remember { mutableStateOf(false) }
-    val actionColor by animateColorAsState(if (loading) Night else Accent, tween(180), label = "composerActionColor")
+    var showToolsSheet by remember { mutableStateOf(false) }
+    val enabledToSend = value.isNotBlank() || attachments.isNotEmpty()
+    val activeToolCount = listOf(webSearchEnabled, fileCreationEnabled).count { it }
+    val capsuleShape = RoundedCornerShape(31.dp)
+
     Column(
-        Modifier.fillMaxWidth().imePadding().background(Canvas)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+        modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 8.dp, bottom = 8.dp)
     ) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                onClick = onModelClick,
-                color = Surface,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.weight(1f)
-            ) {
-                Row(Modifier.padding(start = 8.dp, end = 10.dp, top = 7.dp, bottom = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(30.dp).clip(RoundedCornerShape(10.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Hub, null, Modifier.size(16.dp), tint = Accent)
-                    }
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(profileName, style = MaterialTheme.typography.labelSmall, color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(model.ifBlank { "点击选择模型" }, style = MaterialTheme.typography.labelMedium, color = Ink, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Icon(Icons.Rounded.UnfoldMore, "切换模型", Modifier.size(17.dp), tint = MutedInk)
-                }
-            }
-            Spacer(Modifier.width(8.dp))
-            Surface(
-                onClick = { showEffortSheet = true },
-                color = Night,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Row(Modifier.padding(horizontal = 10.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(24.dp).clip(CircleShape).background(Color(0xFF3A3835)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Psychology, null, Modifier.size(15.dp), tint = Accent)
-                    }
-                    Spacer(Modifier.width(7.dp))
-                    Column {
-                        Text("思考", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.labelSmall)
-                        Text(reasoningEffortLabel(reasoningEffort), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
-                    }
-                    Spacer(Modifier.width(5.dp))
-                    Icon(Icons.Rounded.ExpandMore, null, Modifier.size(15.dp), tint = Color(0xFFBDB8B2))
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
         if (attachments.isNotEmpty()) {
-            ChatAttachmentComposerPreview(
-                attachments = attachments,
-                loading = attachmentLoading,
-                onRemove = onRemoveImage
-            )
-            Spacer(Modifier.height(8.dp))
+            Surface(
+                color = Surface.copy(alpha = .94f),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Hairline.copy(alpha = .72f)),
+                shadowElevation = 5.dp,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
+            ) {
+                ChatAttachmentComposerPreview(
+                    attachments = attachments,
+                    loading = attachmentLoading,
+                    onRemove = onRemoveImage
+                )
+            }
         }
         Surface(
-            color = Surface,
-            shape = RoundedCornerShape(25.dp),
-            border = BorderStroke(1.dp, Hairline),
+            color = Surface.copy(alpha = .86f),
+            shape = capsuleShape,
+            border = BorderStroke(1.dp, Hairline.copy(alpha = .58f)),
             shadowElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth().animateContentSize(tween(150))
+            modifier = Modifier.fillMaxWidth()
+                .shadow(
+                    elevation = 4.dp,
+                    shape = capsuleShape,
+                    ambientColor = Color.Black.copy(alpha = .07f),
+                    spotColor = Color.Black.copy(alpha = .10f)
+                )
+                .animateContentSize(tween(130))
+                .onSizeChanged { onCapsuleHeightChanged(it.height) }
         ) {
-            Row(Modifier.padding(6.dp), verticalAlignment = Alignment.Bottom) {
-                IconButton(
-                    onClick = onPickImages,
-                    enabled = !loading && !attachmentLoading && attachments.size < 4,
-                    modifier = Modifier.size(44.dp)
-                ) {
-                    if (attachmentLoading) {
-                        CircularProgressIndicator(Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            Icons.Rounded.AddPhotoAlternate,
-                            "添加图片",
-                            tint = if (attachments.size < 4) Accent else MutedInk
-                        )
+            Row(
+                Modifier.fillMaxWidth().defaultMinSize(minHeight = 58.dp).padding(6.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Box {
+                    IconButton(
+                        onClick = { showToolsSheet = true },
+                        enabled = !loading,
+                        modifier = Modifier.size(46.dp)
+                    ) {
+                        if (attachmentLoading) {
+                            CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Rounded.Add, "输入选项", Modifier.size(29.dp), tint = Ink)
+                        }
+                    }
+                    if (activeToolCount > 0) {
+                        Box(
+                            Modifier.align(Alignment.TopEnd).offset(x = (-2).dp, y = 2.dp)
+                                .size(16.dp).clip(CircleShape).background(Accent),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(activeToolCount.toString(), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
-                Spacer(Modifier.width(2.dp))
-                TextField(
+                BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("发送消息…", color = Color(0xFF97928C)) },
-                    shape = RoundedCornerShape(19.dp),
-                    maxLines = 6,
+                    modifier = Modifier.weight(1f).padding(horizontal = 7.dp, vertical = 10.dp),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
+                    cursorBrush = SolidColor(Accent),
+                    maxLines = 5,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Sentences,
                         imeAction = ImeAction.Send
                     ),
                     keyboardActions = KeyboardActions(onSend = {
-                        if ((value.isNotBlank() || attachments.isNotEmpty()) && !loading && !attachmentLoading) {
+                        if (enabledToSend && !loading && !attachmentLoading) {
                             haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             focus.clearFocus()
                             onSend()
                         }
                     }),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent,
-                        cursorColor = Accent
-                    )
+                    decorationBox = { innerTextField ->
+                        Box(Modifier.fillMaxWidth()) {
+                            if (value.isEmpty()) {
+                                Text("发送消息", color = Color(0xFF97928C), style = MaterialTheme.typography.bodyLarge)
+                            }
+                            innerTextField()
+                        }
+                    }
                 )
-                Spacer(Modifier.width(6.dp))
                 FilledIconButton(
                     onClick = {
                         haptics.performHapticFeedback(if (loading) HapticFeedbackType.LongPress else HapticFeedbackType.TextHandleMove)
@@ -1405,11 +1639,11 @@ private fun ChatComposer(
                             onSend()
                         }
                     },
-                    enabled = loading || value.isNotBlank() || attachments.isNotEmpty(),
-                    modifier = Modifier.size(48.dp),
+                    enabled = loading || (enabledToSend && !attachmentLoading),
+                    modifier = Modifier.size(46.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = actionColor,
+                        containerColor = Night,
                         contentColor = Color.White,
                         disabledContainerColor = Color(0xFFE6E1DB),
                         disabledContentColor = Color(0xFFA9A39C)
@@ -1418,20 +1652,33 @@ private fun ChatComposer(
                     AnimatedContent(
                         targetState = loading,
                         transitionSpec = {
-                            (fadeIn(tween(140)) + scaleIn(tween(180), initialScale = 0.72f)) togetherWith
-                                (fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.72f))
+                            (fadeIn(tween(140)) + scaleIn(tween(180), initialScale = .72f)) togetherWith
+                                (fadeOut(tween(100)) + scaleOut(tween(120), targetScale = .72f))
                         },
                         label = "send-stop"
                     ) { isLoading ->
-                        if (isLoading) {
-                            Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(22.dp))
-                        } else {
-                            Icon(Icons.AutoMirrored.Rounded.Send, "发送", Modifier.size(22.dp))
-                        }
+                        if (isLoading) Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(21.dp))
+                        else Icon(Icons.AutoMirrored.Rounded.Send, "发送", Modifier.size(21.dp))
                     }
                 }
             }
         }
+    }
+    if (showToolsSheet) {
+        ChatToolsSheet(
+            profileName = profileName,
+            model = model,
+            apiMode = apiMode,
+            webSearchEnabled = webSearchEnabled,
+            fileCreationEnabled = fileCreationEnabled,
+            canPickImages = !loading && !attachmentLoading && attachments.size < 4,
+            onPickImages = { showToolsSheet = false; onPickImages() },
+            onModelClick = { showToolsSheet = false; onModelClick() },
+            onReasoningClick = { showToolsSheet = false; showEffortSheet = true },
+            onWebSearchToggle = onWebSearchToggle,
+            onFileCreationToggle = onFileCreationToggle,
+            onDismiss = { showToolsSheet = false }
+        )
     }
     if (showEffortSheet) {
         AdSelectionSheet(
@@ -1464,6 +1711,109 @@ private fun ChatComposer(
             searchEnabled = false,
             headerIcon = Icons.Rounded.Psychology
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChatToolsSheet(
+    profileName: String,
+    model: String,
+    apiMode: String,
+    webSearchEnabled: Boolean,
+    fileCreationEnabled: Boolean,
+    canPickImages: Boolean,
+    onPickImages: () -> Unit,
+    onModelClick: () -> Unit,
+    onReasoningClick: () -> Unit,
+    onWebSearchToggle: (Boolean) -> Unit,
+    onFileCreationToggle: (Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Canvas) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("输入选项", style = MaterialTheme.typography.titleLarge, color = Ink)
+                    Text("$profileName · ${model.ifBlank { "未选择模型" }}", style = MaterialTheme.typography.labelMedium, color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Surface(color = AccentSoft, contentColor = Accent, shape = CircleShape) {
+                    Text(if (apiMode == "responses") "Responses" else "Chat", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            Spacer(Modifier.height(18.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ComposerSheetAction(Icons.Rounded.AddPhotoAlternate, "图片", canPickImages, onPickImages, Modifier.weight(1f))
+                ComposerSheetAction(Icons.Rounded.Hub, "模型", true, onModelClick, Modifier.weight(1f))
+                ComposerSheetAction(Icons.Rounded.Psychology, "思考", true, onReasoningClick, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(18.dp))
+            Text("工具", style = MaterialTheme.typography.labelLarge, color = MutedInk)
+            Spacer(Modifier.height(7.dp))
+            ComposerToolToggle(
+                icon = Icons.Rounded.TravelExplore,
+                title = "联网搜索",
+                subtitle = if (apiMode == "responses") "使用 Responses 原生网页搜索" else "使用 Chat 搜索参数；启用时文件工具会关闭",
+                checked = webSearchEnabled,
+                onCheckedChange = onWebSearchToggle
+            )
+            Spacer(Modifier.height(8.dp))
+            ComposerToolToggle(
+                icon = Icons.Rounded.NoteAdd,
+                title = "创建文件",
+                subtitle = if (apiMode == "responses") "可创建 Markdown、文本、JSON 与 CSV 文件" else "使用函数工具创建文件；启用时联网搜索会关闭",
+                checked = fileCreationEnabled,
+                onCheckedChange = onFileCreationToggle
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposerSheetAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        color = Surface,
+        contentColor = if (enabled) Ink else MutedInk.copy(alpha = .45f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Hairline.copy(alpha = .75f)),
+        modifier = modifier
+    ) {
+        Column(Modifier.padding(vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null, Modifier.size(22.dp), tint = if (enabled) Accent else MutedInk.copy(alpha = .4f))
+            Spacer(Modifier.height(6.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+@Composable
+private fun ComposerToolToggle(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.clickable { onCheckedChange(!checked) }.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(if (checked) AccentSoft else Color(0xFFF0EDE8)), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(19.dp), tint = if (checked) Accent else MutedInk)
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium, color = Ink, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MutedInk, lineHeight = 16.sp)
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
     }
 }
 
@@ -1518,6 +1868,3 @@ private fun reasoningEffortDescription(value: String): String = when (value) {
     "max" -> "最大推理预算"
     else -> "速度与质量平衡"
 }
-
-
-

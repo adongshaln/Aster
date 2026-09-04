@@ -98,7 +98,10 @@ class ConversationStore(context: Context) {
                     streamRecoveryCount = message.optInt("streamRecoveryCount"),
                     profileName = message.optString("profileName"),
                     model = message.optString("model"),
-                    usage = message.optJSONObject("usage")?.let(::decodeUsage)
+                    usage = message.optJSONObject("usage")?.let(::decodeUsage),
+                    citations = decodeCitations(message.optJSONArray("citations")),
+                    generatedFiles = decodeGeneratedFiles(message.optJSONArray("generatedFiles")),
+                    toolActivities = decodeToolActivities(message.optJSONArray("toolActivities"))
                 ))
             }
         }
@@ -139,7 +142,10 @@ class ConversationStore(context: Context) {
                     .put("streamRecoveryCount", message.streamRecoveryCount)
                     .put("profileName", message.profileName)
                     .put("model", message.model)
-                    .put("usage", message.usage?.let(::encodeUsage)))
+                    .put("usage", message.usage?.let(::encodeUsage))
+                    .put("citations", encodeCitations(message.citations))
+                    .put("generatedFiles", encodeGeneratedFiles(message.generatedFiles))
+                    .put("toolActivities", encodeToolActivities(message.toolActivities)))
             }
         })
 
@@ -169,6 +175,76 @@ class ConversationStore(context: Context) {
                 size = item.optLong("size"),
                 width = item.optInt("width"),
                 height = item.optInt("height")
+            ))
+        }
+    }
+
+    private fun encodeCitations(citations: List<ChatCitation>): JSONArray = JSONArray().apply {
+        citations.forEach { citation ->
+            put(JSONObject()
+                .put("title", citation.title)
+                .put("url", citation.url)
+                .put("startIndex", citation.startIndex)
+                .put("endIndex", citation.endIndex))
+        }
+    }
+
+    private fun decodeCitations(array: JSONArray?): List<ChatCitation> = buildList {
+        if (array == null) return@buildList
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val url = item.optString("url").takeIf(String::isNotBlank) ?: continue
+            add(ChatCitation(
+                title = item.optString("title").ifBlank { url },
+                url = url,
+                startIndex = item.optInt("startIndex").takeIf { item.has("startIndex") && !item.isNull("startIndex") },
+                endIndex = item.optInt("endIndex").takeIf { item.has("endIndex") && !item.isNull("endIndex") }
+            ))
+        }
+    }
+
+    private fun encodeGeneratedFiles(files: List<ChatFileAttachment>): JSONArray = JSONArray().apply {
+        files.forEach { file ->
+            put(JSONObject()
+                .put("id", file.id)
+                .put("name", file.name)
+                .put("mimeType", file.mimeType)
+                .put("content", file.content))
+        }
+    }
+
+    private fun decodeGeneratedFiles(array: JSONArray?): List<ChatFileAttachment> = buildList {
+        if (array == null) return@buildList
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            add(ChatFileAttachment(
+                id = item.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+                name = item.optString("name").ifBlank { "document.txt" },
+                mimeType = item.optString("mimeType").ifBlank { "text/plain" },
+                content = item.optString("content")
+            ))
+        }
+    }
+
+    private fun encodeToolActivities(activities: List<ChatToolActivity>): JSONArray = JSONArray().apply {
+        activities.forEach { activity ->
+            put(JSONObject()
+                .put("id", activity.id)
+                .put("name", activity.name)
+                .put("label", activity.label)
+                .put("status", activity.status))
+        }
+    }
+
+    private fun decodeToolActivities(array: JSONArray?): List<ChatToolActivity> = buildList {
+        if (array == null) return@buildList
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            add(ChatToolActivity(
+                id = item.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
+                name = item.optString("name"),
+                label = item.optString("label"),
+                status = item.optString("status").ifBlank { TOOL_STATUS_COMPLETED }
             ))
         }
     }

@@ -789,6 +789,43 @@ private fun ProfileEditor(
                     )
                 }
             }
+            item {
+                EditorSection("对话工具", "为当前 API 配置保存联网搜索与文件创建开关。") {
+                    AdToggleCard(
+                        title = "联网搜索",
+                        subtitle = if (draft.chatApiMode == "responses") {
+                            "使用 Responses API 的 web_search 工具"
+                        } else {
+                            "通过 Chat Completions 的 web_search_options，需模型与网关支持"
+                        },
+                        checked = draft.webSearchEnabled,
+                        onCheckedChange = { enabled ->
+                            draft = draft.copy(
+                                webSearchEnabled = enabled,
+                                fileCreationEnabled = if (enabled && draft.chatApiMode == "chat") false else draft.fileCreationEnabled
+                            )
+                        }
+                    )
+                    AdToggleCard(
+                        title = "创建文件",
+                        subtitle = "允许模型创建可下载的 Markdown、文本、JSON 或 CSV 文件",
+                        checked = draft.fileCreationEnabled,
+                        onCheckedChange = { enabled ->
+                            draft = draft.copy(
+                                fileCreationEnabled = enabled,
+                                webSearchEnabled = if (enabled && draft.chatApiMode == "chat") false else draft.webSearchEnabled
+                            )
+                        }
+                    )
+                    if (draft.chatApiMode == "chat") {
+                        Text(
+                            "Chat 协议下联网搜索与自定义文件工具互斥；Responses 协议可同时使用。",
+                            color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
             if (draft.chatModel.isGpt56Model()) {
                 item { Gpt56OptimizationCard(draft = draft, onDraft = { draft = it }) }
             }
@@ -1177,7 +1214,6 @@ private fun String.isGpt56Model(): Boolean {
     val value = lowercase()
     return value.contains("gpt-5.6") || value.contains("gpt-5_6")
 }
-
 
 
 
