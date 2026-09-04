@@ -3,10 +3,16 @@ name: Android build
 on:
   push:
     branches: [main]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -29,24 +35,119 @@ jobs:
       - name: Install Android 36 tools
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Set up Gradle
+      - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
 
-      - name: Test and assemble unsigned release
-        run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
-
-      - name: Stage signing inputs
+      - name: Configure release signing when secrets are available
+        id: signing
+        shell: bash
+        env:
+          ASTER_KEYSTORE_BASE64: ${{ secrets.ASTER_KEYSTORE_BASE64 }}
+          ASTER_STORE_PASSWORD: ${{ secrets.ASTER_STORE_PASSWORD }}
+          ASTER_KEY_ALIAS: ${{ secrets.ASTER_KEY_ALIAS }}
+          ASTER_KEY_PASSWORD: ${{ secrets.ASTER_KEY_PASSWORD }}
         run: |
-          mkdir -p ci-output
-          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 \
-            app/build/outputs/apk/release/app-release-unsigned.apk \
-            ci-output/Aster-v2.0.0-unsigned-aligned.apk
-          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" ci-output/apksigner.jar
+          set -euo pipefail
 
-      - name: Upload unsigned build
+          if [[ -n "${ASTER_KEYSTORE_BASE64}" \
+             && -n "${ASTER_STORE_PASSWORD}" \
+             && -n "${ASTER_KEY_ALIAS}" \
+             && -n "${ASTER_KEY_PASSWORD}" ]]; then
+            mkdir -p keystore
+            printf '%s' "${ASTER_KEYSTORE_BASE64}" | base64 --decode > keystore/aster-release.jks
+            chmod 600 keystore/aster-release.jks
+
+            {
+              printf 'storeFile=keystore/aster-release.jks\n'
+              printf 'storePassword=%s\n' "${ASTER_STORE_PASSWORD}"
+              printf 'keyAlias=%s\n' "${ASTER_KEY_ALIAS}"
+              printf 'keyPassword=%s\n' "${ASTER_KEY_PASSWORD}"
+            } > keystore.properties
+            chmod 600 keystore.properties
+
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+            echo "Release signing enabled."
+          else
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Aster signing secrets are not fully configured. An unsigned APK will be produced."
+          fi
+
+      - name: Test and assemble release
+        run: ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleRelease
+
+      - name: Read app version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION_NAME="$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)"
+          if [[ -z "${VERSION_NAME}" ]]; then
+            echo "Unable to determine versionName from app/build.gradle.kts" >&2
+            exit 1
+          fi
+          echo "name=${VERSION_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "Building Aster v${VERSION_NAME}"
+
+      - name: Stage signed APK
+        if: steps.signing.outputs.available == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-output
+          SOURCE="app/build/outputs/apk/release/app-release.apk"
+          TARGET="ci-output/Aster-v${{ steps.version.outputs.name }}.apk"
+          test -f "${SOURCE}"
+          cp "${SOURCE}" "${TARGET}"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "${TARGET}"
+
+      - name: Stage unsigned APK
+        if: steps.signing.outputs.available != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-output
+          SOURCE="app/build/outputs/apk/release/app-release-unsigned.apk"
+          TARGET="ci-output/Aster-v${{ steps.version.outputs.name }}-unsigned.apk"
+          test -f "${SOURCE}"
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -f -p 4 "${SOURCE}" "${TARGET}"
+
+      - name: Upload signed APK
+        if: steps.signing.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aster-release-signed
+          path: ci-output/Aster-v${{ steps.version.outputs.name }}.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unsigned APK
+        if: steps.signing.outputs.available != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: aster-release-unsigned
-          path: ci-output/
+          path: ci-output/Aster-v${{ steps.version.outputs.name }}-unsigned.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish GitHub Release for version tag
+        if: startsWith(github.ref, 'refs/tags/v') && steps.signing.outputs.available == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          APK="ci-output/Aster-v${{ steps.version.outputs.name }}.apk"
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" "${APK}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${APK}" \
+              --title "Aster ${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
+
+      - name: Explain skipped tagged release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.signing.outputs.available != 'true'
+        run: |
+          echo "::warning::A signed GitHub Release was not created because Aster signing secrets are missing."
