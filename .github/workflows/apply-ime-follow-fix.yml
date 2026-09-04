@@ -1,0 +1,78 @@
+name: Apply IME follow scroll fix
+
+on:
+  push:
+    branches:
+      - fix/icon-ime-collapse
+    paths:
+      - .github/workflows/apply-ime-follow-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/icon-ime-collapse
+          fetch-depth: 0
+
+      - name: Restore IME follow scrolling
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''            .collect { (imeBottom, imeTargetBottom) ->
+                if (imeBottom > 0) {
+                    imeWasVisible = true
+                }
+
+                if (imeWasVisible && imeTargetBottom == 0) {
+                    // Start collapsing as soon as the system begins the IME close animation.
+                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
+                    focusManager.clearFocus()
+                }
+            }
+'''
+
+          new = '''            .collect { (imeBottom, imeTargetBottom) ->
+                if (vm.messages.isNotEmpty()) {
+                    // Keep the conversation pinned to the bottom for every IME inset update so
+                    // the visible messages move upward in lockstep with the keyboard animation.
+                    listState.scrollToItem(vm.messages.size)
+                }
+
+                if (imeBottom > 0) {
+                    imeWasVisible = true
+                }
+
+                if (imeWasVisible && imeTargetBottom == 0) {
+                    // Start collapsing as soon as the system begins the IME close animation.
+                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
+                    focusManager.clearFocus()
+                }
+            }
+'''
+
+          if old not in text:
+              raise SystemExit('IME follow-scroll anchor not found')
+          text = text.replace(old, new, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt
+          git commit -m "Restore IME follow scrolling"
+          git push origin HEAD:fix/icon-ime-collapse
