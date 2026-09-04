@@ -121,6 +121,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val density = LocalDensity.current
     val focusManager = LocalFocusManager.current
     val imeInsets = WindowInsets.ime
+    val imeAnimationTarget = WindowInsets.imeAnimationTarget
     val hazeState = rememberHazeState()
     var showSwitcher by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(true) }
@@ -204,18 +205,21 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         if (!composerFocused) return@LaunchedEffect
         autoFollow = true
         var imeWasVisible = imeInsets.getBottom(density) > 0
-        snapshotFlow { imeInsets.getBottom(density) }
+        snapshotFlow {
+            imeInsets.getBottom(density) to imeAnimationTarget.getBottom(density)
+        }
             .distinctUntilChanged()
-            .collect { imeBottom ->
+            .collect { (imeBottom, imeTargetBottom) ->
                 if (imeBottom > 0) {
                     imeWasVisible = true
                     if (vm.messages.isNotEmpty()) {
                         listState.scrollToItem(vm.messages.size)
                     }
-                } else if (imeWasVisible) {
-                    // Android can hide the IME without removing Compose focus.
-                    // Clear it only after a visible -> hidden transition so the
-                    // composer collapses without racing the keyboard opening.
+                }
+
+                if (imeWasVisible && imeTargetBottom == 0) {
+                    // Start collapsing as soon as the system begins the IME close animation.
+                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
                     focusManager.clearFocus()
                 }
             }
