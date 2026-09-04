@@ -1,0 +1,194 @@
+name: Apply chat performance optimizations
+
+on:
+  push:
+    branches:
+      - fix/icon-ime-collapse
+    paths:
+      - .github/workflows/apply-chat-performance.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/icon-ime-collapse
+          fetch-depth: 0
+
+      - name: Optimize chat rendering
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt")
+          text = path.read_text(encoding="utf-8")
+
+          # One animation clock instead of four independent Dp animations.
+          text = text.replace(
+              "import androidx.compose.animation.core.animateFloat\n",
+              "import androidx.compose.animation.core.animateFloat\nimport androidx.compose.animation.core.animateFloatAsState\n",
+              1,
+          )
+
+          # imeAnimationTarget is experimental in this Compose version.
+          text = text.replace(
+              "@Composable\nfun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -> Unit) {",
+              "@OptIn(ExperimentalLayoutApi::class)\n@Composable\nfun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -> Unit) {",
+              1,
+          )
+
+          text = text.replace(
+              "    var composerFocused by remember { mutableStateOf(false) }\n    var composerHeightPx by remember { mutableIntStateOf(0) }\n",
+              "    var composerFocused by remember { mutableStateOf(false) }\n    var imeTransitioning by remember { mutableStateOf(false) }\n    var composerHeightPx by remember { mutableIntStateOf(0) }\n",
+              1,
+          )
+
+          text = text.replace(
+              "    val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)\n    val composerClearance = composerHeight + 18.dp\n",
+              "    val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)\n    val composerClearance = composerHeight + 18.dp\n    val useLiveHaze = !listState.isScrollInProgress && !imeTransitioning && !vm.isChatLoading\n",
+              1,
+          )
+
+          anchor = """    LaunchedEffect(composerFocused, vm.activeConversationId) {
+        if (!composerFocused) return@LaunchedEffect
+"""
+          tracker = """    LaunchedEffect(imeInsets, imeAnimationTarget) {
+        snapshotFlow {
+            imeInsets.getBottom(density) to imeAnimationTarget.getBottom(density)
+        }
+            .distinctUntilChanged()
+            .collect { (currentBottom, targetBottom) ->
+                val transitioning = currentBottom != targetBottom
+                if (imeTransitioning != transitioning) imeTransitioning = transitioning
+            }
+    }
+
+"""
+          if anchor not in text:
+              raise SystemExit("IME effect anchor not found")
+          text = text.replace(anchor, tracker + anchor, 1)
+
+          old_source = """            Box(Modifier.fillMaxSize().hazeSource(hazeState)) {
+"""
+          new_source = """            Box(
+                Modifier.fillMaxSize().then(
+                    if (useLiveHaze) Modifier.hazeSource(hazeState) else Modifier
+                )
+            ) {
+"""
+          if old_source not in text:
+              raise SystemExit("Haze source anchor not found")
+          text = text.replace(old_source, new_source, 1)
+
+          old_haze = """            Box(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                    .height(composerHeight)
+                    .hazeEffect(state = hazeState) {
+                        backgroundColor = Canvas
+                        blurRadius = 32.dp
+                        noiseFactor = .01f
+                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .36f)))
+                        progressive = HazeProgressive.verticalGradient(
+                            startIntensity = 0f,
+                            endIntensity = 1f
+                        )
+                        mask = Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            1f to Color.Black
+                        )
+                    }
+            )
+"""
+          new_haze = """            val hazeLayerModifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .height(composerHeight)
+            if (useLiveHaze) {
+                Box(
+                    hazeLayerModifier.hazeEffect(state = hazeState) {
+                        backgroundColor = Canvas
+                        blurRadius = 22.dp
+                        noiseFactor = 0f
+                        tints = listOf(HazeTint(color = Canvas.copy(alpha = .34f)))
+                        progressive = HazeProgressive.verticalGradient(
+                            startIntensity = 0f,
+                            endIntensity = 1f
+                        )
+                        mask = Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            1f to Color.Black
+                        )
+                    }
+                )
+            } else {
+                // Live blur requires an off-screen source layer and is one of the most expensive
+                // effects on this screen. During motion use a visually similar gradient, then
+                // restore the real blur as soon as the UI becomes still again.
+                Box(
+                    hazeLayerModifier.background(
+                        Brush.verticalGradient(
+                            0f to Color.Transparent,
+                            .46f to Canvas.copy(alpha = .38f),
+                            1f to Canvas.copy(alpha = .96f)
+                        )
+                    )
+                )
+            }
+"""
+          if old_haze not in text:
+              raise SystemExit("Haze effect anchor not found")
+          text = text.replace(old_haze, new_haze, 1)
+
+          text = text.replace(
+              "                                modifier = Modifier.animateItem()\n",
+              "                                modifier = if (message.isStreaming) Modifier else Modifier.animateItem()\n",
+              1,
+          )
+
+          text = text.replace(
+              "private const val STREAM_TEXT_CHUNK_SIZE = 960",
+              "private const val STREAM_TEXT_CHUNK_SIZE = 640",
+              1,
+          )
+
+          old_anim = """    val focusAnimation = tween<Dp>(durationMillis = 260, easing = FastOutSlowInEasing)
+    val minimumHeight by animateDpAsState(if (isFocused) 110.dp else 58.dp, focusAnimation, label = "composer-height")
+    val fieldStart by animateDpAsState(if (isFocused) 18.dp else 58.dp, focusAnimation, label = "composer-field-start")
+    val fieldEnd by animateDpAsState(if (isFocused) 18.dp else 58.dp, focusAnimation, label = "composer-field-end")
+    val fieldTop by animateDpAsState(if (isFocused) 15.dp else 17.dp, focusAnimation, label = "composer-field-top")
+    val fieldBottom by animateDpAsState(if (isFocused) 57.dp else 15.dp, focusAnimation, label = "composer-field-bottom")
+"""
+          new_anim = """    val focusProgress by animateFloatAsState(
+        targetValue = if (isFocused) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (isFocused) 230 else 180,
+            easing = FastOutSlowInEasing
+        ),
+        label = "composer-focus-progress"
+    )
+    val minimumHeight = 58.dp + 52.dp * focusProgress
+    val fieldStart = 58.dp - 40.dp * focusProgress
+    val fieldEnd = 58.dp - 40.dp * focusProgress
+    val fieldTop = 17.dp - 2.dp * focusProgress
+    val fieldBottom = 15.dp + 42.dp * focusProgress
+"""
+          if old_anim not in text:
+              raise SystemExit("Composer animation anchor not found")
+          text = text.replace(old_anim, new_anim, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Commit performance changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt
+          git commit -m "Optimize chat rendering performance"
+          git push origin HEAD:fix/icon-ime-collapse
