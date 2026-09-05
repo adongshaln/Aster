@@ -1,0 +1,37 @@
+name: One-off reading refinement
+
+on:
+  push:
+    branches:
+      - design/reading-experience
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: design/reading-experience
+          fetch-depth: 0
+
+      - name: Apply reading refinements
+        run: python3 tools/oneoff_refine_reading.py
+
+      - name: Remove one-off helper files
+        run: |
+          rm tools/oneoff_refine_reading.py
+          rm .github/workflows/oneoff-reading-refine.yml
+
+      - name: Commit refined reading experience
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "Refine mobile reading density and thinking mark"
+          git push origin HEAD:design/reading-experience
