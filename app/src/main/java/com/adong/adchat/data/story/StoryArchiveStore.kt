@@ -18,6 +18,17 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             "pinned DESC, effective_sequence DESC, updated_at DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toMemory()) } }
 
+    fun listPendingProposals(storyId: String, timelineId: String): List<StoryProposal> =
+        helper.readableDatabase.query(
+            StorySchema.PROPOSALS,
+            null,
+            "story_id = ? AND timeline_id = ? AND state = ?",
+            arrayOf(storyId, timelineId, StoryProposalState.Pending.dbValue),
+            null,
+            null,
+            "updated_at DESC"
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toProposal()) } }
+
     fun addConfirmedRecord(
         storyId: String,
         timelineId: String,
@@ -111,7 +122,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         return changed
     }
 
-    /** Manual removal is soft so later revision/replay work has an audit boundary. */
+    /** Manual removal is a soft deactivation only; full undo/replay is not implemented here. */
     fun deactivateRecord(recordId: String): Boolean {
         val storyId = storyIdForRecord(recordId) ?: return false
         val now = System.currentTimeMillis()
@@ -158,6 +169,19 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         sourceRevisionId = nullableString("source_revision_id"),
         pinned = int("pinned") != 0,
         active = int("active") != 0,
+        createdAt = long("created_at"),
+        updatedAt = long("updated_at")
+    )
+
+    private fun Cursor.toProposal(): StoryProposal = StoryProposal(
+        id = string("id"),
+        storyId = string("story_id"),
+        timelineId = string("timeline_id"),
+        content = string("content"),
+        proposalKind = string("proposal_kind"),
+        sourceRevisionId = string("source_revision_id"),
+        decisionSourceRevisionId = nullableString("decision_source_revision_id"),
+        state = StoryProposalState.fromDb(string("state")),
         createdAt = long("created_at"),
         updatedAt = long("updated_at")
     )

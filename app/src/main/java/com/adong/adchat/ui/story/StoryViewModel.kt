@@ -11,9 +11,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.ApiRepository
-import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryArchiveStore
+import com.adong.adchat.data.story.StoryContextComposer
 import com.adong.adchat.data.story.StoryMemoryKind
 import com.adong.adchat.data.story.StoryMemoryRecord
 import com.adong.adchat.data.story.StoryMessageWithRevision
@@ -291,15 +291,25 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 refreshWorkspaceIfVisible(story.id, workspace)
 
-                val requestHistory = store.loadMessages(story.id, story.currentTimelineId, workspace)
-                    .filter { row -> row.revision.state == StoryRevisionState.Complete }
-                    .map { row -> ChatMessage(role = row.message.role, content = row.revision.content) }
+                val context = StoryContextComposer.compose(
+                    workspace = workspace,
+                    baseInstruction = workspaceSystemPrompt(workspace),
+                    memoryRecords = archiveStore.listMemoryRecords(story.id, story.currentTimelineId),
+                    proposals = archiveStore.listPendingProposals(story.id, story.currentTimelineId),
+                    proseMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose),
+                    discussionMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Discussion)
+                )
+                context.truncationNotice?.let { notice ->
+                    withContext(Dispatchers.Main) {
+                        if (activeStoryId == story.id) errors[workspace] = notice
+                    }
+                }
 
                 val result = api.streamChat(
                     profile = profile,
                     model = routeModel,
-                    systemPrompt = workspaceSystemPrompt(workspace),
-                    history = requestHistory,
+                    systemPrompt = context.systemPrompt,
+                    history = context.history,
                     cacheKey = "aster-story-${story.id}-${workspace.dbValue}"
                 ) { delta ->
                     streamed.append(delta)
@@ -449,10 +459,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             你正在 Aster 的故事讨论工作区。与用户讨论设定、人物、文风和后续计划。
             讨论中的建议、假设、备选方案和示例片段都不是已经发生的正式剧情。
             不要因为自己提出了某个方案，就把它当作用户已经确认的事实。
+            标记为“未确认候选”的内容仅供讨论，除非之后被用户确认并写入正式资料，否则不得提升为故事事实。
         """.trimIndent()
         StoryWorkspace.Prose -> """
             你正在 Aster 的故事正文工作区。根据用户给出的剧情方向、对白、人物行动或世界观约束继续创作正文。
-            不要输出记忆 JSON、资料整理过程或管理说明。不要把尚未发生的计划提前写成既成事实。
+            你只能把注入的“固定且已确认的故事资料”和“已确认的故事资料”视作正式资料；讨论候选不会提供给你。
+            作者计划用于约束创作方向，不等于剧情已经发生。不要输出记忆 JSON、资料整理过程或管理说明，也不要把尚未发生的计划提前写成既成事实。
             尊重用户对角色控制权和推进节奏的要求，保持连续、自然的小说叙事。
         """.trimIndent()
     }
