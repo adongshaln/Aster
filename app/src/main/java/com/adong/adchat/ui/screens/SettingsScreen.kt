@@ -236,7 +236,7 @@ private fun ProfileTransferDialog(
         onDismiss = onDismiss,
         content = {
             if (exporting) {
-                SettingSwitch(
+                AdToggleCard(
                     title = "包含 API Key",
                     subtitle = "仅在可信设备间迁移时开启",
                     checked = includeApiKeys,
@@ -926,4 +926,3 @@ private fun String.isImageLike(): Boolean {
         "diffusion"
     ).any(id::contains)
 }
-
