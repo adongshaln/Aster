@@ -1,7 +1,9 @@
 package com.adong.adchat.data.story
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class StoryContextComposerTest {
@@ -14,12 +16,13 @@ class StoryContextComposerTest {
         val inference = memory("inference", "国王可能已经中毒。", StoryMemoryNature.Inference)
         val candidate = proposal("candidate", "让国王在下一幕突然死亡。")
         val prose = listOf(
-            message("p1", StoryWorkspace.Prose, "assistant", "她抵达王都。", StoryRevisionState.Complete, 1),
-            message("p2", StoryWorkspace.Prose, "assistant", "不应进入上下文的中断正文", StoryRevisionState.Interrupted, 2),
-            message("p3", StoryWorkspace.Prose, "user", "继续写她进入城门。", StoryRevisionState.Complete, 3)
+            message("p0", StoryWorkspace.Prose, "user", "她来到王都外。", StoryRevisionState.Complete, 1),
+            message("p1", StoryWorkspace.Prose, "assistant", "她抵达王都。", StoryRevisionState.Complete, 2),
+            message("p2", StoryWorkspace.Prose, "assistant", "不应进入上下文的中断正文", StoryRevisionState.Interrupted, 3),
+            message("p3", StoryWorkspace.Prose, "user", "继续写她进入城门。", StoryRevisionState.Complete, 4)
         )
         val discussion = listOf(
-            message("d1", StoryWorkspace.Discussion, "user", "秘密讨论候选：改成南方城市。", StoryRevisionState.Complete, 4)
+            message("d1", StoryWorkspace.Discussion, "user", "秘密讨论候选：改成南方城市。", StoryRevisionState.Complete, 5)
         )
 
         val result = StoryContextComposer.compose(
@@ -40,6 +43,7 @@ class StoryContextComposerTest {
         assertFalse(result.history.any { it.content.contains("中断正文") })
         assertFalse(result.history.any { it.content.contains("秘密讨论候选") })
         assertTrue(result.includedProposalIds.isEmpty())
+        assertTrue(result.withinHardBudget)
     }
 
     @Test
@@ -47,9 +51,6 @@ class StoryContextComposerTest {
         val confirmed = memory("confirmed", "骑士团驻扎在旧港。", StoryMemoryNature.UserConfirmed)
         val inference = memory("inference", "团长也许认识幕后人物。", StoryMemoryNature.Inference)
         val candidate = proposal("candidate", "候选方案：让团长主动求援。")
-        val prose = listOf(
-            message("p1", StoryWorkspace.Prose, "assistant", "正文机密段落", StoryRevisionState.Complete, 1)
-        )
         val discussion = listOf(
             message("d1", StoryWorkspace.Discussion, "user", "我们讨论一下团长。", StoryRevisionState.Complete, 2)
         )
@@ -59,7 +60,7 @@ class StoryContextComposerTest {
             baseInstruction = "讨论规则",
             memoryRecords = listOf(confirmed, inference),
             proposals = listOf(candidate),
-            proseMessages = prose,
+            proseMessages = emptyList(),
             discussionMessages = discussion
         )
 
@@ -67,78 +68,99 @@ class StoryContextComposerTest {
         assertTrue(result.systemPrompt.contains("未确认候选，仅供讨论"))
         assertTrue(result.systemPrompt.contains("团长也许认识幕后人物"))
         assertTrue(result.systemPrompt.contains("让团长主动求援"))
-        assertFalse(result.history.any { it.content.contains("正文机密段落") })
         assertTrue(result.history.any { it.content.contains("我们讨论一下团长") })
         assertTrue("candidate" in result.includedProposalIds)
     }
 
     @Test
-    fun budgetTruncationKeepsResultBoundedAndReportsDroppedPinnedFacts() {
-        val pinnedNewest = memory(
-            id = "pin-new",
-            content = "新".repeat(1_600),
-            nature = StoryMemoryNature.UserConfirmed,
-            pinned = true,
-            updatedAt = 20
-        )
-        val pinnedOld = memory(
-            id = "pin-old",
-            content = "旧".repeat(1_600),
-            nature = StoryMemoryNature.UserConfirmed,
-            pinned = true,
-            updatedAt = 10
-        )
+    fun overlongCurrentInputFailsHardBudgetBeforeRequest() {
         val current = message(
             "current",
             StoryWorkspace.Prose,
             "user",
-            "继续。",
+            "超".repeat(4_100),
             StoryRevisionState.Complete,
-            3
+            1
         )
+
+        val error = expectOverflow {
+            StoryContextComposer.compose(
+                workspace = StoryWorkspace.Prose,
+                baseInstruction = "正文规则",
+                memoryRecords = emptyList(),
+                proposals = emptyList(),
+                proseMessages = listOf(current),
+                discussionMessages = emptyList(),
+                budget = StoryContextBudget(maxInputChars = 4_000)
+            )
+        }
+
+        assertEquals(StoryContextOverflowSection.CurrentInput, error.section)
+    }
+
+    @Test
+    fun pinnedFactsMayExceedPinnedSectionCapWhenGlobalBudgetCanHoldThem() {
+        val pinA = memory("pin-a", "甲".repeat(1_100), StoryMemoryNature.UserConfirmed, pinned = true)
+        val pinB = memory("pin-b", "乙".repeat(1_100), StoryMemoryNature.UserConfirmed, pinned = true)
+        val current = message("current", StoryWorkspace.Prose, "user", "继续。", StoryRevisionState.Complete, 3)
 
         val result = StoryContextComposer.compose(
             workspace = StoryWorkspace.Prose,
             baseInstruction = "正文规则",
-            memoryRecords = listOf(pinnedOld, pinnedNewest),
+            memoryRecords = listOf(pinA, pinB),
             proposals = emptyList(),
             proseMessages = listOf(current),
             discussionMessages = emptyList(),
             budget = StoryContextBudget(
                 maxInputChars = 4_000,
-                pinnedMemoryChars = 2_000,
+                pinnedMemoryChars = 1_000,
                 confirmedMemoryChars = 0,
                 candidateChars = 0,
-                recentHistoryChars = 1_000
+                recentHistoryChars = 0
             )
         )
 
-        assertTrue("pin-new" in result.includedMemoryIds)
-        assertFalse("pin-old" in result.includedMemoryIds)
-        assertTrue(result.truncations.any { it.section == "固定资料" && it.omittedItems == 1 })
-        assertTrue(result.estimatedChars <= result.maxChars)
-        assertTrue(result.truncationNotice?.contains("固定资料") == true)
+        assertTrue("pin-a" in result.includedMemoryIds)
+        assertTrue("pin-b" in result.includedMemoryIds)
+        assertTrue(result.systemPrompt.contains("甲".repeat(100)))
+        assertTrue(result.systemPrompt.contains("乙".repeat(100)))
+        assertFalse(result.truncations.any { it.section == "固定资料" })
+        assertTrue(result.withinHardBudget)
     }
 
     @Test
-    fun historyBudgetDropsOlderTurnsBeforeCurrentUserTurn() {
-        val older = (1..6).map { index ->
-            message(
-                id = "old-$index",
+    fun pinnedFactsThatCannotFitGlobalBudgetFailInsteadOfBeingOmitted() {
+        val pinned = memory(
+            "pin",
+            "固".repeat(3_950),
+            StoryMemoryNature.UserConfirmed,
+            pinned = true
+        )
+        val current = message("current", StoryWorkspace.Prose, "user", "继续。", StoryRevisionState.Complete, 2)
+
+        val error = expectOverflow {
+            StoryContextComposer.compose(
                 workspace = StoryWorkspace.Prose,
-                role = if (index % 2 == 0) "assistant" else "user",
-                content = "旧内容$index" + "x".repeat(700),
-                state = StoryRevisionState.Complete,
-                sequence = index.toLong()
+                baseInstruction = "正文规则",
+                memoryRecords = listOf(pinned),
+                proposals = emptyList(),
+                proseMessages = listOf(current),
+                discussionMessages = emptyList(),
+                budget = StoryContextBudget(maxInputChars = 4_000, pinnedMemoryChars = 100)
             )
         }
-        val current = message(
-            "current",
-            StoryWorkspace.Prose,
-            "user",
-            "这是当前用户输入，必须保留。",
-            StoryRevisionState.Complete,
-            99
+
+        assertEquals(StoryContextOverflowSection.PinnedMemory, error.section)
+    }
+
+    @Test
+    fun historyBudgetKeepsOnlyContinuousCompleteRounds() {
+        val messages = listOf(
+            message("u1", StoryWorkspace.Prose, "user", "第一轮问题", StoryRevisionState.Complete, 1),
+            message("a1", StoryWorkspace.Prose, "assistant", "第一轮回答", StoryRevisionState.Complete, 2),
+            message("u2", StoryWorkspace.Prose, "user", "第二轮问题", StoryRevisionState.Complete, 3),
+            message("a2", StoryWorkspace.Prose, "assistant", "第二轮回答" + "x".repeat(900), StoryRevisionState.Complete, 4),
+            message("current", StoryWorkspace.Prose, "user", "当前输入", StoryRevisionState.Complete, 5)
         )
 
         val result = StoryContextComposer.compose(
@@ -146,19 +168,111 @@ class StoryContextComposerTest {
             baseInstruction = "正文规则",
             memoryRecords = emptyList(),
             proposals = emptyList(),
-            proseMessages = older + current,
+            proseMessages = messages,
             discussionMessages = emptyList(),
             budget = StoryContextBudget(
                 maxInputChars = 4_000,
                 pinnedMemoryChars = 0,
                 confirmedMemoryChars = 0,
                 candidateChars = 0,
-                recentHistoryChars = 1_200
+                recentHistoryChars = 1_000
             )
         )
 
-        assertTrue(result.history.last().content.contains("当前用户输入"))
-        assertTrue(result.truncations.any { it.section == "较早正文" })
+        assertEquals(listOf("第二轮问题", "第二轮回答" + "x".repeat(900), "当前输入"), result.history.map { it.content })
+    }
+
+    @Test
+    fun newestLongReplyCannotBeReplacedByOlderShortTurn() {
+        val messages = listOf(
+            message("u1", StoryWorkspace.Prose, "user", "旧短问题", StoryRevisionState.Complete, 1),
+            message("a1", StoryWorkspace.Prose, "assistant", "旧短回答", StoryRevisionState.Complete, 2),
+            message("u2", StoryWorkspace.Prose, "user", "最近问题", StoryRevisionState.Complete, 3),
+            message("a2", StoryWorkspace.Prose, "assistant", "长".repeat(1_300), StoryRevisionState.Complete, 4),
+            message("current", StoryWorkspace.Prose, "user", "继续当前场景。", StoryRevisionState.Complete, 5)
+        )
+
+        val result = StoryContextComposer.compose(
+            workspace = StoryWorkspace.Prose,
+            baseInstruction = "正文规则",
+            memoryRecords = emptyList(),
+            proposals = emptyList(),
+            proseMessages = messages,
+            discussionMessages = emptyList(),
+            budget = StoryContextBudget(
+                maxInputChars = 4_000,
+                pinnedMemoryChars = 0,
+                confirmedMemoryChars = 0,
+                candidateChars = 0,
+                recentHistoryChars = 800
+            )
+        )
+
+        assertEquals(listOf("继续当前场景。"), result.history.map { it.content })
+        assertTrue(result.truncations.any { it.section == "较早正文轮次" && it.omittedItems == 2 })
+    }
+
+    @Test
+    fun characterAliasAndPlaceMentionsRankRelevantMemoryAheadOfUnrelatedEntityMemory() {
+        val alice = memory(
+            id = "alice",
+            content = "爱丽丝擅长长剑。" + "甲".repeat(220),
+            nature = StoryMemoryNature.UserConfirmed,
+            kind = StoryMemoryKind.CharacterProfile,
+            entityNames = listOf("爱丽丝", "莉丝")
+        )
+        val capital = memory(
+            id = "capital",
+            content = "莱茵城北门连接旧大道。" + "乙".repeat(220),
+            nature = StoryMemoryNature.UserConfirmed,
+            kind = StoryMemoryKind.WorldFact,
+            entityNames = listOf("莱茵城", "王都")
+        )
+        val unrelated = memory(
+            id = "other",
+            content = "鲍勃正在南港经商。" + "丙".repeat(220),
+            nature = StoryMemoryNature.UserConfirmed,
+            kind = StoryMemoryKind.CharacterProfile,
+            entityNames = listOf("鲍勃")
+        )
+        val current = message(
+            "current",
+            StoryWorkspace.Prose,
+            "user",
+            "让莉丝从王都北门出发。",
+            StoryRevisionState.Complete,
+            10
+        )
+
+        val result = StoryContextComposer.compose(
+            workspace = StoryWorkspace.Prose,
+            baseInstruction = "正文规则",
+            memoryRecords = listOf(unrelated, capital, alice),
+            proposals = emptyList(),
+            proseMessages = listOf(current),
+            discussionMessages = emptyList(),
+            budget = StoryContextBudget(
+                maxInputChars = 4_000,
+                pinnedMemoryChars = 0,
+                confirmedMemoryChars = 560,
+                candidateChars = 0,
+                recentHistoryChars = 0
+            )
+        )
+
+        assertTrue("alice" in result.includedMemoryIds)
+        assertTrue("capital" in result.includedMemoryIds)
+        assertFalse("other" in result.includedMemoryIds)
+    }
+
+    private fun expectOverflow(block: () -> Unit): StoryContextOverflowException {
+        try {
+            block()
+        } catch (error: StoryContextOverflowException) {
+            return error
+        }
+        fail("Expected StoryContextOverflowException")
+        throw AssertionError("unreachable")
     }
 
     private fun memory(
@@ -166,16 +280,19 @@ class StoryContextComposerTest {
         content: String,
         nature: StoryMemoryNature,
         pinned: Boolean = false,
-        updatedAt: Long = 1
+        updatedAt: Long = 1,
+        kind: StoryMemoryKind = StoryMemoryKind.WorldFact,
+        entityNames: List<String> = emptyList()
     ): StoryMemoryRecord = StoryMemoryRecord(
         id = id,
         storyId = storyId,
         timelineId = timelineId,
-        kind = StoryMemoryKind.WorldFact,
+        kind = kind,
         content = content,
         nature = nature,
         pinned = pinned,
-        updatedAt = updatedAt
+        updatedAt = updatedAt,
+        subjectEntityNames = entityNames
     )
 
     private fun proposal(id: String, content: String): StoryProposal = StoryProposal(

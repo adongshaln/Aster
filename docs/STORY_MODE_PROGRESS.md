@@ -26,7 +26,10 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 - Story Discussion and Prose have independent drafts, scroll anchors, message histories and generation jobs.
 - Workspace saves use strictly monotonic state versions; stale asynchronous writes are rejected by SQLite persistence.
 - Manual stop removes an empty assistant placeholder but preserves non-empty partial output as `stopped`.
-- Story context is composed under a conservative global character budget with section caps and explicit truncation metadata.
+- Story context has a hard final-request character ceiling. An oversized current input fails before the network request rather than producing an over-budget payload.
+- Pinned confirmed material is mandatory: its section cap is only a planning target. Pinned facts may use additional global budget and fail explicitly if all pinned facts plus the current request cannot fit.
+- Optional confirmed material is ranked by basic character/place relevance using canonical names and aliases attached from active entities.
+- Recent history is selected only as a continuous suffix of complete user/assistant rounds; an oversized newer round blocks older short turns from leapfrogging it.
 - Prose context receives active confirmed material and complete Prose history only. Pending proposals, inference-only memory and Discussion history are excluded.
 - Discussion context may receive pending candidates/inferences, but they are explicitly marked non-authoritative and are never promoted to Prose context by the composer.
 - Existing API profile transfer is not a full app backup and does not include conversations or story archives.
@@ -36,7 +39,8 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 
 - M1a commit: `8cd5f76bbaf8768c54ce922ecb5d55ce8ead2639`; Android build #71 passed.
 - M1b stabilization commit: `784e3dcbf696a4168251ecbc6e06f41c4e2447dd`; Android build #80 passed, including unit tests, Release compile and signed APK staging.
-- Regression coverage includes #72 mixed-padding compilation, blank-stop cleanup, stopped partial preservation, monotonic workspace state versions and stale-save rejection.
+- M2a base commit: `9e9a25249752c27954eec1f791c8a4ecf6a6e40a`; Android build #86 passed.
+- M2a closeout adds hard-budget rejection, mandatory pinned-memory behavior, complete-round history truncation and basic character/alias/place relevance selection. CI must pass before M2b begins.
 
 ## M2b hard prerequisite
 
@@ -53,4 +57,4 @@ Until that prerequisite is implemented, current manual `deactivateRecord` is onl
 M0 report: `docs/STORY_MODE_M0.md`.
 M1b runtime stabilization: `docs/STORY_MODE_FIX72.md`.
 
-Current task after M2a validation: M2b — establish manual mutation logging + `memoryVersion` transaction first, then add organizer jobs, proposals and atomic automatic memory maintenance. Do not change the stable app version yet.
+Current task: finish M2a validation, then enter M2b by implementing manual archive mutation log + atomic `memoryVersion` transaction before any automatic organizer commit path. Do not change the stable app version yet.

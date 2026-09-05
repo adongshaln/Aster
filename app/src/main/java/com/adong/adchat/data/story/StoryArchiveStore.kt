@@ -3,12 +3,13 @@ package com.adong.adchat.data.story
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import org.json.JSONArray
 
 class StoryArchiveStore(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
 
-    fun listMemoryRecords(storyId: String, timelineId: String): List<StoryMemoryRecord> =
-        helper.readableDatabase.query(
+    fun listMemoryRecords(storyId: String, timelineId: String): List<StoryMemoryRecord> {
+        val records = helper.readableDatabase.query(
             StorySchema.MEMORIES,
             null,
             "story_id = ? AND timeline_id = ? AND active = 1",
@@ -17,6 +18,16 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             null,
             "pinned DESC, effective_sequence DESC, updated_at DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toMemory()) } }
+        if (records.none { it.subjectEntityId != null || it.objectEntityId != null }) return records
+
+        val namesByEntityId = activeCharacterAndPlaceNames(storyId)
+        return records.map { record ->
+            record.copy(
+                subjectEntityNames = record.subjectEntityId?.let(namesByEntityId::get).orEmpty(),
+                objectEntityNames = record.objectEntityId?.let(namesByEntityId::get).orEmpty()
+            )
+        }
+    }
 
     fun listPendingProposals(storyId: String, timelineId: String): List<StoryProposal> =
         helper.readableDatabase.query(
@@ -140,6 +151,33 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
     }
 
     override fun close() = helper.close()
+
+    private fun activeCharacterAndPlaceNames(storyId: String): Map<String, List<String>> =
+        helper.readableDatabase.query(
+            StorySchema.ENTITIES,
+            arrayOf("id", "kind", "canonical_name", "aliases_json"),
+            "story_id = ? AND active = 1 AND kind IN (?, ?)",
+            arrayOf(storyId, StoryEntityKind.Character.dbValue, StoryEntityKind.Place.dbValue),
+            null,
+            null,
+            null
+        ).use { cursor ->
+            buildMap {
+                while (cursor.moveToNext()) {
+                    val id = cursor.string("id")
+                    val names = buildList {
+                        add(cursor.string("canonical_name"))
+                        val aliases = runCatching { JSONArray(cursor.string("aliases_json")) }.getOrNull()
+                        if (aliases != null) {
+                            for (index in 0 until aliases.length()) {
+                                aliases.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
+                            }
+                        }
+                    }.distinct()
+                    put(id, names)
+                }
+            }
+        }
 
     private fun storyIdForRecord(recordId: String): String? = helper.readableDatabase.rawQuery(
         "SELECT story_id FROM ${StorySchema.MEMORIES} WHERE id = ? LIMIT 1",

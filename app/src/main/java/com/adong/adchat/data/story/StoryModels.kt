@@ -163,7 +163,10 @@ data class StoryMemoryRecord(
     val pinned: Boolean = false,
     val active: Boolean = true,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /** Runtime-only canonical names/aliases used by context relevance; not persisted in memory_records. */
+    val subjectEntityNames: List<String> = emptyList(),
+    val objectEntityNames: List<String> = emptyList()
 )
 
 data class StoryProposal(
