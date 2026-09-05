@@ -1,4 +1,4 @@
-﻿package com.adong.adchat.ui.screens
+package com.adong.adchat.ui.screens
 
 import android.Manifest
 import android.media.MediaMetadataRetriever
@@ -63,6 +63,7 @@ import coil.request.ImageRequest
 import com.adong.adchat.media.*
 import com.adong.adchat.ui.components.AdConfirmDialog
 import com.adong.adchat.ui.media.*
+import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -101,10 +102,12 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             }
         }
     ) { scaffoldPadding ->
+        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            AsterPageHeader("下载", onOpenDrawer, Modifier.padding(horizontal = 8.dp))
         LazyColumn(
-            modifier = Modifier.fillMaxSize().statusBarsPadding(),
-            contentPadding = PaddingValues(16.dp, 6.dp, 16.dp, scaffoldPadding.calculateBottomPadding() + 28.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
+            contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 32.dp),
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             item { MediaHeader(onOpenDrawer) }
             item {
@@ -158,6 +161,8 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
         }
     }
 
+    }
+
     deleteCandidate?.let { record ->
         AdConfirmDialog(
             title = "删除视频？",
@@ -172,91 +177,67 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
 
 @Composable
 private fun MediaHeader(onOpenDrawer: () -> Unit) {
-    Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onOpenDrawer, modifier = Modifier.size(42.dp), colors = IconButtonDefaults.iconButtonColors(containerColor = Surface, contentColor = Ink)) {
-            Icon(Icons.Rounded.Menu, "打开侧栏")
-        }
-        Spacer(Modifier.width(11.dp))
-        Text("下载", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            MediaPlatform.entries.forEach { PlatformDot(it) }
-        }
+    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+        Text("把喜欢的，留在身边。", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(6.dp))
+        Text("保存此刻，留给下一次重温。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy: Boolean, onValueChange: (String) -> Unit, onResolve: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     val focusManager = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
-    Surface(color = Surface, shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, Hairline), shadowElevation = 1.dp) {
-        Column(Modifier.padding(12.dp)) {
+    Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
+        Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    modifier = Modifier.weight(1f).heightIn(min = 58.dp),
-                    placeholder = { Text("粘贴视频链接", color = MutedInk) },
-                    leadingIcon = { PlatformIcon(detectedPlatform, Modifier.size(19.dp), platformColor(detectedPlatform)) },
-                    trailingIcon = {
-                        IconButton(onClick = {
-                            clipboard.getText()?.text?.takeIf(String::isNotBlank)?.let(onValueChange)
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        }, enabled = !busy) { Icon(Icons.Rounded.ContentPaste, "粘贴", Modifier.size(20.dp), tint = MutedInk) }
-                    },
-                    enabled = !busy,
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = {
-                        if (value.isNotBlank() && !busy) { focusManager.clearFocus(); onResolve() }
-                    }),
-                    shape = RoundedCornerShape(17.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = Canvas, unfocusedContainerColor = Canvas, disabledContainerColor = Canvas,
-                        focusedBorderColor = Accent.copy(alpha = .55f), unfocusedBorderColor = Color.Transparent, disabledBorderColor = Color.Transparent
-                    )
-                )
-                Spacer(Modifier.width(9.dp))
-                RoundResolveButton(value.isNotBlank() && !busy, busy) {
-                    focusManager.clearFocus()
-                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                    onResolve()
+                Icon(Icons.Rounded.Link, null, Modifier.size(21.dp), tint = Accent)
+                Text("视频链接", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = {
+                    clipboard.getText()?.text?.takeIf(String::isNotBlank)?.let(onValueChange)
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }, enabled = !busy) {
+                    Icon(Icons.Rounded.ContentPaste, null, Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("粘贴")
                 }
             }
-            Spacer(Modifier.height(9.dp))
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("自动识别", color = MutedInk, fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(value = value, onValueChange = onValueChange,
+                modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4,
+                placeholder = { Text("粘贴链接或完整的分享文字…", style = MaterialTheme.typography.bodyMedium) },
+                enabled = !busy, textStyle = MaterialTheme.typography.bodyMedium,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = {
+                    if (value.isNotBlank() && !busy) { focusManager.clearFocus(); onResolve() }
+                }), shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Canvas,
+                    unfocusedContainerColor = Canvas, disabledContainerColor = Canvas,
+                    focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent))
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 MediaPlatform.entries.forEach { PlatformMiniLabel(it, it == detectedPlatform) }
+            }
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = { focusManager.clearFocus(); onResolve() }, enabled = value.isNotBlank() && !busy,
+                modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Night)) {
+                if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Rounded.ArrowDownward, null, Modifier.size(19.dp))
+                Spacer(Modifier.width(9.dp))
+                Text(if (busy) "正在处理" else "解析链接")
             }
         }
     }
 }
 
 @Composable
-private fun RoundResolveButton(enabled: Boolean, busy: Boolean, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) .92f else 1f, spring(dampingRatio = .72f, stiffness = 680f), label = "resolve-button")
-    IconButton(
-        onClick = onClick, enabled = enabled, interactionSource = interaction,
-        modifier = Modifier.size(52.dp).graphicsLayer { scaleX = scale; scaleY = scale },
-        colors = IconButtonDefaults.filledIconButtonColors(
-            containerColor = Accent, contentColor = Color.White,
-            disabledContainerColor = AccentSoft, disabledContentColor = Accent.copy(alpha = .4f)
-        )
-    ) {
-        if (busy) CircularProgressIndicator(Modifier.size(21.dp), color = Color.White, strokeWidth = 2.dp)
-        else Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, "解析", Modifier.size(27.dp))
-    }
-}
-
-@Composable
 private fun CompactCapabilities() {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 3.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.AutoAwesome, null, tint = Sage, modifier = Modifier.size(17.dp))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Icon(Icons.Rounded.CheckCircleOutline, null, tint = Sage, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(7.dp))
-        Text("无水印优先 · 多路加速 · 断点续传", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Text("在线播放 · 选择画质 · 断点续传", color = MutedInk, style = MaterialTheme.typography.labelMedium)
     }
 }
 
@@ -506,18 +487,12 @@ private fun ErrorCard(message: String, canRetry: Boolean, onRetry: () -> Unit) {
 
 @Composable
 private fun DownloadSectionHeader(count: Int) {
-    Row(Modifier.fillMaxWidth().padding(top = 5.dp, start = 2.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.History, null, tint = MutedInk, modifier = Modifier.size(17.dp)); Spacer(Modifier.width(7.dp))
-        Text("最近", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); Text(count.toString(), color = MutedInk, fontSize = 12.sp)
-    }
+    AsterSectionHeading("已保存", if (count == 0) null else "$count 个视频", Modifier.padding(top = 8.dp))
 }
 
 @Composable
 private fun EmptyDownloadHistory() {
-    Row(Modifier.fillMaxWidth().padding(vertical = 18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        Icon(Icons.Rounded.Download, null, tint = MutedInk.copy(alpha = .55f), modifier = Modifier.size(18.dp)); Spacer(Modifier.width(7.dp))
-        Text("暂无下载", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
-    }
+    AsterEmptyState(Icons.Rounded.VideoLibrary, "喜欢的片刻，慢慢收集", "保存的视频会出现在这里，随时播放或分享")
 }
 
 @Composable

@@ -66,6 +66,8 @@ import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.AdConfirmDialog
 import com.adong.adchat.ui.components.QuickModelSwitcher
 import com.adong.adchat.ui.components.RouteKind
+import com.adong.adchat.ui.components.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.adong.adchat.ui.theme.*
 
 import kotlinx.coroutines.delay
@@ -112,10 +114,12 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         }
     }
 
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        AsterPageHeader("创作", onOpenDrawer, Modifier.padding(horizontal = 8.dp))
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize().statusBarsPadding(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
+        modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
+        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
         item(key = "header") {
@@ -197,7 +201,7 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         } else {
             item(key = "gallery-title") {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("最近创作", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    Text("作品集", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     Text("${vm.images.size} 张", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
             }
@@ -235,6 +239,7 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
         }
         item(key = "bottom-space") { Spacer(Modifier.height(18.dp)) }
+    }
     }
     if (showSwitcher) {
         QuickModelSwitcher(
@@ -293,95 +298,27 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
 @Composable
 private fun DrawHeader(profileName: String, model: String, onSwitch: () -> Unit, onOpenDrawer: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.Top) {
-            IconButton(onClick = onOpenDrawer, modifier = Modifier.offset(x = (-8).dp, y = (-4).dp)) { Icon(Icons.Rounded.Menu, "\u6253\u5f00\u4fa7\u680f") }
-            Column(Modifier.weight(1f)) {
-                Text("视觉创作室", style = MaterialTheme.typography.headlineMedium)
-                Spacer(Modifier.height(6.dp))
-                Text("独立绘图路由 · 内置漫画原位翻译", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Surface(onClick = onSwitch, color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.Palette, null, Modifier.size(17.dp), tint = Accent)
-                }
-                Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(profileName, style = MaterialTheme.typography.labelLarge)
-                    Text(model.ifBlank { "点击选择绘图模型" }, color = MutedInk, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                Text("切换", color = Accent, style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.width(4.dp))
-                Icon(Icons.Rounded.UnfoldMore, null, tint = Accent, modifier = Modifier.size(18.dp))
-            }
-        }
+        Text("把灵感，变成画面。", style = MaterialTheme.typography.headlineMedium)
+        Spacer(Modifier.height(6.dp))
+        Text("描绘想象，也为故事赋予新的语言。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(22.dp))
+        AsterModelRow("绘图模型 · $profileName", model, onSwitch, icon = Icons.Rounded.Palette)
     }
 }
 
 @Composable
 private fun MangaTranslationToggle(
-    active: Boolean,
-    locked: Boolean,
-    analysisModel: String,
-    onSelectAnalysisModel: () -> Unit,
-    onToggle: (Boolean) -> Unit
+    active: Boolean, locked: Boolean, analysisModel: String,
+    onSelectAnalysisModel: () -> Unit, onToggle: (Boolean) -> Unit
 ) {
-    Surface(
-        color = if (active) AccentSoft else Surface,
-        contentColor = Ink,
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, if (active) Accent.copy(alpha = .22f) else Hairline),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(Modifier.padding(horizontal = 13.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(38.dp).clip(RoundedCornerShape(12.dp)).background(if (active) Accent else Canvas),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Translate, null, tint = if (active) Color.White else Accent, modifier = Modifier.size(20.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        AsterSegmentedControl(listOf("图像创作", "漫画翻译"), if (active) 1 else 0,
+            onSelect = { if ((it == 1) != active) onToggle(it == 1) }, enabled = !locked)
+        AnimatedVisibility(active) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("理解剧情与称谓，保留原画的表达。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+                AsterModelRow("剧情分析模型", analysisModel, onSelectAnalysisModel, icon = Icons.Rounded.Psychology)
             }
-            Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f)) {
-                Text("漫画翻译", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text(if (active) "模式已开启" else "模式未开启", color = if (active) Accent else MutedInk, style = MaterialTheme.typography.bodySmall)
-            }
-            Surface(
-                onClick = onSelectAnalysisModel,
-                enabled = !locked,
-                color = if (active) Color.White.copy(alpha = .78f) else Canvas,
-                shape = RoundedCornerShape(11.dp),
-                modifier = Modifier.widthIn(max = 126.dp)
-            ) {
-                Row(Modifier.padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Psychology, null, Modifier.size(15.dp), tint = Accent)
-                    Spacer(Modifier.width(6.dp))
-                    Column(Modifier.weight(1f, fill = false)) {
-                        Text("辅助", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                        Text(
-                            analysisModel.ifBlank { "未选择" },
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.width(7.dp))
-            Switch(
-                checked = active,
-                onCheckedChange = onToggle,
-                enabled = !locked,
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = Accent,
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = Color(0xFFD7D2CC),
-                    uncheckedBorderColor = Color.Transparent
-                )
-            )
         }
     }
 }
@@ -418,6 +355,7 @@ private fun PromptStudio(
     onGenerate: () -> Unit,
     onStop: () -> Unit
 ) {
+    var showCanvasOptions by rememberSaveable { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
     var elapsedMs by remember { mutableLongStateOf(0L) }
     LaunchedEffect(loading, generationStartedAt) {
@@ -432,7 +370,8 @@ private fun PromptStudio(
         color = Surface,
         contentColor = Ink,
         shape = RoundedCornerShape(28.dp),
-        shadowElevation = 2.dp,
+        border = BorderStroke(1.dp, Hairline),
+        shadowElevation = 0.dp,
         modifier = Modifier.animateContentSize(tween(220, easing = FastOutSlowInEasing))
     ) {
         Column(Modifier.padding(18.dp)) {
@@ -445,7 +384,7 @@ private fun PromptStudio(
                         Icon(Icons.Rounded.AutoAwesome, null, tint = Accent, modifier = Modifier.size(18.dp))
                     }
                     Spacer(Modifier.width(9.dp))
-                    Text("创作提示", style = MaterialTheme.typography.titleMedium)
+                    Text("你想看见什么？", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.weight(1f))
                     if (prompt.isNotBlank()) {
                         Text("${prompt.length} 字", color = MutedInk, style = MaterialTheme.typography.labelMedium)
@@ -455,8 +394,8 @@ private fun PromptStudio(
                 OutlinedTextField(
                     value = prompt,
                     onValueChange = onPrompt,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 132.dp, max = 230.dp),
-                    placeholder = { Text("描述主体、场景、光线、色彩和氛围…", color = Color(0xFF918C85)) },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 126.dp, max = 230.dp),
+                    placeholder = { Text("一座海边小屋，午后的风吹起白色窗帘…", color = MutedInk) },
                     minLines = 4,
                     maxLines = 10,
                     shape = RoundedCornerShape(18.dp),
@@ -472,7 +411,7 @@ private fun PromptStudio(
                 Spacer(Modifier.height(16.dp))
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(if (mangaTranslation) "漫画原图（必选）" else "参考图（可选）", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                Text(if (mangaTranslation) "漫画原图" else "参考图 · 可选", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 Spacer(Modifier.weight(1f))
                 Text(
                     "${referenceImages.size}/${if (mangaTranslation) 20 else 2}",
@@ -584,6 +523,19 @@ private fun PromptStudio(
             }
             Spacer(Modifier.height(18.dp))
             if (!mangaTranslation) {
+                Surface(onClick = { showCanvasOptions = !showCanvasOptions }, color = Canvas,
+                    shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Tune, null, Modifier.size(19.dp), tint = MutedInk)
+                        Text("画面设置", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.labelLarge)
+                        Text("${when (size) { "1536x1024" -> "3:2"; "1024x1536" -> "2:3"; else -> "1:1" }} · $style",
+                            color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                        Icon(if (showCanvasOptions) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            if (showCanvasOptions) "收起画面设置" else "展开画面设置", Modifier.size(20.dp), tint = MutedInk)
+                    }
+                }
+                AnimatedVisibility(showCanvasOptions) {
+                    Column(Modifier.padding(top = 16.dp)) {
                 StudioLabel("风格")
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                     listOf(
@@ -621,6 +573,8 @@ private fun PromptStudio(
                         )
                     }
                 }
+            }
+            }
             }
             AnimatedVisibility(visible = error != null) {
                 Column {
@@ -664,7 +618,7 @@ private fun PromptStudio(
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Accent,
+                    containerColor = Night,
                     disabledContainerColor = Hairline
                 )
             ) {
@@ -910,18 +864,7 @@ private fun CanvasChoiceCard(value: String, label: String, selected: Boolean, on
 
 @Composable
 private fun EmptyGallery() {
-    Column(
-        Modifier.fillMaxWidth().padding(vertical = 38.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(Modifier.size(76.dp).clip(RoundedCornerShape(24.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.Collections, null, tint = Accent, modifier = Modifier.size(30.dp))
-        }
-        Spacer(Modifier.height(14.dp))
-        Text("第一张作品，等待你的想法", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
-        Text("生成结果会保留在本次使用记录中", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
-    }
+    AsterEmptyState(Icons.Rounded.Collections, "留一处空间，给你的作品", "生成的图片与翻译作品会保存在这里")
 }
 
 @Composable

@@ -61,6 +61,7 @@ import com.adong.adchat.ui.components.AdToggleCard
 import com.adong.adchat.ui.components.AdChoiceOption
 import com.adong.adchat.ui.components.AdSelectionSheet
 import com.adong.adchat.ui.components.RouteKind
+import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.theme.*
 
 @Composable
@@ -88,56 +89,29 @@ fun SettingsScreen(vm: MainViewModel, onOpenDrawer: () -> Unit) {
 @Composable
 private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (ApiProfile) -> Unit, onCreate: (ApiProfile) -> Unit) {
     var addMenu by remember { mutableStateOf(false) }
+    var showTransferActions by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<ApiProfile?>(null) }
     var transferMode by remember { mutableStateOf<String?>(null) }
     var includeApiKeys by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf("") }
     var importError by remember { mutableStateOf<String?>(null) }
     var section by rememberSaveable { mutableIntStateOf(0) }
-    LazyColumn(
-        Modifier.fillMaxSize().statusBarsPadding(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
-    ) {
-        item {
-            Row(verticalAlignment = Alignment.Top) {
-                IconButton(onClick = onOpenDrawer, modifier = Modifier.offset(x = (-8).dp, y = (-4).dp)) { Icon(Icons.Rounded.Menu, "\u6253\u5f00\u4fa7\u680f") }
-                Column(Modifier.weight(1f)) {
-                    Text("API 路由中心", style = MaterialTheme.typography.headlineMedium)
-                    Spacer(Modifier.height(6.dp))
-                    Text("分别管理对话与绘图服务", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
-                }
-                IconButton(onClick = { transferMode = "import"; importError = null }) { Icon(Icons.Rounded.FileUpload, "导入配置") }
-                IconButton(onClick = { transferMode = "export" }) { Icon(Icons.Rounded.FileDownload, "导出配置") }
-            }
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        AsterPageHeader("设置", onOpenDrawer, Modifier.padding(horizontal = 8.dp)) {
+            AsterIconButton(Icons.Rounded.MoreHoriz, "配置管理", { showTransferActions = true })
         }
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("路由" to Icons.AutoMirrored.Rounded.CallSplit, "API" to Icons.Rounded.Dns, "助手" to Icons.Rounded.SmartToy).forEachIndexed { index, (label, icon) ->
-                    val selected = section == index
-                    Surface(
-                        onClick = { section = index },
-                        modifier = Modifier.weight(1f),
-                        color = if (selected) Night else Surface,
-                        contentColor = if (selected) Color.White else MutedInk,
-                        shape = RoundedCornerShape(15.dp)
-                    ) {
-                        Row(Modifier.padding(horizontal = 10.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                            Box(Modifier.size(26.dp).clip(RoundedCornerShape(9.dp)).background(if (selected) Color(0xFF3A3835) else Canvas), contentAlignment = Alignment.Center) {
-                                Icon(icon, null, Modifier.size(15.dp), tint = if (selected) Accent else MutedInk)
-                            }
-                            Spacer(Modifier.width(7.dp))
-                            Text(label, style = MaterialTheme.typography.labelLarge)
-                        }
-                    }
-                }
-            }
-        }
+        AsterSegmentedControl(listOf("模型分配", "服务连接", "助手偏好"), section, { section = it },
+            Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+        LazyColumn(
+            Modifier.weight(1f).fillMaxWidth().imePadding(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp)
+        ) {
         if (section == 0) {
             item { IndependenceBanner(vm) }
             item {
                 Column {
-                    SectionTitle("ACTIVE ROUTES", "当前路由", "对话路由仅影响当前窗口，绘图路由保持独立。")
+                    SectionTitle("", "合适的事，交给合适的模型", "为当前对话与图像创作分别选择服务。")
                 Spacer(Modifier.height(12.dp))
                 RouteAssignmentCard(
                     kind = RouteKind.Chat,
@@ -163,7 +137,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
             item {
                 Column {
                     Row(verticalAlignment = Alignment.Bottom) {
-                        Column(Modifier.weight(1f)) { SectionTitle("API PROFILES", "API 配置", "每个配置都有自己的 URL、Key、路径和模型。") }
+                        Column(Modifier.weight(1f)) { SectionTitle("", "连接你的服务", "管理地址、密钥与可用模型。") }
                     Button(onClick = { addMenu = true }, shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Night)) {
                         Icon(Icons.Rounded.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("添加")
                     }
@@ -191,7 +165,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
         if (section == 2) {
             item {
                 Column {
-                    SectionTitle("ASSISTANT", "对话行为", "系统提示词只影响对话，不会发送给绘图 API。")
+                    SectionTitle("", "让回答更合心意", "设置助手的角色、语气与回答习惯。仅用于对话。")
                 Spacer(Modifier.height(12.dp))
                 Surface(color = Surface, shape = RoundedCornerShape(20.dp)) {
                     OutlinedTextField(
@@ -209,9 +183,22 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
         }
         }
         item {
-            Text("Aster ${BuildConfig.VERSION_NAME} \u00b7 Secure multi-route client", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically) {
+                AsterMark(Modifier.size(23.dp), MutedInk)
+                Text("Aster ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+            }
         }
         item { Spacer(Modifier.height(8.dp)) }
+    }
+    }
+    if (showTransferActions) {
+        AdActionSheet(title = "配置管理", subtitle = "在设备之间迁移你的服务配置",
+            actions = listOf(
+                AdActionOption("import", "导入配置", "从 JSON 恢复服务与模型", Icons.Rounded.FileUpload),
+                AdActionOption("export", "导出配置", "备份当前的服务配置", Icons.Rounded.FileDownload)
+            ), onAction = { showTransferActions = false; transferMode = it.id; importError = null },
+            onDismiss = { showTransferActions = false })
     }
     if (addMenu) {
         AdActionSheet(
@@ -367,27 +354,25 @@ private fun ProfileTransferDialog(
 
 @Composable
 private fun IndependenceBanner(vm: MainViewModel) {
-    val testing = vm.connectionFor(vm.chatProfile.id).phase == ConnectionPhase.Testing || vm.connectionFor(vm.imageProfile.id).phase == ConnectionPhase.Testing
-    Surface(color = Night, contentColor = Color.White, shape = RoundedCornerShape(22.dp)) {
+    val chat = vm.connectionFor(vm.chatProfile.id).phase
+    val image = vm.connectionFor(vm.imageProfile.id).phase
+    val testing = chat == ConnectionPhase.Testing || image == ConnectionPhase.Testing
+    val checked = chat == ConnectionPhase.Success && image == ConnectionPhase.Success
+    val failed = chat == ConnectionPhase.Error || image == ConnectionPhase.Error
+    val tone = when { failed -> Danger; checked -> Sage; else -> MutedInk }
+    Surface(color = Surface, shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, Hairline)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(Color(0xFF383633)), contentAlignment = Alignment.Center) {
-                Icon(Icons.AutoMirrored.Rounded.CallSplit, null, tint = Accent)
+            Icon(if (checked) Icons.Rounded.CheckCircleOutline else Icons.Rounded.NetworkCheck,
+                null, Modifier.size(22.dp), tint = tone)
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(when { testing -> "正在检查连接"; checked -> "服务连接正常"; failed -> "有服务需要检查"; else -> "连接状态" },
+                    style = MaterialTheme.typography.titleSmall)
+                Text(when { testing -> "这可能需要片刻"; checked -> "模型列表已同步"; failed -> "前往服务连接查看详情"; else -> "测试可用性并同步模型" },
+                    color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("独立路由已启用", style = MaterialTheme.typography.titleMedium)
-                Text("每个对话窗口都可独立选择 API 与模型。", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.bodyMedium)
-            }
-            Spacer(Modifier.width(8.dp))
-            FilledTonalButton(
-                onClick = vm::testActiveRoutes,
-                enabled = !testing,
-                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color(0xFF3A3835), contentColor = Color.White)
-            ) {
-                if (testing) CircularProgressIndicator(Modifier.size(16.dp), color = Accent, strokeWidth = 2.dp)
-                else Icon(Icons.Rounded.NetworkCheck, null, Modifier.size(17.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (testing) "测试中" else "诊断")
+            TextButton(onClick = vm::testActiveRoutes, enabled = !testing) {
+                if (testing) CircularProgressIndicator(Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
+                else Text("检查", color = Accent)
             }
         }
     }
@@ -421,7 +406,7 @@ private fun RouteAssignmentCard(
     val accent = if (kind == RouteKind.Chat) Accent else Sage
     val soft = if (kind == RouteKind.Chat) AccentSoft else SageSoft
 
-    Surface(color = Surface, shape = RoundedCornerShape(23.dp)) {
+    Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(42.dp).clip(RoundedCornerShape(14.dp)).background(soft), contentAlignment = Alignment.Center) {
@@ -429,11 +414,11 @@ private fun RouteAssignmentCard(
                 }
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(if (kind == RouteKind.Chat) "当前对话路由" else "绘图路由", style = MaterialTheme.typography.titleMedium)
-                    Text(if (kind == RouteKind.Chat) "仅作用于当前窗口" else "独立 API 与模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                    Text(if (kind == RouteKind.Chat) "对话模型" else "图像模型", style = MaterialTheme.typography.titleMedium)
+                    Text(if (kind == RouteKind.Chat) "用于当前这段对话" else "用于图像创作与漫画翻译", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
                 Surface(color = soft, contentColor = accent, shape = CircleShape) {
-                    Text(if (kind == RouteKind.Chat) "CHAT" else "IMAGE", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text(if (kind == RouteKind.Chat) "对话" else "创作", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(Modifier.height(14.dp))
@@ -517,7 +502,7 @@ private fun ProfileCard(
         animationSpec = tween(180),
         label = "profile-status"
     )
-    Surface(color = Surface, shape = RoundedCornerShape(23.dp)) {
+    Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(Canvas), contentAlignment = Alignment.Center) {
@@ -1163,8 +1148,9 @@ private fun EditorModelField(label: String, value: String, models: List<ApiModel
 
 @Composable
 private fun SectionTitle(eyebrow: String, title: String, description: String) {
-    Text(eyebrow, color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.3.sp)
-    Spacer(Modifier.height(4.dp)); Text(title, style = MaterialTheme.typography.titleLarge); Spacer(Modifier.height(3.dp)); Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+    Text(title, style = MaterialTheme.typography.titleLarge)
+    Spacer(Modifier.height(6.dp))
+    Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
 }
 
 @Composable

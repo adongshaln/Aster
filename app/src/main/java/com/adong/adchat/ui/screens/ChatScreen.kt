@@ -28,6 +28,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,6 +51,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -57,6 +60,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -89,6 +94,7 @@ import com.adong.adchat.data.TOOL_STATUS_RUNNING
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.chat.questionNavigationTargets
+import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.components.AdChoiceOption
 import com.adong.adchat.ui.components.AdSelectionSheet
 import com.adong.adchat.ui.components.QuickModelSwitcher
@@ -119,6 +125,8 @@ import kotlin.math.sin
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -> Unit) {
+    val composerFocusRequester = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -255,7 +263,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 if (vm.messages.isEmpty()) {
                     EmptyChat(
                         model = vm.chatProfile.chatModel,
-                        onSuggestion = vm::sendMessage,
+                        onSuggestion = { draft ->
+                            vm.updateChatInput(draft)
+                            composerFocusRequester.requestFocus()
+                            keyboard?.show()
+                        },
+                        onConfigure = onOpenSettings,
                         modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
                     )
                 } else {
@@ -263,12 +276,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
-                            start = 18.dp,
-                            end = 18.dp,
-                            top = 18.dp,
+                            start = 22.dp,
+                            end = 22.dp,
+                            top = 24.dp,
                             bottom = composerClearance
                         ),
-                        verticalArrangement = Arrangement.spacedBy(22.dp)
+                        verticalArrangement = Arrangement.spacedBy(30.dp)
                     ) {
                         items(
                             items = vm.messages,
@@ -394,6 +407,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .navigationBarsPadding()
             ) {
                 ChatComposer(
+                    focusRequester = composerFocusRequester,
                     value = vm.chatInput,
                     attachments = vm.chatAttachments,
                     profileName = vm.chatProfile.name,
@@ -427,57 +441,51 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
 }
 @Composable
 private fun ChatHeader(vm: MainViewModel, onOpenDrawer: () -> Unit, onSwitchModel: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onOpenDrawer) { Icon(Icons.Rounded.Menu, "\u6253\u5f00\u4fa7\u680f") }
-            Column(Modifier.weight(1f)) {
-                Text(vm.conversations.firstOrNull { it.id == vm.activeConversationId }?.title ?: "\u65b0\u5bf9\u8bdd", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${vm.chatProfile.name} \u00b7 ${vm.chatProfile.chatModel.ifBlank { "\u672a\u9009\u62e9\u6a21\u578b" }}", style = MaterialTheme.typography.labelSmall, color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Surface(onClick = onSwitchModel, color = AccentSoft, contentColor = Accent, shape = RoundedCornerShape(12.dp)) {
-                Row(Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.SwapHoriz, null, Modifier.size(17.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text("\u6a21\u578b", style = MaterialTheme.typography.labelLarge)
-                }
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        AsterIconButton(Icons.Rounded.Menu, "打开侧栏", onOpenDrawer)
+        Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onSwitchModel)
+            .padding(horizontal = 8.dp, vertical = 7.dp)) {
+            Text(if (vm.messages.isEmpty()) "Aster" else vm.conversations.firstOrNull { it.id == vm.activeConversationId }?.title ?: "对话",
+                style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(vm.chatProfile.chatModel.ifBlank { "选择对话模型" },
+                    modifier = Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelMedium,
+                    color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(Icons.Rounded.ExpandMore, "切换模型", Modifier.size(15.dp), tint = MutedInk)
             }
         }
+        AsterIconButton(Icons.Rounded.EditSquare, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
     }
 }
+
 @Composable
-private fun EmptyChat(model: String, onSuggestion: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyChat(model: String, onSuggestion: (String) -> Unit, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
     val suggestions = listOf(
-        "帮我把一个复杂问题拆成行动步骤",
-        "解释一个我最近没弄懂的概念",
-        "为我的新项目整理一份创意清单"
+        Triple(Icons.Rounded.Lightbulb, "理清思路", "帮我把一个复杂问题拆成清晰的行动步骤。"),
+        Triple(Icons.Rounded.EditNote, "一起创作", "我想写一点东西，帮我一起打磨想法。"),
+        Triple(Icons.Rounded.Explore, "发现新知", "我有一个想弄懂的概念，请用直观的例子解释。")
     )
-    Column(
-        modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Surface(color = AccentSoft, shape = CircleShape) {
-            Icon(Icons.Rounded.AutoAwesome, null, tint = Accent, modifier = Modifier.padding(12.dp).size(24.dp))
-        }
-        Spacer(Modifier.height(20.dp))
-        Text("把想法说出来。", style = MaterialTheme.typography.displaySmall)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "正在使用 ${model.ifBlank { "未配置模型" }}。你可以直接提问，也可以从下面开始。",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MutedInk
-        )
-        Spacer(Modifier.height(28.dp))
-        suggestions.forEach { text ->
-            Surface(
-                onClick = { onSuggestion(text) },
-                color = Surface,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
-            ) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 15.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(text, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                    Icon(Icons.Rounded.ArrowUpward, null, Modifier.size(17.dp), tint = MutedInk)
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.Center) {
+        AsterMark(Modifier.size(78.dp).offset(x = (-14).dp))
+        Spacer(Modifier.height(12.dp))
+        Text("让想法，\n慢慢成形。", style = MaterialTheme.typography.displaySmall)
+        Spacer(Modifier.height(12.dp))
+        Text("从一个问题、一点灵感，\n或任何想聊的事开始。", color = MutedInk, style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.height(30.dp))
+        if (model.isBlank()) {
+            AsterModelRow("准备开始", "连接你的第一个模型", onConfigure, icon = Icons.Rounded.AddLink)
+        } else {
+            suggestions.forEachIndexed { index, (icon, title, prompt) ->
+                Surface(onClick = { onSuggestion(prompt) }, color = Color.Transparent,
+                    shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(Modifier.padding(vertical = 16.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(icon, null, Modifier.size(21.dp), tint = Accent)
+                        Text(title, Modifier.weight(1f).padding(start = 14.dp), style = MaterialTheme.typography.bodyMedium)
+                        Icon(Icons.Rounded.NorthWest, null, Modifier.size(17.dp), tint = MutedInk)
+                    }
                 }
+                if (index < suggestions.lastIndex) HorizontalDivider(color = Hairline)
             }
         }
     }
@@ -500,36 +508,6 @@ private fun ChatMessageItem(
         horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        if (!user && !waitingForFirstToken) {
-            Box(
-                Modifier.size(30.dp).clip(RoundedCornerShape(10.dp)).background(
-                    when {
-                        message.isError -> DangerSoft
-                        message.isInterrupted -> Color(0xFFFFF1D8)
-                        message.isStopped -> Color(0xFFF0EDE8)
-                        else -> AccentSoft
-                    }
-                ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    when {
-                        message.isError -> Icons.Rounded.ErrorOutline
-                        message.isInterrupted -> Icons.Rounded.CloudOff
-                        message.isStopped -> Icons.Rounded.StopCircle
-                        else -> Icons.Rounded.AutoAwesome
-                    },
-                    null,
-                    tint = when {
-                        message.isError -> Danger
-                        message.isStopped -> MutedInk
-                        else -> Accent
-                    },
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-            Spacer(Modifier.width(11.dp))
-        }
         val messageWidth = if (user) {
             Modifier.widthIn(max = 520.dp)
         } else {
@@ -543,7 +521,7 @@ private fun ChatMessageItem(
             horizontalAlignment = if (user) Alignment.End else Alignment.Start
         ) {
             if (user) {
-                Surface(color = Night, contentColor = Color.White, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
+                Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
                     Column(Modifier.padding(7.dp)) {
                         if (message.attachments.isNotEmpty()) {
                             ChatImageRow(message.attachments)
@@ -560,6 +538,14 @@ private fun ChatMessageItem(
                     }
                 }
             } else {
+                if (!waitingForFirstToken) {
+                    Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsterMark(Modifier.size(26.dp), tint = if (message.isError) Danger else Accent)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Aster", color = MutedInk, style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium)
+                    }
+                }
                 if (message.toolActivities.isNotEmpty()) {
                     ToolActivitySummary(message.toolActivities)
                 }
@@ -780,7 +766,7 @@ private fun ThinkingIndicator() {
             }
         }
         Spacer(Modifier.width(9.dp))
-        Text("Thinking", color = MutedInk.copy(alpha = textAlpha), style = MaterialTheme.typography.bodyMedium)
+        Text("正在思考", color = MutedInk.copy(alpha = textAlpha), style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -1575,6 +1561,7 @@ private const val AUTO_SCROLL_INTERVAL_MS = 160L
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatComposer(
+    focusRequester: FocusRequester,
     value: String,
     attachments: List<ChatImageAttachment>,
     profileName: String,
@@ -1638,11 +1625,11 @@ private fun ChatComposer(
             }
         }
         Surface(
-            color = Surface.copy(alpha = .86f),
+            color = Surface.copy(alpha = .97f),
             shape = capsuleShape,
-            border = BorderStroke(1.dp, Hairline.copy(alpha = .58f)),
+            border = BorderStroke(1.dp, if (isFocused) Accent.copy(alpha = .35f) else Hairline),
             shadowElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth().testTag("chat-composer")
                 .shadow(
                     elevation = 4.dp,
                     shape = capsuleShape,
@@ -1654,7 +1641,7 @@ private fun ChatComposer(
                 BasicTextField(
                     value = value,
                     onValueChange = onValueChange,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("chat-input").focusRequester(focusRequester)
                         .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
                         .heightIn(min = 24.dp, max = 132.dp)
                         .onFocusChanged { state ->
@@ -1665,7 +1652,7 @@ private fun ChatComposer(
                         },
                     textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
                     cursorBrush = SolidColor(Accent),
-                    maxLines = 5,
+                    maxLines = if (isFocused) 5 else 1,
                     keyboardOptions = KeyboardOptions(
                         capitalization = KeyboardCapitalization.Sentences,
                         imeAction = ImeAction.Send
@@ -1680,7 +1667,7 @@ private fun ChatComposer(
                     decorationBox = { innerTextField ->
                         Box(Modifier.fillMaxWidth()) {
                             if (value.isEmpty()) {
-                                Text("发送消息", color = Color(0xFF97928C), style = MaterialTheme.typography.bodyLarge)
+                                Text("说说你的想法…", color = MutedInk, style = MaterialTheme.typography.bodyLarge)
                             }
                             innerTextField()
                         }
@@ -1773,7 +1760,7 @@ private fun ChatComposer(
                             label = "send-stop"
                         ) { isLoading ->
                             if (isLoading) Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(21.dp))
-                            else Icon(Icons.AutoMirrored.Rounded.Send, "发送", Modifier.size(21.dp))
+                            else Icon(Icons.Rounded.ArrowUpward, "发送", Modifier.size(23.dp))
                         }
                     }
                 }
