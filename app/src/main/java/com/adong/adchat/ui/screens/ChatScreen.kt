@@ -15,7 +15,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
@@ -23,13 +22,13 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas as ComposeCanvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,11 +36,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.rounded.*
@@ -57,7 +57,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
@@ -69,6 +69,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -92,7 +94,6 @@ import com.adong.adchat.data.ChatToolActivity
 import com.adong.adchat.data.TOOL_STATUS_COMPLETED
 import com.adong.adchat.data.TOOL_STATUS_FAILED
 import com.adong.adchat.data.TOOL_STATUS_RUNNING
-import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.chat.questionNavigationTargets
 import com.adong.adchat.ui.components.*
@@ -102,9 +103,7 @@ import com.adong.adchat.ui.components.QuickModelSwitcher
 import com.adong.adchat.ui.components.RouteKind
 import com.adong.adchat.ui.markdown.MarkdownTable
 import com.adong.adchat.ui.markdown.MarkdownTableAlignment
-import com.adong.adchat.ui.markdown.ReadingAccentKind
 import com.adong.adchat.ui.markdown.containsMarkdownTable
-import com.adong.adchat.ui.markdown.findReadingAccentRanges
 import com.adong.adchat.ui.markdown.markdownTableToTsv
 import com.adong.adchat.ui.markdown.parseMarkdownTableAt
 import com.adong.adchat.ui.theme.*
@@ -115,12 +114,12 @@ import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.sin
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -135,6 +134,13 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val imeInsets = WindowInsets.ime
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     val hazeState = rememberHazeState()
+    val userDragging by listState.interactionSource.collectIsDraggedAsState()
+    val streamScrollSignals = remember {
+        MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+    }
     var showSwitcher by remember { mutableStateOf(false) }
     var autoFollow by remember { mutableStateOf(true) }
     var composerFocused by remember { mutableStateOf(false) }
@@ -192,23 +198,24 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         if (vm.messages.isNotEmpty()) listState.scrollToItem(vm.messages.size)
     }
 
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
-            .distinctUntilChanged()
-            .collect { (scrolling, canScrollForward) ->
-                if (scrolling) autoFollow = !canScrollForward
-            }
+    LaunchedEffect(userDragging, listState.canScrollForward) {
+        if (userDragging) autoFollow = !listState.canScrollForward
     }
-    LaunchedEffect(listState, vm.messages) {
-        snapshotFlow { vm.messages.size to (vm.messages.lastOrNull()?.content?.length ?: 0) }
-            .conflate()
-            .collect {
-                if (vm.messages.isNotEmpty() && autoFollow && !listState.isScrollInProgress) {
-                    listState.scrollToItem(vm.messages.size)
-                }
-                delay(AUTO_SCROLL_INTERVAL_MS)
-            }
+
+    LaunchedEffect(vm.messages.size) {
+        if (vm.messages.isNotEmpty() && autoFollow && !userDragging) {
+            listState.animateScrollToItem(vm.messages.size)
+        }
     }
+
+    LaunchedEffect(streamScrollSignals, vm.activeConversationId) {
+        streamScrollSignals.collect {
+            if (vm.messages.isNotEmpty() && autoFollow && !userDragging && !composerFocused) {
+                listState.animateScrollToItem(vm.messages.size)
+            }
+        }
+    }
+
     LaunchedEffect(imeInsets, imeAnimationTarget) {
         snapshotFlow {
             imeInsets.getBottom(density) to imeAnimationTarget.getBottom(density)
@@ -230,18 +237,14 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             .distinctUntilChanged()
             .collect { (imeBottom, imeTargetBottom) ->
                 if (vm.messages.isNotEmpty()) {
-                    // Keep the conversation pinned to the bottom for every IME inset update so
-                    // the visible messages move upward in lockstep with the keyboard animation.
+                    // Preserve the accepted IME behaviour: the conversation follows every inset
+                    // update so keyboard and content move together rather than serially.
                     listState.scrollToItem(vm.messages.size)
                 }
 
-                if (imeBottom > 0) {
-                    imeWasVisible = true
-                }
+                if (imeBottom > 0) imeWasVisible = true
 
                 if (imeWasVisible && imeTargetBottom == 0) {
-                    // Start collapsing as soon as the system begins the IME close animation.
-                    // Waiting for imeBottom == 0 makes the keyboard and composer animate serially.
                     focusManager.clearFocus()
                 }
             }
@@ -291,7 +294,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             start = 22.dp,
                             end = 22.dp,
                             top = 24.dp,
-                            bottom = composerClearance
+                            bottom = composerClearance + 24.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(30.dp)
                     ) {
@@ -313,6 +316,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                                         putExtra(Intent.EXTRA_TITLE, file.name)
                                     })
                                 },
+                                onStreamingTextAdvanced = { streamScrollSignals.tryEmit(Unit) },
                                 modifier = if (message.isStreaming) Modifier else Modifier.animateItem()
                             )
                         }
@@ -420,6 +424,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         QuickModelSwitcher(kind = RouteKind.Chat, vm = vm, onDismiss = { showSwitcher = false }, onManageApis = onOpenSettings)
     }
 }
+
 @Composable
 private fun ChatHeader(
     vm: MainViewModel,
@@ -491,11 +496,13 @@ private fun ChatMessageItem(
     onRetry: () -> Unit,
     onRegenerate: () -> Unit,
     onSaveFile: (ChatFileAttachment) -> Unit,
+    onStreamingTextAdvanced: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val user = message.role == "user"
     val waitingForFirstToken = !user && message.content.isBlank() && message.isStreaming
     val context = LocalContext.current
+    var showDetails by remember(message.id) { mutableStateOf(false) }
     Row(
         modifier.fillMaxWidth(),
         horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
@@ -504,9 +511,6 @@ private fun ChatMessageItem(
         val messageWidth = if (user) {
             Modifier.widthIn(max = 520.dp)
         } else {
-            // Keep the assistant column inside the available row width.  The
-            // previous non-filling weight made the action row measure wider
-            // than short replies, which could push “重新生成” off-screen.
             Modifier.weight(1f).widthIn(max = 680.dp)
         }
         Column(
@@ -542,13 +546,14 @@ private fun ChatMessageItem(
                 if (message.toolActivities.isNotEmpty()) {
                     ToolActivitySummary(message.toolActivities)
                 }
-                if (message.content.isBlank() && message.isStreaming) {
+                if (waitingForFirstToken) {
                     ThinkingIndicator()
                 } else {
                     RichMessageText(
                         content = message.content,
                         streaming = message.isStreaming,
-                        error = message.isError
+                        error = message.isError,
+                        onStreamingTextAdvanced = onStreamingTextAdvanced
                     )
                 }
                 if (message.generatedFiles.isNotEmpty()) {
@@ -589,35 +594,44 @@ private fun ChatMessageItem(
                         }
                     }
                 }
-                if (!message.isStreaming && message.profileName.isNotBlank()) {
-                    Text(
-                        "${message.profileName} · ${message.model}",
-                        modifier = Modifier.padding(top = 7.dp),
-                        color = MutedInk,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                message.usage?.takeIf { it.inputTokens > 0 || it.outputTokens > 0 || it.cachedTokens > 0 }?.let { usage ->
-                    TokenUsagePanel(usage = usage)
-                }
                 AnimatedVisibility(!message.isStreaming && message.content.isNotBlank()) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        ChatActionButton(
-                            icon = Icons.Outlined.ContentCopy,
-                            label = "复制",
-                            onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Aster", message.content)) },
-                        )
-                        if (message.isError) {
-                            ChatActionButton(Icons.Rounded.Refresh, "重试", onRetry)
-                        } else if (message.isInterrupted || message.isStopped) {
-                            ChatActionButton(Icons.Rounded.PlayArrow, "继续生成", onRetry)
-                        } else if (canRegenerate) {
-                            ChatActionButton(Icons.Rounded.Refresh, "重新生成", onRegenerate, accent = true)
+                    Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            ChatActionButton(
+                                icon = Icons.Outlined.ContentCopy,
+                                label = "复制",
+                                onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("Aster", message.content)) },
+                            )
+                            if (message.isError) {
+                                ChatActionButton(Icons.Rounded.Refresh, "重试", onRetry)
+                            } else if (message.isInterrupted || message.isStopped) {
+                                ChatActionButton(Icons.Rounded.PlayArrow, "继续生成", onRetry)
+                            } else if (canRegenerate) {
+                                ChatActionButton(Icons.Rounded.Refresh, "重新生成", onRegenerate, accent = true)
+                            }
+                            if (message.profileName.isNotBlank() || message.usage != null) {
+                                ChatActionButton(
+                                    Icons.Rounded.MoreHoriz,
+                                    if (showDetails) "收起" else "详情",
+                                    { showDetails = !showDetails }
+                                )
+                            }
+                        }
+                        AnimatedVisibility(showDetails) {
+                            Column(Modifier.fillMaxWidth().padding(top = 5.dp)) {
+                                if (message.profileName.isNotBlank()) {
+                                    Text(
+                                        "${message.profileName} · ${message.model}",
+                                        color = MutedInk,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                message.usage?.takeIf { it.inputTokens > 0 || it.outputTokens > 0 || it.cachedTokens > 0 }?.let { usage ->
+                                    TokenUsagePanel(usage = usage)
+                                }
+                            }
                         }
                     }
                 }
@@ -702,44 +716,58 @@ private fun StreamRecoveryStatus(
 
 @Composable
 private fun ThinkingIndicator() {
-    val transition = rememberInfiniteTransition(label = "thinking")
-    val rotation by transition.animateFloat(
+    val density = LocalDensity.current
+    val transition = rememberInfiniteTransition(label = "aster-thinking")
+    val motion by transition.animateFloat(
         initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(tween(1450, easing = LinearEasing)),
-        label = "thinking-rays"
+        targetValue = 4f,
+        animationSpec = infiniteRepeatable(tween(3520, easing = LinearEasing)),
+        label = "aster-thinking-motion"
     )
-    val textAlpha by transition.animateFloat(
-        initialValue = .52f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(850), repeatMode = RepeatMode.Reverse),
-        label = "thinking-text"
+    val subtitleAlpha by transition.animateFloat(
+        initialValue = .58f,
+        targetValue = .86f,
+        animationSpec = infiniteRepeatable(tween(900), repeatMode = RepeatMode.Reverse),
+        label = "aster-thinking-subtitle"
     )
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        ComposeCanvas(Modifier.size(21.dp)) {
-            val centerPoint = center
-            val innerRadius = size.minDimension * .20f
-            val outerRadius = size.minDimension * .46f
-            repeat(12) { index ->
-                val radians = (rotation + index * 30f) * PI / 180.0
-                val opacity = .18f + .82f * ((index + 1f) / 12f)
-                drawLine(
-                    color = Accent.copy(alpha = opacity),
-                    start = androidx.compose.ui.geometry.Offset(
-                        centerPoint.x + (cos(radians) * innerRadius).toFloat(),
-                        centerPoint.y + (sin(radians) * innerRadius).toFloat()
-                    ),
-                    end = androidx.compose.ui.geometry.Offset(
-                        centerPoint.x + (cos(radians) * outerRadius).toFloat(),
-                        centerPoint.y + (sin(radians) * outerRadius).toFloat()
-                    ),
-                    strokeWidth = size.minDimension * .105f,
-                    cap = StrokeCap.Round
-                )
-            }
+    val step = motion.toInt().coerceIn(0, 3)
+    val local = (motion - step).coerceIn(0f, 1f)
+    val hopPortion = .62f
+    val hopProgress = (local / hopPortion).coerceIn(0f, 1f)
+    val eased = hopProgress * hopProgress * (3f - 2f * hopProgress)
+    val jumpPx = if (local < hopPortion) {
+        with(density) { (-6.dp).toPx() } * sin(PI * hopProgress).toFloat()
+    } else {
+        0f
+    }
+    val rotation = step * 90f + if (local < hopPortion) eased * 90f else 90f
+
+    Row(
+        Modifier.heightIn(min = 46.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+            AsterArtwork(
+                Modifier.size(28.dp).graphicsLayer {
+                    translationY = jumpPx
+                    rotationZ = rotation
+                }
+            )
         }
         Spacer(Modifier.width(9.dp))
-        Text("正在思考", color = MutedInk.copy(alpha = textAlpha), style = MaterialTheme.typography.bodyMedium)
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                "Aster 正在思考",
+                color = Ink,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                "正在组织回答…",
+                color = MutedInk.copy(alpha = subtitleAlpha),
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
     }
 }
 
@@ -983,43 +1011,145 @@ private fun formatTokens(value: Int): String = when {
 
 private fun formatDuration(ms: Long): String = if (ms < 1_000) "${ms}ms" else String.format(Locale.ROOT, "%.2fs", ms / 1_000f)
 
+private data class BufferedStreamingText(
+    val text: String,
+    val animating: Boolean
+)
+
 @Composable
-private fun RichMessageText(content: String, streaming: Boolean, error: Boolean) {
-    // Table syntax has to be parsed as a whole block. Arbitrary stream chunks can split a row or
-    // delimiter, so table-bearing responses use the structured renderer while they are arriving.
-    if (streaming && containsMarkdownTable(content)) {
-        StructuredMessageText(content = content, streaming = true, error = error)
+private fun rememberBufferedStreamingText(
+    content: String,
+    streaming: Boolean,
+    onAdvanced: () -> Unit
+): BufferedStreamingText {
+    val latestContent by rememberUpdatedState(content)
+    val latestOnAdvanced by rememberUpdatedState(onAdvanced)
+    var displayed by remember { mutableStateOf(if (streaming) "" else content) }
+    var animating by remember { mutableStateOf(streaming) }
+
+    LaunchedEffect(streaming) {
+        if (streaming) {
+            animating = true
+            while (true) {
+                val target = latestContent
+                if (!target.startsWith(displayed)) displayed = ""
+                val backlog = target.length - displayed.length
+                if (backlog <= 0) {
+                    delay(22)
+                    continue
+                }
+                val step = revealStep(backlog)
+                val end = advanceCodePoints(target, displayed.length, step)
+                displayed = target.substring(0, end)
+                latestOnAdvanced()
+                delay(revealDelay(displayed.lastOrNull(), backlog))
+            }
+        } else {
+            animating = displayed != latestContent
+            while (displayed != latestContent) {
+                val target = latestContent
+                if (!target.startsWith(displayed)) displayed = ""
+                val backlog = target.length - displayed.length
+                if (backlog <= 0) break
+                val end = advanceCodePoints(target, displayed.length, revealStep(backlog).coerceAtLeast(8))
+                displayed = target.substring(0, end)
+                latestOnAdvanced()
+                delay(16)
+            }
+            displayed = latestContent
+            animating = false
+            latestOnAdvanced()
+        }
+    }
+
+    return BufferedStreamingText(
+        text = if (!streaming && !animating) content else displayed,
+        animating = streaming || animating
+    )
+}
+
+private fun revealStep(backlog: Int): Int = when {
+    backlog > 300 -> 22
+    backlog > 140 -> 12
+    backlog > 60 -> 6
+    backlog > 24 -> 3
+    else -> 2
+}
+
+private fun revealDelay(lastChar: Char?, backlog: Int): Long = when {
+    backlog > 140 -> 16L
+    backlog > 60 -> 22L
+    lastChar == '\n' -> 58L
+    lastChar in listOf('。', '！', '？', '!', '?') -> 48L
+    lastChar in listOf('，', '、', '；', '：') -> 34L
+    else -> 38L
+}
+
+private fun advanceCodePoints(text: String, start: Int, count: Int): Int {
+    var cursor = start.coerceIn(0, text.length)
+    repeat(count) {
+        if (cursor >= text.length) return cursor
+        cursor += Character.charCount(Character.codePointAt(text, cursor))
+    }
+    return cursor.coerceAtMost(text.length)
+}
+
+@Composable
+private fun RichMessageText(
+    content: String,
+    streaming: Boolean,
+    error: Boolean,
+    onStreamingTextAdvanced: () -> Unit
+) {
+    val buffered = rememberBufferedStreamingText(content, streaming, onStreamingTextAdvanced)
+    val visibleContent = buffered.text
+    val writing = buffered.animating
+
+    if (writing && containsMarkdownTable(visibleContent)) {
+        StructuredMessageText(content = visibleContent, streaming = true, error = error)
         return
     }
-    if (streaming) {
-        val stableChunkCount = content.length / STREAM_TEXT_CHUNK_SIZE
-        val tailStart = stableChunkCount * STREAM_TEXT_CHUNK_SIZE
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            // Streaming content is append-only. Keep completed chunks remembered so only the
-            // short live tail is reparsed and laid out for every delta.
-            repeat(stableChunkCount) { index ->
-                key(index) {
-                    val start = index * STREAM_TEXT_CHUNK_SIZE
-                    val chunk = remember { content.substring(start, start + STREAM_TEXT_CHUNK_SIZE) }
-                    val display = remember(chunk) { streamingMarkdown(chunk) }
-                    Text(display, style = MaterialTheme.typography.bodyLarge, color = if (error) Danger else Ink)
+    if (writing && visibleContent.contains("```")) {
+        StructuredMessageText(content = visibleContent, streaming = true, error = error)
+        return
+    }
+    if (writing) {
+        StreamingProseText(content = visibleContent, error = error)
+        return
+    }
+    StructuredMessageText(content = visibleContent, streaming = false, error = error)
+}
+
+@Composable
+private fun StreamingProseText(content: String, error: Boolean) {
+    val normalized = content.replace("\r\n", "\n")
+    val parts = remember(normalized) { normalized.split("\n\n") }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (parts.isEmpty() || (parts.size == 1 && parts.first().isEmpty())) {
+            AsterWritingCursorLine(error)
+            return@Column
+        }
+        parts.forEachIndexed { index, paragraph ->
+            val tail = index == parts.lastIndex
+            if (paragraph.isNotEmpty()) {
+                key(index, paragraph) {
+                    MarkdownTextBlock(
+                        raw = paragraph,
+                        showCursor = tail,
+                        error = error
+                    )
                 }
-            }
-            key(Int.MIN_VALUE) {
-                val tail = remember(content, tailStart) { content.substring(tailStart) }
-                val display = remember(tail) { streamingMarkdown(tail + "  \u258d") }
-                Text(display, style = MaterialTheme.typography.bodyLarge, color = if (error) Danger else Ink)
+            } else if (tail) {
+                AsterWritingCursorLine(error)
             }
         }
-        return
     }
-    StructuredMessageText(content = content, streaming = false, error = error)
 }
 
 @Composable
 private fun StructuredMessageText(content: String, streaming: Boolean, error: Boolean) {
     val parts = remember(content) { content.split("```") }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         parts.forEachIndexed { index, raw ->
             if (raw.isBlank() && index != parts.lastIndex) return@forEachIndexed
             if (index % 2 == 1) {
@@ -1028,7 +1158,7 @@ private fun StructuredMessageText(content: String, streaming: Boolean, error: Bo
                 val code = if (language != null) lines.drop(1).joinToString("\n") else raw.trim('\n')
                 CodeBlock(
                     language = language,
-                    code = if (streaming && index == parts.lastIndex) "$code  \u258d" else code,
+                    code = if (streaming && index == parts.lastIndex) "$code  ▍" else code,
                     selectable = !streaming
                 )
             } else {
@@ -1042,20 +1172,6 @@ private fun StructuredMessageText(content: String, streaming: Boolean, error: Bo
     }
 }
 
-private fun streamingMarkdown(text: String): AnnotatedString {
-    val normalized = stripStreamingQuotePrefixes(text)
-        .replace(Regex("```[A-Za-z0-9_+.#-]*"), "")
-        .lineSequence()
-        .joinToString("\n") { line ->
-            when {
-                line.matches(Regex("^#{1,3}\\s+.*")) -> "**${line.dropWhile { it == '#' }.trimStart()}**"
-                line.startsWith("- ") || line.startsWith("* ") -> "\u2022 ${line.drop(2)}"
-                else -> line
-            }
-        }
-    return inlineMarkdown(normalized)
-}
-
 @Composable
 private fun CodeBlock(language: String?, code: String, selectable: Boolean) {
     val context = LocalContext.current
@@ -1066,12 +1182,12 @@ private fun CodeBlock(language: String?, code: String, selectable: Boolean) {
                 IconButton(
                     onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("code", code)) },
                     modifier = Modifier.size(32.dp)
-                ) { Icon(Icons.Outlined.ContentCopy, "\u590d\u5236\u4ee3\u7801", Modifier.size(15.dp), tint = Color(0xFFCCC6BE)) }
+                ) { Icon(Icons.Outlined.ContentCopy, "复制代码", Modifier.size(15.dp), tint = Color(0xFFCCC6BE)) }
             }
-            val content: @Composable () -> Unit = {
+            val contentBlock: @Composable () -> Unit = {
                 Text(code, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 13.dp, end = 13.dp, bottom = 13.dp, top = 3.dp))
             }
-            if (selectable) SelectionContainer { content() } else content()
+            if (selectable) SelectionContainer { contentBlock() } else contentBlock()
         }
     }
 }
@@ -1086,13 +1202,7 @@ private data class MarkdownBlock(
 
 private val MARKDOWN_QUOTE_PREFIX = Regex("""^\s*>\s?""")
 
-private fun stripStreamingQuotePrefixes(text: String): String = text.lineSequence().joinToString("\n") { line ->
-    if (MARKDOWN_QUOTE_PREFIX.containsMatchIn(line)) line.replaceFirst(MARKDOWN_QUOTE_PREFIX, "") else line
-}
-
 private fun normalizeQuoteHeavyMarkdown(text: String): String {
-    // Some models prefix every prose paragraph with ">" for visual emphasis.
-    // Treat a quote-heavy response as normal reading text instead of drawing repeated quote chrome.
     val lines = text.lines()
     val meaningful = lines.filter { it.isNotBlank() }
     if (meaningful.isEmpty()) return text
@@ -1102,6 +1212,13 @@ private fun normalizeQuoteHeavyMarkdown(text: String): String {
     return lines.joinToString("\n") { line ->
         if (MARKDOWN_QUOTE_PREFIX.containsMatchIn(line)) line.replaceFirst(MARKDOWN_QUOTE_PREFIX, "") else line
     }
+}
+
+private fun isSceneBreakLine(line: String): Boolean {
+    val value = line.filterNot(Char::isWhitespace)
+    if (value in setOf("***", "——", "……", "...", "◇", "◆")) return true
+    if (value.length >= 3 && value.all { it == '-' }) return true
+    return value.length >= 3 && value.all { it == '*' }
 }
 
 private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
@@ -1135,6 +1252,11 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
                 flushParagraph()
                 flushQuote()
             }
+            isSceneBreakLine(line) -> {
+                flushParagraph()
+                flushQuote()
+                result += MarkdownBlock(5, "")
+            }
             line.matches(Regex("""^#{1,3}\s+.*""")) -> {
                 flushParagraph()
                 flushQuote()
@@ -1144,7 +1266,7 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
             line.startsWith("- ") || line.startsWith("* ") -> {
                 flushParagraph()
                 flushQuote()
-                result += MarkdownBlock(2, line.drop(2).trim(), marker = "\u2022")
+                result += MarkdownBlock(2, line.drop(2).trim(), marker = "•")
             }
             line.matches(Regex("""^\d+[.)]\s+.*""")) -> {
                 flushParagraph()
@@ -1158,7 +1280,7 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
             }
             else -> {
                 flushQuote()
-                if (paragraph.isNotEmpty()) paragraph.append(' ')
+                if (paragraph.isNotEmpty()) paragraph.append('\n')
                 paragraph.append(line.trim())
             }
         }
@@ -1172,49 +1294,76 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
 @Composable
 private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) {
     val blocks = remember(raw) { parseMarkdownBlocks(raw) }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 29.sp)
+    Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
         if (blocks.isEmpty() && showCursor) {
-            Text("\u258d", style = MaterialTheme.typography.bodyLarge, color = if (error) Danger else Accent)
+            AsterWritingCursorLine(error)
         }
         blocks.forEachIndexed { index, block ->
             val hasCursor = showCursor && index == blocks.lastIndex
-            val displayText = if (hasCursor && block.kind != 4) "${block.text}  \u258d" else block.text
             when (block.kind) {
                 1 -> ReadableText(
-                    text = inlineMarkdown(displayText),
+                    text = inlineMarkdown(block.text),
                     style = when (block.level) {
-                        1 -> MaterialTheme.typography.titleLarge
-                        2 -> MaterialTheme.typography.titleMedium
-                        else -> MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
+                        1 -> MaterialTheme.typography.titleLarge.copy(lineHeight = 31.sp)
+                        2 -> MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, lineHeight = 26.sp)
+                        else -> bodyStyle.copy(fontWeight = FontWeight.SemiBold, lineHeight = 25.sp)
                     },
                     color = if (error) Danger else Ink,
                     selectable = !showCursor,
-                    modifier = Modifier.padding(top = if (block.level == 1) 7.dp else 3.dp)
+                    showWritingCursor = hasCursor,
+                    modifier = Modifier.padding(top = if (block.level == 1) 10.dp else 5.dp)
                 )
-                2 -> MarkdownListRow(block.marker, displayText, error, selectable = !showCursor)
-                3 -> Surface(
-                    color = Color(0xFFF0EDE8),
-                    contentColor = Ink,
-                    shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
+                2 -> MarkdownListRow(block.marker, block.text, error, selectable = !showCursor, showCursor = hasCursor)
+                3 -> Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(vertical = 2.dp)
                 ) {
+                    Box(
+                        Modifier.width(2.dp).fillMaxHeight().clip(CircleShape)
+                            .background(if (error) Danger.copy(alpha = .30f) else Accent.copy(alpha = .28f))
+                    )
+                    Spacer(Modifier.width(12.dp))
                     ReadableText(
-                        inlineMarkdown(displayText),
-                        MaterialTheme.typography.bodyLarge,
-                        Color(0xFF4E4A45),
+                        inlineMarkdown(block.text),
+                        bodyStyle,
+                        if (error) Danger else Color(0xFF4E4A45),
                         selectable = !showCursor,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                        showWritingCursor = hasCursor,
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 4 -> block.table?.let {
                     MarkdownTableBlock(table = it, selectable = !showCursor, error = error)
-                    if (hasCursor) {
-                        Text("\u258d", style = MaterialTheme.typography.bodyLarge, color = if (error) Danger else Accent)
-                    }
+                    if (hasCursor) AsterWritingCursorLine(error)
                 }
-                else -> ReadableText(inlineMarkdown(displayText), MaterialTheme.typography.bodyLarge, if (error) Danger else Ink, selectable = !showCursor)
+                5 -> {
+                    SceneBreak()
+                    if (hasCursor) AsterWritingCursorLine(error)
+                }
+                else -> ReadableText(
+                    inlineMarkdown(block.text),
+                    bodyStyle,
+                    if (error) Danger else Ink,
+                    selectable = !showCursor,
+                    showWritingCursor = hasCursor
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun SceneBreak() {
+    Box(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "•   •   •",
+            color = MutedInk.copy(alpha = .48f),
+            style = MaterialTheme.typography.labelMedium,
+            letterSpacing = 2.sp
+        )
     }
 }
 
@@ -1414,36 +1563,89 @@ private fun tableTextVisualUnits(value: String): Float {
 }
 
 @Composable
-private fun MarkdownListRow(marker: String, text: String, error: Boolean, selectable: Boolean) {
+private fun MarkdownListRow(
+    marker: String,
+    text: String,
+    error: Boolean,
+    selectable: Boolean,
+    showCursor: Boolean
+) {
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 29.sp)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        Text(marker, color = if (error) Danger else Accent, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.widthIn(min = 24.dp))
-        ReadableText(inlineMarkdown(text), MaterialTheme.typography.bodyLarge, if (error) Danger else Ink, selectable, Modifier.weight(1f))
+        Text(
+            marker,
+            color = if (error) Danger else MutedInk,
+            style = bodyStyle,
+            modifier = Modifier.widthIn(min = 24.dp)
+        )
+        ReadableText(
+            inlineMarkdown(text),
+            bodyStyle,
+            if (error) Danger else Ink,
+            selectable,
+            Modifier.weight(1f),
+            showWritingCursor = showCursor
+        )
     }
+}
+
+private const val ASTER_CURSOR_TAG = "aster-writing-cursor"
+
+@Composable
+private fun ReadableText(
+    text: AnnotatedString,
+    style: androidx.compose.ui.text.TextStyle,
+    color: Color,
+    selectable: Boolean,
+    modifier: Modifier = Modifier,
+    showWritingCursor: Boolean = false
+) {
+    val rendered = remember(text, showWritingCursor) {
+        if (!showWritingCursor) text else buildAnnotatedString {
+            append(text)
+            append(" ")
+            appendInlineContent(ASTER_CURSOR_TAG, "✦")
+        }
+    }
+    val inlineContent = if (showWritingCursor) {
+        mapOf(
+            ASTER_CURSOR_TAG to InlineTextContent(
+                Placeholder(
+                    width = 14.sp,
+                    height = 14.sp,
+                    placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
+                )
+            ) {
+                AsterMark(Modifier.fillMaxSize(), tint = Accent.copy(alpha = .72f))
+            }
+        )
+    } else {
+        emptyMap()
+    }
+    val contentBlock: @Composable () -> Unit = {
+        Text(
+            text = rendered,
+            style = style,
+            color = color,
+            modifier = modifier,
+            inlineContent = inlineContent
+        )
+    }
+    if (selectable) SelectionContainer { contentBlock() } else contentBlock()
 }
 
 @Composable
-private fun ReadableText(text: AnnotatedString, style: androidx.compose.ui.text.TextStyle, color: Color, selectable: Boolean, modifier: Modifier = Modifier) {
-    val content: @Composable () -> Unit = { Text(text, style = style, color = color, modifier = modifier) }
-    if (selectable) SelectionContainer { content() } else content()
+private fun AsterWritingCursorLine(error: Boolean) {
+    ReadableText(
+        text = AnnotatedString(""),
+        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 29.sp),
+        color = if (error) Danger else Ink,
+        selectable = false,
+        showWritingCursor = true
+    )
 }
 
-private fun inlineMarkdown(text: String): AnnotatedString {
-    val markdown = basicInlineMarkdown(text)
-    val blockedRanges = markdown.getStringAnnotations(INLINE_CODE_TAG, 0, markdown.length)
-        .map { annotation -> annotation.start until annotation.end }
-    val accents = findReadingAccentRanges(markdown.text, blockedRanges)
-    if (accents.isEmpty()) return markdown
-    return buildAnnotatedString {
-        append(markdown)
-        accents.forEach { accent ->
-            addStyle(
-                SpanStyle(color = if (accent.kind == ReadingAccentKind.Quote) QuoteAmber else BracketBlue),
-                accent.start,
-                accent.end
-            )
-        }
-    }
-}
+private fun inlineMarkdown(text: String): AnnotatedString = basicInlineMarkdown(text)
 
 @Composable
 private fun ChatActionButton(
@@ -1452,9 +1654,6 @@ private fun ChatActionButton(
     onClick: () -> Unit,
     accent: Boolean = false
 ) {
-    // TextButton adds a platform minimum width and horizontal content padding.
-    // That padding was the source of the apparent offset/cropping on narrow
-    // assistant columns. This button measures only its actual content.
     Surface(
         onClick = onClick,
         color = Color.Transparent,
@@ -1510,11 +1709,9 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
                     "`" -> SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFFF0EDE8), color = Ink)
                     else -> SpanStyle(fontStyle = FontStyle.Italic)
                 }
-                val contentStart = length
                 pushStyle(style)
                 append(text.substring(index + token.length, end))
                 pop()
-                if (token == "`") addStringAnnotation(INLINE_CODE_TAG, "true", contentStart, length)
                 index = end + token.length
             } else {
                 append(token); index += token.length
@@ -1526,10 +1723,6 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
         }
     }
 }
-
-private const val INLINE_CODE_TAG = "adchat-inline-code"
-private const val STREAM_TEXT_CHUNK_SIZE = 640
-private const val AUTO_SCROLL_INTERVAL_MS = 160L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1923,8 +2116,6 @@ private val REASONING_OPTIONS = listOf(
 )
 
 private fun compactModelLabel(value: String): String = value.ifBlank { "选择模型" }
-
-private fun reasoningEffortLabel(value: String): String = REASONING_OPTIONS.firstOrNull { it.first == value }?.second ?: "均衡"
 
 private fun reasoningEffortDescription(value: String): String = when (value) {
     "low" -> "优先响应速度"

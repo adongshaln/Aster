@@ -33,6 +33,17 @@ fun AsterMark(modifier: Modifier = Modifier, tint: Color = Accent) {
     Icon(painterResource(R.drawable.ic_launcher_monochrome), null, modifier, tint = tint)
 }
 
+/** Full-colour transparent Aster artwork for branded motion and larger identity moments. */
+@Composable
+fun AsterArtwork(modifier: Modifier = Modifier) {
+    Icon(
+        painter = painterResource(R.drawable.ic_launcher_foreground),
+        contentDescription = null,
+        modifier = modifier,
+        tint = Color.Unspecified
+    )
+}
+
 @Composable
 fun AsterWordmark(size: Int = 30, color: Color = Ink) {
     Text("Aster", fontFamily = FontFamily.Serif, fontSize = size.sp,
