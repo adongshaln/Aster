@@ -1,0 +1,66 @@
+name: One-off reading fix
+
+on:
+  push:
+    branches:
+      - design/reading-experience
+    paths:
+      - .github/workflows/one-off-reading-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: design/reading-experience
+      - name: Patch chat reading behavior
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt")
+          text = path.read_text(encoding="utf-8")
+
+          old_haze = "    val useLiveHaze = !listState.isScrollInProgress && !imeTransitioning && !vm.isChatLoading"
+          new_haze = "    // Keep the bottom reading veil visually stable; the live Haze path rendered differently\\n    // between idle and touch/scroll states on some Android GPUs.\\n    val useLiveHaze = false"
+          if old_haze not in text:
+              raise SystemExit("live haze selector not found")
+          text = text.replace(old_haze, new_haze, 1)
+
+          old_inline = "private fun inlineMarkdown(text: String): AnnotatedString = basicInlineMarkdown(text)"
+          new_inline = '''private fun inlineMarkdown(text: String): AnnotatedString {
+              val base = basicInlineMarkdown(text)
+              val source = base.text
+              return buildAnnotatedString {
+                  append(base)
+                  var cursor = 0
+                  while (cursor < source.length) {
+                      val start = source.indexOf('『', cursor)
+                      if (start < 0) break
+                      val end = source.indexOf('』', start + 1)
+                      if (end < 0) break
+                      addStyle(
+                          SpanStyle(color = Accent),
+                          start = start,
+                          end = end + 1
+                      )
+                      cursor = end + 1
+                  }
+              }
+          }'''
+          if old_inline not in text:
+              raise SystemExit("inlineMarkdown hook not found")
+          text = text.replace(old_inline, new_inline, 1)
+
+          path.write_text(text, encoding="utf-8")
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/ui/screens/ChatScreen.kt
+          git commit -m "Stabilize bottom reading veil and highlight defined terms"
+          git push origin HEAD:design/reading-experience
