@@ -126,9 +126,13 @@ private fun AsterApp(
     }
 
     LaunchedEffect(vm.notice) {
-        vm.notice?.let {
-            snackbarHostState.showSnackbar(it)
+        vm.notice?.let { message ->
             vm.dismissNotice()
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(
+                message = message,
+                duration = SnackbarDuration.Short
+            )
         }
     }
 
@@ -147,18 +151,7 @@ private fun AsterApp(
         }
     ) {
         Scaffold(
-            containerColor = Canvas,
-            snackbarHost = {
-                SnackbarHost(snackbarHostState) { data ->
-                    Snackbar(
-                        snackbarData = data,
-                        containerColor = Night,
-                        contentColor = Color.White,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
-            }
+            containerColor = Canvas
         ) { padding ->
             val pageBottomPadding = if (page == AppPage.Chat) 0.dp else padding.calculateBottomPadding()
             Box(Modifier.fillMaxSize().padding(bottom = pageBottomPadding), contentAlignment = Alignment.TopCenter) {
@@ -181,6 +174,42 @@ private fun AsterApp(
                         AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
                         AppPage.Settings -> SettingsScreen(vm, onOpenDrawer = openDrawer)
                     }
+                    }
+                }
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .statusBarsPadding()
+                        .padding(top = 66.dp, start = 16.dp, end = 16.dp)
+                        .widthIn(max = 640.dp)
+                ) { data ->
+                    Snackbar(
+                        containerColor = Night,
+                        contentColor = Color.White,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { data.dismiss() }
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = data.visuals.message,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.width(12.dp))
+                            Icon(
+                                Icons.Rounded.Close,
+                                contentDescription = "关闭提示",
+                                modifier = Modifier.size(18.dp),
+                                tint = Color.White.copy(alpha = .82f)
+                            )
+                        }
                     }
                 }
             }
