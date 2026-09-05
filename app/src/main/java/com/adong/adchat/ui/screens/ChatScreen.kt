@@ -352,7 +352,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     )
                 )
             }
-            AnimatedVisibility(
+            androidx.compose.animation.AnimatedVisibility(
                 visible = showJumpToBottom,
                 modifier = Modifier.align(Alignment.BottomEnd)
                     .padding(end = 18.dp, bottom = composerClearance),
