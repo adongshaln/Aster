@@ -49,7 +49,9 @@ import com.adong.adchat.ui.screens.ChatScreen
 import com.adong.adchat.ui.screens.DrawScreen
 import com.adong.adchat.ui.screens.MediaDownloadScreen
 import com.adong.adchat.ui.screens.SettingsScreen
+import com.adong.adchat.ui.screens.StoryScreen
 import com.adong.adchat.ui.media.MediaDownloadViewModel
+import com.adong.adchat.ui.story.StoryViewModel
 import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -81,37 +83,40 @@ class MainActivity : ComponentActivity() {
         pendingMediaShare = extractSharedMediaText(intent)
     }
 
-    private fun extractSharedMediaText(intent: Intent?): String? {
-        return when (intent?.action) {
-            Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
-            Intent.ACTION_VIEW -> intent.dataString
-            else -> null
-        }?.trim()?.takeIf { it.isNotBlank() }
-    }
+    private fun extractSharedMediaText(intent: Intent?): String? = when (intent?.action) {
+        Intent.ACTION_SEND -> intent.getStringExtra(Intent.EXTRA_TEXT)
+        Intent.ACTION_VIEW -> intent.dataString
+        else -> null
+    }?.trim()?.takeIf { it.isNotBlank() }
 }
 
 private enum class AppPage(val label: String, val icon: ImageVector) {
     Chat("对话", Icons.Rounded.Forum),
+    Story("故事", Icons.Rounded.AutoStories),
     Draw("创作", Icons.Rounded.AutoAwesome),
     Media("下载", Icons.Rounded.DownloadForOffline),
     Settings("设置", Icons.Rounded.Tune)
 }
 
 @Composable
-private fun AsterApp(
-    vm: MainViewModel,
-    incomingMediaText: String?,
-    onMediaTextConsumed: () -> Unit
-) {
+private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextConsumed: () -> Unit) {
     var page by rememberSaveable { mutableStateOf(AppPage.Chat) }
     val pageStates = rememberSaveableStateHolder()
     val mediaVm: MediaDownloadViewModel = viewModel()
+    val storyVm: StoryViewModel = viewModel()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showStoryCreator by rememberSaveable { mutableStateOf(false) }
+    var storyTitle by rememberSaveable { mutableStateOf("") }
     val openDrawer = { scope.launch { drawerState.open() }; Unit }
     fun navigate(target: AppPage) {
         page = target
+        scope.launch { drawerState.close() }
+    }
+    fun requestStoryCreation() {
+        storyTitle = ""
+        showStoryCreator = true
         scope.launch { drawerState.close() }
     }
 
@@ -128,10 +133,7 @@ private fun AsterApp(
     LaunchedEffect(vm.notice) {
         val message = vm.notice ?: return@LaunchedEffect
         snackbarHostState.currentSnackbarData?.dismiss()
-        snackbarHostState.showSnackbar(
-            message = message,
-            duration = SnackbarDuration.Short
-        )
+        snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Short)
         if (vm.notice == message) vm.dismissNotice()
     }
 
@@ -143,16 +145,16 @@ private fun AsterApp(
                 vm = vm,
                 currentPage = page,
                 onNewChat = { vm.newConversation(); navigate(AppPage.Chat) },
+                onNewStory = ::requestStoryCreation,
                 onConversation = { vm.selectConversation(it); navigate(AppPage.Chat) },
                 onNavigate = ::navigate,
                 onClose = { scope.launch { drawerState.close() } }
             )
         }
     ) {
-        Scaffold(
-            containerColor = Canvas
-        ) { padding ->
-            val pageBottomPadding = if (page == AppPage.Chat) 0.dp else padding.calculateBottomPadding()
+        Scaffold(containerColor = Canvas) { padding ->
+            val edgeToEdgePage = page == AppPage.Chat || page == AppPage.Story
+            val pageBottomPadding = if (edgeToEdgePage) 0.dp else padding.calculateBottomPadding()
             Box(Modifier.fillMaxSize().padding(bottom = pageBottomPadding), contentAlignment = Alignment.TopCenter) {
                 AnimatedContent(
                     targetState = page,
@@ -167,52 +169,86 @@ private fun AsterApp(
                     label = "page-transition"
                 ) { target ->
                     pageStates.SaveableStateProvider(target.name) {
-                    when (target) {
-                        AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
-                        AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
-                        AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
-                        AppPage.Settings -> SettingsScreen(vm, onOpenDrawer = openDrawer)
-                    }
+                        when (target) {
+                            AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                            AppPage.Story -> StoryScreen(
+                                mainVm = vm,
+                                storyVm = storyVm,
+                                onOpenDrawer = openDrawer,
+                                onCreateStory = ::requestStoryCreation,
+                                onOpenSettings = { navigate(AppPage.Settings) }
+                            )
+                            AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                            AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
+                            AppPage.Settings -> SettingsScreen(vm, onOpenDrawer = openDrawer)
+                        }
                     }
                 }
                 SnackbarHost(
                     hostState = snackbarHostState,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .statusBarsPadding()
-                        .padding(top = 82.dp, start = 16.dp, end = 16.dp)
-                        .widthIn(max = 640.dp)
+                    modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                        .padding(top = 82.dp, start = 16.dp, end = 16.dp).widthIn(max = 640.dp)
                 ) { data ->
                     Snackbar(
                         containerColor = Night,
                         contentColor = Color.White,
                         shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { data.dismiss() }
+                        modifier = Modifier.fillMaxWidth().clickable { data.dismiss() }
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = data.visuals.message,
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(data.visuals.message, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                             Spacer(Modifier.width(12.dp))
-                            Icon(
-                                Icons.Rounded.Close,
-                                contentDescription = "关闭提示",
-                                modifier = Modifier.size(18.dp),
-                                tint = Color.White.copy(alpha = .82f)
-                            )
+                            Icon(Icons.Rounded.Close, "关闭提示", Modifier.size(18.dp), tint = Color.White.copy(alpha = .82f))
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showStoryCreator) {
+        AdModalDialog(
+            title = "新建故事",
+            subtitle = "只需要一个名字，设定可以之后慢慢讨论",
+            icon = Icons.Rounded.AutoStories,
+            onDismiss = { showStoryCreator = false },
+            content = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = storyTitle,
+                        onValueChange = { if (it.length <= 60) storyTitle = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("故事名称") },
+                        placeholder = { Text("例如：庄园物语") },
+                        supportingText = { Text("${storyTitle.length}/60") },
+                        shape = RoundedCornerShape(17.dp)
+                    )
+                    if (vm.chatProfile.chatModel.isBlank()) {
+                        Text("当前没有可用的对话模型，请先在设置中完成服务配置。", color = Danger, style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text("使用 ${vm.chatProfile.name} · ${vm.chatProfile.chatModel}", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            actions = {
+                OutlinedButton(
+                    onClick = { showStoryCreator = false },
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) { Text("取消") }
+                Button(
+                    onClick = {
+                        storyVm.createStory(storyTitle, vm.chatProfile) { page = AppPage.Story }
+                        showStoryCreator = false
+                    },
+                    enabled = storyTitle.isNotBlank() && vm.chatProfile.chatModel.isNotBlank(),
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                ) { Text("创建", fontWeight = FontWeight.Bold) }
+            }
+        )
     }
 }
 
@@ -221,6 +257,7 @@ private fun AppDrawer(
     vm: MainViewModel,
     currentPage: AppPage,
     onNewChat: () -> Unit,
+    onNewStory: () -> Unit,
     onConversation: (String) -> Unit,
     onNavigate: (AppPage) -> Unit,
     onClose: () -> Unit
@@ -229,14 +266,14 @@ private fun AppDrawer(
     var deleteCandidate by remember { mutableStateOf<Conversation?>(null) }
     var renameCandidate by remember { mutableStateOf<Conversation?>(null) }
     var renameText by remember { mutableStateOf("") }
+    var showNewActions by remember { mutableStateOf(false) }
     val visibleConversations = vm.conversations.filter { conversation ->
         query.isBlank() || conversation.title.contains(query.trim(), ignoreCase = true) ||
             conversation.messages.any { it.content.contains(query.trim(), ignoreCase = true) }
     }.sortedByDescending { it.updatedAt }
     val today = java.time.LocalDate.now()
     val groupedConversations = visibleConversations.groupBy { conversation ->
-        val day = java.time.Instant.ofEpochMilli(conversation.updatedAt)
-            .atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+        val day = java.time.Instant.ofEpochMilli(conversation.updatedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
         when {
             day == today -> "今天"
             day == today.minusDays(1) -> "昨天"
@@ -253,76 +290,99 @@ private fun AppDrawer(
         modifier = Modifier.widthIn(max = 360.dp).fillMaxHeight()
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 AsterMark(Modifier.size(46.dp))
                 AsterWordmark()
                 Spacer(Modifier.weight(1f))
                 AsterIconButton(Icons.Rounded.Close, "关闭侧栏", onClose)
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 AppPage.entries.filter { it != AppPage.Settings }.forEach { item ->
                     val selected = currentPage == item
-                    Surface(onClick = { onNavigate(item) }, modifier = Modifier.weight(1f),
+                    Surface(
+                        onClick = { onNavigate(item) },
+                        modifier = Modifier.weight(1f),
                         color = if (selected) Night else Surface,
                         contentColor = if (selected) WarmWhite else MutedInk,
-                        shape = RoundedCornerShape(18.dp)) {
-                        Column(Modifier.padding(vertical = 13.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(item.icon, null, Modifier.size(21.dp))
-                            Spacer(Modifier.height(7.dp))
-                            Text(item.label, style = MaterialTheme.typography.labelLarge)
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(item.icon, null, Modifier.size(20.dp))
+                            Spacer(Modifier.height(6.dp))
+                            Text(item.label, style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
             }
             Spacer(Modifier.height(18.dp))
-            Button(onClick = onNewChat, enabled = !vm.isChatLoading,
+            Button(
+                onClick = { showNewActions = true },
+                enabled = !vm.isChatLoading,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(50.dp),
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = WarmWhite)) {
+                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = WarmWhite)
+            ) {
                 Icon(Icons.Rounded.Add, null, Modifier.size(20.dp))
                 Spacer(Modifier.width(9.dp))
-                Text(if (vm.isChatLoading) "当前对话正在生成" else "新建对话")
+                Text(if (vm.isChatLoading) "当前对话正在生成" else "新建")
             }
             OutlinedTextField(
-                value = query, onValueChange = { query = it },
+                value = query,
+                onValueChange = { query = it },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-                singleLine = true, textStyle = MaterialTheme.typography.bodyMedium,
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium,
                 leadingIcon = { Icon(Icons.Rounded.Search, null, Modifier.size(19.dp)) },
                 trailingIcon = { if (query.isNotEmpty()) AsterIconButton(Icons.Rounded.Close, "清空搜索", { query = "" }) },
                 placeholder = { Text("搜索对话", style = MaterialTheme.typography.bodyMedium) },
                 shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Surface,
-                    unfocusedContainerColor = Surface, focusedBorderColor = Accent,
-                    unfocusedBorderColor = Hairline)
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Surface,
+                    unfocusedContainerColor = Surface,
+                    focusedBorderColor = Accent,
+                    unfocusedBorderColor = Hairline
+                )
             )
-            LazyColumn(modifier = Modifier.weight(1f),
+            LazyColumn(
+                modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
                 if (visibleConversations.isEmpty()) {
-                    item { AsterEmptyState(Icons.Rounded.ChatBubbleOutline,
-                        if (query.isBlank()) "从一段对话开始" else "没有找到对话",
-                        if (query.isBlank()) "你的想法，会在这里留下记录" else "试试其他关键词") }
+                    item {
+                        AsterEmptyState(
+                            Icons.Rounded.ChatBubbleOutline,
+                            if (query.isBlank()) "从一段对话开始" else "没有找到对话",
+                            if (query.isBlank()) "你的想法，会在这里留下记录" else "试试其他关键词"
+                        )
+                    }
                 }
                 groupedConversations.forEach { (period, conversations) ->
                     item(key = "period-$period") {
-                        Text(period, color = MutedInk, style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 6.dp))
+                        Text(period, color = MutedInk, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 6.dp))
                     }
                     items(conversations, key = { it.id }) { conversation ->
-                        ConversationRow(conversation,
+                        ConversationRow(
+                            conversation,
                             selected = currentPage == AppPage.Chat && vm.activeConversationId == conversation.id,
                             generating = vm.isChatLoading && vm.activeConversationId == conversation.id,
                             onClick = { onConversation(conversation.id) },
                             onRename = { renameCandidate = conversation; renameText = conversation.title },
-                            onDelete = { deleteCandidate = conversation })
+                            onDelete = { deleteCandidate = conversation }
+                        )
                     }
                 }
             }
             HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = Hairline)
-            Surface(onClick = { onNavigate(AppPage.Settings) },
+            Surface(
+                onClick = { onNavigate(AppPage.Settings) },
                 color = if (currentPage == AppPage.Settings) AccentSoft else Color.Transparent,
-                shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(12.dp)) {
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.padding(12.dp)
+            ) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Tune, null, Modifier.size(21.dp), tint = MutedInk)
                     Text("设置", Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.labelLarge)
@@ -330,6 +390,23 @@ private fun AppDrawer(
                 }
             }
         }
+    }
+
+    if (showNewActions) {
+        AdActionSheet(
+            title = "新建",
+            subtitle = "选择接下来要开始的工作方式",
+            actions = listOf(
+                AdActionOption("chat", "普通对话", "像现在一样开始一段新的 AI 对话", Icons.Rounded.Forum),
+                AdActionOption("story", "故事创作", "讨论设定与正式正文分开保存", Icons.Rounded.AutoStories)
+            ),
+            onAction = { action ->
+                showNewActions = false
+                if (action.id == "story") onNewStory() else onNewChat()
+            },
+            onDismiss = { showNewActions = false },
+            headerIcon = Icons.Rounded.Add
+        )
     }
 
     deleteCandidate?.let { conversation ->
@@ -385,7 +462,6 @@ private fun AppDrawer(
             }
         )
     }
-
 }
 
 @Composable
@@ -422,10 +498,16 @@ private fun ConversationRow(
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(conversation.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium)
             Text(
-                if (generating) "\u6b63\u5728\u751f\u6210 \u00b7 ${conversation.messages.count { it.role == "user" }} \u6761\u63d0\u95ee"
-                else "${conversation.messages.count { it.role == "user" }} \u6761\u63d0\u95ee \u00b7 ${format.format(Date(conversation.updatedAt))}",
+                conversation.title,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+            )
+            Text(
+                if (generating) "正在生成 · ${conversation.messages.count { it.role == "user" }} 条提问"
+                else "${conversation.messages.count { it.role == "user" }} 条提问 · ${format.format(Date(conversation.updatedAt))}",
                 color = if (generating) Accent else MutedInk,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = if (generating) FontWeight.SemiBold else FontWeight.Normal
@@ -433,20 +515,23 @@ private fun ConversationRow(
         }
         IconButton(
             onClick = { showActions = true },
-            colors = IconButtonDefaults.iconButtonColors(containerColor = if (selected) Color.White.copy(alpha = .72f) else Color.Transparent, contentColor = MutedInk),
+            colors = IconButtonDefaults.iconButtonColors(
+                containerColor = if (selected) Color.White.copy(alpha = .72f) else Color.Transparent,
+                contentColor = MutedInk
+            ),
             modifier = Modifier.size(36.dp)
         ) { Icon(Icons.Rounded.MoreHoriz, "更多", Modifier.size(19.dp)) }
     }
     if (showActions) {
         AdActionSheet(
             title = conversation.title,
-            subtitle = if (generating) "\u5f53\u524d\u4efb\u52a1\u6b63\u5728\u751f\u6210" else "\u7ba1\u7406\u8fd9\u4e2a\u5386\u53f2\u4efb\u52a1",
+            subtitle = if (generating) "当前任务正在生成" else "管理这个历史任务",
             actions = listOf(
-                AdActionOption("rename", "\u91cd\u547d\u540d", "\u4fee\u6539\u4efb\u52a1\u5728\u4fa7\u680f\u4e2d\u7684\u540d\u79f0", Icons.Rounded.Edit),
+                AdActionOption("rename", "重命名", "修改任务在侧栏中的名称", Icons.Rounded.Edit),
                 AdActionOption(
                     "delete",
-                    "\u5220\u9664\u5bf9\u8bdd",
-                    if (generating) "\u8bf7\u5148\u505c\u6b62\u5f53\u524d\u751f\u6210" else "\u6c38\u4e45\u5220\u9664\u5168\u90e8\u6d88\u606f",
+                    "删除对话",
+                    if (generating) "请先停止当前生成" else "永久删除全部消息",
                     Icons.Rounded.DeleteOutline,
                     destructive = true,
                     enabled = !generating
