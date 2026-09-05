@@ -17,35 +17,53 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: design/reading-experience
-      - name: Fix snackbar lifecycle
-        shell: python
+      - name: Fix notice lifetime
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path("app/src/main/java/com/adong/adchat/MainActivity.kt")
           text = path.read_text(encoding="utf-8")
-          pattern = re.compile(r'''    LaunchedEffect\(vm\.notice\) \{\n        vm\.notice\?\.let \{ message ->\n            vm\.dismissNotice\(\)\n            snackbarHostState\.currentSnackbarData\?\.dismiss\(\)\n            snackbarHostState\.showSnackbar\(\n                message = message,\n                duration = SnackbarDuration\.Short\n            \)\n        \}\n    \}''')
-          replacement = '''    LaunchedEffect(vm.notice) {
-        val message = vm.notice ?: return@LaunchedEffect
-        snackbarHostState.currentSnackbarData?.dismiss()
-        snackbarHostState.showSnackbar(
-            message = message,
-            duration = SnackbarDuration.Short
-        )
-        if (vm.notice == message) vm.dismissNotice()
-    }'''
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f"expected one notice block, replaced {count}")
-          text = text.replace('.padding(top = 66.dp, start = 16.dp, end = 16.dp)', '.padding(top = 82.dp, start = 16.dp, end = 16.dp)', 1)
+          old = (
+              "    LaunchedEffect(vm.notice) {\n"
+              "        vm.notice?.let { message ->\n"
+              "            vm.dismissNotice()\n"
+              "            snackbarHostState.currentSnackbarData?.dismiss()\n"
+              "            snackbarHostState.showSnackbar(\n"
+              "                message = message,\n"
+              "                duration = SnackbarDuration.Short\n"
+              "            )\n"
+              "        }\n"
+              "    }"
+          )
+          new = (
+              "    LaunchedEffect(vm.notice) {\n"
+              "        val message = vm.notice ?: return@LaunchedEffect\n"
+              "        snackbarHostState.currentSnackbarData?.dismiss()\n"
+              "        snackbarHostState.showSnackbar(\n"
+              "            message = message,\n"
+              "            duration = SnackbarDuration.Short\n"
+              "        )\n"
+              "        if (vm.notice == message) vm.dismissNotice()\n"
+              "    }"
+          )
+          if old not in text:
+              raise SystemExit("notice lifecycle block not found")
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              ".padding(top = 66.dp, start = 16.dp, end = 16.dp)",
+              ".padding(top = 82.dp, start = 16.dp, end = 16.dp)",
+              1,
+          )
           path.write_text(text, encoding="utf-8")
-
-          Path('.github/workflows/one-off-snackbar-lifecycle-fix.yml').unlink()
-      - name: Commit fix and self-remove
+          PY
+      - name: Commit fix and remove helper workflow
+        shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/adong/adchat/MainActivity.kt .github/workflows/one-off-snackbar-lifecycle-fix.yml
+          git rm .github/workflows/one-off-snackbar-lifecycle-fix.yml
+          git add app/src/main/java/com/adong/adchat/MainActivity.kt
           git commit -m "Fix transient notice lifecycle"
           git push origin HEAD:design/reading-experience
