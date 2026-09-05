@@ -167,6 +167,9 @@ class StoryRepository(context: Context) : AutoCloseable {
                 createdAt = now,
                 completedAt = now.takeIf { state == StoryRevisionState.Complete }
             )
+            if (workspace == StoryWorkspace.Prose && role == "assistant") {
+                StoryTimelineHistory.captureBoundary(db, storyId, timelineId, messageId, sequence)
+            }
             insertMessage(db, message)
             insertRevision(db, revision)
             touchStory(db, storyId, now)
@@ -204,6 +207,19 @@ class StoryRepository(context: Context) : AutoCloseable {
         activateRevision(db, current, newRevision, now)
         StoryMessageWithRevision(current.message.copy(activeRevisionId = newRevision.id), newRevision)
     }
+
+    fun forkProseRevision(messageId: String, expectedRevisionId: String, content: String): String =
+        helper.writableDatabase.inTransaction { db -> StoryTimelineHistory.fork(db, messageId, expectedRevisionId, content) }
+
+    fun switchTimeline(storyId: String, targetTimelineId: String, expectedTimelineId: String): Boolean =
+        helper.writableDatabase.inTransaction { db -> StoryTimelineHistory.switch(db, storyId, targetTimelineId, expectedTimelineId) }
+
+    fun listTimelines(storyId: String): List<StoryTimeline> = helper.readableDatabase.query(
+        StorySchema.TIMELINES, null, "story_id = ?", arrayOf(storyId), null, null, "created_at ASC, rowid ASC"
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(StoryTimeline(
+        id = cursor.string("id"), storyId = storyId, parentTimelineId = cursor.getString(cursor.getColumnIndexOrThrow("parent_timeline_id")),
+        forkRevisionId = cursor.getString(cursor.getColumnIndexOrThrow("fork_revision_id")), createdAt = cursor.long("created_at")
+    )) } }
 
     fun listRevisions(messageId: String): List<StoryMessageRevision> = helper.readableDatabase.query(
         StorySchema.REVISIONS, null, "message_id = ?", arrayOf(messageId), null, null, "created_at ASC, rowid ASC"
@@ -374,15 +390,10 @@ class StoryRepository(context: Context) : AutoCloseable {
     }
 
     fun loadWorkspaceState(storyId: String, workspace: StoryWorkspace): StoryWorkspaceState =
-        helper.readableDatabase.query(
-            StorySchema.WORKSPACE_STATE,
-            null,
-            "story_id = ? AND workspace = ?",
-            arrayOf(storyId, workspace.dbValue),
-            null,
-            null,
-            null,
-            "1"
+        helper.readableDatabase.rawQuery(
+            """SELECT w.*, s.current_timeline_id FROM ${StorySchema.WORKSPACE_STATE} w
+               JOIN ${StorySchema.STORIES} s ON s.id = w.story_id WHERE w.story_id = ? AND w.workspace = ? LIMIT 1""",
+            arrayOf(storyId, workspace.dbValue)
         ).use { cursor ->
             if (!cursor.moveToFirst()) return@use StoryWorkspaceState(storyId, workspace)
             StoryWorkspaceState(
@@ -391,11 +402,14 @@ class StoryRepository(context: Context) : AutoCloseable {
                 draft = cursor.string("draft"),
                 firstVisibleIndex = cursor.int("first_visible_index"),
                 firstVisibleOffset = cursor.int("first_visible_offset"),
-                updatedAt = cursor.long("updated_at")
+                updatedAt = cursor.long("updated_at"),
+                timelineId = cursor.string("current_timeline_id")
             )
         }
 
     fun saveWorkspaceState(state: StoryWorkspaceState): Boolean = helper.writableDatabase.inTransaction { db ->
+        if (state.timelineId != null && db.rawQuery("SELECT 1 FROM ${StorySchema.STORIES} WHERE id = ? AND current_timeline_id = ?",
+                arrayOf(state.storyId, state.timelineId)).use { !it.moveToFirst() }) return@inTransaction false
         val existingUpdatedAt = db.rawQuery(
             "SELECT updated_at FROM ${StorySchema.WORKSPACE_STATE} WHERE story_id = ? AND workspace = ? LIMIT 1",
             arrayOf(state.storyId, state.workspace.dbValue)
@@ -512,7 +526,7 @@ class StoryRepository(context: Context) : AutoCloseable {
 
     private fun requireStoryTimeline(db: SQLiteDatabase, storyId: String, timelineId: String) {
         val exists = db.rawQuery(
-            "SELECT 1 FROM ${StorySchema.TIMELINES} WHERE id = ? AND story_id = ? LIMIT 1",
+            "SELECT 1 FROM ${StorySchema.TIMELINES} t JOIN ${StorySchema.STORIES} s ON s.current_timeline_id = t.id WHERE t.id = ? AND t.story_id = ? LIMIT 1",
             arrayOf(timelineId, storyId)
         ).use { it.moveToFirst() }
         require(exists) { "Timeline does not belong to story" }

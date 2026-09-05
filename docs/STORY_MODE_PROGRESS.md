@@ -111,4 +111,13 @@ Configuration wait fix `a5ebadcea7bbd3dcdfc4b35169c5e3506e0f5012` passed Android
 - Source-linked records/proposals disappear from context when their revision is inactive; restoration reuses original records and preserves manual pin/deactivation decisions.
 - Dedupe excludes obsolete sources so a new revision can independently record the same fact. Finalized revisions cannot be overwritten by streaming writes or physically deleted.
 - Older messages with later content (including Discussion), streaming work and stale editor saves are rejected. This is deliberately tail-only until descendant invalidation and branching are implemented.
-- This checkpoint does not implement model-driven rewrite, snapshots/replay, older chapter branching, or full M3 acceptance. Its own CI is required.
+- This checkpoint does not implement model-driven rewrite, snapshots/replay, older chapter branching, or full M3 acceptance. Commit `b2d102afb5622191a004374bfa0084b1eca5771f` passed Android Build #94 (tests, Release and signed APK).
+
+### M3b — checkpoint-based historical rewrite
+
+- Before each new Prose assistant message, persist a transactionally consistent checkpoint of the active prefix, memories, proposals, entities and completed organizer sources. Immutable text is referenced by revision ID instead of duplicated in every checkpoint.
+- “保留旧后续，从这里另写” creates an independent timeline from that checkpoint, remaps all source IDs and leaves the original continuation untouched. Later manual additions/edits are not copied backward.
+- Historical routes can be restored. Workspace drafts/scroll positions are checkpointed on switching; late saves and old UI loads are scoped to their route. Route switches increment memoryVersion, rejecting obsolete organizer commits.
+- Fork, inherited state, route switch and snapshot audit commit atomically. Reopening preserves routes and workspace state. No database schema or stable app version change is needed.
+- Legacy chapters without a pre-generation checkpoint, changed prefixes, and snapshots containing parallel streaming output are rejected explicitly. Earlier inherited messages currently do not receive fabricated checkpoints.
+- These are materialized checkpoint restores, not arbitrary manual-log undo/replay. Model-driven rewrite, full change browsing and full M3/M4 acceptance remain. This commit requires its own CI.

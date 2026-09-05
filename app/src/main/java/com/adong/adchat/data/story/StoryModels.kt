@@ -203,7 +203,8 @@ data class StoryWorkspaceState(
     val draft: String = "",
     val firstVisibleIndex: Int = 0,
     val firstVisibleOffset: Int = 0,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val timelineId: String? = null
 )
 
 fun newStoryId(): String = "story_${UUID.randomUUID()}"

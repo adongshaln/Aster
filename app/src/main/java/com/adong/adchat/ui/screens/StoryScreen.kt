@@ -86,13 +86,34 @@ fun StoryScreen(
             onArchive = storyVm::openArchive,
             onCreateStory = onCreateStory
         )
-        key(story.id, storyVm.activeWorkspace) {
+        TextButton(onClick = storyVm::openTimelineHistory, modifier = Modifier.align(Alignment.End), enabled = !storyVm.revisionBusy) {
+            Text("历史路线", style = MaterialTheme.typography.labelSmall, color = MutedInk)
+        }
+        key(story.id, story.currentTimelineId, storyVm.activeWorkspace) {
             StoryWorkspaceContent(
                 storyVm = storyVm,
                 profile = profile,
                 onOpenSettings = onOpenSettings
             )
         }
+    }
+
+    if (storyVm.timelineHistoryOpen) {
+        AlertDialog(onDismissRequest = storyVm::closeTimelineHistory, title = { Text("历史路线") },
+            text = { Column {
+                Text("切回旧路线会恢复其正文与资料，当前路线也会保留。", style = MaterialTheme.typography.bodySmall)
+                storyVm.revisionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(storyVm.timelineHistory, key = { it.id }) { timeline ->
+                        TextButton(onClick = { storyVm.restoreTimeline(timeline.id) },
+                            enabled = !storyVm.revisionBusy && timeline.id != story.currentTimelineId && StoryWorkspace.entries.none { storyVm.isLoading(it) }) {
+                            Text((if (timeline.parentTimelineId == null) "原路线" else "修订路线 · ${java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timeline.createdAt))}") +
+                                if (timeline.id == story.currentTimelineId) "（当前）" else "")
+                        }
+                    }
+                }
+            } },
+            confirmButton = { TextButton(onClick = storyVm::closeTimelineHistory, enabled = !storyVm.revisionBusy) { Text("关闭") } })
     }
 
     if (showStoryPicker) {
@@ -221,7 +242,7 @@ private fun StoryWorkspaceContent(
 
     DisposableEffect(workspace) {
         onDispose {
-            storyVm.saveScroll(workspace, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+            storyVm.saveScroll(workspace, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, savedState.timelineId)
         }
     }
     LaunchedEffect(dragging, listState.canScrollForward) {
@@ -240,11 +261,15 @@ private fun StoryWorkspaceContent(
             title = { Text("修订正文") },
             text = {
                 Column(Modifier.heightIn(max = 480.dp)) {
-                    Text("保存会建立新版本。旧版本及对应资料仍会保留，可在这里恢复。", style = MaterialTheme.typography.bodySmall)
+                    Text("末尾正文可保存为新版本。较早正文请从这里另写：旧后续留在历史路线，新路线从生成前资料快照继续。", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(value = revisedText, onValueChange = { revisedText = it },
                         enabled = !storyVm.revisionBusy, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 220.dp))
                     storyVm.revisionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { storyVm.saveProseRevision(revisedText, fork = true) },
+                        enabled = !storyVm.revisionBusy && revisedText.isNotBlank() && revisedText.trim() != target.revision.content) {
+                        Text("保留旧后续，从这里另写")
+                    }
                     Spacer(Modifier.height(8.dp))
                     LazyColumn(Modifier.weight(1f, fill = false)) {
                         items(storyVm.revisionHistory, key = { it.id }) { version ->
@@ -286,7 +311,7 @@ private fun StoryWorkspaceContent(
                 items(messages, key = { it.message.id }) { row ->
                     Column {
                         StoryMessageItem(row)
-                        if (workspace == StoryWorkspace.Prose && row == messages.lastOrNull() &&
+                        if (workspace == StoryWorkspace.Prose &&
                             row.message.role == "assistant" && row.revision.state != StoryRevisionState.Streaming) {
                             TextButton(onClick = { storyVm.openRevisionEditor(row) },
                                 enabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) }) {

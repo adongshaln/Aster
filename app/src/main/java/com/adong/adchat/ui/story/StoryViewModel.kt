@@ -29,6 +29,7 @@ import com.adong.adchat.data.story.StoryRevisionState
 import com.adong.adchat.data.story.StoryStopCleanup
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.data.story.StoryWorkspaceState
+import com.adong.adchat.data.story.StoryTimeline
 import com.adong.adchat.data.story.nextStoryWorkspaceUpdatedAt
 import com.adong.adchat.data.story.storyStopCleanupFor
 import kotlinx.coroutines.CancellationException
@@ -90,7 +91,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         workspaceMessages[workspace].orEmpty()
 
     fun workspaceState(workspace: StoryWorkspace = activeWorkspace): StoryWorkspaceState =
-        workspaceStates[workspace] ?: StoryWorkspaceState(activeStoryId.orEmpty(), workspace)
+        workspaceStates[workspace] ?: StoryWorkspaceState(activeStoryId.orEmpty(), workspace, timelineId = activeStory?.currentTimelineId)
 
     fun draft(workspace: StoryWorkspace = activeWorkspace): String = workspaceState(workspace).draft
 
@@ -225,7 +226,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) { store.saveWorkspaceState(next) }
     }
 
-    fun saveScroll(workspace: StoryWorkspace, firstVisibleIndex: Int, firstVisibleOffset: Int) {
+    fun saveScroll(workspace: StoryWorkspace, firstVisibleIndex: Int, firstVisibleOffset: Int, expectedTimelineId: String? = activeStory?.currentTimelineId) {
+        if (expectedTimelineId != activeStory?.currentTimelineId) return
         val storyId = activeStoryId ?: return
         val current = workspaceState(workspace)
         val next = current.copy(
@@ -309,27 +311,78 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         if (!revisionBusy) { revisionTarget = null; revisionHistory.clear(); revisionError = null }
     }
 
-    fun saveProseRevision(content: String, restoreRevisionId: String? = null) {
+    fun saveProseRevision(content: String, restoreRevisionId: String? = null, fork: Boolean = false) {
         val target = revisionTarget ?: return
         if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
         revisionBusy = true
         revisionError = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                if (restoreRevisionId != null) {
+                if (fork) {
+                    store.forkProseRevision(target.message.id, target.revision.id, content)
+                } else if (restoreRevisionId != null) {
                     check(store.restoreMessageRevision(target.message.id, restoreRevisionId, target.revision.id))
                 } else {
                     check(store.replaceMessageRevision(target.message.id, content.trim(),
                         profileName = target.revision.profileName, model = target.revision.model,
                         expectedRevisionId = target.revision.id) != null)
                 }
-                refreshWorkspaceIfVisible(target.message.storyId, StoryWorkspace.Prose)
-                refreshArchive(target.message.storyId, target.message.timelineId)
-                refreshStory(target.message.storyId)
-                scheduleMemoryMaintenance(target.message.storyId, target.message.timelineId)
+                val updated = store.getStory(target.message.storyId) ?: error("故事已删除")
+                withContext(Dispatchers.Main) {
+                    replaceStory(updated)
+                    if (activeStoryId == updated.id) {
+                        workspaceMessages.clear(); workspaceStates.clear(); archiveRecords.clear(); archiveProposals.clear()
+                        loadActiveStoryState(updated)
+                    }
+                }
+                scheduleMemoryMaintenance(updated.id, updated.currentTimelineId)
                 withContext(Dispatchers.Main) { revisionTarget = null; revisionHistory.clear() }
             } catch (error: Exception) {
                 withContext(Dispatchers.Main) { revisionError = error.message ?: "修订未保存，请重试" }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { revisionBusy = false }
+            }
+        }
+    }
+
+    val timelineHistory = mutableStateListOf<StoryTimeline>()
+    var timelineHistoryOpen by mutableStateOf(false)
+        private set
+
+    fun openTimelineHistory() {
+        val story = activeStory ?: return
+        if (revisionBusy) return
+        timelineHistoryOpen = true
+        revisionError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            val routes = store.listTimelines(story.id)
+            withContext(Dispatchers.Main) {
+                if (activeStoryId == story.id) { timelineHistory.clear(); timelineHistory.addAll(routes) }
+            }
+        }
+    }
+    fun closeTimelineHistory() { if (!revisionBusy) timelineHistoryOpen = false }
+
+    fun restoreTimeline(timelineId: String) {
+        val story = activeStory ?: return
+        if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
+        revisionBusy = true
+        revisionError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                store.switchTimeline(story.id, timelineId, story.currentTimelineId)
+                val updated = store.getStory(story.id) ?: error("故事已删除")
+                withContext(Dispatchers.Main) {
+                    replaceStory(updated)
+                    if (activeStoryId == updated.id) {
+                        workspaceMessages.clear(); workspaceStates.clear(); archiveRecords.clear(); archiveProposals.clear()
+                        loadActiveStoryState(updated)
+                    }
+                    timelineHistoryOpen = false
+                }
+                scheduleMemoryMaintenance(updated.id, updated.currentTimelineId)
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) { revisionError = error.message ?: "恢复失败" }
             } finally {
                 withContext(NonCancellable + Dispatchers.Main) { revisionBusy = false }
             }
@@ -534,7 +587,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     if (resolvedProfile == null) break // Wait for configuration; do not spend a request attempt.
                     if (running == null) continue
                     try {
-                        withContext(Dispatchers.Main) { if (activeStoryId == storyId) memoryStatus = "正在整理记忆" }
+                        withContext(Dispatchers.Main) { if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) memoryStatus = "正在整理记忆" }
                         val source = store.getActiveRevision(running.sourceRevisionId)
                         val currentVersion = memoryStore.currentMemoryVersion(storyId)
                         if (source == null || source.state != StoryRevisionState.Complete || source.content.isBlank()) {
@@ -601,7 +654,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     val status = if (waitingForConfiguration && memoryStore.nextPendingJob(storyId, timelineId) != null)
                         "记忆整理已暂停，请选择可用的 API 和模型后重试"
                     else memoryStore.jobStatus(storyId, timelineId)
-                    withContext(Dispatchers.Main) { if (activeStoryId == storyId) memoryStatus = status }
+                    withContext(Dispatchers.Main) { if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) memoryStatus = status }
                 }
             }
         }
@@ -621,7 +674,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val proposals = archiveStore.listPendingProposals(story.id, story.currentTimelineId)
             val status = memoryStore.jobStatus(story.id, story.currentTimelineId)
             withContext(Dispatchers.Main) {
-                if (activeStoryId != story.id) return@withContext
+                if (activeStoryId != story.id || activeStory?.currentTimelineId != story.currentTimelineId) return@withContext
                 workspaceMessages.putAll(loadedMessages)
                 workspaceStates.putAll(loadedStates)
                 archiveRecords.clear()
@@ -639,7 +692,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val story = store.getStory(storyId) ?: return@launch
             val rows = store.loadMessages(storyId, story.currentTimelineId, workspace)
             withContext(Dispatchers.Main) {
-                if (activeStoryId == storyId) workspaceMessages[workspace] = rows
+                if (activeStoryId == storyId && activeStory?.currentTimelineId == story.currentTimelineId) workspaceMessages[workspace] = rows
             }
         }
     }
@@ -648,7 +701,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val records = archiveStore.listMemoryRecords(storyId, timelineId)
         val proposals = archiveStore.listPendingProposals(storyId, timelineId)
         withContext(Dispatchers.Main) {
-            if (activeStoryId == storyId) {
+            if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
                 archiveRecords.clear()
                 archiveProposals.clear()
                 archiveRecords.addAll(records)
