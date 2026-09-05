@@ -343,7 +343,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateProfile(profile.id) {
             it.copy(
                 webSearchEnabled = enabled,
-                fileCreationEnabled = if (enabled && it.chatApiMode == "chat") false else it.fileCreationEnabled
+                fileCreationEnabled = if (enabled && !profile.usesResponses()) false else it.fileCreationEnabled
             )
         }
         persist()
@@ -354,7 +354,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateProfile(profile.id) {
             it.copy(
                 fileCreationEnabled = enabled,
-                webSearchEnabled = if (enabled && it.chatApiMode == "chat") false else it.webSearchEnabled
+                webSearchEnabled = if (enabled && !profile.usesResponses()) false else it.webSearchEnabled
             )
         }
         persist()
@@ -1789,5 +1789,4 @@ private fun String.isImageLike(): Boolean {
         "diffusion"
     ).any(id::contains)
 }
-
 

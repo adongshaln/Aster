@@ -84,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.ChatFileAttachment
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ChatCitation
@@ -415,7 +416,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     loading = vm.isChatLoading,
                     attachmentLoading = vm.isChatAttachmentLoading,
                     reasoningEffort = vm.chatProfile.reasoningEffort,
-                    apiMode = vm.chatProfile.chatApiMode,
+                    apiMode = if (vm.chatProfile.usesResponses()) "responses" else "chat",
                     webSearchEnabled = vm.chatProfile.webSearchEnabled,
                     fileCreationEnabled = vm.chatProfile.fileCreationEnabled,
                     onModelClick = { showSwitcher = true },
