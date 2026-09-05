@@ -286,7 +286,8 @@ data class ChatCompletionResult(
     val usage: TokenUsage,
     val citations: List<ChatCitation> = emptyList(),
     val generatedFiles: List<GeneratedFileDraft> = emptyList(),
-    val toolActivities: List<ChatToolActivity> = emptyList()
+    val toolActivities: List<ChatToolActivity> = emptyList(),
+    val outputComplete: Boolean = true
 )
 
 data class StreamRecoveryEvent(

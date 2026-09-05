@@ -144,3 +144,13 @@ M3c commit `4bd0de02a72864bbb8d7ea9436c1e3a5639cfa9b` passed Android Build #97 (
 - This conservative action requires the batch to match the current global memoryVersion and an effective source in the current route; later memory edits, source changes and route changes reject it. It does not replay arbitrary older dependent batches.
 - Regression tests cover automatic undo/restore and restart, candidate adoption/rejection, later edits, cross-route/source rejection, and rollback after a partial batch write. This commit requires its own CI.
 - M3/M4 still require acceptance review, including context dependency behavior, provider integration, and UI/readability polish; no stable version bump or main merge.
+
+### Acceptance pass 1 — reading and completion contract
+
+M3d commit `cf70ef1ad3ad2a8cd90041ac9b02df2fcd498201` passed Android Build #98.
+
+- Story replies now reuse the ordinary chat Markdown renderer (headings/lists/code/tables and 『』 styling), instead of displaying raw Markdown as plain text.
+- Pending proposals appear before the recent-change history so review actions are not buried below 100 audit rows.
+- API results carry explicit output-completion metadata. Chat requires finish_reason=stop; Responses requires its completion event/status. Truncation, filtering and missing completion confirmation retain text but do not qualify a story reply as complete. Organizer output requires the same confirmation before parsing/committing. Ordinary chat still receives its text without a new retry policy.
+- Added MockWebServer protocol-contract tests for Gemini-compatible Chat SSE/JSON and Responses JSON; these are synthetic gateway tests, not a real Gemini provider acceptance run.
+- Own CI pending. Remaining acceptance: on-device reading/keyboard/long-thread performance, real provider story and memory accuracy, full M1–M4 design-gap review. No main merge/version bump.

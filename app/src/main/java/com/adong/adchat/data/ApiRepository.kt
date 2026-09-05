@@ -211,6 +211,7 @@ class ApiRepository {
         var firstDeltaAt: Long? = null
         var usage = TokenUsage()
         val full = StringBuilder()
+        var outputComplete = false
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
         val citations = linkedMapOf<String, ChatCitation>()
         val activities = linkedMapOf<String, ChatToolActivity>()
@@ -221,6 +222,7 @@ class ApiRepository {
         }
 
         suspend fun executeRound(): ProtocolRoundResult {
+            outputComplete = false
             val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled, profile.fileCreationEnabled)
             val body = JSONObject()
                 .put("model", model)
@@ -262,7 +264,10 @@ class ApiRepository {
                             parseCitations(root).forEach { roundCitations[it.url] = it }
                             val choices = root.optJSONArray("choices")
                             val choice = choices?.optJSONObject(0)
-                            if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) completed = true
+                            if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
+                                completed = true
+                                outputComplete = choice.optString("finish_reason") == "stop"
+                            }
                             if (root.has("usage") && !root.isNull("usage")) {
                                 roundUsage = parseUsage(root)
                                 if (choices != null && choices.length() == 0) completed = true
@@ -281,6 +286,7 @@ class ApiRepository {
                         val text = response.body?.string().orEmpty()
                         if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
                         val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
+                        outputComplete = root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason") == "stop"
                         toolAccumulator.accept(root)
                         parseCitations(root).forEach { roundCitations[it.url] = it }
                         val result = runCatching { parseMessageContent(root) }.getOrDefault("")
@@ -354,7 +360,8 @@ class ApiRepository {
             usage = finalUsage,
             citations = citations.values.toList(),
             generatedFiles = generatedFiles,
-            toolActivities = activities.values.toList()
+            toolActivities = activities.values.toList(),
+            outputComplete = outputComplete
         )
     }
 
@@ -377,6 +384,7 @@ class ApiRepository {
         var firstDeltaAt: Long? = null
         var usage = TokenUsage()
         val full = StringBuilder()
+        var outputComplete = false
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
         val citations = linkedMapOf<String, ChatCitation>()
         val activities = linkedMapOf<String, ChatToolActivity>()
@@ -444,6 +452,7 @@ class ApiRepository {
                                 }
                                 "response.completed" -> {
                                     val completedResponse = root.optJSONObject("response") ?: root
+                                    outputComplete = completedResponse.optString("status").let { it.isBlank() || it == "completed" }
                                     responseId = completedResponse.optString("id").ifBlank { responseId }
                                     roundUsage = parseUsage(completedResponse)
                                     usedWebSearch = usedWebSearch || responseUsedWebSearch(root)
@@ -459,6 +468,7 @@ class ApiRepository {
                         val text = response.body?.string().orEmpty()
                         if (text.isBlank()) throw IllegalStateException("Responses API returned an empty response")
                         val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON from Responses API") }
+                        outputComplete = root.optString("status") == "completed"
                         toolAccumulator.acceptResponse(root)
                         parseCitations(root).forEach { roundCitations[it.url] = it }
                         responseId = root.optString("id")
@@ -526,7 +536,8 @@ class ApiRepository {
             usage = finalUsage,
             citations = citations.values.toList(),
             generatedFiles = generatedFiles,
-            toolActivities = activities.values.toList()
+            toolActivities = activities.values.toList(),
+            outputComplete = outputComplete
         )
     }
 

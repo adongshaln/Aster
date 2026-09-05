@@ -1149,7 +1149,7 @@ private fun StreamingProseText(content: String, error: Boolean) {
 }
 
 @Composable
-private fun StructuredMessageText(content: String, streaming: Boolean, error: Boolean) {
+internal fun StructuredMessageText(content: String, streaming: Boolean, error: Boolean) {
     val parts = remember(content) { content.split("```") }
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         parts.forEachIndexed { index, raw ->

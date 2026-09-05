@@ -513,14 +513,17 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     val completed = store.updateActiveRevision(
                         revisionId = revisionId,
                         content = finalText,
-                        state = StoryRevisionState.Complete,
+                        state = if (result.outputComplete) StoryRevisionState.Complete else StoryRevisionState.Interrupted,
                         profileName = profile.name,
                         model = routeModel
                     )
-                    if (completed) {
+                    if (completed && result.outputComplete) {
                         memoryStore.enqueueForRevision(story.id, story.currentTimelineId, revisionId)
                         scheduleMemoryMaintenance(story.id, story.currentTimelineId, profile)
                     }
+                }
+                if (!result.outputComplete) withContext(Dispatchers.Main) {
+                    if (activeStoryId == story.id) errors[workspace] = "回复未确认完整结束，已保留内容，不会写入正式记忆。"
                 }
             } catch (error: Throwable) {
                 val partial = streamed.toString().trimEnd()
@@ -658,6 +661,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                             history = listOf(ChatMessage(role = "user", content = organizerInput)),
                             cacheKey = "aster-story-memory-$storyId-${running.sourceRevisionId}-${running.baseMemoryVersion}"
                         ) { }
+                        check(organizerResponse.outputComplete) { "整理回复未完整结束，未提交资料" }
                         val output = StoryMemoryOrganizer.parse(organizerResponse.text, source.workspace)
                         when (memoryStore.applyOrganizerOutput(running, output)) {
                             is StoryMemoryApplyResult.Committed -> {

@@ -404,34 +404,11 @@ private fun StoryMessageItem(row: StoryMessageWithRevision) {
         ) {
             if (user) {
                 Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
-                    SelectionContainer {
-                        Text(
-                            storyAnnotatedText(row.revision.content),
-                            Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                    }
-                }
-            } else {
-                if (row.revision.state == StoryRevisionState.Streaming && row.revision.content.isBlank()) {
-                    StoryThinkingIndicator()
-                } else {
-                    Row(Modifier.padding(bottom = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-                        AsterMark(Modifier.size(26.dp), tint = Accent)
-                        Spacer(Modifier.width(5.dp))
-                        Text("Aster", color = MutedInk, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-                    }
-                    SelectionContainer {
-                        Text(
-                            storyAnnotatedText(row.revision.content),
-                            color = Ink,
-                            style = MaterialTheme.typography.bodyLarge.copy(
-                                fontSize = READING_BODY_FONT_SP.sp,
-                                lineHeight = READING_BODY_LINE_SP.sp,
-                                fontWeight = FontWeight.Normal
-                            )
-                        )
-                    }
+                    StructuredMessageText(
+                        content = row.revision.content,
+                        streaming = row.revision.state == StoryRevisionState.Streaming,
+                        error = false
+                    )
                     if (row.revision.state in setOf(StoryRevisionState.Interrupted, StoryRevisionState.Stopped)) {
                         Surface(
                             color = if (row.revision.state == StoryRevisionState.Stopped) Color(0xFFF0EDE8) else Color(0xFFFFF1D8),
@@ -439,7 +416,7 @@ private fun StoryMessageItem(row: StoryMessageWithRevision) {
                             modifier = Modifier.padding(top = 8.dp)
                         ) {
                             Text(
-                                if (row.revision.state == StoryRevisionState.Stopped) "已停止生成，当前内容已保留" else "连接中断，当前内容已保留",
+                                if (row.revision.state == StoryRevisionState.Stopped) "已停止生成，当前内容已保留" else "回复未完整结束，内容已保留且不计入正式剧情",
                                 Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
                                 color = MutedInk,
                                 style = MaterialTheme.typography.labelMedium
@@ -726,6 +703,19 @@ private fun StoryArchiveSheet(
                     } }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
                     changeError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+                    if (proposals.isNotEmpty()) item { Text("待确认 · ${proposals.size}", style = MaterialTheme.typography.titleSmall) }
+                    items(proposals, key = { "proposal-${it.id}" }) { proposal ->
+                        Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                                Text("待确认候选", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                                Text(proposal.content, modifier = Modifier.padding(vertical = 8.dp))
+                                Row {
+                                    TextButton(onClick = { onDecide(proposal.id, true) }) { Text("采用") }
+                                    TextButton(onClick = { onDecide(proposal.id, false) }) { Text("废弃") }
+                                }
+                            }
+                        }
+                    }
                     item { Text("最近变更（最多 100 条）", style = MaterialTheme.typography.titleSmall) }
                     items(changes, key = { "change-${it.id}" }) { change ->
                         Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
@@ -739,18 +729,6 @@ private fun StoryArchiveSheet(
                                 Row {
                                     TextButton(onClick = { viewingChange = change }) { Text("查看详情") }
                                     if (change.canUndo) TextButton(onClick = { onUndo(change.id, change.batch) }, enabled = !undoBusy) { Text(if (change.batch) "整体撤销" else "撤销此改动") }
-                                }
-                            }
-                        }
-                    }
-                    items(proposals, key = { "proposal-${it.id}" }) { proposal ->
-                        Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
-                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
-                                Text("待确认候选", color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                                Text(proposal.content, modifier = Modifier.padding(vertical = 8.dp))
-                                Row {
-                                    TextButton(onClick = { onDecide(proposal.id, true) }) { Text("采用") }
-                                    TextButton(onClick = { onDecide(proposal.id, false) }) { Text("废弃") }
                                 }
                             }
                         }
