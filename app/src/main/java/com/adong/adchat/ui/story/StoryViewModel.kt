@@ -14,6 +14,7 @@ import com.adong.adchat.data.ApiRepository
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ConfigStore
 import com.adong.adchat.data.story.Story
+import com.adong.adchat.data.story.StoryChangeEntry
 import com.adong.adchat.data.story.StoryArchiveStore
 import com.adong.adchat.data.story.StoryContextComposer
 import com.adong.adchat.data.story.StoryMemoryApplyResult
@@ -58,6 +59,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     var memoryStatus by mutableStateOf("暂无整理任务")
         private set
     val archiveRecords = mutableStateListOf<StoryMemoryRecord>()
+    val archiveChanges = mutableStateListOf<StoryChangeEntry>()
+    var archiveChangeError by mutableStateOf<String?>(null)
+        private set
+    var undoBusy by mutableStateOf(false)
+        private set
     private val workspaceMessages = mutableStateMapOf<StoryWorkspace, List<StoryMessageWithRevision>>()
     private val workspaceStates = mutableStateMapOf<StoryWorkspace, StoryWorkspaceState>()
     private val loadingKeys = mutableStateMapOf<String, Boolean>()
@@ -145,6 +151,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openArchive() {
         archiveOpen = true
+        archiveChanges.clear()
+        archiveChangeError = null
         val story = activeStory ?: return
         viewModelScope.launch(Dispatchers.IO) { refreshArchive(story.id, story.currentTimelineId) }
     }
@@ -275,6 +283,27 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             archiveStore.setPinned(recordId, pinned)
             refreshArchive(story.id, story.currentTimelineId)
             refreshStory(story.id)
+        }
+    }
+
+    fun undoArchiveChange(changeId: String) {
+        val story = activeStory ?: return
+        if (undoBusy) return
+        undoBusy = true
+        archiveChangeError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                archiveStore.undoManualChange(story.id, story.currentTimelineId, changeId)
+                refreshArchive(story.id, story.currentTimelineId)
+                refreshStory(story.id)
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (activeStoryId == story.id && activeStory?.currentTimelineId == story.currentTimelineId)
+                        archiveChangeError = error.message ?: "撤销未保存，请重试"
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { undoBusy = false }
+            }
         }
     }
 
@@ -709,12 +738,15 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val epoch = stateEpoch
         val records = archiveStore.listMemoryRecords(storyId, timelineId)
         val proposals = archiveStore.listPendingProposals(storyId, timelineId)
+        val changes = archiveStore.listChanges(storyId, timelineId)
         withContext(Dispatchers.Main) {
             if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
                 archiveRecords.clear()
                 archiveProposals.clear()
                 archiveRecords.addAll(records)
                 archiveProposals.addAll(proposals)
+                archiveChanges.clear()
+                archiveChanges.addAll(changes)
             }
         }
     }

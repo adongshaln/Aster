@@ -146,6 +146,126 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             "committed_version DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toManualChange()) } }
 
+    /** Compensating mutation: original audit entries and record identity are retained. */
+    fun undoManualChange(storyId: String, timelineId: String, changeId: String): Boolean =
+        helper.writableDatabase.inTransaction { db ->
+            require(db.rawQuery("SELECT 1 FROM ${StorySchema.STORIES} WHERE id = ? AND current_timeline_id = ?",
+                arrayOf(storyId, timelineId)).use { it.moveToFirst() }) { "故事路线已变化，请重新打开档案" }
+            val change = db.query(StorySchema.MANUAL_MEMORY_CHANGES, null,
+                "id = ? AND story_id = ? AND timeline_id = ?", arrayOf(changeId, storyId, timelineId), null, null, null
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.toManualChange() else null } ?: return@inTransaction false
+            if (undoMarkerExists(db, storyId, timelineId, changeId)) return@inTransaction false
+            require(!isProposalDecision(db, change)) { "候选采用涉及确认状态，暂不支持从单条资料日志撤销" }
+            val current = queryMemory(db, change.recordId) ?: return@inTransaction false
+            require(latestManualChangeId(db, current.id) == change.id && auditMatches(current, change.afterJson)) {
+                "这条资料已有后续改动，请从最新变更操作，避免覆盖新内容"
+            }
+            require(sourceIsEffective(db, current)) { "资料来源已不属于当前正文版本，不能在此恢复" }
+            val before = change.beforeJson?.let(::JSONObject)
+            val now = System.currentTimeMillis()
+            val restored = if (before == null) current.copy(active = false, updatedAt = now) else current.copy(
+                content = before.getString("content"), pinned = before.getBoolean("pinned"),
+                active = before.getBoolean("active"), updatedAt = now
+            )
+            val base = requireStoryMemoryVersion(db, storyId)
+            check(db.update(StorySchema.MEMORIES, ContentValues().apply {
+                put("content", restored.content); put("pinned", if (restored.pinned) 1 else 0)
+                put("active", if (restored.active) 1 else 0); put("updated_at", now)
+            }, "id = ?", arrayOf(current.id)) == 1)
+            val inverseId = commitManualChange(db, if (before == null) StoryManualMemoryOperation.Deactivate else StoryManualMemoryOperation.Update,
+                current, restored, base, now)
+            db.insertOrThrow(StorySchema.SNAPSHOTS, null, ContentValues().apply {
+                put("id", "undo_${java.util.UUID.randomUUID()}"); put("story_id", storyId); put("timeline_id", timelineId)
+                put("sequence_no", current.effectiveSequence); put("memory_version", Math.addExact(base, 1L))
+                put("log_cursor", "undo:$changeId"); put("created_at", now)
+                put("snapshot_json", JSONObject().put("operation", "undo_manual_change").put("change_id", changeId)
+                    .put("inverse_change_id", inverseId).put("before", JSONObject(memoryAuditJson(current)))
+                    .put("after", JSONObject(memoryAuditJson(restored))).toString())
+            })
+            true
+        }
+
+    fun listChanges(storyId: String, timelineId: String): List<StoryChangeEntry> = helper.readableDatabase.inTransaction { db ->
+        val manual = db.query(StorySchema.MANUAL_MEMORY_CHANGES, null, "story_id = ? AND timeline_id = ?",
+            arrayOf(storyId, timelineId), null, null, "committed_version DESC", "100").use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.toManualChange()) }
+        }
+        val result = manual.map { change ->
+            val record = queryMemory(db, change.recordId)
+            val undone = undoMarkerExists(db, storyId, timelineId, change.id)
+            val proposal = isProposalDecision(db, change)
+            val latest = record != null && latestManualChangeId(db, record.id) == change.id
+            val effective = record != null && sourceIsEffective(db, record)
+            StoryChangeEntry(change.id, change.committedVersion, when (change.operation) {
+                StoryManualMemoryOperation.Add -> "新增资料"
+                StoryManualMemoryOperation.Update -> "修改 / 恢复资料"
+                StoryManualMemoryOperation.Pin -> "调整固定状态"
+                StoryManualMemoryOperation.Deactivate -> "停用资料"
+            }, auditDescription(change.beforeJson), auditDescription(change.afterJson),
+                source = record?.sourceRevisionId?.let { sourceText(db, it) }.orEmpty(),
+                note = when { undone -> "已撤销"; proposal -> "来自候选确认，单条撤销暂不可用"; !effective -> "历史版本来源";
+                    !latest -> "已有后续资料改动"; else -> "" },
+                canUndo = !undone && !proposal && latest && effective && record != null && auditMatches(record, change.afterJson))
+        }.toMutableList()
+        db.rawQuery("""SELECT c.*, r.content AS source_text FROM ${StorySchema.CHANGE_SETS} c
+            LEFT JOIN ${StorySchema.REVISIONS} r ON r.id = c.source_revision_id
+            WHERE c.story_id = ? AND c.timeline_id = ? ORDER BY c.committed_version DESC LIMIT 100""",
+            arrayOf(storyId, timelineId)).use { cursor ->
+            while (cursor.moveToNext()) {
+                val operations = JSONObject(cursor.string("operations_json"))
+                val description = when {
+                    operations.optString("operation") == "switch_revision" -> "切换正文版本"
+                    operations.has("proposal_id") -> if (operations.optString("after") == "accepted") "采用候选" else "废弃候选"
+                    else -> "自动整理：新增 ${operations.optJSONArray("added_memory_ids")?.length() ?: 0} 条资料、${operations.optJSONArray("proposal_ids")?.length() ?: 0} 条候选"
+                }
+                result += StoryChangeEntry(cursor.string("id"), cursor.getLong(cursor.getColumnIndexOrThrow("committed_version")),
+                    description, source = cursor.nullableString("source_text").orEmpty(), note = "保留来源记录；此类变更暂不提供单条撤销")
+            }
+        }
+        result.sortedByDescending { it.version }.take(100)
+    }
+
+    private fun undoMarkerExists(db: SQLiteDatabase, storyId: String, timelineId: String, changeId: String): Boolean =
+        db.rawQuery("SELECT 1 FROM ${StorySchema.SNAPSHOTS} WHERE story_id = ? AND timeline_id = ? AND log_cursor = ? LIMIT 1",
+            arrayOf(storyId, timelineId, "undo:$changeId")).use { it.moveToFirst() }
+
+    private fun latestManualChangeId(db: SQLiteDatabase, recordId: String): String? = db.rawQuery(
+        "SELECT id FROM ${StorySchema.MANUAL_MEMORY_CHANGES} WHERE record_id = ? ORDER BY committed_version DESC LIMIT 1", arrayOf(recordId)
+    ).use { if (it.moveToFirst()) it.getString(0) else null }
+
+    private fun isProposalDecision(db: SQLiteDatabase, change: StoryManualMemoryChange): Boolean = db.rawQuery(
+        "SELECT operations_json FROM ${StorySchema.CHANGE_SETS} WHERE story_id = ? AND timeline_id = ? AND committed_version = ?",
+        arrayOf(change.storyId, change.timelineId, change.committedVersion.toString())
+    ).use { cursor ->
+        var found = false
+        while (cursor.moveToNext()) {
+            val op = JSONObject(cursor.getString(0))
+            if (op.has("proposal_id") && op.optString("record_id") == change.recordId) found = true
+        }
+        found
+    }
+
+    private fun sourceIsEffective(db: SQLiteDatabase, record: StoryMemoryRecord): Boolean = record.sourceRevisionId == null ||
+        db.rawQuery("""SELECT 1 FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m ON m.active_revision_id = r.id
+            WHERE r.id = ? AND r.state = 'complete' AND m.story_id = ? AND m.timeline_id = ?""",
+            arrayOf(record.sourceRevisionId, record.storyId, record.timelineId)).use { it.moveToFirst() }
+
+    private fun sourceText(db: SQLiteDatabase, revisionId: String): String = db.rawQuery(
+        "SELECT content FROM ${StorySchema.REVISIONS} WHERE id = ?", arrayOf(revisionId)
+    ).use { if (it.moveToFirst()) it.getString(0) else "" }
+
+    private fun auditMatches(record: StoryMemoryRecord, json: String?): Boolean {
+        if (json == null) return false
+        val expected = JSONObject(json)
+        val actual = JSONObject(memoryAuditJson(record))
+        return actual.keys().asSequence().all { key -> expected.has(key) && actual.get(key).toString() == expected.get(key).toString() }
+    }
+
+    private fun auditDescription(json: String?): String = json?.let { value ->
+        val row = JSONObject(value)
+        "${row.getString("content")}\n${if (row.getBoolean("pinned")) "固定" else "未固定"} · ${if (row.getBoolean("active")) "启用" else "停用"}"
+    }.orEmpty()
+
     fun addConfirmedRecord(
         storyId: String,
         timelineId: String,
@@ -323,7 +443,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         after: StoryMemoryRecord?,
         baseVersion: Long,
         now: Long
-    ) {
+    ): String {
         val record = after ?: before ?: error("Manual change requires a memory record")
         val committedVersion = Math.addExact(baseVersion, 1L)
         val change = StoryManualMemoryChange(
@@ -363,6 +483,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             arrayOf(record.storyId, baseVersion.toString())
         )
         check(advanced == 1) { "Story memoryVersion changed before manual mutation commit" }
+        return change.id
     }
 
     private fun requireStoryMemoryVersion(db: SQLiteDatabase, storyId: String): Long = db.rawQuery(

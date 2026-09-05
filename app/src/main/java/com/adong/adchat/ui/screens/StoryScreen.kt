@@ -5,6 +5,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -41,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.story.Story
+import com.adong.adchat.data.story.StoryChangeEntry
 import com.adong.adchat.data.story.StoryMemoryKind
 import com.adong.adchat.data.story.StoryProposal
 import com.adong.adchat.data.story.StoryMemoryRecord
@@ -138,6 +141,10 @@ fun StoryScreen(
             records = storyVm.archiveRecords,
             proposals = storyVm.archiveProposals,
             memoryStatus = storyVm.memoryStatus,
+            changes = storyVm.archiveChanges,
+            changeError = storyVm.archiveChangeError,
+            undoBusy = storyVm.undoBusy,
+            onUndo = storyVm::undoArchiveChange,
             onDecide = storyVm::decideProposal,
             onRetryMemory = storyVm::retryMemory,
             availableProfiles = mainVm.profiles,
@@ -656,6 +663,10 @@ private fun StoryArchiveSheet(
     records: List<StoryMemoryRecord>,
     proposals: List<StoryProposal>,
     memoryStatus: String,
+    changes: List<StoryChangeEntry>,
+    changeError: String?,
+    undoBusy: Boolean,
+    onUndo: (String) -> Unit,
     onDecide: (String, Boolean) -> Unit,
     onRetryMemory: () -> Unit,
     availableProfiles: List<ApiProfile>,
@@ -668,6 +679,17 @@ private fun StoryArchiveSheet(
     onDismiss: () -> Unit
 ) {
     var section by remember { mutableIntStateOf(0) }
+    var viewingChange by remember { mutableStateOf<StoryChangeEntry?>(null) }
+    viewingChange?.let { change ->
+        AlertDialog(onDismissRequest = { viewingChange = null }, title = { Text(change.title) },
+            text = { Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
+                Text("记忆版本 ${change.version}", style = MaterialTheme.typography.labelMedium)
+                if (change.before.isNotBlank()) { Text("变更前", fontWeight = FontWeight.SemiBold); Text(change.before) }
+                if (change.after.isNotBlank()) { Text("变更后", fontWeight = FontWeight.SemiBold); Text(change.after) }
+                if (change.source.isNotBlank()) { Text("来源正文 / 讨论", fontWeight = FontWeight.SemiBold); Text(change.source) }
+                if (change.note.isNotBlank()) Text(change.note, color = MutedInk)
+            } }, confirmButton = { TextButton(onClick = { viewingChange = null }) { Text("关闭") } })
+    }
     var editing by remember { mutableStateOf<StoryMemoryRecord?>(null) }
     var adding by remember { mutableStateOf(false) }
     var showRouteMenu by remember { mutableStateOf(false) }
@@ -703,6 +725,24 @@ private fun StoryArchiveSheet(
                         TextButton(onClick = onRetryMemory, enabled = story.automaticMemoryEnabled) { Text("重试失败项") }
                     } }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
+                    changeError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+                    item { Text("最近变更（最多 100 条）", style = MaterialTheme.typography.titleSmall) }
+                    items(changes, key = { "change-${it.id}" }) { change ->
+                        Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                                Text(change.title, fontWeight = FontWeight.SemiBold)
+                                Text("记忆版本 ${change.version}", style = MaterialTheme.typography.labelSmall, color = MutedInk)
+                                val preview = change.after.ifBlank { change.before.ifBlank { change.source } }
+                                if (preview.isNotBlank()) Text(preview, maxLines = 3, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(vertical = 6.dp), style = MaterialTheme.typography.bodySmall)
+                                if (change.note.isNotBlank()) Text(change.note, color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                                Row {
+                                    TextButton(onClick = { viewingChange = change }) { Text("查看详情") }
+                                    if (change.canUndo) TextButton(onClick = { onUndo(change.id) }, enabled = !undoBusy) { Text("撤销此改动") }
+                                }
+                            }
+                        }
+                    }
                     items(proposals, key = { "proposal-${it.id}" }) { proposal ->
                         Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
                             Column(Modifier.fillMaxWidth().padding(14.dp)) {

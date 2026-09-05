@@ -123,3 +123,13 @@ Configuration wait fix `a5ebadcea7bbd3dcdfc4b35169c5e3506e0f5012` passed Android
 - These are materialized checkpoint restores, not arbitrary manual-log undo/replay. Model-driven rewrite, full change browsing and full M3/M4 acceptance remain. This commit requires its own CI.
 
 M3b follow-up: asynchronous UI loads now use a view-state epoch as well as route identity, preventing a late pre-switch refresh from moving the screen backward. Startup marks orphaned streaming revisions interrupted (never complete), so process death cannot permanently block historical-route recovery. Added a restart regression test.
+
+### M3c — audit browsing and guarded manual undo
+
+M3b checkpoint `b6b3daa5331344eeb81aa4c470e2bf45f9a0a79d` passed Android Build #96 (tests, Release and fixed-signature APK).
+
+- Archive Changes now displays up to 100 recent manual/automatic audit entries, before/after values, source text and proposal/version-change records.
+- Manual add/update/pin/deactivate can be reversed through a compensating mutation. Original records/logs remain, and an inverse audit plus a durable undo marker and memoryVersion advance commit atomically.
+- Duplicate undo is idempotent across restart; later edits, inactive sources, and wrong timelines are rejected. The inverse is itself a recorded change and can be reversed.
+- Candidate adoption cannot be partially undone via its manual-add row. Automatic ChangeSets and candidate decisions remain browse-only in this checkpoint. This is not arbitrary log replay or full M3 completion.
+- Regression tests cover all four manual operations, repeat clicks/restart, conflicts, rollback, candidate decision isolation, and stale organizer results after undo. This commit requires its own CI.
