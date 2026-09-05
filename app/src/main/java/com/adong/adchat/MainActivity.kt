@@ -126,14 +126,13 @@ private fun AsterApp(
     }
 
     LaunchedEffect(vm.notice) {
-        vm.notice?.let { message ->
-            vm.dismissNotice()
-            snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar(
-                message = message,
-                duration = SnackbarDuration.Short
-            )
-        }
+        val message = vm.notice ?: return@LaunchedEffect
+        snackbarHostState.currentSnackbarData?.dismiss()
+        snackbarHostState.showSnackbar(
+            message = message,
+            duration = SnackbarDuration.Short
+        )
+        if (vm.notice == message) vm.dismissNotice()
     }
 
     ModalNavigationDrawer(
@@ -181,7 +180,7 @@ private fun AsterApp(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .statusBarsPadding()
-                        .padding(top = 66.dp, start = 16.dp, end = 16.dp)
+                        .padding(top = 82.dp, start = 16.dp, end = 16.dp)
                         .widthIn(max = 640.dp)
                 ) { data ->
                     Snackbar(
