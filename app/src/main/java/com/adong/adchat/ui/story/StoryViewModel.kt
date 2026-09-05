@@ -22,6 +22,7 @@ import com.adong.adchat.data.story.StoryMemoryOrganizer
 import com.adong.adchat.data.story.StoryMemoryRecord
 import com.adong.adchat.data.story.StoryProposal
 import com.adong.adchat.data.story.StoryMemoryStore
+import com.adong.adchat.data.story.StoryMessageRevision
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRepository
 import com.adong.adchat.data.story.StoryRevisionState
@@ -280,10 +281,65 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    var revisionTarget by mutableStateOf<StoryMessageWithRevision?>(null)
+        private set
+    val revisionHistory = mutableStateListOf<StoryMessageRevision>()
+    var revisionBusy by mutableStateOf(false)
+        private set
+    var revisionError by mutableStateOf<String?>(null)
+        private set
+
+    fun openRevisionEditor(row: StoryMessageWithRevision) {
+        if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
+        revisionTarget = row
+        revisionError = null
+        revisionHistory.clear()
+        viewModelScope.launch(Dispatchers.IO) {
+            val history = store.listRevisions(row.message.id)
+            withContext(Dispatchers.Main) {
+                if (revisionTarget?.revision?.id == row.revision.id) {
+                    revisionHistory.clear()
+                    revisionHistory.addAll(history)
+                }
+            }
+        }
+    }
+
+    fun closeRevisionEditor() {
+        if (!revisionBusy) { revisionTarget = null; revisionHistory.clear(); revisionError = null }
+    }
+
+    fun saveProseRevision(content: String, restoreRevisionId: String? = null) {
+        val target = revisionTarget ?: return
+        if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
+        revisionBusy = true
+        revisionError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (restoreRevisionId != null) {
+                    check(store.restoreMessageRevision(target.message.id, restoreRevisionId, target.revision.id))
+                } else {
+                    check(store.replaceMessageRevision(target.message.id, content.trim(),
+                        profileName = target.revision.profileName, model = target.revision.model,
+                        expectedRevisionId = target.revision.id) != null)
+                }
+                refreshWorkspaceIfVisible(target.message.storyId, StoryWorkspace.Prose)
+                refreshArchive(target.message.storyId, target.message.timelineId)
+                refreshStory(target.message.storyId)
+                scheduleMemoryMaintenance(target.message.storyId, target.message.timelineId)
+                withContext(Dispatchers.Main) { revisionTarget = null; revisionHistory.clear() }
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) { revisionError = error.message ?: "修订未保存，请重试" }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { revisionBusy = false }
+            }
+        }
+    }
+
     fun send(profile: ApiProfile, workspace: StoryWorkspace = activeWorkspace) {
         val story = activeStory ?: return
         val input = draft(workspace).trim()
-        if (input.isBlank()) return
+        if (input.isBlank() || revisionBusy) return
         val key = jobKey(story.id, workspace)
         if (loadingKeys[key] == true) return
         if (profile.id != story.profileId) {

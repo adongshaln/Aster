@@ -233,6 +233,46 @@ private fun StoryWorkspaceContent(
         }
     }
 
+    storyVm.revisionTarget?.let { target ->
+        var revisedText by remember(target.revision.id) { mutableStateOf(target.revision.content) }
+        AlertDialog(
+            onDismissRequest = storyVm::closeRevisionEditor,
+            title = { Text("修订正文") },
+            text = {
+                Column(Modifier.heightIn(max = 480.dp)) {
+                    Text("保存会建立新版本。旧版本及对应资料仍会保留，可在这里恢复。", style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(value = revisedText, onValueChange = { revisedText = it },
+                        enabled = !storyVm.revisionBusy, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 220.dp))
+                    storyVm.revisionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(Modifier.weight(1f, fill = false)) {
+                        items(storyVm.revisionHistory, key = { it.id }) { version ->
+                            TextButton(
+                                onClick = { storyVm.saveProseRevision("", version.id) },
+                                enabled = !storyVm.revisionBusy && version.id != target.revision.id && version.state == StoryRevisionState.Complete
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(if (version.id == target.revision.id) "当前版本" else "恢复此版本",
+                                        style = MaterialTheme.typography.labelMedium)
+                                    Text(version.content, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                        style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { storyVm.saveProseRevision(revisedText) },
+                    enabled = !storyVm.revisionBusy && revisedText.isNotBlank() && revisedText.trim() != target.revision.content) {
+                    Text(if (storyVm.revisionBusy) "保存中…" else "保存新版本")
+                }
+            },
+            dismissButton = { TextButton(onClick = storyVm::closeRevisionEditor, enabled = !storyVm.revisionBusy) { Text("关闭") } }
+        )
+    }
+
     Box(Modifier.fillMaxSize().imePadding()) {
         if (messages.isEmpty()) {
             StoryWorkspaceEmpty(workspace, Modifier.fillMaxSize().padding(bottom = 92.dp))
@@ -243,7 +283,18 @@ private fun StoryWorkspaceContent(
                 contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 124.dp),
                 verticalArrangement = Arrangement.spacedBy(28.dp)
             ) {
-                items(messages, key = { it.message.id }) { row -> StoryMessageItem(row) }
+                items(messages, key = { it.message.id }) { row ->
+                    Column {
+                        StoryMessageItem(row)
+                        if (workspace == StoryWorkspace.Prose && row == messages.lastOrNull() &&
+                            row.message.role == "assistant" && row.revision.state != StoryRevisionState.Streaming) {
+                            TextButton(onClick = { storyVm.openRevisionEditor(row) },
+                                enabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) }) {
+                                Text("修订 / 版本", color = MutedInk)
+                            }
+                        }
+                    }
+                }
             }
         }
 

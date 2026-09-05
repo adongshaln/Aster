@@ -101,4 +101,14 @@ Missing API/model configuration now leaves organizer jobs pending without consum
 The scheduler does not immediately relaunch while configuration remains unavailable; selecting
 a valid story route or explicitly retrying resumes pending work. A SQLite regression test covers
 repeated blocked claims, persistence across reopening, and successful processing after restoration.
-This follow-up commit still requires its own CI validation before starting M3.
+Configuration wait fix `a5ebadcea7bbd3dcdfc4b35169c5e3506e0f5012` passed Android Build #93 (tests, Release, fixed-signature APK).
+
+### M3a — tail Prose revision checkpoint
+
+- Tail assistant Prose can be manually revised and complete saved revisions restored through the message action.
+- Revision completion states are preserved; the active pointer controls eligibility. Stopped/interrupted/legacy superseded revisions cannot be restored as complete.
+- Pointer switch, memoryVersion advance, stale source jobs and before/after revision audit commit atomically.
+- Source-linked records/proposals disappear from context when their revision is inactive; restoration reuses original records and preserves manual pin/deactivation decisions.
+- Dedupe excludes obsolete sources so a new revision can independently record the same fact. Finalized revisions cannot be overwritten by streaming writes or physically deleted.
+- Older messages with later content (including Discussion), streaming work and stale editor saves are rejected. This is deliberately tail-only until descendant invalidation and branching are implemented.
+- This checkpoint does not implement model-driven rewrite, snapshots/replay, older chapter branching, or full M3 acceptance. Its own CI is required.

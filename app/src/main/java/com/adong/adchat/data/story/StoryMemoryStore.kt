@@ -374,7 +374,10 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         timelineId: String,
         content: String
     ): Boolean = db.rawQuery(
-        "SELECT 1 FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ? AND content = ? LIMIT 1",
+        """SELECT 1 FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ? AND content = ?
+           AND (source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
+               JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+               WHERE r.id = ${StorySchema.MEMORIES}.source_revision_id AND r.state = 'complete')) LIMIT 1""",
         arrayOf(storyId, timelineId, content)
     ).use { it.moveToFirst() }
 
@@ -384,7 +387,10 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         timelineId: String,
         content: String
     ): Boolean = db.rawQuery(
-        "SELECT 1 FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ? AND content = ? LIMIT 1",
+        """SELECT 1 FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ? AND content = ?
+           AND (source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
+               JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+               WHERE r.id = ${StorySchema.PROPOSALS}.source_revision_id AND r.state = 'complete')) LIMIT 1""",
         arrayOf(storyId, timelineId, content)
     ).use { it.moveToFirst() }
 

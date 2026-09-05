@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
+import org.json.JSONObject
 
 class StoryRepository(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
@@ -178,9 +179,13 @@ class StoryRepository(context: Context) : AutoCloseable {
         content: String,
         state: StoryRevisionState = StoryRevisionState.Complete,
         profileName: String = "",
-        model: String = ""
+        model: String = "",
+        expectedRevisionId: String? = null
     ): StoryMessageWithRevision? = helper.writableDatabase.inTransaction { db ->
         val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction null
+        requireRevisionChangeAllowed(db, current, expectedRevisionId)
+        require(state == StoryRevisionState.Complete && content.isNotBlank()) { "修订正文不能为空，且必须保存为完整版本" }
+        if (current.revision.content == content && current.revision.state == state) return@inTransaction current
         val now = System.currentTimeMillis()
         val newRevision = StoryMessageRevision(
             id = newRevisionId(),
@@ -195,21 +200,71 @@ class StoryRepository(context: Context) : AutoCloseable {
             createdAt = now,
             completedAt = now.takeIf { state == StoryRevisionState.Complete }
         )
-        db.update(
-            StorySchema.REVISIONS,
-            ContentValues().apply { put("state", StoryRevisionState.Superseded.dbValue) },
-            "id = ?",
-            arrayOf(current.revision.id)
-        )
         insertRevision(db, newRevision)
-        db.update(
-            StorySchema.MESSAGES,
-            ContentValues().apply { put("active_revision_id", newRevision.id) },
-            "id = ?",
-            arrayOf(messageId)
-        )
-        touchStory(db, current.message.storyId, now)
+        activateRevision(db, current, newRevision, now)
         StoryMessageWithRevision(current.message.copy(activeRevisionId = newRevision.id), newRevision)
+    }
+
+    fun listRevisions(messageId: String): List<StoryMessageRevision> = helper.readableDatabase.query(
+        StorySchema.REVISIONS, null, "message_id = ?", arrayOf(messageId), null, null, "created_at ASC, rowid ASC"
+    ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toRevision()) } }
+
+    fun restoreMessageRevision(messageId: String, revisionId: String, expectedRevisionId: String): Boolean =
+        helper.writableDatabase.inTransaction { db ->
+            val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
+            requireRevisionChangeAllowed(db, current, expectedRevisionId)
+            if (current.revision.id == revisionId) return@inTransaction false
+            val target = db.query(StorySchema.REVISIONS, null, "id = ? AND message_id = ?",
+                arrayOf(revisionId, messageId), null, null, null).use { cursor ->
+                if (cursor.moveToFirst()) cursor.toRevision() else null
+            } ?: return@inTransaction false
+            require(target.state == StoryRevisionState.Complete && target.content.isNotBlank()) {
+                "只能恢复已完整完成的正文版本"
+            }
+            activateRevision(db, current, target, System.currentTimeMillis())
+            true
+        }
+
+    private fun requireRevisionChangeAllowed(db: SQLiteDatabase, current: StoryMessageWithRevision, expected: String?) {
+        require(expected == null || current.revision.id == expected) { "正文版本已变化，请重新打开后操作" }
+        require(current.message.workspace == StoryWorkspace.Prose && current.message.role == "assistant") {
+            "目前仅支持修订末尾正文回复"
+        }
+        require(current.revision.state != StoryRevisionState.Streaming) { "请等待正文生成结束" }
+        val blocked = db.rawQuery(
+            """SELECT 1 FROM ${StorySchema.MESSAGES} m JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+               WHERE m.story_id = ? AND m.timeline_id = ? AND (m.sequence_no > ? OR r.state = 'streaming') LIMIT 1""",
+            arrayOf(current.message.storyId, current.message.timelineId, current.message.sequence.toString())
+        ).use { it.moveToFirst() }
+        require(!blocked) { "已有后续内容或正在生成，请先结束生成；较早正文的分支修订尚未开放" }
+        val activeTimeline = db.rawQuery("SELECT 1 FROM ${StorySchema.STORIES} WHERE id = ? AND current_timeline_id = ?",
+            arrayOf(current.message.storyId, current.message.timelineId)).use { it.moveToFirst() }
+        require(activeTimeline) { "故事时间线已变化" }
+    }
+
+    private fun activateRevision(db: SQLiteDatabase, current: StoryMessageWithRevision, target: StoryMessageRevision, now: Long) {
+        val baseVersion = db.rawQuery("SELECT memory_version FROM ${StorySchema.STORIES} WHERE id = ?",
+            arrayOf(current.message.storyId)).use { cursor -> check(cursor.moveToFirst()); cursor.getLong(0) }
+        val nextVersion = Math.addExact(baseVersion, 1L)
+        check(db.update(StorySchema.MESSAGES, ContentValues().apply { put("active_revision_id", target.id) },
+            "id = ? AND active_revision_id = ?", arrayOf(current.message.id, current.revision.id)) == 1)
+        check(db.update(StorySchema.STORIES, ContentValues().apply {
+            put("memory_version", nextVersion); put("updated_at", now)
+        }, "id = ? AND memory_version = ?", arrayOf(current.message.storyId, baseVersion.toString())) == 1)
+        db.update(StorySchema.JOBS, ContentValues().apply {
+            put("state", StoryJobState.Stale.dbValue); put("error", "Source revision switched"); put("updated_at", now)
+        }, "source_revision_id = ? AND state IN ('pending','running')", arrayOf(current.revision.id))
+        // Records retain their source IDs and manual active/pin choices. Query visibility follows the active revision.
+        db.insertOrThrow(StorySchema.CHANGE_SETS, null, ContentValues().apply {
+            put("id", newChangeSetId()); put("story_id", current.message.storyId)
+            put("timeline_id", current.message.timelineId); put("source_revision_id", target.id)
+            put("base_memory_version", baseVersion); put("committed_version", nextVersion)
+            put("status", "committed"); put("created_at", now); put("updated_at", now)
+            put("operations_json", JSONObject().put("actor", "user_ui").put("operation", "switch_revision")
+                .put("message_id", current.message.id).put("before_revision_id", current.revision.id)
+                .put("after_revision_id", target.id).toString())
+            put("conflicts_json", "[]")
+        })
     }
 
     fun updateActiveRevision(
@@ -223,7 +278,8 @@ class StoryRepository(context: Context) : AutoCloseable {
             """
             SELECT m.story_id
             FROM ${StorySchema.MESSAGES} m
-            WHERE m.active_revision_id = ?
+            JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+            WHERE m.active_revision_id = ? AND r.state = 'streaming'
             LIMIT 1
             """.trimIndent(),
             arrayOf(revisionId)
@@ -244,6 +300,8 @@ class StoryRepository(context: Context) : AutoCloseable {
 
     fun deleteMessage(messageId: String): Boolean = helper.writableDatabase.inTransaction { db ->
         val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
+        // Only disposable empty generation placeholders may be physically removed.
+        if (current.revision.content.isNotBlank() || current.revision.state == StoryRevisionState.Complete) return@inTransaction false
         val deleted = db.delete(StorySchema.MESSAGES, "id = ?", arrayOf(messageId)) == 1
         if (deleted) touchStory(db, current.message.storyId, System.currentTimeMillis())
         deleted
