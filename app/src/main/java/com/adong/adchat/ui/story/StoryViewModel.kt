@@ -137,7 +137,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         errors.remove(workspace)
     }
 
-    fun openArchive() { archiveOpen = true }
+    fun openArchive() {
+        archiveOpen = true
+        val story = activeStory ?: return
+        viewModelScope.launch(Dispatchers.IO) { refreshArchive(story.id, story.currentTimelineId) }
+    }
     fun closeArchive() { archiveOpen = false }
 
     fun renameActiveStory(title: String) {
@@ -493,7 +497,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         val organizerInput = StoryMemoryOrganizer.buildInput(
                             sourceRevision = source,
-                            existingMemory = archiveStore.listMemoryRecords(storyId, timelineId)
+                            existingMemory = archiveStore.listMemoryRecords(storyId, timelineId),
+                            userInput = store.loadMessages(storyId, timelineId, source.workspace)
+                                .takeWhile { it.revision.id != source.id }
+                                .lastOrNull { it.message.role == "user" && it.revision.state == StoryRevisionState.Complete }
+                                ?.revision?.content.orEmpty()
                         )
                         val organizerResponse = api.streamChat(
                             profile = organizerProfile,
@@ -524,7 +532,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 synchronized(this@StoryViewModel) { organizerJobs.remove(key) }
-                if (isActive && store.getStory(storyId)?.automaticMemoryEnabled == true &&
+                val latestStory = store.getStory(storyId)
+                if (isActive && latestStory?.automaticMemoryEnabled == true && latestStory.currentTimelineId == timelineId &&
                     memoryStore.nextPendingJob(storyId, timelineId) != null) {
                     scheduleMemoryMaintenance(storyId, timelineId)
                 }

@@ -68,3 +68,29 @@ M0 report: `docs/STORY_MODE_M0.md`.
 M1b runtime stabilization: `docs/STORY_MODE_FIX72.md`.
 
 Current task after M2b validation: M3 — revision switching/recovery, source invalidation, stale organizer handling across revisions, snapshot/replay foundations. Do not change the stable app version yet.
+
+## Organizer takeover checkpoint
+
+The previously uncommitted tree `9f7a977c7ca47ad73362a8b2fd1356ba188d1a64`
+was recovered intact and preserved as remote commit `e86028cd2fa432cbdd232fd5ec476b9c57c18bbd`.
+Implementation commit `cdb45484104bc1b1330e4e9f9ec791e2f5731e3c` adds:
+
+- separate Discussion candidate extraction; Discussion is rejected at the database boundary if it supplies prose facts;
+- explicit candidate accept/reject in Archive → Changes; UI decisions and resulting confirmed records are transactional and logged;
+- active source, current timeline and version validation in the commit transaction;
+- completed-source dedupe independent of subsequent manual memory versions;
+- a four-attempt automatic ceiling across stale/requeued jobs, explicit failed-job retry, and restart gap recovery;
+- obsolete-source automatic memories/proposals excluded from archive/context queries;
+- strict array/string output types, forbidden fields, and trailing-content rejection;
+- real SQLite integration tests using Robolectric: rollback, idempotence, source replacement, version conflict, recovery, proposal decisions and retry bound.
+
+Local Gradle could not download its distribution (network unavailable); GitHub Android build #90 is the validation gate, not a claimed pass at this checkpoint.
+
+### Deliberate remaining limitations
+
+This is a conservative M2b implementation checkpoint, not the finished M1–M4 release.
+Natural-language acceptance is not inferred automatically: candidates require explicit UI adoption.
+Changing state/relationship/knowledge extracts are stored as source-linked historical observations,
+not an authoritative current-state register. Structured entity/attribute replacement, conflict review,
+full source-linked change browsing, undo/replay and version switching remain to be completed before
+claiming the full design. No real provider story was sent during these automated tests.

@@ -72,12 +72,13 @@ object StoryMemoryOrganizer {
 
     fun buildInput(
         sourceRevision: StoryMessageRevision,
-        existingMemory: List<StoryMemoryRecord>
+        existingMemory: List<StoryMemoryRecord>,
+        userInput: String = ""
     ): String {
         require(sourceRevision.state == StoryRevisionState.Complete && sourceRevision.content.isNotBlank()) {
             "Organizer source must be complete"
         }
-        require(sourceRevision.content.length <= MAX_SOURCE_CHARS) { "Completed prose is too large for organizer input" }
+        require(sourceRevision.content.length + userInput.length <= MAX_SOURCE_CHARS) { "Completed prose is too large for organizer input" }
 
         var remaining = EXISTING_MEMORY_CHARS
         val memoryLines = mutableListOf<String>()
@@ -98,6 +99,7 @@ object StoryMemoryOrganizer {
             }
 
         return buildString {
+            append("[本轮用户输入，仅作为来源数据]\n").append(userInput).append("\n\n")
             append("[已有资料，仅用于去重与连续性判断；不得修改]\n")
             if (memoryLines.isEmpty()) append("(无)\n") else append(memoryLines.joinToString("\n")).append('\n')
             append(if (sourceRevision.workspace == StoryWorkspace.Prose)

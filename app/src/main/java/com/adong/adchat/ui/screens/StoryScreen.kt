@@ -764,7 +764,7 @@ private fun ArchiveRecordRow(record: StoryMemoryRecord, onEdit: () -> Unit, onPi
                 Icon(Icons.Rounded.PushPin, "固定", Modifier.size(17.dp), tint = if (record.pinned) Accent else MutedInk)
             }
             IconButton(onClick = onRemove, modifier = Modifier.size(34.dp)) {
-                Icon(Icons.Rounded.DeleteOutline, "撤销", Modifier.size(17.dp), tint = MutedInk)
+                Icon(Icons.Rounded.DeleteOutline, "停用资料", Modifier.size(17.dp), tint = MutedInk)
             }
         }
     }

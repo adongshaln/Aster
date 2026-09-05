@@ -34,8 +34,13 @@ class StoryMemoryStoreTest {
     private fun running(source: StoryMessageWithRevision): StoryMemoryJob = memory.markRunning(
         memory.enqueueForRevision(story.id, story.currentTimelineId, source.revision.id)!!)!!
     private fun facts() = StoryOrganizerOutput(listOf(StoryOrganizerMemoryCandidate(StoryMemoryKind.PlotEvent, "抵达城门")), emptyList())
-    private fun count(table: String): Int = StoryDatabase(context).use { helper ->
-        helper.readableDatabase.rawQuery("SELECT COUNT(*) FROM $table", null).use { it.moveToFirst(); it.getInt(0) }
+    private fun count(table: String): Int {
+        val helper = StoryDatabase(context)
+        val cursor = helper.readableDatabase.rawQuery("SELECT COUNT(*) FROM $table", null)
+        val value = if (cursor.moveToFirst()) cursor.getInt(0) else 0
+        cursor.close()
+        helper.close()
+        return value
     }
 
     @Test fun commitIsIdempotentAcrossLaterManualVersions() {
@@ -87,7 +92,7 @@ class StoryMemoryStoreTest {
         assertFalse(archive.decideProposal(story.id, story.currentTimelineId, proposal.id, true))
         assertEquals(1, count(StorySchema.MEMORIES))
         assertEquals(1, count(StorySchema.MANUAL_MEMORY_CHANGES))
-        assertEquals(2L, repo.getStory(story.id)!!.memoryVersion)
+        assertEquals(1L, repo.getStory(story.id)!!.memoryVersion)
     }
 
     @Test fun discussionCannotBypassParserAtStoreBoundary() {

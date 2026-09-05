@@ -48,44 +48,89 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             "updated_at DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toProposal()) } }
 
-    /** Explicit UI decision; nested manual add and decision log share this SQLite transaction. */
+    /** Explicit UI decision; proposal state, optional memory record, change set and version are atomic. */
     fun decideProposal(storyId: String, timelineId: String, proposalId: String, accept: Boolean): Boolean =
         helper.writableDatabase.inTransaction { db ->
-            val proposal = db.query(StorySchema.PROPOSALS, null,
+            val proposal = db.query(
+                StorySchema.PROPOSALS,
+                null,
                 "id = ? AND story_id = ? AND timeline_id = ? AND state = 'pending'",
                 arrayOf(proposalId, storyId, timelineId), null, null, null
-            ).use { c -> if (c.moveToFirst()) c.toProposal() else null } ?: return@inTransaction false
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.toProposal() else null }
+                ?: return@inTransaction false
             val sourceActive = db.rawQuery(
-                """SELECT 1 FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m
-                   ON m.active_revision_id = r.id JOIN ${StorySchema.STORIES} s ON s.id = r.story_id
-                   WHERE r.id = ? AND r.state = 'complete' AND s.current_timeline_id = ?""",
-                arrayOf(proposal.sourceRevisionId, timelineId)
-            ).use { it.moveToFirst() }
+                """SELECT 1 FROM ${StorySchema.REVISIONS} r
+                   JOIN ${StorySchema.MESSAGES} m ON m.active_revision_id = r.id
+                   JOIN ${StorySchema.STORIES} s ON s.id = r.story_id
+                   WHERE r.id = ? AND r.state = 'complete' AND m.role = 'assistant'
+                     AND s.current_timeline_id = ? AND r.timeline_id = ?""",
+                arrayOf(proposal.sourceRevisionId, timelineId, timelineId)
+            ).use { cursor -> cursor.moveToFirst() }
             if (!sourceActive) return@inTransaction false
-            val base = requireStoryMemoryVersion(db, storyId)
+
+            val baseVersion = requireStoryMemoryVersion(db, storyId)
             val now = System.currentTimeMillis()
-            val record = if (accept) addConfirmedRecord(storyId, timelineId,
-                when (proposal.proposalKind) {
-                    "world" -> StoryMemoryKind.WorldFact
-                    "character" -> StoryMemoryKind.CharacterProfile
-                    "author_plan", "plot" -> StoryMemoryKind.AuthorPlan
-                    else -> StoryMemoryKind.OpenThread
-                }, proposal.content) else null
-            val version = if (accept) requireStoryMemoryVersion(db, storyId) else Math.addExact(base, 1L)
-            if (!accept) db.update(StorySchema.STORIES, ContentValues().apply {
-                put("memory_version", version); put("updated_at", now)
-            }, "id = ?", arrayOf(storyId))
-            check(db.update(StorySchema.PROPOSALS, ContentValues().apply {
-                put("state", if (accept) "accepted" else "rejected"); put("updated_at", now)
-            }, "id = ? AND state = 'pending'", arrayOf(proposalId)) == 1)
+            val record = if (accept) {
+                val record = StoryMemoryRecord(
+                    storyId = storyId,
+                    timelineId = timelineId,
+                    kind = when (proposal.proposalKind) {
+                        "world" -> StoryMemoryKind.WorldFact
+                        "character" -> StoryMemoryKind.CharacterProfile
+                        "author_plan", "plot" -> StoryMemoryKind.AuthorPlan
+                        else -> StoryMemoryKind.OpenThread
+                    },
+                    content = proposal.content.trim(),
+                    nature = StoryMemoryNature.UserConfirmed,
+                    scope = "story",
+                    effectiveSequence = db.rawQuery(
+                        "SELECT COALESCE(MAX(sequence_no), 0) FROM ${StorySchema.MESSAGES} WHERE story_id = ? AND timeline_id = ?",
+                        arrayOf(storyId, timelineId)
+                    ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else 0L },
+                    sourceRevisionId = proposal.sourceRevisionId,
+                    pinned = false,
+                    active = true,
+                    createdAt = now,
+                    updatedAt = now
+                )
+                insertMemory(db, record)
+                commitManualChange(db, StoryManualMemoryOperation.Add, null, record, baseVersion, now)
+                record
+            } else null
+            val committedVersion = if (accept) {
+                requireStoryMemoryVersion(db, storyId)
+            } else {
+                val next = Math.addExact(baseVersion, 1L)
+                check(db.update(
+                    StorySchema.STORIES,
+                    ContentValues().apply { put("memory_version", next); put("updated_at", now) },
+                    "id = ? AND memory_version = ?", arrayOf(storyId, baseVersion.toString())
+                ) == 1)
+                next
+            }
+            check(db.update(
+                StorySchema.PROPOSALS,
+                ContentValues().apply {
+                    put("state", if (accept) StoryProposalState.Accepted.dbValue else StoryProposalState.Rejected.dbValue)
+                    put("updated_at", now)
+                },
+                "id = ? AND state = 'pending'", arrayOf(proposalId)
+            ) == 1)
             db.insertOrThrow(StorySchema.CHANGE_SETS, null, ContentValues().apply {
-                put("id", newChangeSetId()); put("story_id", storyId); put("timeline_id", timelineId)
-                put("base_memory_version", base); put("source_revision_id", proposal.sourceRevisionId)
-                put("status", "committed"); put("committed_version", version)
-                put("operations_json", JSONObject().put("actor", "user_ui").put("proposal_id", proposalId)
-                    .put("before", "pending").put("after", if (accept) "accepted" else "rejected")
+                put("id", newChangeSetId())
+                put("story_id", storyId)
+                put("timeline_id", timelineId)
+                put("base_memory_version", baseVersion)
+                put("source_revision_id", proposal.sourceRevisionId)
+                put("status", "committed")
+                put("committed_version", committedVersion)
+                put("operations_json", JSONObject().put("actor", "user_ui")
+                    .put("proposal_id", proposalId).put("before", "pending")
+                    .put("after", if (accept) "accepted" else "rejected")
                     .put("record_id", record?.id ?: JSONObject.NULL).toString())
-                put("conflicts_json", "[]"); put("created_at", now); put("updated_at", now)
+                put("conflicts_json", "[]")
+                put("created_at", now)
+                put("updated_at", now)
             })
             true
         }
