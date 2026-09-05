@@ -191,7 +191,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)
     val composerClearance = composerHeight + 18.dp
-    // Keep the bottom reading veil visually stable; the live Haze path rendered differently\n    // between idle and touch/scroll states on some Android GPUs.\n    val useLiveHaze = false
+    // Keep the bottom reading veil visually stable; the live Haze path rendered differently
+    // between idle and touch/scroll states on some Android GPUs.
+    val useLiveHaze = false
 
     LaunchedEffect(vm.activeConversationId) {
         autoFollow = true
