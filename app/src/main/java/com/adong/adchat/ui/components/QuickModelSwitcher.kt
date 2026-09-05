@@ -136,7 +136,7 @@ fun QuickModelSwitcher(
                         Column(Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Color(0xFF3A3835) else Canvas), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp), tint = if (selected) Accent else MutedInk)
+                                    Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp), tint = if (selected) AccentSoft else MutedInk)
                                 }
                                 Spacer(Modifier.width(10.dp))
                                 Column(Modifier.weight(1f)) {
@@ -210,7 +210,7 @@ fun QuickModelSwitcher(
                         ) {
                             Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(if (selected) Color.White.copy(alpha = .75f) else Canvas), contentAlignment = Alignment.Center) {
-                                    Icon(if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining, null, Modifier.size(20.dp), tint = if (selected) Accent else MutedInk)
+                                    Icon(if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining, null, Modifier.size(20.dp), tint = if (selected) AccentSoft else MutedInk)
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {

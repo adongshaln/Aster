@@ -111,7 +111,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
             item { IndependenceBanner(vm) }
             item {
                 Column {
-                    SectionTitle("", "合适的事，交给合适的模型", "为当前对话与图像创作分别选择服务。")
+                    SectionTitle("合适的事，交给合适的模型", "为当前对话与图像创作分别选择服务。")
                 Spacer(Modifier.height(12.dp))
                 RouteAssignmentCard(
                     kind = RouteKind.Chat,
@@ -137,7 +137,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
             item {
                 Column {
                     Row(verticalAlignment = Alignment.Bottom) {
-                        Column(Modifier.weight(1f)) { SectionTitle("", "连接你的服务", "管理地址、密钥与可用模型。") }
+                        Column(Modifier.weight(1f)) { SectionTitle("连接你的服务", "管理地址、密钥与可用模型。") }
                     Button(onClick = { addMenu = true }, shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Night)) {
                         Icon(Icons.Rounded.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("添加")
                     }
@@ -165,7 +165,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
         if (section == 2) {
             item {
                 Column {
-                    SectionTitle("", "让回答更合心意", "设置助手的角色、语气与回答习惯。仅用于对话。")
+                    SectionTitle("让回答更合心意", "设置助手的角色、语气与回答习惯。仅用于对话。")
                 Spacer(Modifier.height(12.dp))
                 Surface(color = Surface, shape = RoundedCornerShape(20.dp)) {
                     OutlinedTextField(
@@ -577,7 +577,7 @@ private fun Gpt56OptimizationCard(draft: ApiProfile, onDraft: (ApiProfile) -> Un
         Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFF393735)), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.AutoAwesome, null, tint = Accent)
+                    Icon(Icons.Rounded.AutoAwesome, null, tint = AccentSoft)
                 }
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
@@ -997,10 +997,10 @@ private fun ConnectionEditorCard(
     onTest: () -> Unit
 ) {
     val color = when (state.phase) {
-        ConnectionPhase.Success -> Sage
-        ConnectionPhase.Error -> Danger
-        ConnectionPhase.Testing -> Accent
-        ConnectionPhase.Idle -> MutedInk
+        ConnectionPhase.Success -> Color(0xFFB8CEAC)
+        ConnectionPhase.Error -> Color(0xFFFFB4A9)
+        ConnectionPhase.Testing -> AccentSoft
+        ConnectionPhase.Idle -> Color(0xFFBDB8B2)
     }
     Surface(
         color = Night,
@@ -1012,7 +1012,7 @@ private fun ConnectionEditorCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(38.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFF343331)), contentAlignment = Alignment.Center) {
                     if (state.phase == ConnectionPhase.Testing) {
-                        CircularProgressIndicator(Modifier.size(21.dp), color = Accent, strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.size(21.dp), color = AccentSoft, strokeWidth = 2.dp)
                     } else {
                         Icon(
                             when (state.phase) {
@@ -1040,7 +1040,7 @@ private fun ConnectionEditorCard(
                 TextButton(
                     onClick = onTest,
                     enabled = canTest && state.phase != ConnectionPhase.Testing,
-                    colors = ButtonDefaults.textButtonColors(contentColor = Accent, disabledContentColor = Color(0xFF77736F))
+                    colors = ButtonDefaults.textButtonColors(contentColor = AccentSoft, disabledContentColor = Color(0xFF77736F))
                 ) {
                     Text(if (state.phase == ConnectionPhase.Testing) "测试中" else "测试")
                 }
@@ -1147,7 +1147,7 @@ private fun EditorModelField(label: String, value: String, models: List<ApiModel
 }
 
 @Composable
-private fun SectionTitle(eyebrow: String, title: String, description: String) {
+private fun SectionTitle(title: String, description: String) {
     Text(title, style = MaterialTheme.typography.titleLarge)
     Spacer(Modifier.height(6.dp))
     Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium)

@@ -109,7 +109,7 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             contentPadding = PaddingValues(20.dp, 16.dp, 20.dp, 32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            item { MediaHeader(onOpenDrawer) }
+            item { MediaHeader() }
             item {
                 LinkInputCard(
                     value = state.input,
@@ -176,7 +176,7 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
 }
 
 @Composable
-private fun MediaHeader(onOpenDrawer: () -> Unit) {
+private fun MediaHeader() {
     Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
         Text("把喜欢的，留在身边。", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))

@@ -114,11 +114,11 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         }
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
         AsterPageHeader("创作", onOpenDrawer, Modifier.padding(horizontal = 8.dp))
     LazyColumn(
         state = listState,
-        modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
+        modifier = Modifier.weight(1f).fillMaxWidth(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
@@ -126,8 +126,7 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             DrawHeader(
                 profileName = vm.imageProfile.name,
                 model = vm.imageProfile.imageModel,
-                onSwitch = { showSwitcher = true },
-                onOpenDrawer = onOpenDrawer
+                onSwitch = { showSwitcher = true }
             )
         }
         item(key = "manga-translation") {
@@ -187,12 +186,10 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 activeTaskCount = vm.activeImageTaskCount,
                 activeImageCount = vm.activeImageCount,
                 maxImageCount = vm.maxConcurrentImageCount,
-                canStartTask = vm.canStartImageTask,
                 statusMangaTranslation = vm.activeImageTaskIsManga,
                 statusReferenceCount = vm.activeImageTaskReferenceCount,
                 error = vm.imageError,
                 onDismissError = vm::dismissImageError,
-                onGenerate = { focus.clearFocus(); vm.generateImage() },
                 onStop = vm::stopImageGeneration
             )
         }
@@ -238,8 +235,9 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 }
             }
         }
-        item(key = "bottom-space") { Spacer(Modifier.height(18.dp)) }
+        item(key = "bottom-space") { Spacer(Modifier.height(8.dp)) }
     }
+        DrawGenerateBar(vm, onGenerate = { focus.clearFocus(); vm.generateImage() })
     }
     if (showSwitcher) {
         QuickModelSwitcher(
@@ -296,7 +294,32 @@ fun DrawScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
 }
 
 @Composable
-private fun DrawHeader(profileName: String, model: String, onSwitch: () -> Unit, onOpenDrawer: () -> Unit) {
+private fun DrawGenerateBar(vm: MainViewModel, onGenerate: () -> Unit) {
+    val manga = vm.imageWorkflow == ImageWorkflow.MangaTranslation
+    val ready = vm.canStartImageTask && vm.drawPrompt.isNotBlank() && !vm.isReferenceLoading &&
+        (!manga || vm.referenceImages.size in 1..20)
+    val haptics = LocalHapticFeedback.current
+    Surface(color = Canvas) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
+            Button(onClick = { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); onGenerate() },
+                enabled = ready, modifier = Modifier.fillMaxWidth().height(54.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)) {
+                Icon(if (manga) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome, null, Modifier.size(20.dp))
+                Spacer(Modifier.width(9.dp))
+                Text(when {
+                    !vm.canStartImageTask -> "并发任务已满"
+                    vm.activeImageTaskCount > 0 -> "提交下一批 · ${vm.activeImageCount}/${vm.maxConcurrentImageCount} 张"
+                    manga -> "开始翻译漫画"
+                    else -> "开始生成"
+                }, fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DrawHeader(profileName: String, model: String, onSwitch: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Text("把灵感，变成画面。", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
@@ -347,12 +370,10 @@ private fun PromptStudio(
     activeTaskCount: Int,
     activeImageCount: Int,
     maxImageCount: Int,
-    canStartTask: Boolean,
     statusMangaTranslation: Boolean,
     statusReferenceCount: Int,
     error: String?,
     onDismissError: () -> Unit,
-    onGenerate: () -> Unit,
     onStop: () -> Unit
 ) {
     var showCanvasOptions by rememberSaveable { mutableStateOf(false) }
@@ -608,47 +629,7 @@ private fun PromptStudio(
                     )
                 }
             }
-            Spacer(Modifier.height(18.dp))
-            Button(
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onGenerate()
-                },
-                enabled = canStartTask && prompt.isNotBlank() && !referenceLoading && (!mangaTranslation || referenceImages.size in 1..20),
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Night,
-                    disabledContainerColor = Hairline
-                )
-            ) {
-                AnimatedContent(
-                    targetState = activeTaskCount > 0,
-                    transitionSpec = {
-                        (fadeIn(tween(140)) + scaleIn(tween(180), initialScale = 0.78f)) togetherWith
-                            (fadeOut(tween(100)) + scaleOut(tween(120), targetScale = 0.78f))
-                    },
-                    label = "generate-stop"
-                ) { hasActiveTasks ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            if (mangaTranslation) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome,
-                            null,
-                            Modifier.size(20.dp)
-                        )
-                        Spacer(Modifier.width(9.dp))
-                        Text(
-                            when {
-                                !canStartTask -> "并发任务已满"
-                                hasActiveTasks -> "提交下一批 · $activeImageCount/$maxImageCount 张"
-                                mangaTranslation -> "开始翻译漫画"
-                                else -> "开始生成"
-                            },
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
+
         }
     }
 }

@@ -454,7 +454,7 @@ private fun ChatHeader(vm: MainViewModel, onOpenDrawer: () -> Unit, onSwitchMode
                 Icon(Icons.Rounded.ExpandMore, "切换模型", Modifier.size(15.dp), tint = MutedInk)
             }
         }
-        AsterIconButton(Icons.Rounded.EditSquare, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
+        AsterIconButton(Icons.Rounded.AddComment, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
     }
 }
 

@@ -61,6 +61,7 @@ class AsterUiSmokeTest {
         screenshot("04-navigation")
         rule.onNodeWithText("创作").performClick()
         rule.onNodeWithText("图像创作").assertIsDisplayed()
+        rule.onNodeWithText("开始生成").assertIsDisplayed()
         screenshot("05-studio")
         rule.onNodeWithText("画面设置").performScrollTo().performClick()
         rule.onNodeWithText("画布比例").performScrollTo().assertIsDisplayed()
