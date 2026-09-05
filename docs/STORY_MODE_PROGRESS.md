@@ -133,3 +133,14 @@ M3b checkpoint `b6b3daa5331344eeb81aa4c470e2bf45f9a0a79d` passed Android Build #
 - Duplicate undo is idempotent across restart; later edits, inactive sources, and wrong timelines are rejected. The inverse is itself a recorded change and can be reversed.
 - Candidate adoption cannot be partially undone via its manual-add row. Automatic ChangeSets and candidate decisions remain browse-only in this checkpoint. This is not arbitrary log replay or full M3 completion.
 - Regression tests cover all four manual operations, repeat clicks/restart, conflicts, rollback, candidate decision isolation, and stale organizer results after undo. This commit requires its own CI.
+
+### M3d — whole-batch undo for organizer output and candidate decisions
+
+M3c commit `4bd0de02a72864bbb8d7ea9436c1e3a5639cfa9b` passed Android Build #97 (tests, Release, signed APK).
+
+- Automatic additions and their pending proposals can be reversed together. Candidate adoption/rejection reverses its decision and generated record together; no partial manual-add undo is used.
+- Inverse ChangeSets record before/after active/state values and can themselves be reversed to restore the same record/proposal IDs. Original logs remain.
+- All row mutations, inverse audit, persistent duplicate marker and memoryVersion advance share a transaction. Completed organizer jobs stay completed to avoid recreating intentionally removed output.
+- This conservative action requires the batch to match the current global memoryVersion and an effective source in the current route; later memory edits, source changes and route changes reject it. It does not replay arbitrary older dependent batches.
+- Regression tests cover automatic undo/restore and restart, candidate adoption/rejection, later edits, cross-route/source rejection, and rollback after a partial batch write. This commit requires its own CI.
+- M3/M4 still require acceptance review, including context dependency behavior, provider integration, and UI/readability polish; no stable version bump or main merge.

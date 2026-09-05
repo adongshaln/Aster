@@ -185,6 +185,9 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             true
         }
 
+    fun undoChangeSet(storyId: String, timelineId: String, changeId: String): Boolean =
+        helper.writableDatabase.inTransaction { db -> StoryChangeSetUndo.undo(db, storyId, timelineId, changeId) }
+
     fun listChanges(storyId: String, timelineId: String): List<StoryChangeEntry> = helper.readableDatabase.inTransaction { db ->
         val manual = db.query(StorySchema.MANUAL_MEMORY_CHANGES, null, "story_id = ? AND timeline_id = ?",
             arrayOf(storyId, timelineId), null, null, "committed_version DESC", "100").use { cursor ->
@@ -214,12 +217,19 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             while (cursor.moveToNext()) {
                 val operations = JSONObject(cursor.string("operations_json"))
                 val description = when {
+                    operations.optString("operation") == "reverse_change_set" -> "撤销 / 恢复整批变更"
                     operations.optString("operation") == "switch_revision" -> "切换正文版本"
                     operations.has("proposal_id") -> if (operations.optString("after") == "accepted") "采用候选" else "废弃候选"
                     else -> "自动整理：新增 ${operations.optJSONArray("added_memory_ids")?.length() ?: 0} 条资料、${operations.optJSONArray("proposal_ids")?.length() ?: 0} 条候选"
                 }
-                result += StoryChangeEntry(cursor.string("id"), cursor.getLong(cursor.getColumnIndexOrThrow("committed_version")),
-                    description, source = cursor.nullableString("source_text").orEmpty(), note = "保留来源记录；此类变更暂不提供单条撤销")
+                val id = cursor.string("id")
+                val version = cursor.getLong(cursor.getColumnIndexOrThrow("committed_version"))
+                val canUndo = StoryChangeSetUndo.canUndo(db, storyId, timelineId, id, version, cursor.string("source_revision_id"), operations)
+                val undone = StoryChangeSetUndo.wasUndone(db, storyId, timelineId, id)
+                result += StoryChangeEntry(id, version, description, source = cursor.nullableString("source_text").orEmpty(),
+                    note = if (undone) "已整体撤销" else if (canUndo) "资料与候选状态将一起撤销；反向记录可用于恢复"
+                        else "仅当前来源、且没有后续记忆变更的批次可整体撤销",
+                    canUndo = canUndo, batch = true)
             }
         }
         result.sortedByDescending { it.version }.take(100)

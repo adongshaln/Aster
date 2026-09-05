@@ -9,5 +9,6 @@ data class StoryChangeEntry(
     val after: String = "",
     val source: String = "",
     val note: String = "",
-    val canUndo: Boolean = false
+    val canUndo: Boolean = false,
+    val batch: Boolean = false
 )

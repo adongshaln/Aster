@@ -666,7 +666,7 @@ private fun StoryArchiveSheet(
     changes: List<StoryChangeEntry>,
     changeError: String?,
     undoBusy: Boolean,
-    onUndo: (String) -> Unit,
+    onUndo: (String, Boolean) -> Unit,
     onDecide: (String, Boolean) -> Unit,
     onRetryMemory: () -> Unit,
     availableProfiles: List<ApiProfile>,
@@ -738,7 +738,7 @@ private fun StoryArchiveSheet(
                                 if (change.note.isNotBlank()) Text(change.note, color = MutedInk, style = MaterialTheme.typography.labelSmall)
                                 Row {
                                     TextButton(onClick = { viewingChange = change }) { Text("查看详情") }
-                                    if (change.canUndo) TextButton(onClick = { onUndo(change.id) }, enabled = !undoBusy) { Text("撤销此改动") }
+                                    if (change.canUndo) TextButton(onClick = { onUndo(change.id, change.batch) }, enabled = !undoBusy) { Text(if (change.batch) "整体撤销" else "撤销此改动") }
                                 }
                             }
                         }

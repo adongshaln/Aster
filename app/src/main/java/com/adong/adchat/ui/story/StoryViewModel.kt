@@ -286,14 +286,15 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun undoArchiveChange(changeId: String) {
+    fun undoArchiveChange(changeId: String, batch: Boolean) {
         val story = activeStory ?: return
         if (undoBusy) return
         undoBusy = true
         archiveChangeError = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                archiveStore.undoManualChange(story.id, story.currentTimelineId, changeId)
+                if (batch) archiveStore.undoChangeSet(story.id, story.currentTimelineId, changeId)
+                else archiveStore.undoManualChange(story.id, story.currentTimelineId, changeId)
                 refreshArchive(story.id, story.currentTimelineId)
                 refreshStory(story.id)
             } catch (error: Exception) {
