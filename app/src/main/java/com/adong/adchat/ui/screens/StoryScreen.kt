@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryMemoryKind
+import com.adong.adchat.data.story.StoryProposal
 import com.adong.adchat.data.story.StoryMemoryRecord
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRevisionState
@@ -114,6 +115,10 @@ fun StoryScreen(
         StoryArchiveSheet(
             story = story,
             records = storyVm.archiveRecords,
+            proposals = storyVm.archiveProposals,
+            memoryStatus = storyVm.memoryStatus,
+            onDecide = storyVm::decideProposal,
+            onRetryMemory = storyVm::retryMemory,
             availableProfiles = mainVm.profiles,
             onReplaceRoute = storyVm::replaceActiveRoute,
             onAutomaticMemory = storyVm::setAutomaticMemoryEnabled,
@@ -573,6 +578,10 @@ private fun StoryPickerSheet(
 private fun StoryArchiveSheet(
     story: Story,
     records: List<StoryMemoryRecord>,
+    proposals: List<StoryProposal>,
+    memoryStatus: String,
+    onDecide: (String, Boolean) -> Unit,
+    onRetryMemory: () -> Unit,
     availableProfiles: List<ApiProfile>,
     onReplaceRoute: (ApiProfile) -> Unit,
     onAutomaticMemory: (Boolean) -> Unit,
@@ -614,7 +623,22 @@ private fun StoryArchiveSheet(
                             Switch(checked = story.automaticMemoryEnabled, onCheckedChange = onAutomaticMemory)
                         }
                     }
+                    item { ArchiveInfoCard("整理状态", memoryStatus) {
+                        TextButton(onClick = onRetryMemory, enabled = story.automaticMemoryEnabled) { Text("重试失败项") }
+                    } }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
+                    items(proposals, key = { "proposal-${it.id}" }) { proposal ->
+                        Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                                Text("待确认候选", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                                Text(proposal.content, modifier = Modifier.padding(vertical = 8.dp))
+                                Row {
+                                    TextButton(onClick = { onDecide(proposal.id, true) }) { Text("采用") }
+                                    TextButton(onClick = { onDecide(proposal.id, false) }) { Text("废弃") }
+                                }
+                            }
+                        }
+                    }
                     item {
                         Surface(
                             color = Surface,

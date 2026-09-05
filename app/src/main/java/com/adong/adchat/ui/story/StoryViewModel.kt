@@ -20,6 +20,7 @@ import com.adong.adchat.data.story.StoryMemoryApplyResult
 import com.adong.adchat.data.story.StoryMemoryKind
 import com.adong.adchat.data.story.StoryMemoryOrganizer
 import com.adong.adchat.data.story.StoryMemoryRecord
+import com.adong.adchat.data.story.StoryProposal
 import com.adong.adchat.data.story.StoryMemoryStore
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRepository
@@ -32,7 +33,9 @@ import com.adong.adchat.data.story.storyStopCleanupFor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
@@ -48,6 +51,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val stopRequested = ConcurrentHashMap.newKeySet<String>()
 
     val stories = mutableStateListOf<Story>()
+    val archiveProposals = mutableStateListOf<StoryProposal>()
+    var memoryStatus by mutableStateOf("暂无整理任务")
+        private set
     val archiveRecords = mutableStateListOf<StoryMemoryRecord>()
     private val workspaceMessages = mutableStateMapOf<StoryWorkspace, List<StoryMessageWithRevision>>()
     private val workspaceStates = mutableStateMapOf<StoryWorkspace, StoryWorkspaceState>()
@@ -105,6 +111,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 workspaceMessages.clear()
                 workspaceStates.clear()
                 archiveRecords.clear()
+                archiveProposals.clear()
                 errors.clear()
                 loadActiveStoryState(story)
                 onCreated(story)
@@ -120,6 +127,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         workspaceMessages.clear()
         workspaceStates.clear()
         archiveRecords.clear()
+                archiveProposals.clear()
         errors.clear()
         loadActiveStoryState(story)
     }
@@ -193,6 +201,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     workspaceMessages.clear()
                     workspaceStates.clear()
                     archiveRecords.clear()
+                archiveProposals.clear()
                     activeStory?.let(::loadActiveStoryState)
                 }
             }
@@ -359,7 +368,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                         profileName = profile.name,
                         model = routeModel
                     )
-                    if (completed && workspace == StoryWorkspace.Prose) {
+                    if (completed) {
                         memoryStore.enqueueForRevision(story.id, story.currentTimelineId, revisionId)
                         scheduleMemoryMaintenance(story.id, story.currentTimelineId, profile)
                     }
@@ -397,7 +406,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } finally {
-                withContext(Dispatchers.Main) {
+                withContext(NonCancellable + Dispatchers.Main) {
                     stopRequested.remove(key)
                     jobs.remove(key)
                     loadingKeys.remove(key)
@@ -418,6 +427,28 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         job.cancel(CancellationException("User stopped story generation"))
     }
 
+    fun retryMemory() {
+        val story = activeStory ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            memoryStore.retryFailed(story.id, story.currentTimelineId)
+            scheduleMemoryMaintenance(story.id, story.currentTimelineId)
+        }
+    }
+
+    fun decideProposal(proposalId: String, accept: Boolean) {
+        val story = activeStory ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                archiveStore.decideProposal(story.id, story.currentTimelineId, proposalId, accept)
+                refreshArchive(story.id, story.currentTimelineId)
+                refreshStory(story.id)
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) { memoryStatus = "候选操作未保存，请重新打开档案后重试" }
+            }
+        }
+    }
+
+    @Synchronized
     private fun scheduleMemoryMaintenance(
         storyId: String,
         timelineId: String,
@@ -427,15 +458,17 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         if (organizerJobs[key]?.isActive == true) return
         val task = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             try {
-                while (true) {
+                memoryStore.enqueueMissingSources(storyId, timelineId)
+                while (isActive) {
                     val story = store.getStory(storyId) ?: break
-                    if (!story.automaticMemoryEnabled) break
+                    if (!story.automaticMemoryEnabled || story.currentTimelineId != timelineId) break
                     val pending = memoryStore.nextPendingJob(storyId, timelineId) ?: break
                     val running = memoryStore.markRunning(pending) ?: continue
                     try {
+                        withContext(Dispatchers.Main) { if (activeStoryId == storyId) memoryStatus = "正在整理记忆" }
                         val source = store.getActiveRevision(running.sourceRevisionId)
                         val currentVersion = memoryStore.currentMemoryVersion(storyId)
-                        if (source == null || !source.eligibleForMemory) {
+                        if (source == null || source.state != StoryRevisionState.Complete || source.content.isBlank()) {
                             memoryStore.markStale(running.id, "Source revision is no longer active complete prose")
                             continue
                         }
@@ -465,11 +498,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                         val organizerResponse = api.streamChat(
                             profile = organizerProfile,
                             model = story.model,
-                            systemPrompt = StoryMemoryOrganizer.systemPrompt,
+                            systemPrompt = if (source.workspace == StoryWorkspace.Prose) StoryMemoryOrganizer.systemPrompt else StoryMemoryOrganizer.discussionPrompt,
                             history = listOf(ChatMessage(role = "user", content = organizerInput)),
                             cacheKey = "aster-story-memory-$storyId-${running.sourceRevisionId}-${running.baseMemoryVersion}"
                         ) { }
-                        val output = StoryMemoryOrganizer.parse(organizerResponse.text)
+                        val output = StoryMemoryOrganizer.parse(organizerResponse.text, source.workspace)
                         when (memoryStore.applyOrganizerOutput(running, output)) {
                             is StoryMemoryApplyResult.Committed -> {
                                 refreshArchive(storyId, timelineId)
@@ -490,7 +523,15 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } finally {
-                organizerJobs.remove(key)
+                synchronized(this@StoryViewModel) { organizerJobs.remove(key) }
+                if (isActive && store.getStory(storyId)?.automaticMemoryEnabled == true &&
+                    memoryStore.nextPendingJob(storyId, timelineId) != null) {
+                    scheduleMemoryMaintenance(storyId, timelineId)
+                }
+                withContext(NonCancellable) {
+                    val status = memoryStore.jobStatus(storyId, timelineId)
+                    withContext(Dispatchers.Main) { if (activeStoryId == storyId) memoryStatus = status }
+                }
             }
         }
         organizerJobs[key] = task
@@ -506,12 +547,17 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 store.loadWorkspaceState(story.id, workspace)
             }
             val records = archiveStore.listMemoryRecords(story.id, story.currentTimelineId)
+            val proposals = archiveStore.listPendingProposals(story.id, story.currentTimelineId)
+            val status = memoryStore.jobStatus(story.id, story.currentTimelineId)
             withContext(Dispatchers.Main) {
                 if (activeStoryId != story.id) return@withContext
                 workspaceMessages.putAll(loadedMessages)
                 workspaceStates.putAll(loadedStates)
                 archiveRecords.clear()
+                archiveProposals.clear()
                 archiveRecords.addAll(records)
+                archiveProposals.addAll(proposals)
+                memoryStatus = status
             }
         }
     }
@@ -529,10 +575,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshArchive(storyId: String, timelineId: String) {
         val records = archiveStore.listMemoryRecords(storyId, timelineId)
+        val proposals = archiveStore.listPendingProposals(storyId, timelineId)
         withContext(Dispatchers.Main) {
             if (activeStoryId == storyId) {
                 archiveRecords.clear()
+                archiveProposals.clear()
                 archiveRecords.addAll(records)
+                archiveProposals.addAll(proposals)
             }
         }
     }
@@ -556,9 +605,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         jobs.values.forEach { it.cancel() }
         organizerJobs.values.forEach { it.cancel() }
-        memoryStore.close()
-        archiveStore.close()
-        store.close()
+        val pending = jobs.values.toList() + organizerJobs.values.toList()
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            pending.forEach { it.join() }
+            memoryStore.close()
+            archiveStore.close()
+            store.close()
+        }
         super.onCleared()
     }
 

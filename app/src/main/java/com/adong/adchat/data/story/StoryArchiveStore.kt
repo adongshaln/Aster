@@ -14,7 +14,10 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         val records = helper.readableDatabase.query(
             StorySchema.MEMORIES,
             null,
-            "story_id = ? AND timeline_id = ? AND active = 1",
+            """story_id = ? AND timeline_id = ? AND active = 1 AND
+               (source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
+                JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+                WHERE r.id = ${StorySchema.MEMORIES}.source_revision_id AND r.state = 'complete'))""",
             arrayOf(storyId, timelineId),
             null,
             null,
@@ -35,12 +38,57 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         helper.readableDatabase.query(
             StorySchema.PROPOSALS,
             null,
-            "story_id = ? AND timeline_id = ? AND state = ?",
+            """story_id = ? AND timeline_id = ? AND state = ? AND EXISTS
+                (SELECT 1 FROM ${StorySchema.MESSAGES} m JOIN ${StorySchema.REVISIONS} r
+                 ON r.id = m.active_revision_id WHERE r.id = ${StorySchema.PROPOSALS}.source_revision_id
+                 AND r.state = 'complete')""",
             arrayOf(storyId, timelineId, StoryProposalState.Pending.dbValue),
             null,
             null,
             "updated_at DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toProposal()) } }
+
+    /** Explicit UI decision; nested manual add and decision log share this SQLite transaction. */
+    fun decideProposal(storyId: String, timelineId: String, proposalId: String, accept: Boolean): Boolean =
+        helper.writableDatabase.inTransaction { db ->
+            val proposal = db.query(StorySchema.PROPOSALS, null,
+                "id = ? AND story_id = ? AND timeline_id = ? AND state = 'pending'",
+                arrayOf(proposalId, storyId, timelineId), null, null, null
+            ).use { c -> if (c.moveToFirst()) c.toProposal() else null } ?: return@inTransaction false
+            val sourceActive = db.rawQuery(
+                """SELECT 1 FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m
+                   ON m.active_revision_id = r.id JOIN ${StorySchema.STORIES} s ON s.id = r.story_id
+                   WHERE r.id = ? AND r.state = 'complete' AND s.current_timeline_id = ?""",
+                arrayOf(proposal.sourceRevisionId, timelineId)
+            ).use { it.moveToFirst() }
+            if (!sourceActive) return@inTransaction false
+            val base = requireStoryMemoryVersion(db, storyId)
+            val now = System.currentTimeMillis()
+            val record = if (accept) addConfirmedRecord(storyId, timelineId,
+                when (proposal.proposalKind) {
+                    "world" -> StoryMemoryKind.WorldFact
+                    "character" -> StoryMemoryKind.CharacterProfile
+                    "author_plan", "plot" -> StoryMemoryKind.AuthorPlan
+                    else -> StoryMemoryKind.OpenThread
+                }, proposal.content) else null
+            val version = if (accept) requireStoryMemoryVersion(db, storyId) else Math.addExact(base, 1L)
+            if (!accept) db.update(StorySchema.STORIES, ContentValues().apply {
+                put("memory_version", version); put("updated_at", now)
+            }, "id = ?", arrayOf(storyId))
+            check(db.update(StorySchema.PROPOSALS, ContentValues().apply {
+                put("state", if (accept) "accepted" else "rejected"); put("updated_at", now)
+            }, "id = ? AND state = 'pending'", arrayOf(proposalId)) == 1)
+            db.insertOrThrow(StorySchema.CHANGE_SETS, null, ContentValues().apply {
+                put("id", newChangeSetId()); put("story_id", storyId); put("timeline_id", timelineId)
+                put("base_memory_version", base); put("source_revision_id", proposal.sourceRevisionId)
+                put("status", "committed"); put("committed_version", version)
+                put("operations_json", JSONObject().put("actor", "user_ui").put("proposal_id", proposalId)
+                    .put("before", "pending").put("after", if (accept) "accepted" else "rejected")
+                    .put("record_id", record?.id ?: JSONObject.NULL).toString())
+                put("conflicts_json", "[]"); put("created_at", now); put("updated_at", now)
+            })
+            true
+        }
 
     fun listManualChanges(storyId: String, timelineId: String): List<StoryManualMemoryChange> =
         helper.readableDatabase.query(

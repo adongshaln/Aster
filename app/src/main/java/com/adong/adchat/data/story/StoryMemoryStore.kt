@@ -28,13 +28,13 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             put("error", "Recovered after process restart")
             put("updated_at", System.currentTimeMillis())
         },
-        "state = ? AND kind = ?",
-        arrayOf(StoryJobState.Running.dbValue, ORGANIZER_JOB_KIND)
+        "state = ? AND kind IN (?, ?)",
+        arrayOf(StoryJobState.Running.dbValue, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND)
     )
 
     fun enqueueForRevision(storyId: String, timelineId: String, sourceRevisionId: String): StoryMemoryJob? =
         helper.writableDatabase.inTransaction { db ->
-            val source = queryActiveCompleteProseSource(db, sourceRevisionId)
+            val source = queryActiveCompleteSource(db, sourceRevisionId)
                 ?.takeIf { it.storyId == storyId && it.timelineId == timelineId }
                 ?: return@inTransaction null
             val storyState = queryStoryState(db, storyId) ?: return@inTransaction null
@@ -42,20 +42,23 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             insertJobIfAbsent(db, source, storyState.memoryVersion, System.currentTimeMillis())
         }
 
-    fun nextPendingJob(storyId: String, timelineId: String): StoryMemoryJob? = helper.readableDatabase.query(
-        StorySchema.JOBS,
-        null,
-        "story_id = ? AND timeline_id = ? AND kind = ? AND state = ?",
-        arrayOf(storyId, timelineId, ORGANIZER_JOB_KIND, StoryJobState.Pending.dbValue),
-        null,
-        null,
-        "created_at ASC",
-        "1"
+    fun nextPendingJob(storyId: String, timelineId: String): StoryMemoryJob? = helper.readableDatabase.rawQuery(
+        """SELECT j.* FROM ${StorySchema.JOBS} j
+           JOIN ${StorySchema.REVISIONS} r ON r.id = j.source_revision_id
+           JOIN ${StorySchema.MESSAGES} m ON m.id = r.message_id
+           WHERE j.story_id = ? AND j.timeline_id = ? AND j.kind IN (?, ?) AND j.state = ?
+           ORDER BY m.sequence_no ASC, j.created_at ASC LIMIT 1""",
+        arrayOf(storyId, timelineId, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND, StoryJobState.Pending.dbValue)
     ).use { cursor -> if (cursor.moveToFirst()) cursor.toJob() else null }
 
     fun markRunning(job: StoryMemoryJob): StoryMemoryJob? = helper.writableDatabase.inTransaction { db ->
         val current = queryJob(db, job.id) ?: return@inTransaction null
         if (current.state != StoryJobState.Pending) return@inTransaction null
+        val totalAttempts = sourceAttempts(db, current.sourceRevisionId)
+        if (totalAttempts >= MAX_SOURCE_ATTEMPTS) {
+            markJobState(db, current.id, StoryJobState.Failed, "Retry limit reached; review and retry manually")
+            return@inTransaction null
+        }
         val now = System.currentTimeMillis()
         val next = current.copy(
             state = StoryJobState.Running,
@@ -123,7 +126,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
 
     fun requeueStale(job: StoryMemoryJob, newBaseVersion: Long): StoryMemoryJob? =
         helper.writableDatabase.inTransaction { db ->
-            val source = queryActiveCompleteProseSource(db, job.sourceRevisionId)
+            val source = queryActiveCompleteSource(db, job.sourceRevisionId)
             db.update(
                 StorySchema.JOBS,
                 ContentValues().apply {
@@ -134,7 +137,9 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 "id = ?",
                 arrayOf(job.id)
             )
-            source?.let { insertJobIfAbsent(db, it, newBaseVersion, System.currentTimeMillis()) }
+            val actualVersion = queryStoryState(db, job.storyId)?.memoryVersion
+            source?.takeIf { it.storyId == job.storyId && it.timelineId == job.timelineId }
+                ?.let { insertJobIfAbsent(db, it, actualVersion ?: newBaseVersion, System.currentTimeMillis()) }
         }
 
     fun applyOrganizerOutput(job: StoryMemoryJob, output: StoryOrganizerOutput): StoryMemoryApplyResult =
@@ -142,14 +147,21 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             val persistedJob = queryJob(db, job.id) ?: return@inTransaction StoryMemoryApplyResult.StaleSource
             if (persistedJob.state != StoryJobState.Running) return@inTransaction StoryMemoryApplyResult.StaleSource
 
-            val source = queryActiveCompleteProseSource(db, persistedJob.sourceRevisionId)
-            if (source == null) {
+            val source = queryActiveCompleteSource(db, persistedJob.sourceRevisionId)
+            if (source == null || source.storyId != persistedJob.storyId || source.timelineId != persistedJob.timelineId) {
                 markJobState(db, persistedJob.id, StoryJobState.Stale, "Source revision is no longer active complete prose")
                 return@inTransaction StoryMemoryApplyResult.StaleSource
             }
 
             val storyState = queryStoryState(db, persistedJob.storyId)
                 ?: return@inTransaction StoryMemoryApplyResult.StaleSource
+            if (!storyState.automaticMemoryEnabled) {
+                markJobState(db, persistedJob.id, StoryJobState.Pending, "Automatic memory disabled")
+                return@inTransaction StoryMemoryApplyResult.StaleSource
+            }
+            require(source.workspace == StoryWorkspace.Prose || output.memories.isEmpty()) {
+                "Discussion cannot commit prose facts"
+            }
             if (storyState.memoryVersion != persistedJob.baseMemoryVersion) {
                 markJobState(db, persistedJob.id, StoryJobState.Stale, "memoryVersion changed before organizer commit")
                 val requeued = insertJobIfAbsent(db, source, storyState.memoryVersion, System.currentTimeMillis())
@@ -164,7 +176,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             }
 
             val now = System.currentTimeMillis()
-            val committedVersion = if (memoryCandidates.isNotEmpty()) {
+            val committedVersion = if (memoryCandidates.isNotEmpty() || proposalCandidates.isNotEmpty()) {
                 Math.addExact(storyState.memoryVersion, 1L)
             } else {
                 storyState.memoryVersion
@@ -253,12 +265,19 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         baseMemoryVersion: Long,
         now: Long
     ): StoryMemoryJob? {
+        if (db.rawQuery("SELECT 1 FROM ${StorySchema.JOBS} WHERE source_revision_id = ? AND state = 'completed' LIMIT 1",
+                arrayOf(source.revisionId)).use { it.moveToFirst() }) return null
+        if (sourceAttempts(db, source.revisionId) >= MAX_SOURCE_ATTEMPTS) {
+            db.execSQL("UPDATE ${StorySchema.JOBS} SET state = 'failed', error = 'Retry limit reached' WHERE source_revision_id = ? AND state = 'stale'",
+                arrayOf(source.revisionId))
+            return null
+        }
         val dedupeKey = storyOrganizerDedupeKey(source.revisionId, baseMemoryVersion)
         val candidate = StoryMemoryJob(
             storyId = source.storyId,
             timelineId = source.timelineId,
             sourceRevisionId = source.revisionId,
-            kind = ORGANIZER_JOB_KIND,
+            kind = if (source.workspace == StoryWorkspace.Prose) ORGANIZER_JOB_KIND else DISCUSSION_JOB_KIND,
             dedupeKey = dedupeKey,
             baseMemoryVersion = baseMemoryVersion,
             state = StoryJobState.Pending,
@@ -296,19 +315,20 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         ).use { cursor -> if (cursor.moveToFirst()) cursor.toJob() else null }
     }
 
-    private fun queryActiveCompleteProseSource(db: SQLiteDatabase, revisionId: String): SourceMeta? = db.rawQuery(
+    private fun queryActiveCompleteSource(db: SQLiteDatabase, revisionId: String): SourceMeta? = db.rawQuery(
         """
         SELECT r.id, r.story_id, r.timeline_id, r.workspace, r.state, r.content,
                m.sequence_no, m.role
         FROM ${StorySchema.REVISIONS} r
         JOIN ${StorySchema.MESSAGES} m ON m.active_revision_id = r.id
-        WHERE r.id = ?
+        JOIN ${StorySchema.STORIES} s ON s.id = r.story_id AND s.current_timeline_id = r.timeline_id
+        WHERE r.id = ? AND m.story_id = r.story_id AND m.timeline_id = r.timeline_id
+          AND m.workspace = r.workspace AND m.id = r.message_id
         LIMIT 1
         """.trimIndent(),
         arrayOf(revisionId)
     ).use { cursor ->
         if (!cursor.moveToFirst()) return@use null
-        if (StoryWorkspace.fromDb(cursor.string("workspace")) != StoryWorkspace.Prose) return@use null
         if (StoryRevisionState.fromDb(cursor.string("state")) != StoryRevisionState.Complete) return@use null
         if (cursor.string("role") != "assistant") return@use null
         val content = cursor.string("content")
@@ -317,7 +337,8 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             revisionId = cursor.string("id"),
             storyId = cursor.string("story_id"),
             timelineId = cursor.string("timeline_id"),
-            sequence = cursor.long("sequence_no")
+            sequence = cursor.long("sequence_no"),
+            workspace = StoryWorkspace.fromDb(cursor.string("workspace"))
         )
     }
 
@@ -349,7 +370,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         timelineId: String,
         content: String
     ): Boolean = db.rawQuery(
-        "SELECT 1 FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ? AND active = 1 AND content = ? LIMIT 1",
+        "SELECT 1 FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ? AND content = ? LIMIT 1",
         arrayOf(storyId, timelineId, content)
     ).use { it.moveToFirst() }
 
@@ -359,8 +380,8 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         timelineId: String,
         content: String
     ): Boolean = db.rawQuery(
-        "SELECT 1 FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ? AND state = ? AND content = ? LIMIT 1",
-        arrayOf(storyId, timelineId, StoryProposalState.Pending.dbValue, content)
+        "SELECT 1 FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ? AND content = ? LIMIT 1",
+        arrayOf(storyId, timelineId, content)
     ).use { it.moveToFirst() }
 
     private fun insertMemory(db: SQLiteDatabase, record: StoryMemoryRecord) {
@@ -453,7 +474,8 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         val revisionId: String,
         val storyId: String,
         val timelineId: String,
-        val sequence: Long
+        val sequence: Long,
+        val workspace: StoryWorkspace
     )
 
     private data class StoryState(
@@ -461,7 +483,57 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         val automaticMemoryEnabled: Boolean
     )
 
+    private fun sourceAttempts(db: SQLiteDatabase, revisionId: String): Int = db.rawQuery(
+        "SELECT COALESCE(SUM(attempts), 0) FROM ${StorySchema.JOBS} WHERE source_revision_id = ?",
+        arrayOf(revisionId)
+    ).use { it.moveToFirst(); it.getInt(0) }
+
+    // Recover the gap between a completed reply and enqueue, including while memory was disabled.
+    fun enqueueMissingSources(storyId: String, timelineId: String) {
+        val revisions = helper.readableDatabase.rawQuery(
+            """SELECT r.id FROM ${StorySchema.REVISIONS} r
+               JOIN ${StorySchema.MESSAGES} m ON m.active_revision_id = r.id
+               WHERE r.story_id = ? AND r.timeline_id = ? AND r.state = 'complete'
+                 AND m.role = 'assistant' ORDER BY m.sequence_no""",
+            arrayOf(storyId, timelineId)
+        ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        revisions.forEach { id ->
+            // Existing failed/pending jobs must not be reset by reopening the app.
+            val exists = helper.readableDatabase.rawQuery(
+                "SELECT 1 FROM ${StorySchema.JOBS} WHERE source_revision_id = ? LIMIT 1", arrayOf(id)
+            ).use { it.moveToFirst() }
+            if (!exists) enqueueForRevision(storyId, timelineId, id)
+        }
+    }
+
+    fun retryFailed(storyId: String, timelineId: String) = helper.writableDatabase.inTransaction { db ->
+        val ids = db.rawQuery("SELECT DISTINCT source_revision_id FROM ${StorySchema.JOBS} WHERE story_id = ? AND timeline_id = ? AND state = 'failed'",
+            arrayOf(storyId, timelineId)).use { c -> buildList { while(c.moveToNext()) add(c.getString(0)) } }
+        ids.forEach { id ->
+            val source = queryActiveCompleteSource(db, id) ?: return@forEach
+            db.execSQL("UPDATE ${StorySchema.JOBS} SET attempts = 0 WHERE source_revision_id = ?", arrayOf(id))
+            val version = queryStoryState(db, storyId)?.memoryVersion ?: return@forEach
+            val job = insertJobIfAbsent(db, source, version, System.currentTimeMillis()) ?: return@forEach
+            if (job.state != StoryJobState.Completed) markJobState(db, job.id, StoryJobState.Pending, "User requested retry")
+        }
+    }
+
+    fun jobStatus(storyId: String, timelineId: String): String = helper.readableDatabase.rawQuery(
+        "SELECT state, COUNT(*) FROM ${StorySchema.JOBS} WHERE story_id = ? AND timeline_id = ? GROUP BY state",
+        arrayOf(storyId, timelineId)
+    ).use { c -> buildList {
+        while (c.moveToNext()) {
+            val label = when (c.getString(0)) {
+                "pending" -> "待整理"; "running" -> "整理中"; "failed" -> "失败"
+                "completed" -> "已整理"; else -> "已过期"
+            }
+            add("$label ${c.getInt(1)}")
+        }
+    }.joinToString(" · ").ifBlank { "暂无整理任务" } }
+
     private companion object {
+        const val MAX_SOURCE_ATTEMPTS = 4
+        const val DISCUSSION_JOB_KIND = "organize_discussion"
         const val ORGANIZER_JOB_KIND = "organize_prose"
         const val MAX_JOB_ERROR_CHARS = 500
     }

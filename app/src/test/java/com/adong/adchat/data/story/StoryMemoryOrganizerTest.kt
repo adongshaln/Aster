@@ -57,6 +57,33 @@ class StoryMemoryOrganizerTest {
         assertTrue(StoryMemoryOrganizer.systemPrompt.contains("不得返回、猜测或修改任何数据库 ID"))
     }
 
+    @Test fun malformedTypesAndTrailingDataAreRejected() {
+        listOf(
+            """{"memories":{},"proposals":[]}""",
+            """{"memories":[],"proposals":null}""",
+            """{"memories":[{"kind":"plot_event","content":12}],"proposals":[]}""",
+            """{"memories":[],"proposals":[]} extra"""
+        ).forEach { raw -> expectFailure { StoryMemoryOrganizer.parse(raw) } }
+    }
+
+    @Test fun discussionCannotCommitFacts() {
+        expectFailure { StoryMemoryOrganizer.parse(
+            """{"memories":[{"kind":"plot_event","content":"示例中人物死亡"}],"proposals":[]}""",
+            StoryWorkspace.Discussion) }
+        val output = StoryMemoryOrganizer.parse(
+            """{"memories":[],"proposals":[{"kind":"world","content":"也许存在魔法"}]}""",
+            StoryWorkspace.Discussion)
+        assertEquals(1, output.proposals.size)
+        assertTrue(output.memories.isEmpty())
+    }
+
+    @Test fun changingStateIsAnObservationNotAnEverlastingCurrentState() {
+        val output = StoryMemoryOrganizer.parse(
+            """{"memories":[{"kind":"current_state","content":"人物抵达港口"}],"proposals":[]}""")
+        assertEquals(StoryMemoryKind.PlotEvent, output.memories.single().kind)
+        assertTrue(output.memories.single().content.startsWith("本轮观察"))
+    }
+
     private fun expectFailure(block: () -> Unit) {
         try {
             block()
