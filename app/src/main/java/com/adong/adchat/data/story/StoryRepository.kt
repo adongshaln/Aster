@@ -242,6 +242,13 @@ class StoryRepository(context: Context) : AutoCloseable {
         updated
     }
 
+    fun deleteMessage(messageId: String): Boolean = helper.writableDatabase.inTransaction { db ->
+        val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
+        val deleted = db.delete(StorySchema.MESSAGES, "id = ?", arrayOf(messageId)) == 1
+        if (deleted) touchStory(db, current.message.storyId, System.currentTimeMillis())
+        deleted
+    }
+
     fun isRevisionActive(revisionId: String): Boolean = helper.readableDatabase.rawQuery(
         "SELECT 1 FROM ${StorySchema.MESSAGES} WHERE active_revision_id = ? LIMIT 1",
         arrayOf(revisionId)
@@ -330,20 +337,32 @@ class StoryRepository(context: Context) : AutoCloseable {
             )
         }
 
-    fun saveWorkspaceState(state: StoryWorkspaceState) {
-        helper.writableDatabase.insertWithOnConflict(
-            StorySchema.WORKSPACE_STATE,
-            null,
-            ContentValues().apply {
-                put("story_id", state.storyId)
-                put("workspace", state.workspace.dbValue)
-                put("draft", state.draft.take(MAX_WORKSPACE_DRAFT))
-                put("first_visible_index", state.firstVisibleIndex.coerceAtLeast(0))
-                put("first_visible_offset", state.firstVisibleOffset)
-                put("updated_at", System.currentTimeMillis())
-            },
-            SQLiteDatabase.CONFLICT_REPLACE
-        )
+    fun saveWorkspaceState(state: StoryWorkspaceState): Boolean = helper.writableDatabase.inTransaction { db ->
+        val existingUpdatedAt = db.rawQuery(
+            "SELECT updated_at FROM ${StorySchema.WORKSPACE_STATE} WHERE story_id = ? AND workspace = ? LIMIT 1",
+            arrayOf(state.storyId, state.workspace.dbValue)
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getLong(0) else null }
+        if (!shouldPersistStoryWorkspaceState(existingUpdatedAt, state.updatedAt)) return@inTransaction false
+
+        val values = ContentValues().apply {
+            put("story_id", state.storyId)
+            put("workspace", state.workspace.dbValue)
+            put("draft", state.draft.take(MAX_WORKSPACE_DRAFT))
+            put("first_visible_index", state.firstVisibleIndex.coerceAtLeast(0))
+            put("first_visible_offset", state.firstVisibleOffset)
+            put("updated_at", state.updatedAt)
+        }
+        if (existingUpdatedAt == null) {
+            db.insertOrThrow(StorySchema.WORKSPACE_STATE, null, values)
+            true
+        } else {
+            db.update(
+                StorySchema.WORKSPACE_STATE,
+                values,
+                "story_id = ? AND workspace = ?",
+                arrayOf(state.storyId, state.workspace.dbValue)
+            ) == 1
+        }
     }
 
     override fun close() = helper.close()

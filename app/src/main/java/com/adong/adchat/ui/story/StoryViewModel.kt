@@ -19,20 +19,25 @@ import com.adong.adchat.data.story.StoryMemoryRecord
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRepository
 import com.adong.adchat.data.story.StoryRevisionState
+import com.adong.adchat.data.story.StoryStopCleanup
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.data.story.StoryWorkspaceState
+import com.adong.adchat.data.story.nextStoryWorkspaceUpdatedAt
+import com.adong.adchat.data.story.storyStopCleanupFor
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 
 class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val store = StoryRepository(application)
     private val archiveStore = StoryArchiveStore(application)
     private val api = ApiRepository()
     private val jobs = linkedMapOf<String, Job>()
-    private val stopRequested = hashSetOf<String>()
+    private val stopRequested = ConcurrentHashMap.newKeySet<String>()
 
     val stories = mutableStateListOf<Story>()
     val archiveRecords = mutableStateListOf<StoryMemoryRecord>()
@@ -176,7 +181,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     fun updateDraft(value: String, workspace: StoryWorkspace = activeWorkspace) {
         val storyId = activeStoryId ?: return
         val current = workspaceState(workspace)
-        val next = current.copy(storyId = storyId, draft = value, updatedAt = System.currentTimeMillis())
+        val next = current.copy(
+            storyId = storyId,
+            draft = value,
+            updatedAt = nextStoryWorkspaceUpdatedAt(current.updatedAt, System.currentTimeMillis())
+        )
         workspaceStates[workspace] = next
         viewModelScope.launch(Dispatchers.IO) { store.saveWorkspaceState(next) }
     }
@@ -188,7 +197,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             storyId = storyId,
             firstVisibleIndex = firstVisibleIndex.coerceAtLeast(0),
             firstVisibleOffset = firstVisibleOffset,
-            updatedAt = System.currentTimeMillis()
+            updatedAt = nextStoryWorkspaceUpdatedAt(current.updatedAt, System.currentTimeMillis())
         )
         workspaceStates[workspace] = next
         viewModelScope.launch(Dispatchers.IO) { store.saveWorkspaceState(next) }
@@ -257,7 +266,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         loadingKeys[key] = true
         stopRequested.remove(key)
 
-        val job = viewModelScope.launch(Dispatchers.IO) {
+        val job = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
             var assistant: StoryMessageWithRevision? = null
             val streamed = StringBuilder()
             var lastPersistAt = 0L
@@ -323,18 +332,21 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 val partial = streamed.toString().trimEnd()
                 val revisionId = assistant?.revision?.id
                 when {
-                    key in stopRequested || error is CancellationException -> {
-                        if (revisionId != null) {
-                            store.updateActiveRevision(
-                                revisionId = revisionId,
-                                content = partial,
-                                state = StoryRevisionState.Stopped,
-                                profileName = profile.name,
-                                model = routeModel
-                            )
+                    key in stopRequested -> {
+                        when (storyStopCleanupFor(partial)) {
+                            StoryStopCleanup.RemoveAssistant -> assistant?.message?.id?.let(store::deleteMessage)
+                            StoryStopCleanup.KeepStoppedPartial -> revisionId?.let {
+                                store.updateActiveRevision(
+                                    revisionId = it,
+                                    content = partial,
+                                    state = StoryRevisionState.Stopped,
+                                    profileName = profile.name,
+                                    model = routeModel
+                                )
+                            }
                         }
-                        if (error is CancellationException && key !in stopRequested) throw error
                     }
+                    error is CancellationException -> throw error
                     revisionId != null -> {
                         store.updateActiveRevision(
                             revisionId = revisionId,
@@ -349,21 +361,25 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } finally {
-                stopRequested.remove(key)
-                jobs.remove(key)
-                withContext(Dispatchers.Main) { loadingKeys.remove(key) }
+                withContext(Dispatchers.Main) {
+                    stopRequested.remove(key)
+                    jobs.remove(key)
+                    loadingKeys.remove(key)
+                }
                 refreshWorkspaceIfVisible(story.id, workspace)
                 refreshStory(story.id)
             }
         }
         jobs[key] = job
+        job.start()
     }
 
     fun stop(workspace: StoryWorkspace = activeWorkspace) {
         val storyId = activeStoryId ?: return
         val key = jobKey(storyId, workspace)
+        val job = jobs[key] ?: return
         stopRequested += key
-        jobs[key]?.cancel(CancellationException("User stopped story generation"))
+        job.cancel(CancellationException("User stopped story generation"))
     }
 
     private fun loadActiveStoryState(story: Story) {
