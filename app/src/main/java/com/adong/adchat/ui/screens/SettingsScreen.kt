@@ -49,6 +49,8 @@ import com.adong.adchat.data.IMAGE_API_MODE_GEMINI
 import com.adong.adchat.data.IMAGE_API_MODE_OPENAI
 import com.adong.adchat.data.hasValidBaseUrl
 import com.adong.adchat.data.invalidExtraHeaderLines
+import com.adong.adchat.data.isGptModel
+import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.normalized
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.ConnectionUiState
@@ -95,102 +97,64 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
     var includeApiKeys by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf("") }
     var importError by remember { mutableStateOf<String?>(null) }
-    var section by rememberSaveable { mutableIntStateOf(0) }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         AsterPageHeader("设置", onOpenDrawer, Modifier.padding(horizontal = 8.dp)) {
             AsterIconButton(Icons.Rounded.MoreHoriz, "配置管理", { showTransferActions = true })
         }
-        AsterSegmentedControl(listOf("模型分配", "服务连接", "助手偏好"), section, { section = it },
-            Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().imePadding(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(22.dp)
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-        if (section == 0) {
-            item { IndependenceBanner(vm) }
             item {
-                Column {
-                    SectionTitle("合适的事，交给合适的模型", "为当前对话与图像创作分别选择服务。")
-                Spacer(Modifier.height(12.dp))
-                RouteAssignmentCard(
-                    kind = RouteKind.Chat,
-                    profile = vm.chatProfile,
-                    profiles = vm.profiles,
-                    models = vm.modelsFor(vm.chatProfile.id),
-                    onProfile = vm::selectChatProfile,
-                    onModel = { vm.selectChatModel(vm.chatProfile.id, it) }
-                )
-                Spacer(Modifier.height(10.dp))
-                RouteAssignmentCard(
-                    kind = RouteKind.Image,
-                    profile = vm.imageProfile,
-                    profiles = vm.profiles,
-                    models = vm.modelsFor(vm.imageProfile.id),
-                    onProfile = vm::selectImageProfile,
-                    onModel = { vm.selectImageModel(vm.imageProfile.id, it) }
-                )
-            }
-        }
-        }
-        if (section == 1) {
-            item {
-                Column {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Column(Modifier.weight(1f)) { SectionTitle("连接你的服务", "管理地址、密钥与可用模型。") }
-                    Button(onClick = { addMenu = true }, shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Night)) {
-                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("添加")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("我的服务", style = MaterialTheme.typography.titleLarge, color = Ink)
+                        Text("连接 API，开始使用你的模型", style = MaterialTheme.typography.bodySmall, color = MutedInk)
                     }
-                }
-                Spacer(Modifier.height(12.dp))
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    vm.profiles.forEach { profile ->
-                        ProfileCard(
-                            profile = profile,
-                            state = vm.connectionFor(profile.id),
-                            modelCount = vm.modelsFor(profile.id).size,
-                            usedForChat = profile.id == vm.chatProfile.id,
-                            usedForImage = profile.id == vm.imageProfile.id,
-                            canDelete = vm.profiles.size > 1,
-                            onTest = { vm.testProfile(profile) },
-                            onEdit = { onEdit(profile) },
-                            onDuplicate = { vm.duplicateProfile(profile.id) },
-                            onDelete = { deleteCandidate = profile }
-                        )
+                    TextButton(onClick = { addMenu = true }) {
+                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("添加")
                     }
                 }
             }
-        }
-        }
-        if (section == 2) {
+            items(vm.profiles, key = { it.id }) { profile ->
+                ProfileCard(
+                    profile, vm.connectionFor(profile.id), vm.modelsFor(profile.id).size,
+                    profile.id == vm.chatProfile.id, profile.id == vm.imageProfile.id,
+                    vm.profiles.size > 1, { vm.testProfile(profile) }, { onEdit(profile) },
+                    { vm.duplicateProfile(profile.id) }, { deleteCandidate = profile }
+                )
+            }
             item {
-                Column {
-                    SectionTitle("让回答更合心意", "设置助手的角色、语气与回答习惯。仅用于对话。")
                 Spacer(Modifier.height(12.dp))
-                Surface(color = Surface, shape = RoundedCornerShape(20.dp)) {
+                SettingsDisclosure("默认模型", "对话 · " + vm.chatProfile.chatModel.ifBlank { "未选择" }, Icons.Rounded.Tune) {
+                    RouteAssignmentCard(RouteKind.Chat, vm.chatProfile, vm.profiles,
+                        vm.modelsFor(vm.chatProfile.id), vm::selectChatProfile,
+                        { vm.selectChatModel(vm.chatProfile.id, it) })
+                    RouteAssignmentCard(RouteKind.Image, vm.imageProfile, vm.profiles,
+                        vm.modelsFor(vm.imageProfile.id), vm::selectImageProfile,
+                        { vm.selectImageModel(vm.imageProfile.id, it) })
+                }
+            }
+            item {
+                SettingsDisclosure("助手偏好", "角色、语气与回答习惯", Icons.Rounded.EditNote) {
                     OutlinedTextField(
-                        value = vm.appConfig.systemPrompt,
-                        onValueChange = vm::updateSystemPrompt,
-                        modifier = Modifier.fillMaxWidth().padding(10.dp),
-                        minLines = 4,
-                        maxLines = 8,
+                        value = vm.appConfig.systemPrompt, onValueChange = vm::updateSystemPrompt,
+                        modifier = Modifier.fillMaxWidth(), minLines = 4, maxLines = 8,
                         placeholder = { Text("定义助手的角色与回答风格") },
-                        shape = RoundedCornerShape(15.dp),
-                        colors = editorFieldColors()
+                        shape = RoundedCornerShape(15.dp), colors = editorFieldColors()
                     )
+                    Text("修改自动保存，仅用于对话。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
             }
-        }
-        }
-        item {
-            Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically) {
-                AsterMark(Modifier.size(23.dp), MutedInk)
-                Text("Aster ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+            item {
+                Text("Aster ${BuildConfig.VERSION_NAME}", Modifier.fillMaxWidth().padding(top = 20.dp),
+                    color = MutedInk, style = MaterialTheme.typography.labelMedium,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
         }
-        item { Spacer(Modifier.height(8.dp)) }
-    }
     }
     if (showTransferActions) {
         AdActionSheet(title = "配置管理", subtitle = "在设备之间迁移你的服务配置",
@@ -206,7 +170,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
             subtitle = "选择一个起点，之后仍可修改所有字段",
             actions = listOf(
                 AdActionOption("blank", "空白配置", "从 URL、Key 和模型开始填写", Icons.Rounded.AddCircleOutline),
-                AdActionOption("openai", "OpenAI / GPT-5.6", "预填 Responses、缓存与绘图路径", Icons.Rounded.Cloud),
+                AdActionOption("openai", "OpenAI / GPT", "GPT 模型统一使用 Responses", Icons.Rounded.Cloud),
                 AdActionOption("local", "本地兼容服务", "适合局域网、模拟器和自建网关", Icons.Rounded.Dns)
             ),
             onAction = { action ->
@@ -272,7 +236,7 @@ private fun ProfileTransferDialog(
         onDismiss = onDismiss,
         content = {
             if (exporting) {
-                AdToggleCard(
+                SettingSwitch(
                     title = "包含 API Key",
                     subtitle = "仅在可信设备间迁移时开启",
                     checked = includeApiKeys,
@@ -350,32 +314,6 @@ private fun ProfileTransferDialog(
             }
         }
     )
-}
-
-@Composable
-private fun IndependenceBanner(vm: MainViewModel) {
-    val chat = vm.connectionFor(vm.chatProfile.id).phase
-    val image = vm.connectionFor(vm.imageProfile.id).phase
-    val testing = chat == ConnectionPhase.Testing || image == ConnectionPhase.Testing
-    val checked = chat == ConnectionPhase.Success && image == ConnectionPhase.Success
-    val failed = chat == ConnectionPhase.Error || image == ConnectionPhase.Error
-    val tone = when { failed -> Danger; checked -> Sage; else -> MutedInk }
-    Surface(color = Surface, shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, Hairline)) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(if (checked) Icons.Rounded.CheckCircleOutline else Icons.Rounded.NetworkCheck,
-                null, Modifier.size(22.dp), tint = tone)
-            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(when { testing -> "正在检查连接"; checked -> "服务连接正常"; failed -> "有服务需要检查"; else -> "连接状态" },
-                    style = MaterialTheme.typography.titleSmall)
-                Text(when { testing -> "这可能需要片刻"; checked -> "模型列表已同步"; failed -> "前往服务连接查看详情"; else -> "测试可用性并同步模型" },
-                    color = MutedInk, style = MaterialTheme.typography.labelMedium)
-            }
-            TextButton(onClick = vm::testActiveRoutes, enabled = !testing) {
-                if (testing) CircularProgressIndicator(Modifier.size(18.dp), color = Accent, strokeWidth = 2.dp)
-                else Text("检查", color = Accent)
-            }
-        }
-    }
 }
 
 @Composable
@@ -529,11 +467,8 @@ private fun ProfileCard(
                 ) { Icon(Icons.Rounded.MoreHoriz, "更多", Modifier.size(20.dp)) }
             }
             Spacer(Modifier.height(13.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniMetric("状态", state.title, statusColor, Modifier.weight(1f))
-                MiniMetric("模型", if (modelCount == 0) "未同步" else "$modelCount 个", Ink, Modifier.weight(1f))
-                MiniMetric("密钥", if (profile.apiKey.isBlank()) "未填写" else "••••${profile.apiKey.takeLast(4)}", Ink, Modifier.weight(1f))
-            }
+            Text(state.title + if (modelCount > 0) " · $modelCount 个模型" else "",
+                color = statusColor, style = MaterialTheme.typography.labelMedium)
             if (state.phase == ConnectionPhase.Error || (state.phase == ConnectionPhase.Success && modelCount == 0)) {
                 Spacer(Modifier.height(10.dp))
                 Text(
@@ -544,7 +479,7 @@ private fun ProfileCard(
             }
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onTest, enabled = state.phase != ConnectionPhase.Testing, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
+                TextButton(onClick = onTest, enabled = state.phase != ConnectionPhase.Testing, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
                     Icon(Icons.Rounded.NetworkCheck, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("测试并同步")
                 }
                 Button(onClick = onEdit, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Night)) {
@@ -568,72 +503,6 @@ private fun ProfileCard(
             onDismiss = { showActions = false },
             headerIcon = Icons.Rounded.Dns
         )
-    }
-}
-
-@Composable
-private fun Gpt56OptimizationCard(draft: ApiProfile, onDraft: (ApiProfile) -> Unit) {
-    Surface(color = Night, contentColor = Color.White, shape = RoundedCornerShape(22.dp)) {
-        Column(Modifier.padding(17.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFF393735)), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.AutoAwesome, null, tint = AccentSoft)
-                }
-                Spacer(Modifier.width(11.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("GPT-5.6 Sol 优化", style = MaterialTheme.typography.titleMedium)
-                    Text("智能高命中缓存与协议回退", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.bodyMedium)
-                }
-                StatusBadge("已识别", Color(0xFF3A3835), Accent)
-            }
-
-            Text("API 协议", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.labelMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GptOption("Chat Completions", draft.chatApiMode == "chat", Modifier.weight(1f)) { onDraft(draft.copy(chatApiMode = "chat")) }
-                GptOption("Responses 推荐", draft.chatApiMode == "responses", Modifier.weight(1f)) { onDraft(draft.copy(chatApiMode = "responses")) }
-            }
-
-            AdToggleCard(
-                title = "提示词缓存",
-                subtitle = "滚动缓存整段对话前缀，并保持会话 cache key 稳定",
-                checked = draft.promptCacheEnabled,
-                onCheckedChange = { onDraft(draft.copy(promptCacheEnabled = it, promptCacheMode = if (it) "adaptive" else draft.promptCacheMode)) },
-                dark = true
-            )
-            if (draft.promptCacheEnabled) {
-                Text("缓存策略", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GptOption("智能高命中", draft.promptCacheMode != "compatibility", Modifier.weight(1f)) { onDraft(draft.copy(promptCacheMode = "adaptive")) }
-                    GptOption("兼容模式", draft.promptCacheMode == "compatibility", Modifier.weight(1f)) { onDraft(draft.copy(promptCacheMode = "compatibility")) }
-                }
-            }
-            Text("智能高命中会优先使用 Chat Completions 显式滚动断点，把当前整段输入作为下一轮可复用前缀；若中转站不支持，会自动回退到所选协议的自动缓存。命中率取决于上下文长度和最新回复长度，并非固定值。", color = Color(0xFFBDB8B2), style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun GptOption(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        modifier = modifier,
-        color = if (selected) Accent else Color(0xFF393735),
-        contentColor = Color.White,
-        border = if (selected) BorderStroke(1.dp, Color(0xFFFF9A80)) else BorderStroke(1.dp, Color(0xFF4A4744)),
-        shape = RoundedCornerShape(14.dp)
-    ) {
-        Row(
-            Modifier.padding(horizontal = 11.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(text, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.weight(1f))
-            if (selected) {
-                Spacer(Modifier.width(6.dp))
-                Box(Modifier.size(18.dp).clip(CircleShape).background(Color.White.copy(alpha = .22f)), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.Check, null, Modifier.size(12.dp), tint = Color.White)
-                }
-            }
-        }
     }
 }
 
@@ -670,7 +539,6 @@ private fun ProfileEditor(
 ) {
     var draft by remember { mutableStateOf(initial) }
     LaunchedEffect(initial) { draft = initial }
-    var advanced by remember { mutableStateOf(false) }
     var keyVisible by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
     val normalizedDraft = draft.normalized()
@@ -681,7 +549,6 @@ private fun ProfileEditor(
         normalizedDraft.extraHeaders != normalizedInitial.extraHeaders
     val invalidHeaders = draft.invalidExtraHeaderLines()
     val validBaseUrl = draft.hasValidBaseUrl()
-    val hasDefaultModel = draft.chatModel.isNotBlank() || draft.imageModel.isNotBlank()
     val visibleState = if (connectionChanged) {
         ConnectionUiState(ConnectionPhase.Idle, "参数已修改", "请重新测试当前参数")
     } else state
@@ -698,7 +565,7 @@ private fun ProfileEditor(
             IconButton(onClick = { if (draft != initial) confirmDiscard = true else onBack() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回") }
             Column(Modifier.weight(1f)) {
                 Text(if (isNew) "添加 API" else "编辑 API", style = MaterialTheme.typography.titleLarge)
-                Text("独立管理 URL、Key、路径和模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                Text("连接服务，选择默认模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
             AnimatedVisibility(draft != initial) {
                 StatusBadge("未保存", AccentSoft, Accent)
@@ -709,31 +576,12 @@ private fun ProfileEditor(
             }
         }
         LazyColumn(
-            Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 10.dp),
+            Modifier.weight(1f).imePadding(),
+            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
             item {
-                ConnectionEditorCard(
-                    state = visibleState,
-                    canTest = testDisabledReason == null,
-                    disabledReason = testDisabledReason,
-                    onTest = { onTest(normalizedDraft) { updated -> draft = updated } }
-                )
-            }
-            item {
-                ProfileReadinessCard(
-                    validBaseUrl = validBaseUrl,
-                    headersValid = invalidHeaders.isEmpty(),
-                    hasApiKey = draft.apiKey.isNotBlank(),
-                    isLocalHttp = draft.baseUrl.trim().startsWith("http://"),
-                    hasDefaultModel = hasDefaultModel,
-                    syncedModelCount = models.size,
-                    connectionReady = visibleState.phase == ConnectionPhase.Success
-                )
-            }
-            item {
-                EditorSection("基本信息", "用于识别和连接这个 API。") {
+                EditorSection("连接信息", "填写服务商提供的地址和密钥") {
                     EditorField("配置名称", draft.name, { draft = draft.copy(name = it) }, "例如：主对话 API", Icons.Outlined.Badge)
                     EditorField("Base URL", draft.baseUrl, { draft = draft.copy(baseUrl = it, cachedModels = emptyList(), lastLatencyMs = null) }, "https://api.example.com", Icons.Outlined.Language,
                         supporting = if (validBaseUrl) "保存时会自动移除末尾 /" else "必须是包含完整主机的 http:// 或 https:// 地址")
@@ -746,7 +594,7 @@ private fun ProfileEditor(
                             modifier = Modifier.fillMaxWidth(),
                             placeholder = { Text("可留空用于本地服务") },
                             leadingIcon = { Icon(Icons.Outlined.Key, null) },
-                            trailingIcon = { IconButton(onClick = { keyVisible = !keyVisible }) { Icon(if (keyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, null) } },
+                            trailingIcon = { IconButton(onClick = { keyVisible = !keyVisible }) { Icon(if (keyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (keyVisible) "隐藏密钥" else "显示密钥") } },
                             visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             singleLine = true, shape = RoundedCornerShape(15.dp), colors = editorFieldColors()
                         )
@@ -754,19 +602,30 @@ private fun ProfileEditor(
                 }
             }
             item {
+                ConnectionEditorCard(
+                    state = visibleState, canTest = testDisabledReason == null,
+                    disabledReason = testDisabledReason,
+                    onTest = { onTest(normalizedDraft) { updated -> draft = updated } }
+                )
+            }
+            item {
                 EditorSection("默认模型", "切换到此 API 时，会恢复这里保存的模型。") {
+                    Text(if (draft.chatModel.isGptModel()) "GPT · Responses" else "GPT 自动使用 Responses；其他模型可在高级设置中选择协议",
+                        color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("对话模型", draft.chatModel, models.filterNot { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
-                    EditorModelField("绘图模型", draft.imageModel, models.filter { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
+                    EditorModelField("绘图模型（可选）", draft.imageModel, models.filter { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
                 }
             }
             item {
-                EditorSection("流式稳定性", "控制中途断线后的安全恢复行为。") {
-                    AdToggleCard(
+                SettingsDisclosure("连接与恢复", "断线续传与缓存兼容", Icons.Rounded.NetworkCheck) {
+                    SettingSwitch(
                         title = "流式安全续传",
                         subtitle = "中途断线时最多自动续传一次；基于已生成内容继续，不会从头重跑",
                         checked = draft.autoResumeStream,
                         onCheckedChange = { draft = draft.copy(autoResumeStream = it) }
                     )
+                    SettingSwitch("缓存兼容参数", "发送缓存标识；不兼容的网关可关闭，命中由服务端决定",
+                        draft.promptCacheEnabled) { draft = draft.copy(promptCacheEnabled = it) }
                     Text(
                         "仅对连接重置、提前断流和瞬时网络错误生效。认证失败、额度不足及用户主动停止不会自动重试。",
                         color = MutedInk,
@@ -775,10 +634,10 @@ private fun ProfileEditor(
                 }
             }
             item {
-                EditorSection("对话工具", "为当前 API 配置保存联网搜索与文件创建开关。") {
-                    AdToggleCard(
+                SettingsDisclosure("工具默认值", "联网搜索、创建文件；聊天中也可随时调整", Icons.Rounded.Build) {
+                    SettingSwitch(
                         title = "联网搜索",
-                        subtitle = if (draft.chatApiMode == "responses") {
+                        subtitle = if (draft.usesResponses()) {
                             "使用 Responses API 的 web_search 工具"
                         } else {
                             "通过 Chat Completions 的 web_search_options，需模型与网关支持"
@@ -787,22 +646,22 @@ private fun ProfileEditor(
                         onCheckedChange = { enabled ->
                             draft = draft.copy(
                                 webSearchEnabled = enabled,
-                                fileCreationEnabled = if (enabled && draft.chatApiMode == "chat") false else draft.fileCreationEnabled
+                                fileCreationEnabled = if (enabled && !draft.usesResponses()) false else draft.fileCreationEnabled
                             )
                         }
                     )
-                    AdToggleCard(
+                    SettingSwitch(
                         title = "创建文件",
                         subtitle = "允许模型创建可下载的 Markdown、文本、JSON 或 CSV 文件",
                         checked = draft.fileCreationEnabled,
                         onCheckedChange = { enabled ->
                             draft = draft.copy(
                                 fileCreationEnabled = enabled,
-                                webSearchEnabled = if (enabled && draft.chatApiMode == "chat") false else draft.webSearchEnabled
+                                webSearchEnabled = if (enabled && !draft.usesResponses()) false else draft.webSearchEnabled
                             )
                         }
                     )
-                    if (draft.chatApiMode == "chat") {
+                    if (!draft.usesResponses()) {
                         Text(
                             "Chat 协议下联网搜索与自定义文件工具互斥；Responses 协议可同时使用。",
                             color = MutedInk,
@@ -811,78 +670,62 @@ private fun ProfileEditor(
                     }
                 }
             }
-            if (draft.chatModel.isGpt56Model()) {
-                item { Gpt56OptimizationCard(draft = draft, onDraft = { draft = it }) }
-            }
             item {
-                Surface(color = Surface, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth().clickable { advanced = !advanced }) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.Code, null, tint = Accent)
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) { Text("接口路径与请求头", style = MaterialTheme.typography.titleMedium); Text("OpenAI 兼容接口的高级设置", color = MutedInk, style = MaterialTheme.typography.bodyMedium) }
-                            Icon(if (advanced) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore, null)
-                        }
-                        AnimatedVisibility(advanced) {
-                            Column(Modifier.padding(top = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                                Column {
-                                    Text("绘图协议", style = MaterialTheme.typography.labelLarge)
-                                    Spacer(Modifier.height(7.dp))
-                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        ImageProtocolOption("自动识别", draft.imageApiMode == IMAGE_API_MODE_AUTO, Modifier.weight(1f)) {
-                                            draft = draft.copy(imageApiMode = IMAGE_API_MODE_AUTO)
-                                        }
-                                        ImageProtocolOption("OpenAI Images", draft.imageApiMode == IMAGE_API_MODE_OPENAI, Modifier.weight(1f)) {
-                                            draft = draft.copy(imageApiMode = IMAGE_API_MODE_OPENAI)
-                                        }
-                                        ImageProtocolOption("Gemini", draft.imageApiMode == IMAGE_API_MODE_GEMINI, Modifier.weight(1f)) {
-                                            draft = draft.copy(imageApiMode = IMAGE_API_MODE_GEMINI)
-                                        }
-                                    }
-                                    Text(
-                                        if (draft.imageApiMode == IMAGE_API_MODE_GEMINI) {
-                                            "通过 Chat Completions 的多模态 image 输出绘图，支持参考图。"
-                                        } else {
-                                            "自动识别 Gemini 图片模型；NAI Diffusion 等模型使用 OpenAI Images 兼容协议。"
-                                        },
-                                        color = MutedInk,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(top = 6.dp)
-                                    )
-                                }
-                                EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
-                                EditorField("对话接口路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
-                                EditorField("Responses API path", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)
-                                EditorField("绘图接口路径", draft.imagePath, { draft = draft.copy(imagePath = it) }, "/v1/images/generations", Icons.Outlined.Image)
-                                EditorField("\u53c2\u8003\u56fe\u7f16\u8f91\u8def\u5f84", draft.imageEditPath, { draft = draft.copy(imageEditPath = it) }, "/v1/images/edits", Icons.Outlined.AutoFixHigh, supporting = "multipart image edit endpoint")
-                                EditorField(
-                                    "额外请求头",
-                                    draft.extraHeaders,
-                                    { draft = draft.copy(extraHeaders = it, cachedModels = emptyList(), lastLatencyMs = null) },
-                                    "X-Header: value",
-                                    Icons.Outlined.DataObject,
-                                    supporting = invalidHeaders.firstOrNull()?.let { "格式错误：$it" }
-                                        ?: "每行一个 Header: value，空行会自动移除",
-                                    minLines = 4
-                                )
+                SettingsDisclosure("高级设置", "协议、接口路径与请求头", Icons.Rounded.Code) {
+                    if (draft.chatModel.isGptModel()) {
+                        Text("GPT 模型固定使用 Responses，不自动切换协议。", color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        Text("对话协议", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ImageProtocolOption("Chat Completions", !draft.usesResponses(), Modifier.weight(1f)) {
+                                draft = draft.copy(chatApiMode = "chat",
+                                    fileCreationEnabled = if (draft.webSearchEnabled) false else draft.fileCreationEnabled)
+                            }
+                            ImageProtocolOption("Responses", draft.usesResponses(), Modifier.weight(1f)) {
+                                draft = draft.copy(chatApiMode = "responses")
                             }
                         }
                     }
-                }
-            }
-            item {
-                Button(
-                    onClick = { onSave(normalizedDraft) },
-                    enabled = valid,
-                    modifier = Modifier.fillMaxWidth().height(54.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
-                ) {
-                    Icon(Icons.Rounded.Save, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (visibleState.phase == ConnectionPhase.Success) "保存并完成" else "保存 API 配置",
-                        fontWeight = FontWeight.Bold
+                    Column {
+                        Text("绘图协议", style = MaterialTheme.typography.labelLarge)
+                        Spacer(Modifier.height(7.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ImageProtocolOption("自动识别", draft.imageApiMode == IMAGE_API_MODE_AUTO, Modifier.weight(1f)) {
+                                draft = draft.copy(imageApiMode = IMAGE_API_MODE_AUTO)
+                            }
+                            ImageProtocolOption("OpenAI Images", draft.imageApiMode == IMAGE_API_MODE_OPENAI, Modifier.weight(1f)) {
+                                draft = draft.copy(imageApiMode = IMAGE_API_MODE_OPENAI)
+                            }
+                            ImageProtocolOption("Gemini", draft.imageApiMode == IMAGE_API_MODE_GEMINI, Modifier.weight(1f)) {
+                                draft = draft.copy(imageApiMode = IMAGE_API_MODE_GEMINI)
+                            }
+                        }
+                        Text(
+                            if (draft.imageApiMode == IMAGE_API_MODE_GEMINI) {
+                                "通过 Chat Completions 的多模态 image 输出绘图，支持参考图。"
+                            } else {
+                                "自动识别 Gemini 图片模型；NAI Diffusion 等模型使用 OpenAI Images 兼容协议。"
+                            },
+                            color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
+                    EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
+                    EditorField("Chat / Gemini 路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
+                    EditorField("Responses 路径", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)
+                    EditorField("绘图接口路径", draft.imagePath, { draft = draft.copy(imagePath = it) }, "/v1/images/generations", Icons.Outlined.Image)
+                    EditorField("\u53c2\u8003\u56fe\u7f16\u8f91\u8def\u5f84", draft.imageEditPath, { draft = draft.copy(imageEditPath = it) }, "/v1/images/edits", Icons.Outlined.AutoFixHigh, supporting = "multipart image edit endpoint")
+                    EditorField(
+                        "额外请求头",
+                        draft.extraHeaders,
+                        { draft = draft.copy(extraHeaders = it, cachedModels = emptyList(), lastLatencyMs = null) },
+                        "X-Header: value",
+                        Icons.Outlined.DataObject,
+                        supporting = invalidHeaders.firstOrNull()?.let { "格式错误：$it" }
+                            ?: "每行一个 Header: value，空行会自动移除",
+                        minLines = 3
                     )
                 }
             }
@@ -904,164 +747,68 @@ private fun ProfileEditor(
 }
 
 @Composable
-private fun ProfileReadinessCard(
-    validBaseUrl: Boolean,
-    headersValid: Boolean,
-    hasApiKey: Boolean,
-    isLocalHttp: Boolean,
-    hasDefaultModel: Boolean,
-    syncedModelCount: Int,
-    connectionReady: Boolean
-) {
-    val checks = listOf(
-        Triple("服务地址", if (validBaseUrl) "URL 格式正确" else "需要完整的 http(s) 主机地址", validBaseUrl),
-        Triple("请求头", if (headersValid) "额外 Header 格式可用" else "存在无效的 Header: value", headersValid),
-        Triple("默认模型", if (hasDefaultModel) "已填写至少一个模型" else "尚未选择对话或绘图模型", hasDefaultModel),
-        Triple("模型列表", if (syncedModelCount > 0) "已同步 $syncedModelCount 个模型" else "未同步，仍可手动填写 ID", syncedModelCount > 0),
-        Triple("连接验证", if (connectionReady) "当前参数已通过测试" else "保存前建议执行一次测试", connectionReady)
-    )
-    val authReady = hasApiKey || isLocalHttp
-    val readyCount = checks.count { it.third }
-    val progress = readyCount / checks.size.toFloat()
-    val container by animateColorAsState(
-        if (readyCount == checks.size && authReady) SageSoft else Surface,
-        tween(200),
-        label = "readiness-container"
-    )
-    Surface(color = container, shape = RoundedCornerShape(22.dp), modifier = Modifier.animateContentSize(tween(220))) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(46.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.fillMaxSize(),
-                        strokeWidth = 4.dp,
-                        color = if (readyCount == checks.size) Sage else Accent,
-                        trackColor = Hairline
-                    )
-                    Text("$readyCount", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("配置完成度", style = MaterialTheme.typography.titleMedium)
-                    Text("$readyCount/${checks.size} 项就绪，测试不会产生对话 Token 费用", color = MutedInk, style = MaterialTheme.typography.bodySmall)
-                }
-                Icon(
-                    if (readyCount == checks.size) Icons.Rounded.Verified else Icons.AutoMirrored.Rounded.FactCheck,
-                    null,
-                    tint = if (readyCount == checks.size) Sage else Accent
-                )
-            }
-            Spacer(Modifier.height(14.dp))
-            checks.forEachIndexed { index, (title, detail, ready) ->
-                Row(verticalAlignment = Alignment.Top) {
-                    Box(
-                        Modifier.padding(top = 2.dp).size(21.dp).clip(CircleShape)
-                            .background(if (ready) SageSoft else AccentSoft),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            if (ready) Icons.Rounded.Check else Icons.Rounded.PriorityHigh,
-                            null,
-                            Modifier.size(13.dp),
-                            tint = if (ready) Sage else Accent
-                        )
-                    }
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(title, style = MaterialTheme.typography.labelLarge)
-                        Text(detail, color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-                if (index != checks.lastIndex) Spacer(Modifier.height(10.dp))
-            }
-            if (!authReady) {
-                Spacer(Modifier.height(12.dp))
-                Surface(color = AccentSoft, contentColor = Ink, shape = RoundedCornerShape(13.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.KeyOff, null, Modifier.size(16.dp), tint = Accent)
-                        Spacer(Modifier.width(7.dp))
-                        Text("HTTPS 服务未填写 Key，请确认该服务允许无鉴权访问", color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
 private fun ConnectionEditorCard(
     state: ConnectionUiState,
     canTest: Boolean,
     disabledReason: String?,
     onTest: () -> Unit
 ) {
-    val color = when (state.phase) {
-        ConnectionPhase.Success -> Color(0xFFB8CEAC)
-        ConnectionPhase.Error -> Color(0xFFFFB4A9)
-        ConnectionPhase.Testing -> AccentSoft
-        ConnectionPhase.Idle -> Color(0xFFBDB8B2)
-    }
-    Surface(
-        color = Night,
-        contentColor = Color.White,
-        shape = RoundedCornerShape(22.dp),
-        modifier = Modifier.fillMaxWidth().animateContentSize(tween(220))
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(38.dp).clip(RoundedCornerShape(13.dp)).background(Color(0xFF343331)), contentAlignment = Alignment.Center) {
-                    if (state.phase == ConnectionPhase.Testing) {
-                        CircularProgressIndicator(Modifier.size(21.dp), color = AccentSoft, strokeWidth = 2.dp)
-                    } else {
-                        Icon(
-                            when (state.phase) {
-                                ConnectionPhase.Success -> Icons.Rounded.CheckCircle
-                                ConnectionPhase.Error -> Icons.Rounded.ErrorOutline
-                                else -> Icons.Rounded.NetworkCheck
-                            },
-                            null,
-                            tint = color,
-                            modifier = Modifier.size(21.dp)
-                        )
-                    }
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(state.title, style = MaterialTheme.typography.titleMedium)
-                    Text(state.detail, color = Color(0xFFBDB8B2), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-                state.latencyMs?.let {
-                    Surface(color = Color(0xFF343331), contentColor = Color.White, shape = CircleShape) {
-                        Text("${it}ms", Modifier.padding(horizontal = 9.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium)
-                    }
-                    Spacer(Modifier.width(5.dp))
-                }
-                TextButton(
-                    onClick = onTest,
-                    enabled = canTest && state.phase != ConnectionPhase.Testing,
-                    colors = ButtonDefaults.textButtonColors(contentColor = AccentSoft, disabledContentColor = Color(0xFF77736F))
-                ) {
-                    Text(if (state.phase == ConnectionPhase.Testing) "测试中" else "测试")
-                }
+    val tone = if (state.phase == ConnectionPhase.Error) Danger else MutedInk
+    Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(state.title, color = tone, style = MaterialTheme.typography.labelLarge)
+                Text(disabledReason ?: state.detail, color = tone, style = MaterialTheme.typography.bodySmall)
             }
-            if (!canTest && disabledReason != null) {
-                Spacer(Modifier.height(10.dp))
-                Surface(color = Color(0xFF3A2D2B), contentColor = Color(0xFFFFB4A5), shape = RoundedCornerShape(12.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Info, null, Modifier.size(15.dp))
-                        Spacer(Modifier.width(7.dp))
-                        Text(disabledReason, style = MaterialTheme.typography.labelMedium)
-                    }
-                }
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onTest, enabled = canTest && state.phase != ConnectionPhase.Testing) {
+                if (state.phase == ConnectionPhase.Testing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Text("测试并同步")
             }
         }
     }
 }
 
 @Composable
+private fun SettingsDisclosure(
+    title: String, summary: String, icon: ImageVector,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Surface(color = Surface, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+        Column {
+            Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(22.dp), tint = Accent)
+                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                    Text(title, style = MaterialTheme.typography.titleSmall, color = Ink)
+                    Text(summary, style = MaterialTheme.typography.bodySmall, color = MutedInk)
+                }
+                Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    if (expanded) "收起" else "展开", tint = MutedInk)
+            }
+            AnimatedVisibility(expanded) {
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = Ink)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MutedInk)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
 private fun EditorSection(title: String, description: String, content: @Composable ColumnScope.() -> Unit) {
-    Column { Text(title, style = MaterialTheme.typography.titleLarge); Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.height(10.dp)); Surface(color = Surface, shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(15.dp), content = content) } }
+    Column { Text(title, style = MaterialTheme.typography.titleSmall); Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.height(10.dp)); Surface(color = Surface, shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(15.dp), content = content) } }
 }
 
 @Composable
@@ -1159,11 +906,6 @@ private fun StatusBadge(text: String, background: Color, content: Color) {
 }
 
 @Composable
-private fun MiniMetric(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
-    Surface(color = Canvas, shape = RoundedCornerShape(12.dp), modifier = modifier) { Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) { Text(label, color = MutedInk, style = MaterialTheme.typography.labelMedium); Text(value, color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis) } }
-}
-
-@Composable
 private fun editorFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedBorderColor = Ink, unfocusedBorderColor = Hairline, focusedContainerColor = Canvas,
     unfocusedContainerColor = Canvas, cursorColor = Accent
@@ -1184,22 +926,4 @@ private fun String.isImageLike(): Boolean {
         "diffusion"
     ).any(id::contains)
 }
-
-
-
-
-
-
-
-
-
-
-
-
-private fun String.isGpt56Model(): Boolean {
-    val value = lowercase()
-    return value.contains("gpt-5.6") || value.contains("gpt-5_6")
-}
-
-
 

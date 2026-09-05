@@ -20,8 +20,8 @@ android {
         applicationId = "com.adong.adchat"
         minSdk = 26
         targetSdk = 36
-        versionCode = 54
-        versionName = "2.1.0"
+        versionCode = 55
+        versionName = "2.2.0-preview.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables { useSupportLibrary = true }
@@ -79,7 +79,6 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
-
 
 
 
