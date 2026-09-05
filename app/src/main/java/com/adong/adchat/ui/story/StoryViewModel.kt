@@ -50,6 +50,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val api = ApiRepository()
     private val jobs = linkedMapOf<String, Job>()
     private val organizerJobs = ConcurrentHashMap<String, Job>()
+    @Volatile private var stateEpoch = 0L
     private val stopRequested = ConcurrentHashMap.newKeySet<String>()
 
     val stories = mutableStateListOf<Story>()
@@ -71,6 +72,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            store.recoverInterruptedGenerations()
             memoryStore.recoverRunningJobs()
             val loaded = store.listStories()
             withContext(Dispatchers.Main) {
@@ -108,6 +110,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val story = store.createStory(title, profile.id, profile.chatModel)
             withContext(Dispatchers.Main) {
                 stories.add(0, story)
+                stateEpoch++
                 activeStoryId = story.id
                 activeWorkspace = StoryWorkspace.Discussion
                 workspaceMessages.clear()
@@ -124,6 +127,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     fun selectStory(storyId: String) {
         if (activeStoryId == storyId && workspaceMessages.isNotEmpty()) return
         val story = stories.firstOrNull { it.id == storyId } ?: return
+        stateEpoch++
         activeStoryId = storyId
         activeWorkspace = StoryWorkspace.Discussion
         workspaceMessages.clear()
@@ -315,6 +319,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val target = revisionTarget ?: return
         if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
         revisionBusy = true
+        stateEpoch++
         revisionError = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -367,6 +372,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val story = activeStory ?: return
         if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
         revisionBusy = true
+        stateEpoch++
         revisionError = null
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -663,6 +669,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadActiveStoryState(story: Story) {
+        val epoch = stateEpoch
         viewModelScope.launch(Dispatchers.IO) {
             val loadedMessages = StoryWorkspace.entries.associateWith { workspace ->
                 store.loadMessages(story.id, story.currentTimelineId, workspace)
@@ -674,7 +681,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val proposals = archiveStore.listPendingProposals(story.id, story.currentTimelineId)
             val status = memoryStore.jobStatus(story.id, story.currentTimelineId)
             withContext(Dispatchers.Main) {
-                if (activeStoryId != story.id || activeStory?.currentTimelineId != story.currentTimelineId) return@withContext
+                if (epoch != stateEpoch || activeStoryId != story.id || activeStory?.currentTimelineId != story.currentTimelineId) return@withContext
                 workspaceMessages.putAll(loadedMessages)
                 workspaceStates.putAll(loadedStates)
                 archiveRecords.clear()
@@ -687,21 +694,23 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun refreshWorkspaceIfVisible(storyId: String, workspace: StoryWorkspace) {
+        val epoch = stateEpoch
         if (activeStoryId != storyId) return
         viewModelScope.launch(Dispatchers.IO) {
             val story = store.getStory(storyId) ?: return@launch
             val rows = store.loadMessages(storyId, story.currentTimelineId, workspace)
             withContext(Dispatchers.Main) {
-                if (activeStoryId == storyId && activeStory?.currentTimelineId == story.currentTimelineId) workspaceMessages[workspace] = rows
+                if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == story.currentTimelineId) workspaceMessages[workspace] = rows
             }
         }
     }
 
     private suspend fun refreshArchive(storyId: String, timelineId: String) {
+        val epoch = stateEpoch
         val records = archiveStore.listMemoryRecords(storyId, timelineId)
         val proposals = archiveStore.listPendingProposals(storyId, timelineId)
         withContext(Dispatchers.Main) {
-            if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
+            if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
                 archiveRecords.clear()
                 archiveProposals.clear()
                 archiveRecords.addAll(records)
@@ -711,8 +720,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun refreshStory(storyId: String) {
+        val epoch = stateEpoch
         val updated = store.getStory(storyId) ?: return
-        withContext(Dispatchers.Main) { replaceStory(updated) }
+        withContext(Dispatchers.Main) { if (epoch == stateEpoch) replaceStory(updated) }
     }
 
     private fun replaceStory(story: Story) {

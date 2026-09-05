@@ -9,6 +9,13 @@ import org.json.JSONObject
 class StoryRepository(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
 
+    /** Called once when the story ViewModel starts; a dead process cannot resume an HTTP stream. */
+    fun recoverInterruptedGenerations(): Int = helper.writableDatabase.update(
+        StorySchema.REVISIONS,
+        ContentValues().apply { put("state", StoryRevisionState.Interrupted.dbValue); putNull("completed_at") },
+        "state = 'streaming' AND id IN (SELECT active_revision_id FROM ${StorySchema.MESSAGES})", null
+    )
+
     fun createStory(title: String, profileId: String, model: String): Story {
         val storyId = newStoryId()
         val timelineId = newTimelineId()

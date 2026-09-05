@@ -121,3 +121,5 @@ Configuration wait fix `a5ebadcea7bbd3dcdfc4b35169c5e3506e0f5012` passed Android
 - Fork, inherited state, route switch and snapshot audit commit atomically. Reopening preserves routes and workspace state. No database schema or stable app version change is needed.
 - Legacy chapters without a pre-generation checkpoint, changed prefixes, and snapshots containing parallel streaming output are rejected explicitly. Earlier inherited messages currently do not receive fabricated checkpoints.
 - These are materialized checkpoint restores, not arbitrary manual-log undo/replay. Model-driven rewrite, full change browsing and full M3/M4 acceptance remain. This commit requires its own CI.
+
+M3b follow-up: asynchronous UI loads now use a view-state epoch as well as route identity, preventing a late pre-switch refresh from moving the screen backward. Startup marks orphaned streaming revisions interrupted (never complete), so process death cannot permanently block historical-route recovery. Added a restart regression test.

@@ -102,6 +102,19 @@ class StoryTimelineHistoryTest {
     }
     private fun proseOnOldRoute() = repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "user", "迟到的旧输入")
 
+    @Test fun processRecoveryUnblocksRoutesWithoutPromotingPartialTextToFact() {
+        val target = prose("原文")
+        val branch = repo.forkProseRevision(target.message.id, target.revision.id, "新文")
+        val partial = repo.appendMessage(story.id, branch, StoryWorkspace.Prose, "assistant", "未完成",
+            StoryRevisionState.Streaming)
+        repo.close(); repo = StoryRepository(context)
+        assertEquals(1, repo.recoverInterruptedGenerations())
+        assertEquals(0, repo.recoverInterruptedGenerations())
+        assertEquals(StoryRevisionState.Interrupted, repo.getActiveRevision(partial.revision.id)!!.state)
+        assertNull(memory.enqueueForRevision(story.id, branch, partial.revision.id))
+        assertTrue(repo.switchTimeline(story.id, story.currentTimelineId, branch))
+    }
+
     @Test fun concurrentGenerationPreventsTimelineSwitch() {
         val target = prose("原文")
         val branch = repo.forkProseRevision(target.message.id, target.revision.id, "新文")
