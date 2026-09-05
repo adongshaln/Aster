@@ -1,0 +1,51 @@
+name: One-off snackbar lifecycle fix
+
+on:
+  push:
+    branches:
+      - design/reading-experience
+    paths:
+      - .github/workflows/one-off-snackbar-lifecycle-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: design/reading-experience
+      - name: Fix snackbar lifecycle
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("app/src/main/java/com/adong/adchat/MainActivity.kt")
+          text = path.read_text(encoding="utf-8")
+          pattern = re.compile(r'''    LaunchedEffect\(vm\.notice\) \{\n        vm\.notice\?\.let \{ message ->\n            vm\.dismissNotice\(\)\n            snackbarHostState\.currentSnackbarData\?\.dismiss\(\)\n            snackbarHostState\.showSnackbar\(\n                message = message,\n                duration = SnackbarDuration\.Short\n            \)\n        \}\n    \}''')
+          replacement = '''    LaunchedEffect(vm.notice) {
+        val message = vm.notice ?: return@LaunchedEffect
+        snackbarHostState.currentSnackbarData?.dismiss()
+        snackbarHostState.showSnackbar(
+            message = message,
+            duration = SnackbarDuration.Short
+        )
+        if (vm.notice == message) vm.dismissNotice()
+    }'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one notice block, replaced {count}")
+          text = text.replace('.padding(top = 66.dp, start = 16.dp, end = 16.dp)', '.padding(top = 82.dp, start = 16.dp, end = 16.dp)', 1)
+          path.write_text(text, encoding="utf-8")
+
+          Path('.github/workflows/one-off-snackbar-lifecycle-fix.yml').unlink()
+      - name: Commit fix and self-remove
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/MainActivity.kt .github/workflows/one-off-snackbar-lifecycle-fix.yml
+          git commit -m "Fix transient notice lifecycle"
+          git push origin HEAD:design/reading-experience
