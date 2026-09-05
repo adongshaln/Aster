@@ -396,6 +396,7 @@ class ApiRepository {
         }
 
         suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?): ProtocolRoundResult {
+            outputComplete = false
             val body = JSONObject().put("model", model).put("input", requestInput).put("stream", true)
             if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
             if (profile.fileCreationEnabled) body.put("store", true)
