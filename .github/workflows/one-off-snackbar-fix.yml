@@ -1,0 +1,146 @@
+name: One-off snackbar fix
+
+on:
+  push:
+    branches:
+      - design/reading-experience
+    paths:
+      - .github/workflows/one-off-snackbar-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: design/reading-experience
+      - name: Patch transient notices
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/adong/adchat/MainActivity.kt")
+          text = path.read_text(encoding="utf-8")
+
+          old_effect = '''    LaunchedEffect(vm.notice) {
+              vm.notice?.let {
+                  snackbarHostState.showSnackbar(it)
+                  vm.dismissNotice()
+              }
+          }
+          '''
+          new_effect = '''    LaunchedEffect(vm.notice) {
+              vm.notice?.let { message ->
+                  // Consume the notice immediately so it cannot be replayed while the snackbar is visible.
+                  vm.dismissNotice()
+                  // A newer notice should replace the previous transient message instead of waiting in a queue.
+                  snackbarHostState.currentSnackbarData?.dismiss()
+                  snackbarHostState.showSnackbar(
+                      message = message,
+                      duration = SnackbarDuration.Short
+                  )
+              }
+          }
+          '''
+          if old_effect not in text:
+              raise SystemExit("notice effect block not found")
+          text = text.replace(old_effect, new_effect, 1)
+
+          old_scaffold = '''        Scaffold(
+                  containerColor = Canvas,
+                  snackbarHost = {
+                      SnackbarHost(snackbarHostState) { data ->
+                          Snackbar(
+                              snackbarData = data,
+                              containerColor = Night,
+                              contentColor = Color.White,
+                              shape = RoundedCornerShape(14.dp),
+                              modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                          )
+                      }
+                  }
+              ) { padding ->
+          '''
+          new_scaffold = '''        Scaffold(
+                  containerColor = Canvas
+              ) { padding ->
+          '''
+          if old_scaffold not in text:
+              raise SystemExit("scaffold snackbar block not found")
+          text = text.replace(old_scaffold, new_scaffold, 1)
+
+          anchor = '''                AnimatedContent(
+                      targetState = page,
+                      modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
+                      transitionSpec = {
+                          val forward = targetState.ordinal > initialState.ordinal
+                          val enterOffset: (Int) -> Int = { width -> if (forward) width / 7 else -width / 7 }
+                          val exitOffset: (Int) -> Int = { width -> if (forward) -width / 10 else width / 10 }
+                          (fadeIn(tween(210)) + slideInHorizontally(tween(260), initialOffsetX = enterOffset) + scaleIn(tween(260), initialScale = 0.985f)) togetherWith
+                              (fadeOut(tween(150)) + slideOutHorizontally(tween(210), targetOffsetX = exitOffset) + scaleOut(tween(210), targetScale = 0.992f))
+                      },
+                      label = "page-transition"
+                  ) { target ->
+                      pageStates.SaveableStateProvider(target.name) {
+                      when (target) {
+                          AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                          AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                          AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
+                          AppPage.Settings -> SettingsScreen(vm, onOpenDrawer = openDrawer)
+                      }
+                      }
+                  }
+          '''
+          replacement = anchor + '''
+                  SnackbarHost(
+                      hostState = snackbarHostState,
+                      modifier = Modifier
+                          .align(Alignment.TopCenter)
+                          .statusBarsPadding()
+                          .padding(top = 66.dp, start = 16.dp, end = 16.dp)
+                          .widthIn(max = 640.dp)
+                  ) { data ->
+                      Snackbar(
+                          containerColor = Night,
+                          contentColor = Color.White,
+                          shape = RoundedCornerShape(14.dp),
+                          modifier = Modifier
+                              .fillMaxWidth()
+                              .clickable { data.dismiss() }
+                      ) {
+                          Row(
+                              modifier = Modifier.fillMaxWidth(),
+                              verticalAlignment = Alignment.CenterVertically
+                          ) {
+                              Text(
+                                  text = data.visuals.message,
+                                  modifier = Modifier.weight(1f),
+                                  style = MaterialTheme.typography.bodyMedium,
+                                  fontWeight = FontWeight.SemiBold
+                              )
+                              Spacer(Modifier.width(12.dp))
+                              Icon(
+                                  Icons.Rounded.Close,
+                                  contentDescription = "关闭提示",
+                                  modifier = Modifier.size(18.dp),
+                                  tint = Color.White.copy(alpha = .82f)
+                              )
+                          }
+                      }
+                  }
+          '''
+          if anchor not in text:
+              raise SystemExit("page AnimatedContent anchor not found")
+          text = text.replace(anchor, replacement, 1)
+
+          path.write_text(text, encoding="utf-8")
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/MainActivity.kt
+          git commit -m "Move transient notices away from the composer"
+          git push origin HEAD:design/reading-experience
