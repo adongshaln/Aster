@@ -102,22 +102,7 @@ class ApiRepository {
             attemptHistory: List<ChatMessage>,
             deltaSink: suspend (String) -> Unit
         ): ChatCompletionResult {
-            val adaptiveCache = profile.promptCacheEnabled && model.isGpt56Family() &&
-                profile.promptCacheMode != "compatibility" && !toolsActive
-            return if (adaptiveCache) {
-                try {
-                    streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = true, onToolActivity = onToolActivity, onDelta = deltaSink)
-                } catch (error: Throwable) {
-                    if (error is CancellationException) throw error
-                    currentCoroutineContext().ensureActive()
-                    if (!error.isCacheCompatibilityError()) throw error
-                    if (profile.chatApiMode == "responses") {
-                        streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, onToolActivity, deltaSink)
-                    } else {
-                        streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
-                    }
-                }
-            } else if (profile.chatApiMode == "responses") {
+            return if (profile.usesResponses(model)) {
                 streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, onToolActivity, deltaSink)
             } else {
                 streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
@@ -786,7 +771,7 @@ class ApiRepository {
         val pageData = pages.map { page ->
             "data:${page.mimeType.ifBlank { "image/png" }};base64,${Base64.getEncoder().encodeToString(page.bytes)}"
         }
-        val body = if (profile.chatApiMode == "responses") {
+        val body = if (profile.usesResponses(model)) {
             JSONObject()
                 .put("model", model)
                 .put("stream", true)
@@ -812,7 +797,7 @@ class ApiRepository {
                         }
                     })))
         }
-        val path = if (profile.chatApiMode == "responses") profile.responsesPath else profile.chatPath
+        val path = if (profile.usesResponses(model)) profile.responsesPath else profile.chatPath
         val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path))
             .header("Accept", "text/event-stream")
             .header("Cache-Control", "no-cache")
@@ -823,7 +808,7 @@ class ApiRepository {
             .build()
         val text = executeMangaAnalysisCall(
             call = mangaAnalysisClient.newCall(request),
-            responsesApi = profile.chatApiMode == "responses"
+            responsesApi = profile.usesResponses(model)
         )
         parseMangaTranslationAnalysis(text, pages.size)
     }

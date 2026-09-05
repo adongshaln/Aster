@@ -10,7 +10,7 @@
 
 Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 Android 客户端。它可以将对话与绘图分别路由到不同的 OpenAI 兼容服务，并在统一界面中管理模型、推理、图片、工具调用与历史任务。
 
-> 当前稳定版本：**2.1.0** · `versionCode 54`
+> 当前稳定版本：**2.2.1** · `versionCode 56`
 >
 > 完整历史更新请查看 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -87,11 +87,11 @@ Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 
 - 下载完成后执行 MP4 文件头校验
 - 本地下载历史、播放、分享与删除
 
-## Aster 2.1 当前体验
+## Aster 2.2 当前体验
 
 2.0 将项目正式从 ADChat 更名为 **Aster**，并继续保留 `com.adong.adchat` 应用 ID、原配置格式与已有数据兼容性。
 
-2.1 统一采用暖白、浅棕与墨色视觉，重新整理聊天、创作、媒体下载、设置与侧栏布局，提升信息层级与操作入口的一致性。
+2.1 统一采用暖白、浅棕与墨色视觉，重新整理聊天、创作、媒体下载、设置与侧栏布局，提升信息层级与操作入口的一致性。\n\n2.2 将设置页收敛为服务列表与按需展开的高级选项，并把 GPT 模型的对话请求统一到 Responses API。
 
 当前体验重点包括：
 
@@ -106,7 +106,7 @@ Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 
 - 滚动、键盘动画和流式生成期间自动降低实时模糊负载，改善聊天页帧率
 - Adaptive Icon 使用安全边距，避免 Aster Logo 在不同启动器蒙版下被裁切
 
-更详细的 2.1.0 变更见 [CHANGELOG.md](CHANGELOG.md#210--2026-09-05)。
+更详细的 2.2.1 变更见 [CHANGELOG.md](CHANGELOG.md#221--2026-09-05)。
 
 ## 技术栈
 

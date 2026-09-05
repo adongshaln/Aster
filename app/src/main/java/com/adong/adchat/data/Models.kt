@@ -52,7 +52,7 @@ fun ApiProfile.normalized(): ApiProfile = copy(
     modelsPath = modelsPath.trim().ifBlank { "/v1/models" },
     chatPath = chatPath.trim().ifBlank { "/v1/chat/completions" },
     responsesPath = responsesPath.trim().ifBlank { "/v1/responses" },
-    chatApiMode = chatApiMode.takeIf { it == "responses" } ?: "chat",
+    chatApiMode = if (usesResponses()) "responses" else "chat",
     reasoningEffort = reasoningEffort.ifBlank { "medium" },
     promptCacheMode = promptCacheMode.takeIf { it in setOf("adaptive", "compatibility") } ?: "adaptive",
     imagePath = imagePath.trim().ifBlank { "/v1/images/generations" },

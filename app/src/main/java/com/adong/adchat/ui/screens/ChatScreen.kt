@@ -84,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.ChatFileAttachment
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ChatCitation
@@ -175,12 +176,6 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             )
         }
     }
-    val showQuestionNavigator by remember {
-        derivedStateOf {
-            questionIndices.size > 1 &&
-                (questionTargets.previous != null || questionTargets.next != null)
-        }
-    }
     val regeneratableMessageId by remember {
         derivedStateOf {
             vm.messages.lastOrNull()?.takeIf {
@@ -253,7 +248,24 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        ChatHeader(vm, onOpenDrawer, onSwitchModel = { showSwitcher = true })
+        ChatHeader(
+            vm, onOpenDrawer, onSwitchModel = { showSwitcher = true },
+            showNavigation = questionIndices.size > 1,
+            previousEnabled = questionTargets.previous != null,
+            nextEnabled = questionTargets.next != null,
+            onPrevious = {
+                questionTargets.previous?.let { target ->
+                    autoFollow = false
+                    scope.launch { listState.animateScrollToItem(target) }
+                }
+            },
+            onNext = {
+                questionTargets.next?.let { target ->
+                    autoFollow = false
+                    scope.launch { listState.animateScrollToItem(target) }
+                }
+            }
+        )
         Box(Modifier.weight(1f).fillMaxWidth().imePadding()) {
             Box(
                 Modifier.fillMaxSize().then(
@@ -340,44 +352,14 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     )
                 )
             }
-            AnimatedContent(
-                targetState = showQuestionNavigator,
-                modifier = Modifier.align(Alignment.BottomStart)
-                    .padding(start = 10.dp, bottom = composerClearance + 8.dp),
-                transitionSpec = {
-                    fadeIn(tween(160)) togetherWith fadeOut(tween(110))
-                },
-                label = "question-navigator"
-            ) { visible ->
-                if (visible) {
-                    QuestionNavigator(
-                        previousEnabled = questionTargets.previous != null,
-                        nextEnabled = questionTargets.next != null,
-                        onPrevious = {
-                            questionTargets.previous?.let { target ->
-                                autoFollow = false
-                                scope.launch { listState.animateScrollToItem(target) }
-                            }
-                        },
-                        onNext = {
-                            questionTargets.next?.let { target ->
-                                autoFollow = false
-                                scope.launch { listState.animateScrollToItem(target) }
-                            }
-                        }
-                    )
-                } else Spacer(Modifier.size(0.dp))
-            }
-            AnimatedContent(
-                targetState = showJumpToBottom,
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showJumpToBottom,
                 modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 18.dp, bottom = composerClearance + 8.dp),
-                transitionSpec = {
-                    fadeIn(tween(160)) togetherWith fadeOut(tween(110))
-                },
-                label = "jump-to-bottom"
-            ) { visible ->
-                if (visible) Surface(
+                    .padding(end = 18.dp, bottom = composerClearance),
+                enter = fadeIn(tween(140)),
+                exit = fadeOut(tween(100))
+            ) {
+                Surface(
                     onClick = {
                         autoFollow = true
                         scope.launch { listState.animateScrollToItem(vm.messages.size) }
@@ -385,20 +367,19 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     color = Surface,
                     contentColor = Accent,
                     shape = CircleShape,
-                    shadowElevation = 8.dp
+                    border = BorderStroke(1.dp, Hairline),
+                    tonalElevation = 0.dp,
+                    shadowElevation = 0.dp
                 ) {
                     Row(
-                        Modifier.padding(start = 11.dp, end = 14.dp, top = 9.dp, bottom = 9.dp),
+                        Modifier.heightIn(min = 48.dp).padding(horizontal = 14.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box(Modifier.size(25.dp).clip(CircleShape).background(AccentSoft), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(18.dp))
-                        }
-                        Spacer(Modifier.width(7.dp))
-                        Text(if (vm.isChatLoading) "跟随生成" else "回到底部", style = MaterialTheme.typography.labelLarge)
+                        Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(20.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (vm.isChatLoading) "跟随生成" else "回到底部",
+                            style = MaterialTheme.typography.labelLarge)
                     }
-                } else {
-                    Spacer(Modifier.size(0.dp))
                 }
             }
             Box(
@@ -415,7 +396,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     loading = vm.isChatLoading,
                     attachmentLoading = vm.isChatAttachmentLoading,
                     reasoningEffort = vm.chatProfile.reasoningEffort,
-                    apiMode = vm.chatProfile.chatApiMode,
+                    apiMode = if (vm.chatProfile.usesResponses()) "responses" else "chat",
                     webSearchEnabled = vm.chatProfile.webSearchEnabled,
                     fileCreationEnabled = vm.chatProfile.fileCreationEnabled,
                     onModelClick = { showSwitcher = true },
@@ -440,7 +421,16 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
 }
 @Composable
-private fun ChatHeader(vm: MainViewModel, onOpenDrawer: () -> Unit, onSwitchModel: () -> Unit) {
+private fun ChatHeader(
+    vm: MainViewModel,
+    onOpenDrawer: () -> Unit,
+    onSwitchModel: () -> Unit,
+    showNavigation: Boolean,
+    previousEnabled: Boolean,
+    nextEnabled: Boolean,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit
+) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         AsterIconButton(Icons.Rounded.Menu, "打开侧栏", onOpenDrawer)
         Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onSwitchModel)
@@ -453,6 +443,9 @@ private fun ChatHeader(vm: MainViewModel, onOpenDrawer: () -> Unit, onSwitchMode
                     color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Icon(Icons.Rounded.ExpandMore, "切换模型", Modifier.size(15.dp), tint = MutedInk)
             }
+        }
+        if (showNavigation) {
+            QuestionNavigator(previousEnabled, nextEnabled, onPrevious, onNext)
         }
         AsterIconButton(Icons.Rounded.AddComment, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
     }
@@ -641,48 +634,28 @@ private fun QuestionNavigator(
     onNext: () -> Unit
 ) {
     val haptics = LocalHapticFeedback.current
-    Surface(
-        color = Surface.copy(alpha = .97f),
-        contentColor = Accent,
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, Accent.copy(alpha = .16f)),
-        shadowElevation = 7.dp
-    ) {
-        Column(
-            Modifier.padding(horizontal = 2.dp, vertical = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onPrevious()
+            },
+            enabled = previousEnabled,
+            modifier = Modifier.size(48.dp)
         ) {
-            IconButton(
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onPrevious()
-                },
-                enabled = previousEnabled,
-                modifier = Modifier.size(31.dp)
-            ) {
-                Icon(
-                    Icons.Rounded.KeyboardArrowUp,
-                    "回到上一个提问",
-                    modifier = Modifier.size(19.dp),
-                    tint = if (previousEnabled) Accent else MutedInk.copy(alpha = .28f)
-                )
-            }
-            HorizontalDivider(Modifier.width(18.dp), color = Hairline)
-            IconButton(
-                onClick = {
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onNext()
-                },
-                enabled = nextEnabled,
-                modifier = Modifier.size(31.dp)
-            ) {
-                Icon(
-                    Icons.Rounded.KeyboardArrowDown,
-                    "前往下一个提问",
-                    modifier = Modifier.size(19.dp),
-                    tint = if (nextEnabled) Accent else MutedInk.copy(alpha = .28f)
-                )
-            }
+            Icon(Icons.Rounded.KeyboardArrowUp, "回到上一个提问", Modifier.size(22.dp),
+                tint = if (previousEnabled) Accent else MutedInk.copy(alpha = .28f))
+        }
+        IconButton(
+            onClick = {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onNext()
+            },
+            enabled = nextEnabled,
+            modifier = Modifier.size(48.dp)
+        ) {
+            Icon(Icons.Rounded.KeyboardArrowDown, "前往下一个提问", Modifier.size(22.dp),
+                tint = if (nextEnabled) Accent else MutedInk.copy(alpha = .28f))
         }
     }
 }
