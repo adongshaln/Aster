@@ -86,7 +86,7 @@ internal object StorySchema {
             created_at INTEGER NOT NULL,
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE,
             FOREIGN KEY(timeline_id) REFERENCES $TIMELINES(id) ON DELETE CASCADE,
-            UNIQUE(timeline_id, workspace, sequence_no)
+            UNIQUE(timeline_id, sequence_no)
         )
         """.trimIndent(),
         "CREATE INDEX idx_story_messages_scope ON $MESSAGES(story_id, timeline_id, workspace, sequence_no)",
