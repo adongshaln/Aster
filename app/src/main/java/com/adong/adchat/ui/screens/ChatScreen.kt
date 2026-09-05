@@ -191,7 +191,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)
     val composerClearance = composerHeight + 18.dp
-    val useLiveHaze = !listState.isScrollInProgress && !imeTransitioning && !vm.isChatLoading
+    // Keep the bottom reading veil visually stable; the live Haze path rendered differently\n    // between idle and touch/scroll states on some Android GPUs.\n    val useLiveHaze = false
 
     LaunchedEffect(vm.activeConversationId) {
         autoFollow = true
@@ -1669,7 +1669,26 @@ private fun AsterWritingCursorLine(error: Boolean) {
     )
 }
 
-private fun inlineMarkdown(text: String): AnnotatedString = basicInlineMarkdown(text)
+private fun inlineMarkdown(text: String): AnnotatedString {
+    val base = basicInlineMarkdown(text)
+    val source = base.text
+    return buildAnnotatedString {
+        append(base)
+        var cursor = 0
+        while (cursor < source.length) {
+            val start = source.indexOf('『', cursor)
+            if (start < 0) break
+            val end = source.indexOf('』', start + 1)
+            if (end < 0) break
+            addStyle(
+                SpanStyle(color = Accent),
+                start = start,
+                end = end + 1
+            )
+            cursor = end + 1
+        }
+    }
+}
 
 @Composable
 private fun ChatActionButton(
