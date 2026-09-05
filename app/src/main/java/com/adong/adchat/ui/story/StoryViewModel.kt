@@ -11,11 +11,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.ApiRepository
+import com.adong.adchat.data.ChatMessage
+import com.adong.adchat.data.ConfigStore
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryArchiveStore
 import com.adong.adchat.data.story.StoryContextComposer
+import com.adong.adchat.data.story.StoryMemoryApplyResult
 import com.adong.adchat.data.story.StoryMemoryKind
+import com.adong.adchat.data.story.StoryMemoryOrganizer
 import com.adong.adchat.data.story.StoryMemoryRecord
+import com.adong.adchat.data.story.StoryMemoryStore
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRepository
 import com.adong.adchat.data.story.StoryRevisionState
@@ -35,8 +40,11 @@ import java.util.concurrent.ConcurrentHashMap
 class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val store = StoryRepository(application)
     private val archiveStore = StoryArchiveStore(application)
+    private val memoryStore = StoryMemoryStore(application)
+    private val configStore = ConfigStore(application)
     private val api = ApiRepository()
     private val jobs = linkedMapOf<String, Job>()
+    private val organizerJobs = ConcurrentHashMap<String, Job>()
     private val stopRequested = ConcurrentHashMap.newKeySet<String>()
 
     val stories = mutableStateListOf<Story>()
@@ -55,11 +63,15 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            memoryStore.recoverRunningJobs()
             val loaded = store.listStories()
             withContext(Dispatchers.Main) {
                 stories.clear()
                 stories.addAll(loaded)
                 loaded.firstOrNull()?.let { selectStory(it.id) }
+            }
+            loaded.filter(Story::automaticMemoryEnabled).forEach { story ->
+                scheduleMemoryMaintenance(story.id, story.currentTimelineId)
             }
         }
     }
@@ -143,6 +155,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 replaceStory(updated)
                 errors.clear()
             }
+            if (updated.automaticMemoryEnabled) scheduleMemoryMaintenance(updated.id, updated.currentTimelineId, profile)
         }
     }
 
@@ -152,6 +165,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             if (!store.setAutomaticMemoryEnabled(story.id, enabled)) return@launch
             val updated = store.getStory(story.id) ?: return@launch
             withContext(Dispatchers.Main) { replaceStory(updated) }
+            if (enabled) {
+                scheduleMemoryMaintenance(updated.id, updated.currentTimelineId)
+            } else {
+                organizerJobs.remove(memoryJobKey(updated.id, updated.currentTimelineId))?.cancel()
+            }
         }
     }
 
@@ -159,6 +177,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         jobs.keys.filter { it.startsWith("$storyId|") }.forEach { key ->
             stopRequested += key
             jobs.remove(key)?.cancel(CancellationException("Story deleted"))
+        }
+        organizerJobs.keys.filter { it.startsWith("$storyId|") }.forEach { key ->
+            organizerJobs.remove(key)?.cancel(CancellationException("Story deleted"))
         }
         viewModelScope.launch(Dispatchers.IO) {
             store.deleteStory(storyId)
@@ -233,6 +254,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             archiveStore.setPinned(recordId, pinned)
             refreshArchive(story.id, story.currentTimelineId)
+            refreshStory(story.id)
         }
     }
 
@@ -330,13 +352,17 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val finalText = result.text.ifBlank { streamed.toString() }
                 assistant?.revision?.id?.let { revisionId ->
-                    store.updateActiveRevision(
+                    val completed = store.updateActiveRevision(
                         revisionId = revisionId,
                         content = finalText,
                         state = StoryRevisionState.Complete,
                         profileName = profile.name,
                         model = routeModel
                     )
+                    if (completed && workspace == StoryWorkspace.Prose) {
+                        memoryStore.enqueueForRevision(story.id, story.currentTimelineId, revisionId)
+                        scheduleMemoryMaintenance(story.id, story.currentTimelineId, profile)
+                    }
                 }
             } catch (error: Throwable) {
                 val partial = streamed.toString().trimEnd()
@@ -390,6 +416,85 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val job = jobs[key] ?: return
         stopRequested += key
         job.cancel(CancellationException("User stopped story generation"))
+    }
+
+    private fun scheduleMemoryMaintenance(
+        storyId: String,
+        timelineId: String,
+        preferredProfile: ApiProfile? = null
+    ) {
+        val key = memoryJobKey(storyId, timelineId)
+        if (organizerJobs[key]?.isActive == true) return
+        val task = viewModelScope.launch(Dispatchers.IO, start = CoroutineStart.LAZY) {
+            try {
+                while (true) {
+                    val story = store.getStory(storyId) ?: break
+                    if (!story.automaticMemoryEnabled) break
+                    val pending = memoryStore.nextPendingJob(storyId, timelineId) ?: break
+                    val running = memoryStore.markRunning(pending) ?: continue
+                    try {
+                        val source = store.getActiveRevision(running.sourceRevisionId)
+                        val currentVersion = memoryStore.currentMemoryVersion(storyId)
+                        if (source == null || !source.eligibleForMemory) {
+                            memoryStore.markStale(running.id, "Source revision is no longer active complete prose")
+                            continue
+                        }
+                        if (currentVersion == null) {
+                            memoryStore.markStale(running.id, "Story no longer exists")
+                            break
+                        }
+                        if (currentVersion != running.baseMemoryVersion) {
+                            memoryStore.requeueStale(running, currentVersion)
+                            continue
+                        }
+
+                        val resolvedProfile = preferredProfile?.takeIf { it.id == story.profileId }
+                            ?: configStore.load().profiles.firstOrNull { it.id == story.profileId }
+                        if (resolvedProfile == null || story.model.isBlank()) {
+                            memoryStore.resetPending(running.id, "Story API profile/model unavailable")
+                            break
+                        }
+                        val organizerProfile = resolvedProfile.copy(
+                            webSearchEnabled = false,
+                            fileCreationEnabled = false
+                        )
+                        val organizerInput = StoryMemoryOrganizer.buildInput(
+                            sourceRevision = source,
+                            existingMemory = archiveStore.listMemoryRecords(storyId, timelineId)
+                        )
+                        val organizerResponse = api.streamChat(
+                            profile = organizerProfile,
+                            model = story.model,
+                            systemPrompt = StoryMemoryOrganizer.systemPrompt,
+                            history = listOf(ChatMessage(role = "user", content = organizerInput)),
+                            cacheKey = "aster-story-memory-$storyId-${running.sourceRevisionId}-${running.baseMemoryVersion}"
+                        ) { }
+                        val output = StoryMemoryOrganizer.parse(organizerResponse.text)
+                        when (memoryStore.applyOrganizerOutput(running, output)) {
+                            is StoryMemoryApplyResult.Committed -> {
+                                refreshArchive(storyId, timelineId)
+                                refreshStory(storyId)
+                            }
+                            is StoryMemoryApplyResult.Requeued -> Unit
+                            StoryMemoryApplyResult.StaleSource -> Unit
+                        }
+                    } catch (cancelled: CancellationException) {
+                        memoryStore.resetPending(running.id, "Organizer cancelled")
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        if (running.attempts < 2) {
+                            memoryStore.resetPending(running.id, friendlyStoryError(error))
+                        } else {
+                            memoryStore.markFailed(running.id, friendlyStoryError(error))
+                        }
+                    }
+                }
+            } finally {
+                organizerJobs.remove(key)
+            }
+        }
+        organizerJobs[key] = task
+        task.start()
     }
 
     private fun loadActiveStoryState(story: Story) {
@@ -446,9 +551,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun jobKey(storyId: String, workspace: StoryWorkspace): String = "$storyId|${workspace.dbValue}"
+    private fun memoryJobKey(storyId: String, timelineId: String): String = "$storyId|$timelineId"
 
     override fun onCleared() {
         jobs.values.forEach { it.cancel() }
+        organizerJobs.values.forEach { it.cancel() }
+        memoryStore.close()
         archiveStore.close()
         store.close()
         super.onCleared()

@@ -10,7 +10,7 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 - [x] M1a — story data foundation
 - [x] M1b — story entry, workspaces, archive manual editing shell
 - [x] M2a — story context composition and budget
-- [ ] M2b — background memory maintenance and proposals
+- [x] M2b — background memory maintenance and proposals
 - [ ] M3 — revision recovery and memory invalidation
 - [ ] M4 — UI polish, full acceptance tests, signed test APK
 
@@ -21,7 +21,6 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 - Story persistence uses a separate `aster_story.db` SQLite database with explicit schema versioning and foreign keys.
 - Logical story messages and message revisions are separate; only the active revision can be effective.
 - Complete Prose revisions are memory-eligible; Discussion, interrupted and stopped revisions are not.
-- Story persistence has transaction boundaries, timeline-global sequence numbers and durable job dedupe keys.
 - Story text generation reuses `ApiRepository.streamChat`; no second HTTP stack is added.
 - Story Discussion and Prose have independent drafts, scroll anchors, message histories and generation jobs.
 - Workspace saves use strictly monotonic state versions; stale asynchronous writes are rejected by SQLite persistence.
@@ -32,27 +31,34 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 - Recent history is selected only as a continuous suffix of complete user/assistant rounds; an oversized newer round blocks older short turns from leapfrogging it.
 - Prose context receives active confirmed material and complete Prose history only. Pending proposals, inference-only memory and Discussion history are excluded.
 - Discussion context may receive pending candidates/inferences, but they are explicitly marked non-authoritative and are never promoted to Prose context by the composer.
-- Manual archive add/update/pin/deactivate now uses one SQLite transaction for the record mutation, durable before/after audit entry and `stories.memory_version` increment.
+- Manual archive add/update/pin/deactivate uses one SQLite transaction for the record mutation, durable before/after audit entry and `stories.memory_version` increment.
 - Manual no-op update/pin operations do not create a log entry or consume a memory version.
-- Manual deactivation remains only a soft deactivate/hide operation; the audit trail does not yet provide a complete undo/replay mechanism.
+- Manual deactivation remains only a soft deactivate/hide operation; the audit trail is not a complete undo/replay mechanism.
+- Completed active Prose replies can enqueue durable `organize_prose` jobs. Running jobs are reset to pending when the story subsystem initializes after process interruption.
+- Organizer model output is strict append-only structured data: application-owned IDs are never accepted from the model; automatic confirmed memory is `prose_occurred`, never pinned, and automatic author plans remain pending proposals instead of Prose facts.
+- Organizer jobs snapshot `memoryVersion` before model work and validate it again at commit. A newer manual/automatic memory commit makes the job stale and requeues it against the new version rather than overwriting newer state.
+- Automatic memory additions, change-set audit and `memoryVersion` advancement commit in one SQLite transaction. Pending proposals are isolated from Prose context and are visible only through the Discussion candidate path.
+- The first automatic organizer is conservative and append-only: it does not automatically update, deactivate or replace existing memory records.
 - Existing API profile transfer is not a full app backup and does not include conversations or story archives.
-- There is no current WorkManager/Room/DI framework; pending story jobs will be recovered by the story subsystem when it initializes.
+- There is no current WorkManager/Room/DI framework; persistent organizer jobs resume when the story subsystem initializes, but force-stop background execution is not promised.
 
 ## Validation
 
 - M1a commit: `8cd5f76bbaf8768c54ce922ecb5d55ce8ead2639`; Android build #71 passed.
 - M1b stabilization commit: `784e3dcbf696a4168251ecbc6e06f41c4e2447dd`; Android build #80 passed, including unit tests, Release compile and signed APK staging.
 - M2a base commit: `9e9a25249752c27954eec1f791c8a4ecf6a6e40a`; Android build #86 passed.
-- M2a closeout commit: `6c0faef2c1495f1f3d12dff4cc5bd94504bd1f7c`; Android build #88 passed, covering hard-budget rejection, mandatory pinned memory, complete-round history truncation and basic character/alias/place relevance selection.
-- M2b manual consistency gate adds schema v2 with an additive `manual_memory_changes` log and atomic manual mutation/version code. CI must pass before automatic organizer work begins.
+- M2a closeout commit: `6c0faef2c1495f1f3d12dff4cc5bd94504bd1f7c`; Android build #88 passed.
+- M2b manual consistency commit: `88e202eac296af3f7bc3343ca6834ef61c77cae4`; Android build #89 passed, including unit tests, Release compile and signed APK staging.
+- M2b automatic organizer adds strict output validation, durable/recoverable jobs, version-stale requeue, append-only memory/proposal commit and organizer regression tests. CI must pass before M3 begins.
 
 ## M2b consistency boundary
 
-Before any automatic memory change set can commit, it must preserve the manual consistency boundary now established:
-
-1. every real manual add/update/pin/deactivate writes an explicit durable audit row;
-2. record mutation + audit row + `memoryVersion` increment are one SQLite transaction;
-3. automatic jobs must snapshot a base `memoryVersion`, compare it again at commit, and become stale/requeue rather than overwrite a newer manual change.
+1. Every real manual add/update/pin/deactivate writes an explicit durable audit row.
+2. Manual record mutation + audit row + `memoryVersion` increment are one SQLite transaction.
+3. Automatic jobs bind to an active complete Prose source revision and snapshot the current `memoryVersion`.
+4. Model output cannot supply trusted IDs or destructive operations; application code creates all record/proposal/change-set IDs.
+5. Automatic commit revalidates the source revision and base version. Stale jobs do not commit; they requeue only while the source revision is still active.
+6. Automatic memory + change set + version advancement commit atomically.
 
 Current `deactivateRecord` is still only a soft deactivation/hide operation. It is **not** a complete undo/revert capability.
 
@@ -61,4 +67,4 @@ Current `deactivateRecord` is still only a soft deactivation/hide operation. It 
 M0 report: `docs/STORY_MODE_M0.md`.
 M1b runtime stabilization: `docs/STORY_MODE_FIX72.md`.
 
-Current task: validate the M2b manual consistency gate, then connect automatic organizer jobs/proposals/change sets on top of the version boundary. Do not change the stable app version yet.
+Current task after M2b validation: M3 — revision switching/recovery, source invalidation, stale organizer handling across revisions, snapshot/replay foundations. Do not change the stable app version yet.
