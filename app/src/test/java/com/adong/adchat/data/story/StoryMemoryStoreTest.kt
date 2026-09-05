@@ -43,6 +43,23 @@ class StoryMemoryStoreTest {
         return value
     }
 
+    @Test fun missingConfigurationPreservesPendingJobUntilRouteIsRestored() {
+        val job = memory.enqueueForRevision(story.id, story.currentTimelineId, source().revision.id)!!
+        repeat(8) {
+            assertNull(memory.markRunning(job, configurationAvailable = false))
+            val pending = memory.nextPendingJob(story.id, story.currentTimelineId)!!
+            assertEquals(job.id, pending.id)
+            assertEquals(0, pending.attempts)
+            assertEquals(StoryJobState.Pending, pending.state)
+        }
+        memory.close()
+        memory = StoryMemoryStore(context)
+        val restored = memory.nextPendingJob(story.id, story.currentTimelineId)!!
+        val running = memory.markRunning(restored, configurationAvailable = true)!!
+        assertEquals(1, running.attempts)
+        assertTrue(memory.applyOrganizerOutput(running, facts()) is StoryMemoryApplyResult.Committed)
+    }
+
     @Test fun commitIsIdempotentAcrossLaterManualVersions() {
         val source = source(); val job = running(source)
         assertTrue(memory.applyOrganizerOutput(job, facts()) is StoryMemoryApplyResult.Committed)

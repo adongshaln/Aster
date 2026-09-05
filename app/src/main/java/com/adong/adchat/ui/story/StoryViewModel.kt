@@ -452,6 +452,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun organizerProfile(story: Story, preferred: ApiProfile? = null): ApiProfile? {
+        if (story.model.isBlank()) return null
+        return preferred?.takeIf { it.id == story.profileId }
+            ?: configStore.load().profiles.firstOrNull { it.id == story.profileId }
+    }
+
     @Synchronized
     private fun scheduleMemoryMaintenance(
         storyId: String,
@@ -467,7 +473,10 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     val story = store.getStory(storyId) ?: break
                     if (!story.automaticMemoryEnabled || story.currentTimelineId != timelineId) break
                     val pending = memoryStore.nextPendingJob(storyId, timelineId) ?: break
-                    val running = memoryStore.markRunning(pending) ?: continue
+                    val resolvedProfile = organizerProfile(story, preferredProfile)
+                    val running = memoryStore.markRunning(pending, configurationAvailable = resolvedProfile != null)
+                    if (resolvedProfile == null) break // Wait for configuration; do not spend a request attempt.
+                    if (running == null) continue
                     try {
                         withContext(Dispatchers.Main) { if (activeStoryId == storyId) memoryStatus = "正在整理记忆" }
                         val source = store.getActiveRevision(running.sourceRevisionId)
@@ -485,12 +494,6 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                             continue
                         }
 
-                        val resolvedProfile = preferredProfile?.takeIf { it.id == story.profileId }
-                            ?: configStore.load().profiles.firstOrNull { it.id == story.profileId }
-                        if (resolvedProfile == null || story.model.isBlank()) {
-                            memoryStore.resetPending(running.id, "Story API profile/model unavailable")
-                            break
-                        }
                         val organizerProfile = resolvedProfile.copy(
                             webSearchEnabled = false,
                             fileCreationEnabled = false
@@ -533,12 +536,15 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 synchronized(this@StoryViewModel) { organizerJobs.remove(key) }
                 val latestStory = store.getStory(storyId)
-                if (isActive && latestStory?.automaticMemoryEnabled == true && latestStory.currentTimelineId == timelineId &&
+                val waitingForConfiguration = latestStory != null && organizerProfile(latestStory, preferredProfile) == null
+                if (isActive && !waitingForConfiguration && latestStory?.automaticMemoryEnabled == true && latestStory.currentTimelineId == timelineId &&
                     memoryStore.nextPendingJob(storyId, timelineId) != null) {
                     scheduleMemoryMaintenance(storyId, timelineId)
                 }
                 withContext(NonCancellable) {
-                    val status = memoryStore.jobStatus(storyId, timelineId)
+                    val status = if (waitingForConfiguration && memoryStore.nextPendingJob(storyId, timelineId) != null)
+                        "记忆整理已暂停，请选择可用的 API 和模型后重试"
+                    else memoryStore.jobStatus(storyId, timelineId)
                     withContext(Dispatchers.Main) { if (activeStoryId == storyId) memoryStatus = status }
                 }
             }

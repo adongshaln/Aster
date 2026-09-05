@@ -51,33 +51,37 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         arrayOf(storyId, timelineId, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND, StoryJobState.Pending.dbValue)
     ).use { cursor -> if (cursor.moveToFirst()) cursor.toJob() else null }
 
-    fun markRunning(job: StoryMemoryJob): StoryMemoryJob? = helper.writableDatabase.inTransaction { db ->
-        val current = queryJob(db, job.id) ?: return@inTransaction null
-        if (current.state != StoryJobState.Pending) return@inTransaction null
-        val totalAttempts = sourceAttempts(db, current.sourceRevisionId)
-        if (totalAttempts >= MAX_SOURCE_ATTEMPTS) {
-            markJobState(db, current.id, StoryJobState.Failed, "Retry limit reached; review and retry manually")
-            return@inTransaction null
+    fun markRunning(job: StoryMemoryJob, configurationAvailable: Boolean = true): StoryMemoryJob? {
+        // Missing configuration is a blocked task, not a failed API attempt.
+        if (!configurationAvailable) return null
+        return helper.writableDatabase.inTransaction { db ->
+            val current = queryJob(db, job.id) ?: return@inTransaction null
+            if (current.state != StoryJobState.Pending) return@inTransaction null
+            val totalAttempts = sourceAttempts(db, current.sourceRevisionId)
+            if (totalAttempts >= MAX_SOURCE_ATTEMPTS) {
+                markJobState(db, current.id, StoryJobState.Failed, "Retry limit reached; review and retry manually")
+                return@inTransaction null
+            }
+            val now = System.currentTimeMillis()
+            val next = current.copy(
+                state = StoryJobState.Running,
+                attempts = current.attempts + 1,
+                error = "",
+                updatedAt = now
+            )
+            val changed = db.update(
+                StorySchema.JOBS,
+                ContentValues().apply {
+                    put("state", next.state.dbValue)
+                    put("attempts", next.attempts)
+                    put("error", "")
+                    put("updated_at", now)
+                },
+                "id = ? AND state = ?",
+                arrayOf(current.id, StoryJobState.Pending.dbValue)
+            ) == 1
+            if (changed) next else null
         }
-        val now = System.currentTimeMillis()
-        val next = current.copy(
-            state = StoryJobState.Running,
-            attempts = current.attempts + 1,
-            error = "",
-            updatedAt = now
-        )
-        val changed = db.update(
-            StorySchema.JOBS,
-            ContentValues().apply {
-                put("state", next.state.dbValue)
-                put("attempts", next.attempts)
-                put("error", "")
-                put("updated_at", now)
-            },
-            "id = ? AND state = ?",
-            arrayOf(current.id, StoryJobState.Pending.dbValue)
-        ) == 1
-        if (changed) next else null
     }
 
     fun currentMemoryVersion(storyId: String): Long? = helper.readableDatabase.rawQuery(

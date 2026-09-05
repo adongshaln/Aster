@@ -84,7 +84,7 @@ Implementation commit `cdb45484104bc1b1330e4e9f9ec791e2f5731e3c` adds:
 - strict array/string output types, forbidden fields, and trailing-content rejection;
 - real SQLite integration tests using Robolectric: rollback, idempotence, source replacement, version conflict, recovery, proposal decisions and retry bound.
 
-Local Gradle could not download its distribution (network unavailable); GitHub Android build #90 is the validation gate, not a claimed pass at this checkpoint.
+Checkpoint `2bb110506783cae435e4f360e133f9be5dbdab82` passed GitHub Android build #92: unit tests, Release compilation and fixed-signature APK upload. This verifies the conservative M2b checkpoint, not full M1–M4 acceptance.
 
 ### Deliberate remaining limitations
 
@@ -94,3 +94,11 @@ Changing state/relationship/knowledge extracts are stored as source-linked histo
 not an authoritative current-state register. Structured entity/attribute replacement, conflict review,
 full source-linked change browsing, undo/replay and version switching remain to be completed before
 claiming the full design. No real provider story was sent during these automated tests.
+
+### Configuration wait fix
+
+Missing API/model configuration now leaves organizer jobs pending without consuming attempts.
+The scheduler does not immediately relaunch while configuration remains unavailable; selecting
+a valid story route or explicitly retrying resumes pending work. A SQLite regression test covers
+repeated blocked claims, persistence across reopening, and successful processing after restoration.
+This follow-up commit still requires its own CI validation before starting M3.
