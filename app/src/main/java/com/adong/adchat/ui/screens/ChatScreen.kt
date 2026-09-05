@@ -1124,7 +1124,7 @@ private fun RichMessageText(
 private fun StreamingProseText(content: String, error: Boolean) {
     val normalized = content.replace("\r\n", "\n")
     val parts = remember(normalized) { normalized.split("\n\n") }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(READING_BLOCK_GAP_DP.dp)) {
         if (parts.isEmpty() || (parts.size == 1 && parts.first().isEmpty())) {
             AsterWritingCursorLine(error)
             return@Column
@@ -1149,7 +1149,7 @@ private fun StreamingProseText(content: String, error: Boolean) {
 @Composable
 private fun StructuredMessageText(content: String, streaming: Boolean, error: Boolean) {
     val parts = remember(content) { content.split("```") }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         parts.forEachIndexed { index, raw ->
             if (raw.isBlank() && index != parts.lastIndex) return@forEachIndexed
             if (index % 2 == 1) {
@@ -1257,7 +1257,7 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
                 flushQuote()
                 result += MarkdownBlock(5, "")
             }
-            line.matches(Regex("""^#{1,3}\s+.*""")) -> {
+            line.matches(Regex("""^#{1,6}\s+.*""")) -> {
                 flushParagraph()
                 flushQuote()
                 val level = line.takeWhile { it == '#' }.length
@@ -1294,8 +1294,13 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
 @Composable
 private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) {
     val blocks = remember(raw) { parseMarkdownBlocks(raw) }
-    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 29.sp)
-    Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
+        fontSize = READING_BODY_FONT_SP.sp,
+        lineHeight = READING_BODY_LINE_SP.sp,
+        fontWeight = FontWeight.Normal,
+        letterSpacing = 0.sp
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(READING_BLOCK_GAP_DP.dp)) {
         if (blocks.isEmpty() && showCursor) {
             AsterWritingCursorLine(error)
         }
@@ -1305,14 +1310,23 @@ private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) 
                 1 -> ReadableText(
                     text = inlineMarkdown(block.text),
                     style = when (block.level) {
-                        1 -> MaterialTheme.typography.titleLarge.copy(lineHeight = 31.sp)
-                        2 -> MaterialTheme.typography.titleMedium.copy(fontSize = 18.sp, lineHeight = 26.sp)
-                        else -> bodyStyle.copy(fontWeight = FontWeight.SemiBold, lineHeight = 25.sp)
+                        1 -> MaterialTheme.typography.titleLarge.copy(
+                            fontSize = 20.sp,
+                            lineHeight = 28.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        2 -> MaterialTheme.typography.titleMedium.copy(
+                            fontSize = 17.5.sp,
+                            lineHeight = 25.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        3 -> bodyStyle.copy(fontWeight = FontWeight.SemiBold, lineHeight = 24.sp)
+                        else -> bodyStyle.copy(fontWeight = FontWeight.SemiBold, lineHeight = 24.sp)
                     },
                     color = if (error) Danger else Ink,
                     selectable = !showCursor,
                     showWritingCursor = hasCursor,
-                    modifier = Modifier.padding(top = if (block.level == 1) 10.dp else 5.dp)
+                    modifier = Modifier.padding(top = if (block.level == 1) 8.dp else 3.dp)
                 )
                 2 -> MarkdownListRow(block.marker, block.text, error, selectable = !showCursor, showCursor = hasCursor)
                 3 -> Row(
@@ -1355,7 +1369,7 @@ private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) 
 @Composable
 private fun SceneBreak() {
     Box(
-        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -1570,7 +1584,12 @@ private fun MarkdownListRow(
     selectable: Boolean,
     showCursor: Boolean
 ) {
-    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 29.sp)
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
+        fontSize = READING_BODY_FONT_SP.sp,
+        lineHeight = READING_BODY_LINE_SP.sp,
+        fontWeight = FontWeight.Normal,
+        letterSpacing = 0.sp
+    )
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Text(
             marker,
@@ -1638,7 +1657,12 @@ private fun ReadableText(
 private fun AsterWritingCursorLine(error: Boolean) {
     ReadableText(
         text = AnnotatedString(""),
-        style = MaterialTheme.typography.bodyLarge.copy(fontSize = 17.sp, lineHeight = 29.sp),
+        style = MaterialTheme.typography.bodyLarge.copy(
+            fontSize = READING_BODY_FONT_SP.sp,
+            lineHeight = READING_BODY_LINE_SP.sp,
+            fontWeight = FontWeight.Normal,
+            letterSpacing = 0.sp
+        ),
         color = if (error) Danger else Ink,
         selectable = false,
         showWritingCursor = true
