@@ -1590,7 +1590,6 @@ private fun ChatComposer(
     var showEffortSheet by remember { mutableStateOf(false) }
     var showToolsSheet by remember { mutableStateOf(false) }
     val enabledToSend = value.isNotBlank() || attachments.isNotEmpty()
-    val activeToolCount = listOf(webSearchEnabled, fileCreationEnabled).count { it }
     val capsuleShape = RoundedCornerShape(31.dp)
     val focusProgress by animateFloatAsState(
         targetValue = if (isFocused) 1f else 0f,
@@ -1677,29 +1676,18 @@ private fun ChatComposer(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(58.dp).padding(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box {
-                        IconButton(
-                            onClick = {
-                                focus.clearFocus()
-                                showToolsSheet = true
-                            },
-                            enabled = !loading,
-                            modifier = Modifier.size(46.dp)
-                        ) {
-                            if (attachmentLoading) {
-                                CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
-                            } else {
-                                Icon(Icons.Rounded.Add, "输入选项", Modifier.size(29.dp), tint = Ink)
-                            }
-                        }
-                        if (activeToolCount > 0) {
-                            Box(
-                                Modifier.align(Alignment.TopEnd).offset(x = (-2).dp, y = 2.dp)
-                                    .size(16.dp).clip(CircleShape).background(Accent),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(activeToolCount.toString(), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                            }
+                    IconButton(
+                        onClick = {
+                            focus.clearFocus()
+                            showToolsSheet = true
+                        },
+                        enabled = !loading,
+                        modifier = Modifier.size(46.dp)
+                    ) {
+                        if (attachmentLoading) {
+                            CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Rounded.Add, "输入选项", Modifier.size(29.dp), tint = Ink)
                         }
                     }
                     Spacer(Modifier.weight(1f))
