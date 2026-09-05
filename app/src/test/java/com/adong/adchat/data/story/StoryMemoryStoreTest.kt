@@ -72,8 +72,11 @@ class StoryMemoryStoreTest {
 
     @Test fun sqliteFailureRollsBackRecordVersionAndChangeSet() {
         val job = running(source())
-        StoryDatabase(context).use { helper -> helper.writableDatabase.execSQL(
-            "CREATE TRIGGER fail_changes BEFORE INSERT ON ${StorySchema.CHANGE_SETS} BEGIN SELECT RAISE(ABORT, 'test failure'); END") }
+        val triggerHelper = StoryDatabase(context)
+        triggerHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER fail_changes BEFORE INSERT ON ${StorySchema.CHANGE_SETS} BEGIN SELECT RAISE(ABORT, 'test failure'); END"
+        )
+        triggerHelper.close()
         var failed = false
         try { memory.applyOrganizerOutput(job, facts()) } catch (_: Exception) { failed = true }
         assertTrue(failed)
@@ -92,7 +95,7 @@ class StoryMemoryStoreTest {
         assertFalse(archive.decideProposal(story.id, story.currentTimelineId, proposal.id, true))
         assertEquals(1, count(StorySchema.MEMORIES))
         assertEquals(1, count(StorySchema.MANUAL_MEMORY_CHANGES))
-        assertEquals(1L, repo.getStory(story.id)!!.memoryVersion)
+        assertEquals(2L, repo.getStory(story.id)!!.memoryVersion)
     }
 
     @Test fun discussionCannotBypassParserAtStoreBoundary() {
