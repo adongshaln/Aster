@@ -32,6 +32,9 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 - Recent history is selected only as a continuous suffix of complete user/assistant rounds; an oversized newer round blocks older short turns from leapfrogging it.
 - Prose context receives active confirmed material and complete Prose history only. Pending proposals, inference-only memory and Discussion history are excluded.
 - Discussion context may receive pending candidates/inferences, but they are explicitly marked non-authoritative and are never promoted to Prose context by the composer.
+- Manual archive add/update/pin/deactivate now uses one SQLite transaction for the record mutation, durable before/after audit entry and `stories.memory_version` increment.
+- Manual no-op update/pin operations do not create a log entry or consume a memory version.
+- Manual deactivation remains only a soft deactivate/hide operation; the audit trail does not yet provide a complete undo/replay mechanism.
 - Existing API profile transfer is not a full app backup and does not include conversations or story archives.
 - There is no current WorkManager/Room/DI framework; pending story jobs will be recovered by the story subsystem when it initializes.
 
@@ -40,21 +43,22 @@ Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / vers
 - M1a commit: `8cd5f76bbaf8768c54ce922ecb5d55ce8ead2639`; Android build #71 passed.
 - M1b stabilization commit: `784e3dcbf696a4168251ecbc6e06f41c4e2447dd`; Android build #80 passed, including unit tests, Release compile and signed APK staging.
 - M2a base commit: `9e9a25249752c27954eec1f791c8a4ecf6a6e40a`; Android build #86 passed.
-- M2a closeout adds hard-budget rejection, mandatory pinned-memory behavior, complete-round history truncation and basic character/alias/place relevance selection. CI must pass before M2b begins.
+- M2a closeout commit: `6c0faef2c1495f1f3d12dff4cc5bd94504bd1f7c`; Android build #88 passed, covering hard-budget rejection, mandatory pinned memory, complete-round history truncation and basic character/alias/place relevance selection.
+- M2b manual consistency gate adds schema v2 with an additive `manual_memory_changes` log and atomic manual mutation/version code. CI must pass before automatic organizer work begins.
 
-## M2b hard prerequisite
+## M2b consistency boundary
 
-Before any automatic memory change set can be committed, **manual archive mutations must first gain the same consistency boundary**:
+Before any automatic memory change set can commit, it must preserve the manual consistency boundary now established:
 
-1. add/update/pin/deactivate manual records must write an explicit durable change log;
-2. the mutation and its log entry must atomically advance the story's `memoryVersion`;
-3. automatic jobs must snapshot and compare that version before commit.
+1. every real manual add/update/pin/deactivate writes an explicit durable audit row;
+2. record mutation + audit row + `memoryVersion` increment are one SQLite transaction;
+3. automatic jobs must snapshot a base `memoryVersion`, compare it again at commit, and become stale/requeue rather than overwrite a newer manual change.
 
-Until that prerequisite is implemented, current manual `deactivateRecord` is only a soft deactivation/hide operation. It is **not** a complete undo/revert capability.
+Current `deactivateRecord` is still only a soft deactivation/hide operation. It is **not** a complete undo/revert capability.
 
 ## Last saved point
 
 M0 report: `docs/STORY_MODE_M0.md`.
 M1b runtime stabilization: `docs/STORY_MODE_FIX72.md`.
 
-Current task: finish M2a validation, then enter M2b by implementing manual archive mutation log + atomic `memoryVersion` transaction before any automatic organizer commit path. Do not change the stable app version yet.
+Current task: validate the M2b manual consistency gate, then connect automatic organizer jobs/proposals/change sets on top of the version boundary. Do not change the stable app version yet.

@@ -23,7 +23,10 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
         var version = oldVersion
         while (version < newVersion) {
             when (version) {
-                // Future migrations must be explicit and non-destructive.
+                1 -> {
+                    StorySchema.MIGRATION_1_TO_2_STATEMENTS.forEach(db::execSQL)
+                    version = 2
+                }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -31,7 +34,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
     }
 }
 
@@ -47,6 +50,31 @@ internal object StorySchema {
     const val JOBS = "memory_jobs"
     const val SNAPSHOTS = "story_snapshots"
     const val WORKSPACE_STATE = "story_workspace_state"
+    const val MANUAL_MEMORY_CHANGES = "manual_memory_changes"
+
+    private val MANUAL_MEMORY_CHANGE_STATEMENTS: List<String> = listOf(
+        """
+        CREATE TABLE $MANUAL_MEMORY_CHANGES (
+            id TEXT PRIMARY KEY NOT NULL,
+            story_id TEXT NOT NULL,
+            timeline_id TEXT NOT NULL,
+            record_id TEXT NOT NULL,
+            operation TEXT NOT NULL CHECK(operation IN ('add','update','pin','deactivate')),
+            base_memory_version INTEGER NOT NULL,
+            committed_version INTEGER NOT NULL,
+            before_json TEXT,
+            after_json TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE,
+            FOREIGN KEY(timeline_id) REFERENCES $TIMELINES(id) ON DELETE CASCADE,
+            FOREIGN KEY(record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE,
+            UNIQUE(story_id, committed_version)
+        )
+        """.trimIndent(),
+        "CREATE INDEX idx_manual_memory_changes_story ON $MANUAL_MEMORY_CHANGES(story_id, timeline_id, committed_version DESC)"
+    )
+
+    val MIGRATION_1_TO_2_STATEMENTS: List<String> = MANUAL_MEMORY_CHANGE_STATEMENTS
 
     val CREATE_STATEMENTS: List<String> = listOf(
         """
@@ -236,5 +264,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    )
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS
 }

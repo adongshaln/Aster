@@ -3,7 +3,9 @@ package com.adong.adchat.data.story
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.database.sqlite.SQLiteDatabase
 import org.json.JSONArray
+import org.json.JSONObject
 
 class StoryArchiveStore(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
@@ -40,6 +42,17 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             "updated_at DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toProposal()) } }
 
+    fun listManualChanges(storyId: String, timelineId: String): List<StoryManualMemoryChange> =
+        helper.readableDatabase.query(
+            StorySchema.MANUAL_MEMORY_CHANGES,
+            null,
+            "story_id = ? AND timeline_id = ?",
+            arrayOf(storyId, timelineId),
+            null,
+            null,
+            "committed_version DESC"
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toManualChange()) } }
+
     fun addConfirmedRecord(
         storyId: String,
         timelineId: String,
@@ -53,27 +66,141 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         val cleaned = content.trim()
         require(cleaned.isNotBlank()) { "Memory content is required" }
         val now = System.currentTimeMillis()
-        val effectiveSequence = helper.readableDatabase.rawQuery(
-            "SELECT COALESCE(MAX(sequence_no), 0) FROM ${StorySchema.MESSAGES} WHERE story_id = ? AND timeline_id = ?",
-            arrayOf(storyId, timelineId)
-        ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
-        val record = StoryMemoryRecord(
-            storyId = storyId,
-            timelineId = timelineId,
-            kind = kind,
-            content = cleaned,
-            nature = StoryMemoryNature.UserConfirmed,
-            subjectEntityId = subjectEntityId,
-            objectEntityId = objectEntityId,
-            scope = scope,
-            effectiveSequence = effectiveSequence,
-            sourceRevisionId = null,
-            pinned = pinned,
-            active = true,
-            createdAt = now,
-            updatedAt = now
-        )
-        helper.writableDatabase.insertOrThrow(
+        return helper.writableDatabase.inTransaction { db ->
+            val baseVersion = requireStoryMemoryVersion(db, storyId)
+            val effectiveSequence = db.rawQuery(
+                "SELECT COALESCE(MAX(sequence_no), 0) FROM ${StorySchema.MESSAGES} WHERE story_id = ? AND timeline_id = ?",
+                arrayOf(storyId, timelineId)
+            ).use { if (it.moveToFirst()) it.getLong(0) else 0L }
+            val record = StoryMemoryRecord(
+                storyId = storyId,
+                timelineId = timelineId,
+                kind = kind,
+                content = cleaned,
+                nature = StoryMemoryNature.UserConfirmed,
+                subjectEntityId = subjectEntityId,
+                objectEntityId = objectEntityId,
+                scope = scope,
+                effectiveSequence = effectiveSequence,
+                sourceRevisionId = null,
+                pinned = pinned,
+                active = true,
+                createdAt = now,
+                updatedAt = now
+            )
+            insertMemory(db, record)
+            commitManualChange(
+                db = db,
+                operation = StoryManualMemoryOperation.Add,
+                before = null,
+                after = record,
+                baseVersion = baseVersion,
+                now = now
+            )
+            record
+        }
+    }
+
+    fun updateConfirmedRecord(recordId: String, content: String, pinned: Boolean): Boolean {
+        val cleaned = content.trim()
+        if (cleaned.isBlank()) return false
+        val now = System.currentTimeMillis()
+        return helper.writableDatabase.inTransaction { db ->
+            val before = queryMemory(db, recordId)?.takeIf(StoryMemoryRecord::active)
+                ?: return@inTransaction false
+            if (before.content == cleaned && before.pinned == pinned) return@inTransaction false
+            val baseVersion = requireStoryMemoryVersion(db, before.storyId)
+            val after = before.copy(content = cleaned, pinned = pinned, updatedAt = now)
+            check(
+                db.update(
+                    StorySchema.MEMORIES,
+                    ContentValues().apply {
+                        put("content", after.content)
+                        put("pinned", if (after.pinned) 1 else 0)
+                        put("updated_at", after.updatedAt)
+                    },
+                    "id = ? AND active = 1",
+                    arrayOf(recordId)
+                ) == 1
+            ) { "Manual memory record changed before update commit" }
+            commitManualChange(
+                db = db,
+                operation = StoryManualMemoryOperation.Update,
+                before = before,
+                after = after,
+                baseVersion = baseVersion,
+                now = now
+            )
+            true
+        }
+    }
+
+    fun setPinned(recordId: String, pinned: Boolean): Boolean {
+        val now = System.currentTimeMillis()
+        return helper.writableDatabase.inTransaction { db ->
+            val before = queryMemory(db, recordId)?.takeIf(StoryMemoryRecord::active)
+                ?: return@inTransaction false
+            if (before.pinned == pinned) return@inTransaction false
+            val baseVersion = requireStoryMemoryVersion(db, before.storyId)
+            val after = before.copy(pinned = pinned, updatedAt = now)
+            check(
+                db.update(
+                    StorySchema.MEMORIES,
+                    ContentValues().apply {
+                        put("pinned", if (after.pinned) 1 else 0)
+                        put("updated_at", after.updatedAt)
+                    },
+                    "id = ? AND active = 1",
+                    arrayOf(recordId)
+                ) == 1
+            ) { "Manual memory record changed before pin commit" }
+            commitManualChange(
+                db = db,
+                operation = StoryManualMemoryOperation.Pin,
+                before = before,
+                after = after,
+                baseVersion = baseVersion,
+                now = now
+            )
+            true
+        }
+    }
+
+    /** Manual removal remains a soft deactivation only; this audit log is not full undo/replay. */
+    fun deactivateRecord(recordId: String): Boolean {
+        val now = System.currentTimeMillis()
+        return helper.writableDatabase.inTransaction { db ->
+            val before = queryMemory(db, recordId)?.takeIf(StoryMemoryRecord::active)
+                ?: return@inTransaction false
+            val baseVersion = requireStoryMemoryVersion(db, before.storyId)
+            val after = before.copy(active = false, updatedAt = now)
+            check(
+                db.update(
+                    StorySchema.MEMORIES,
+                    ContentValues().apply {
+                        put("active", 0)
+                        put("updated_at", after.updatedAt)
+                    },
+                    "id = ? AND active = 1",
+                    arrayOf(recordId)
+                ) == 1
+            ) { "Manual memory record changed before deactivate commit" }
+            commitManualChange(
+                db = db,
+                operation = StoryManualMemoryOperation.Deactivate,
+                before = before,
+                after = after,
+                baseVersion = baseVersion,
+                now = now
+            )
+            true
+        }
+    }
+
+    override fun close() = helper.close()
+
+    private fun insertMemory(db: SQLiteDatabase, record: StoryMemoryRecord) {
+        db.insertOrThrow(
             StorySchema.MEMORIES,
             null,
             ContentValues().apply {
@@ -87,70 +214,100 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 record.objectEntityId?.let { put("object_entity_id", it) } ?: putNull("object_entity_id")
                 put("scope", record.scope)
                 put("effective_sequence", record.effectiveSequence)
-                putNull("source_revision_id")
+                record.sourceRevisionId?.let { put("source_revision_id", it) } ?: putNull("source_revision_id")
                 put("pinned", if (record.pinned) 1 else 0)
-                put("active", 1)
+                put("active", if (record.active) 1 else 0)
                 put("created_at", record.createdAt)
                 put("updated_at", record.updatedAt)
             }
         )
-        touchStory(storyId, now)
-        return record
     }
 
-    fun updateConfirmedRecord(recordId: String, content: String, pinned: Boolean): Boolean {
-        val cleaned = content.trim()
-        if (cleaned.isBlank()) return false
-        val now = System.currentTimeMillis()
-        val storyId = storyIdForRecord(recordId) ?: return false
-        val changed = helper.writableDatabase.update(
-            StorySchema.MEMORIES,
+    private fun commitManualChange(
+        db: SQLiteDatabase,
+        operation: StoryManualMemoryOperation,
+        before: StoryMemoryRecord?,
+        after: StoryMemoryRecord?,
+        baseVersion: Long,
+        now: Long
+    ) {
+        val record = after ?: before ?: error("Manual change requires a memory record")
+        val committedVersion = Math.addExact(baseVersion, 1L)
+        val change = StoryManualMemoryChange(
+            storyId = record.storyId,
+            timelineId = record.timelineId,
+            recordId = record.id,
+            operation = operation,
+            baseMemoryVersion = baseVersion,
+            committedVersion = committedVersion,
+            beforeJson = before?.let(::memoryAuditJson),
+            afterJson = after?.let(::memoryAuditJson),
+            createdAt = now
+        )
+        db.insertOrThrow(
+            StorySchema.MANUAL_MEMORY_CHANGES,
+            null,
             ContentValues().apply {
-                put("content", cleaned)
-                put("pinned", if (pinned) 1 else 0)
+                put("id", change.id)
+                put("story_id", change.storyId)
+                put("timeline_id", change.timelineId)
+                put("record_id", change.recordId)
+                put("operation", change.operation.dbValue)
+                put("base_memory_version", change.baseMemoryVersion)
+                put("committed_version", change.committedVersion)
+                change.beforeJson?.let { put("before_json", it) } ?: putNull("before_json")
+                change.afterJson?.let { put("after_json", it) } ?: putNull("after_json")
+                put("created_at", change.createdAt)
+            }
+        )
+        val advanced = db.update(
+            StorySchema.STORIES,
+            ContentValues().apply {
+                put("memory_version", committedVersion)
                 put("updated_at", now)
             },
-            "id = ? AND active = 1",
-            arrayOf(recordId)
-        ) == 1
-        if (changed) touchStory(storyId, now)
-        return changed
+            "id = ? AND memory_version = ?",
+            arrayOf(record.storyId, baseVersion.toString())
+        )
+        check(advanced == 1) { "Story memoryVersion changed before manual mutation commit" }
     }
 
-    fun setPinned(recordId: String, pinned: Boolean): Boolean {
-        val storyId = storyIdForRecord(recordId) ?: return false
-        val now = System.currentTimeMillis()
-        val changed = helper.writableDatabase.update(
-            StorySchema.MEMORIES,
-            ContentValues().apply {
-                put("pinned", if (pinned) 1 else 0)
-                put("updated_at", now)
-            },
-            "id = ? AND active = 1",
-            arrayOf(recordId)
-        ) == 1
-        if (changed) touchStory(storyId, now)
-        return changed
+    private fun requireStoryMemoryVersion(db: SQLiteDatabase, storyId: String): Long = db.rawQuery(
+        "SELECT memory_version FROM ${StorySchema.STORIES} WHERE id = ? LIMIT 1",
+        arrayOf(storyId)
+    ).use { cursor ->
+        check(cursor.moveToFirst()) { "Story not found for manual memory mutation" }
+        cursor.getLong(0)
     }
 
-    /** Manual removal is a soft deactivation only; full undo/replay is not implemented here. */
-    fun deactivateRecord(recordId: String): Boolean {
-        val storyId = storyIdForRecord(recordId) ?: return false
-        val now = System.currentTimeMillis()
-        val changed = helper.writableDatabase.update(
-            StorySchema.MEMORIES,
-            ContentValues().apply {
-                put("active", 0)
-                put("updated_at", now)
-            },
-            "id = ? AND active = 1",
-            arrayOf(recordId)
-        ) == 1
-        if (changed) touchStory(storyId, now)
-        return changed
-    }
+    private fun queryMemory(db: SQLiteDatabase, recordId: String): StoryMemoryRecord? = db.query(
+        StorySchema.MEMORIES,
+        null,
+        "id = ?",
+        arrayOf(recordId),
+        null,
+        null,
+        null,
+        "1"
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.toMemory() else null }
 
-    override fun close() = helper.close()
+    private fun memoryAuditJson(record: StoryMemoryRecord): String = JSONObject().apply {
+        put("id", record.id)
+        put("storyId", record.storyId)
+        put("timelineId", record.timelineId)
+        put("kind", record.kind.dbValue)
+        put("content", record.content)
+        put("nature", record.nature.dbValue)
+        put("subjectEntityId", record.subjectEntityId ?: JSONObject.NULL)
+        put("objectEntityId", record.objectEntityId ?: JSONObject.NULL)
+        put("scope", record.scope)
+        put("effectiveSequence", record.effectiveSequence)
+        put("sourceRevisionId", record.sourceRevisionId ?: JSONObject.NULL)
+        put("pinned", record.pinned)
+        put("active", record.active)
+        put("createdAt", record.createdAt)
+        put("updatedAt", record.updatedAt)
+    }.toString()
 
     private fun activeCharacterAndPlaceNames(storyId: String): Map<String, List<String>> =
         helper.readableDatabase.query(
@@ -178,20 +335,6 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 }
             }
         }
-
-    private fun storyIdForRecord(recordId: String): String? = helper.readableDatabase.rawQuery(
-        "SELECT story_id FROM ${StorySchema.MEMORIES} WHERE id = ? LIMIT 1",
-        arrayOf(recordId)
-    ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-
-    private fun touchStory(storyId: String, now: Long) {
-        helper.writableDatabase.update(
-            StorySchema.STORIES,
-            ContentValues().apply { put("updated_at", now) },
-            "id = ?",
-            arrayOf(storyId)
-        )
-    }
 
     private fun Cursor.toMemory(): StoryMemoryRecord = StoryMemoryRecord(
         id = string("id"),
@@ -224,11 +367,35 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         updatedAt = long("updated_at")
     )
 
+    private fun Cursor.toManualChange(): StoryManualMemoryChange = StoryManualMemoryChange(
+        id = string("id"),
+        storyId = string("story_id"),
+        timelineId = string("timeline_id"),
+        recordId = string("record_id"),
+        operation = StoryManualMemoryOperation.fromDb(string("operation")),
+        baseMemoryVersion = long("base_memory_version"),
+        committedVersion = long("committed_version"),
+        beforeJson = nullableString("before_json"),
+        afterJson = nullableString("after_json"),
+        createdAt = long("created_at")
+    )
+
     private fun Cursor.string(column: String): String = getString(getColumnIndexOrThrow(column))
     private fun Cursor.long(column: String): Long = getLong(getColumnIndexOrThrow(column))
     private fun Cursor.int(column: String): Int = getInt(getColumnIndexOrThrow(column))
     private fun Cursor.nullableString(column: String): String? {
         val index = getColumnIndexOrThrow(column)
         return if (isNull(index)) null else getString(index)
+    }
+
+    private inline fun <T> SQLiteDatabase.inTransaction(block: (SQLiteDatabase) -> T): T {
+        beginTransaction()
+        return try {
+            val result = block(this)
+            setTransactionSuccessful()
+            result
+        } finally {
+            endTransaction()
+        }
     }
 }
