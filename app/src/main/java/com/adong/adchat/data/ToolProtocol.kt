@@ -37,6 +37,7 @@ internal operator fun TokenUsage.plus(other: TokenUsage): TokenUsage = TokenUsag
     outputTokens = outputTokens + other.outputTokens,
     reasoningTokens = reasoningTokens + other.reasoningTokens,
     totalTokens = totalTokens + other.totalTokens,
+    providerUsageReported = providerUsageReported || other.providerUsageReported,
     cacheMetricsReported = cacheMetricsReported || other.cacheMetricsReported
 )
 

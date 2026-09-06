@@ -309,7 +309,8 @@ data class TokenUsage(
     val cacheKey: String = "",
     val cacheMetricsReported: Boolean = false,
     val cacheStrategy: String = "off",
-    val streamRecoveryCount: Int = 0
+    val streamRecoveryCount: Int = 0,
+    val providerUsageReported: Boolean = false
 ) {
     val uncachedInputTokens: Int get() = (inputTokens - cachedTokens - cacheWriteTokens).coerceAtLeast(0)
     val cacheHitRate: Float get() = if (inputTokens > 0) cachedTokens.toFloat() / inputTokens else 0f

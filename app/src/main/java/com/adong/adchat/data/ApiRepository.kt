@@ -940,7 +940,9 @@ class ApiRepository {
             outputTokens = output,
             reasoningTokens = reasoning,
             totalTokens = total,
-            cacheMetricsReported = cacheMetricsReported
+            cacheMetricsReported = cacheMetricsReported,
+            providerUsageReported = listOf("prompt_tokens", "input_tokens").any { usage.opt(it) is Number && usage.optDouble(it, -1.0) >= 0 } &&
+                listOf("completion_tokens", "output_tokens").any { usage.opt(it) is Number && usage.optDouble(it, -1.0) >= 0 }
         )
     }
 

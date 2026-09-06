@@ -143,6 +143,7 @@ fun StoryScreen(
             onResolveConflict = storyVm::resolveConflict,
             proposals = storyVm.archiveProposals,
             memoryStatus = storyVm.memoryStatus,
+            usageText = storyVm.usageText,
             changes = storyVm.archiveChanges,
             changeError = storyVm.archiveChangeError,
             undoBusy = storyVm.undoBusy,
@@ -644,6 +645,7 @@ private fun StoryArchiveSheet(
     onResolveConflict: (com.adong.adchat.data.story.StoryConflictEntry, Boolean) -> Unit,
     proposals: List<StoryProposal>,
     memoryStatus: String,
+    usageText: String,
     changes: List<StoryChangeEntry>,
     changeError: String?,
     undoBusy: Boolean,
@@ -705,6 +707,12 @@ private fun StoryArchiveSheet(
                     item { ArchiveInfoCard("整理状态", memoryStatus) {
                         TextButton(onClick = onRetryMemory, enabled = story.automaticMemoryEnabled) { Text("重试失败项") }
                     } }
+                    item {
+                        var expanded by remember { mutableStateOf(false) }
+                        ArchiveInfoCard("故事用量", if (expanded) usageText else "创作、讨论、整理与摘要的调用记录") {
+                            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起" else "查看") }
+                        }
+                    }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
                     changeError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
                     if (conflicts.isNotEmpty()) item { Text("状态冲突 · ${conflicts.size}", style = MaterialTheme.typography.titleSmall) }

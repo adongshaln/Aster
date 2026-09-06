@@ -47,6 +47,9 @@ import java.util.concurrent.ConcurrentHashMap
 class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val store = StoryRepository(application)
     private val archiveStore = StoryArchiveStore(application)
+    private val usageStore = com.adong.adchat.data.story.StoryUsageStore(application)
+    var usageText by mutableStateOf("正在读取用量…")
+        private set
     private val memoryStore = StoryMemoryStore(application)
     private val configStore = ConfigStore(application)
     private val api = ApiRepository()
@@ -82,6 +85,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             store.recoverInterruptedGenerations()
             memoryStore.recoverRunningJobs()
+            usageStore.recoverInterrupted()
             val loaded = store.listStories()
             withContext(Dispatchers.Main) {
                 stories.clear()
@@ -154,6 +158,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     fun openArchive() {
         archiveOpen = true
         archiveChanges.clear()
+        usageText = "正在读取用量…"
         archiveChangeError = null
         val story = activeStory ?: return
         viewModelScope.launch(Dispatchers.IO) { refreshArchive(story.id, story.currentTimelineId) }
@@ -510,7 +515,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                val result = api.streamChat(
+                val result = trackedChat(
+                    storyId = story.id, timelineId = story.currentTimelineId, category = workspace.dbValue, sourceId = assistant?.revision?.id,
                     profile = profile,
                     model = routeModel,
                     systemPrompt = context.systemPrompt,
@@ -656,7 +662,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                         if (running.kind == com.adong.adchat.data.story.StorySummaries.KIND) {
                             val summaryInput = memoryStore.summaryRequest(running) ?: continue
                             withContext(Dispatchers.Main) { if(activeStoryId == storyId) memoryStatus = "正在生成剧情摘要" }
-                            val response = api.streamChat(
+                            val response = trackedChat(
+                                storyId = storyId, timelineId = timelineId, category = "summary", sourceId = running.id,
                                 profile = resolvedProfile.copy(webSearchEnabled=false,fileCreationEnabled=false), model=story.model,
                                 systemPrompt=com.adong.adchat.data.story.StorySummaries.prompt,
                                 history=listOf(ChatMessage(role="user",content=summaryInput)), cacheKey="aster-summary-${running.id}"
@@ -708,7 +715,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                             val raw = cached ?: if (chunk.text.isBlank()) "{\"memories\":[],\"proposals\":[]}" else {
                                 val organizerInput = StoryMemoryOrganizer.buildInput(source.copy(content = chunk.text), existingMemory,
                                     userInput, chunk.precedingContext)
-                                val response = api.streamChat(
+                                val response = trackedChat(
+                                    storyId = storyId, timelineId = timelineId, category = "organizer", sourceId = "${running.id}:${chunk.index}",
                                     profile = organizerProfile, model = story.model,
                                     systemPrompt = if (source.workspace == StoryWorkspace.Prose) StoryMemoryOrganizer.systemPrompt else StoryMemoryOrganizer.discussionPrompt,
                                     history = listOf(ChatMessage(role = "user", content = organizerInput)),
@@ -806,6 +814,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val proposals = archiveStore.listPendingProposals(storyId, timelineId)
         val conflicts = archiveStore.listStateConflicts(storyId, timelineId)
         val changes = archiveStore.listChanges(storyId, timelineId)
+        val usage = com.adong.adchat.data.story.renderStoryUsage(usageStore.totals(storyId))
         withContext(Dispatchers.Main) {
             if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
                 archiveRecords.clear(); archiveConflicts.clear()
@@ -815,6 +824,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 archiveProposals.addAll(proposals)
                 archiveChanges.clear()
                 archiveChanges.addAll(changes)
+                usageText = usage
             }
         }
     }
@@ -833,6 +843,34 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         stories.addAll(sorted)
     }
 
+    private suspend fun trackedChat(
+        storyId: String, timelineId: String, category: String, sourceId: String?,
+        profile: ApiProfile, model: String, systemPrompt: String, history: List<ChatMessage>, cacheKey: String,
+        onDelta: suspend (String) -> Unit
+    ): com.adong.adchat.data.ChatCompletionResult {
+        val id = usageStore.begin(storyId,timelineId,category,profile.id,model,sourceId)
+        var result: com.adong.adchat.data.ChatCompletionResult? = null
+        var state = "failed"
+        try {
+            val response = api.streamChat(profile,model,systemPrompt,history,cacheKey,onDelta=onDelta)
+            result = response
+            state = if(response.outputComplete) "completed" else "incomplete"
+            return response
+        } catch(cancelled: CancellationException) {
+            state = "cancelled"
+            throw cancelled
+        } finally {
+            // Usage is operational data: persist even when a request is stopped or memory commit later fails.
+            withContext(NonCancellable + Dispatchers.IO) {
+                val saved = runCatching { usageStore.finish(id,state,result) }
+                val text = if(saved.isSuccess) runCatching {
+                    com.adong.adchat.data.story.renderStoryUsage(usageStore.totals(storyId))
+                }.getOrDefault("用量暂时无法读取，请重新打开档案。") else "本次用量未能完整保存，请重新打开档案检查；回复已保留。"
+                withContext(Dispatchers.Main) { if(activeStoryId == storyId) usageText = text }
+            }
+        }
+    }
+
     private fun jobKey(storyId: String, workspace: StoryWorkspace): String = "$storyId|${workspace.dbValue}"
     private fun memoryJobKey(storyId: String, timelineId: String): String = "$storyId|$timelineId"
 
@@ -842,6 +880,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val pending = jobs.values.toList() + organizerJobs.values.toList()
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             pending.forEach { it.join() }
+            usageStore.close()
             memoryStore.close()
             archiveStore.close()
             store.close()
