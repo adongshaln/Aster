@@ -288,6 +288,7 @@ class StoryRepository(context: Context) : AutoCloseable {
                 .put("after_revision_id", target.id).toString())
             put("conflicts_json", "[]")
         })
+        StoryConflicts.refresh(db, current.message.storyId, current.message.timelineId)
     }
 
     fun updateActiveRevision(

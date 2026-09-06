@@ -249,6 +249,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 addedProposalIds += proposal.id
             }
 
+            val conflicts = StoryConflicts.refresh(db, persistedJob.storyId, persistedJob.timelineId)
             val operationsJson = JSONObject()
                 .put("added_memory_ids", JSONArray(addedMemoryIds))
                 .put("proposal_ids", JSONArray(addedProposalIds))
@@ -264,7 +265,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                     put("source_revision_id", persistedJob.sourceRevisionId)
                     put("status", "committed")
                     put("operations_json", operationsJson)
-                    put("conflicts_json", "[]")
+                    put("conflicts_json", JSONArray(conflicts.map { it.id }).toString())
                     put("committed_version", committedVersion)
                     put("created_at", now)
                     put("updated_at", now)

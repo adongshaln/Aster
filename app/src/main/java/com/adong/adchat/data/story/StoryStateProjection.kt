@@ -9,7 +9,7 @@ data class StoryStateConflict(val earlier: StoryMemoryRecord, val latest: StoryM
 data class StoryStateView(val records: List<StoryMemoryRecord>, val conflicts: List<StoryStateConflict>)
 
 class StoryStateConflictException(val conflicts: List<StoryStateConflict>) : IllegalStateException(
-    "当前状态存在冲突，正文尚未发送。请到故事档案修改或停用错误记录；若固定状态已允许随剧情变化，请解除固定。\n" +
+    "当前状态存在冲突，正文尚未发送。请到故事档案「变更」处理冲突，也可修改、停用错误记录或解除固定。\n" +
         conflicts.take(3).joinToString("\n") { it.description }
 )
 

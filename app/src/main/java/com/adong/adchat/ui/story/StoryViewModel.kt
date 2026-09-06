@@ -14,6 +14,7 @@ import com.adong.adchat.data.ApiRepository
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ConfigStore
 import com.adong.adchat.data.story.Story
+import com.adong.adchat.data.story.StoryConflictEntry
 import com.adong.adchat.data.story.StoryChangeEntry
 import com.adong.adchat.data.story.StoryArchiveStore
 import com.adong.adchat.data.story.StoryContextComposer
@@ -59,6 +60,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     var memoryStatus by mutableStateOf("暂无整理任务")
         private set
     val archiveRecords = mutableStateListOf<StoryMemoryRecord>()
+    val archiveConflicts = mutableStateListOf<StoryConflictEntry>()
     val archiveChanges = mutableStateListOf<StoryChangeEntry>()
     var archiveChangeError by mutableStateOf<String?>(null)
         private set
@@ -121,7 +123,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 activeWorkspace = StoryWorkspace.Discussion
                 workspaceMessages.clear()
                 workspaceStates.clear()
-                archiveRecords.clear()
+                archiveRecords.clear(); archiveConflicts.clear()
                 archiveProposals.clear()
                 errors.clear()
                 loadActiveStoryState(story)
@@ -138,7 +140,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         activeWorkspace = StoryWorkspace.Discussion
         workspaceMessages.clear()
         workspaceStates.clear()
-        archiveRecords.clear()
+        archiveRecords.clear(); archiveConflicts.clear()
                 archiveProposals.clear()
         errors.clear()
         loadActiveStoryState(story)
@@ -218,7 +220,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     activeWorkspace = StoryWorkspace.Discussion
                     workspaceMessages.clear()
                     workspaceStates.clear()
-                    archiveRecords.clear()
+                    archiveRecords.clear(); archiveConflicts.clear()
                 archiveProposals.clear()
                     activeStory?.let(::loadActiveStoryState)
                 }
@@ -283,6 +285,26 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             archiveStore.setPinned(recordId, pinned)
             refreshArchive(story.id, story.currentTimelineId)
             refreshStory(story.id)
+        }
+    }
+
+    fun resolveConflict(entry: StoryConflictEntry, acceptNew: Boolean) {
+        val story = activeStory ?: return
+        if (undoBusy) return
+        undoBusy = true
+        archiveChangeError = null
+        val epoch = stateEpoch
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                archiveStore.resolveStateConflict(story.id, story.currentTimelineId, entry.id, entry.memoryVersion, acceptNew)
+                refreshStory(story.id)
+                refreshArchive(story.id, story.currentTimelineId)
+            } catch (error: Exception) {
+                refreshArchive(story.id, story.currentTimelineId)
+                withContext(Dispatchers.Main) {
+                    if (epoch == stateEpoch) archiveChangeError = error.message ?: "处理冲突失败"
+                }
+            } finally { withContext(NonCancellable + Dispatchers.Main) { undoBusy = false } }
         }
     }
 
@@ -366,7 +388,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) {
                     replaceStory(updated)
                     if (activeStoryId == updated.id) {
-                        workspaceMessages.clear(); workspaceStates.clear(); archiveRecords.clear(); archiveProposals.clear()
+                        workspaceMessages.clear(); workspaceStates.clear(); archiveRecords.clear(); archiveConflicts.clear(); archiveProposals.clear()
                         loadActiveStoryState(updated)
                     }
                 }
@@ -411,7 +433,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) {
                     replaceStory(updated)
                     if (activeStoryId == updated.id) {
-                        workspaceMessages.clear(); workspaceStates.clear(); archiveRecords.clear(); archiveProposals.clear()
+                        workspaceMessages.clear(); workspaceStates.clear(); archiveRecords.clear(); archiveConflicts.clear(); archiveProposals.clear()
                         loadActiveStoryState(updated)
                     }
                     timelineHistoryOpen = false
@@ -713,14 +735,16 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             }
             val records = archiveStore.listMemoryRecords(story.id, story.currentTimelineId)
             val proposals = archiveStore.listPendingProposals(story.id, story.currentTimelineId)
+            val conflicts = archiveStore.listStateConflicts(story.id, story.currentTimelineId)
             val status = memoryStore.jobStatus(story.id, story.currentTimelineId)
             withContext(Dispatchers.Main) {
                 if (epoch != stateEpoch || activeStoryId != story.id || activeStory?.currentTimelineId != story.currentTimelineId) return@withContext
                 workspaceMessages.putAll(loadedMessages)
                 workspaceStates.putAll(loadedStates)
-                archiveRecords.clear()
+                archiveRecords.clear(); archiveConflicts.clear()
                 archiveProposals.clear()
                 archiveRecords.addAll(records)
+                archiveConflicts.addAll(conflicts)
                 archiveProposals.addAll(proposals)
                 memoryStatus = status
             }
@@ -743,12 +767,14 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val epoch = stateEpoch
         val records = archiveStore.listMemoryRecords(storyId, timelineId)
         val proposals = archiveStore.listPendingProposals(storyId, timelineId)
+        val conflicts = archiveStore.listStateConflicts(storyId, timelineId)
         val changes = archiveStore.listChanges(storyId, timelineId)
         withContext(Dispatchers.Main) {
             if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
-                archiveRecords.clear()
+                archiveRecords.clear(); archiveConflicts.clear()
                 archiveProposals.clear()
                 archiveRecords.addAll(records)
+                archiveConflicts.addAll(conflicts)
                 archiveProposals.addAll(proposals)
                 archiveChanges.clear()
                 archiveChanges.addAll(changes)

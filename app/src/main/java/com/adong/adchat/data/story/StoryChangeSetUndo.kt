@@ -28,21 +28,26 @@ internal object StoryChangeSetUndo {
         for (i in 0 until updates.length()) {
             val update = updates.getJSONObject(i)
             val table = update.getString("table")
-            require(table == StorySchema.MEMORIES || table == StorySchema.PROPOSALS)
-            val field = if (table == StorySchema.MEMORIES) "active" else "state"
+            require(table in setOf(StorySchema.MEMORIES, StorySchema.PROPOSALS, StorySchema.CONFLICTS))
+            val field = update.optString("field", if (table == StorySchema.MEMORIES) "active" else "state")
+            require(if (table == StorySchema.MEMORIES) field in setOf("active", "pinned") else field == "state")
             val id = update.getString("id")
-            require(seen.add("$table:$id"))
+            require(seen.add("$table:$id:$field"))
             val before = update.getString("before")
             val after = update.getString("after")
-            val allowed = if (field == "active") setOf("0", "1") else setOf("pending", "accepted", "rejected", "superseded")
+            val allowed = if (field != "state") setOf("0", "1") else setOf("pending", "accepted", "rejected", "superseded")
             require(before in allowed && after in allowed)
             val values = ContentValues().apply {
-                if (field == "active") put(field, after.toInt()) else put(field, after)
+                if (field != "state") put(field, after.toInt()) else put(field, after)
                 put("updated_at", now)
             }
+            val source = if (update.has("source")) {
+                if (update.isNull("source")) null else update.getString("source")
+            } else batch.first
+            require(source == null || sourceActive(db, storyId, timelineId, source)) { "关联的另一段正文来源已变化" }
             check(db.update(table, values,
-                "id = ? AND story_id = ? AND timeline_id = ? AND source_revision_id = ? AND $field = ?",
-                arrayOf(id, storyId, timelineId, batch.first, before)) == 1) { "关联资料或候选已变化，整批撤销未执行" }
+                "id = ? AND story_id = ? AND timeline_id = ? AND COALESCE(source_revision_id, '') = ? AND $field = ?",
+                arrayOf(id, storyId, timelineId, source.orEmpty(), before)) == 1) { "关联资料或候选已变化，整批撤销未执行" }
         }
         val nextVersion = Math.addExact(currentVersion, 1L)
         check(db.update(StorySchema.STORIES, ContentValues().apply {
@@ -63,6 +68,7 @@ internal object StoryChangeSetUndo {
             put("snapshot_json", JSONObject().put("operation", "undo_change_set").put("change_id", changeId)
                 .put("inverse_change_id", inverseId).put("updates", updates).toString())
         })
+        StoryConflicts.refresh(db, storyId, timelineId)
         // Completed organizer jobs remain completed: undo must not automatically recreate the batch.
         return true
     }
@@ -88,11 +94,11 @@ internal object StoryChangeSetUndo {
             put(JSONObject().put("table", table).put("id", id).put("before", before).put("after", after))
         }
         when {
-            op.optString("operation") == "reverse_change_set" -> {
+            op.optString("operation") in setOf("reverse_change_set", "resolve_state_conflict") -> {
                 val updates = op.getJSONArray("updates")
                 for (i in 0 until updates.length()) {
                     val row = updates.getJSONObject(i)
-                    add(row.getString("table"), row.getString("id"), row.getString("after"), row.getString("before"))
+                    put(JSONObject(row.toString()).put("before", row.getString("after")).put("after", row.getString("before")))
                 }
             }
             op.has("proposal_id") -> {

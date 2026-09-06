@@ -31,6 +31,10 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                     StorySchema.MIGRATION_2_TO_3_STATEMENTS.forEach(db::execSQL)
                     version = 3
                 }
+                3 -> {
+                    StorySchema.MIGRATION_3_TO_4_STATEMENTS.forEach(db::execSQL)
+                    version = 4
+                }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -38,7 +42,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
     }
 }
 
@@ -54,6 +58,7 @@ internal object StorySchema {
     const val JOBS = "memory_jobs"
     const val SNAPSHOTS = "story_snapshots"
     const val WORKSPACE_STATE = "story_workspace_state"
+    const val CONFLICTS = "state_conflicts"
     const val MANUAL_MEMORY_CHANGES = "manual_memory_changes"
 
     private val MANUAL_MEMORY_CHANGE_STATEMENTS: List<String> = listOf(
@@ -82,6 +87,31 @@ internal object StorySchema {
 
     val MIGRATION_2_TO_3_STATEMENTS = listOf(
         "ALTER TABLE $MEMORIES ADD COLUMN state_key TEXT"
+    )
+
+    val MIGRATION_3_TO_4_STATEMENTS = listOf(
+        """CREATE TABLE $CONFLICTS (
+            id TEXT PRIMARY KEY NOT NULL,
+            story_id TEXT NOT NULL,
+            timeline_id TEXT NOT NULL,
+            earlier_record_id TEXT NOT NULL,
+            latest_record_id TEXT NOT NULL,
+            source_revision_id TEXT,
+            fingerprint TEXT NOT NULL,
+            earlier_json TEXT NOT NULL,
+            latest_json TEXT NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('pending','accepted','rejected','superseded')),
+            created_version INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE(story_id, timeline_id, fingerprint),
+            FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE,
+            FOREIGN KEY(timeline_id) REFERENCES $TIMELINES(id) ON DELETE CASCADE,
+            FOREIGN KEY(earlier_record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE,
+            FOREIGN KEY(latest_record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE,
+            FOREIGN KEY(source_revision_id) REFERENCES $REVISIONS(id) ON DELETE SET NULL
+        )""".trimIndent(),
+        "CREATE INDEX idx_state_conflicts_scope ON $CONFLICTS(story_id, timeline_id, state)"
     )
 
     val CREATE_STATEMENTS: List<String> = listOf(
@@ -273,5 +303,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    ) + MANUAL_MEMORY_CHANGE_STATEMENTS
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS
 }

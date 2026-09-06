@@ -34,6 +34,12 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         }
     }
 
+    fun listStateConflicts(storyId: String, timelineId: String): List<StoryConflictEntry> =
+        helper.writableDatabase.inTransaction { db -> StoryConflicts.refresh(db, storyId, timelineId) }
+
+    fun resolveStateConflict(storyId: String, timelineId: String, id: String, expectedVersion: Long, acceptNew: Boolean): Boolean =
+        helper.writableDatabase.inTransaction { db -> StoryConflicts.resolve(db, storyId, timelineId, id, expectedVersion, acceptNew) }
+
     fun listPendingProposals(storyId: String, timelineId: String): List<StoryProposal> =
         helper.readableDatabase.query(
             StorySchema.PROPOSALS,
@@ -218,6 +224,8 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 val operations = JSONObject(cursor.string("operations_json"))
                 val description = when {
                     operations.optString("operation") == "reverse_change_set" -> "撤销 / 恢复整批变更"
+                    operations.optString("operation") == "resolve_state_conflict" ->
+                        if (operations.optBoolean("accept_new")) "处理冲突：采用新状态" else "处理冲突：保留原状态"
                     operations.optString("operation") == "switch_revision" -> "切换正文版本"
                     operations.has("proposal_id") -> if (operations.optString("after") == "accepted") "采用候选" else "废弃候选"
                     else -> "自动整理：新增 ${operations.optJSONArray("added_memory_ids")?.length() ?: 0} 条资料、${operations.optJSONArray("proposal_ids")?.length() ?: 0} 条候选"
@@ -226,7 +234,13 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 val version = cursor.getLong(cursor.getColumnIndexOrThrow("committed_version"))
                 val canUndo = StoryChangeSetUndo.canUndo(db, storyId, timelineId, id, version, cursor.string("source_revision_id"), operations)
                 val undone = StoryChangeSetUndo.wasUndone(db, storyId, timelineId, id)
-                result += StoryChangeEntry(id, version, description, source = cursor.nullableString("source_text").orEmpty(),
+                result += StoryChangeEntry(id, version, description,
+                    before = operations.optString("before_description", ""), after = operations.optString("after_description", ""),
+                    source = if (operations.optString("operation") == "resolve_state_conflict") {
+                        listOf("earlier_source", "latest_source").mapNotNull { key ->
+                            if (operations.isNull(key)) null else operations.optString(key).takeIf { it.isNotBlank() }
+                        }.distinct().joinToString("\n\n") { sourceText(db, it) }
+                    } else cursor.nullableString("source_text").orEmpty(),
                     note = if (undone) "已整体撤销" else if (canUndo) "资料与候选状态将一起撤销；反向记录可用于恢复"
                         else "仅当前来源、且没有后续记忆变更的批次可整体撤销",
                     canUndo = canUndo, batch = true)
@@ -494,6 +508,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             arrayOf(record.storyId, baseVersion.toString())
         )
         check(advanced == 1) { "Story memoryVersion changed before manual mutation commit" }
+        StoryConflicts.refresh(db, record.storyId, record.timelineId)
         return change.id
     }
 

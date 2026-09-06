@@ -139,6 +139,8 @@ fun StoryScreen(
         StoryArchiveSheet(
             story = story,
             records = storyVm.archiveRecords,
+            conflicts = storyVm.archiveConflicts,
+            onResolveConflict = storyVm::resolveConflict,
             proposals = storyVm.archiveProposals,
             memoryStatus = storyVm.memoryStatus,
             changes = storyVm.archiveChanges,
@@ -638,6 +640,8 @@ private fun StoryPickerSheet(
 private fun StoryArchiveSheet(
     story: Story,
     records: List<StoryMemoryRecord>,
+    conflicts: List<com.adong.adchat.data.story.StoryConflictEntry>,
+    onResolveConflict: (com.adong.adchat.data.story.StoryConflictEntry, Boolean) -> Unit,
     proposals: List<StoryProposal>,
     memoryStatus: String,
     changes: List<StoryChangeEntry>,
@@ -703,6 +707,28 @@ private fun StoryArchiveSheet(
                     } }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
                     changeError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
+                    if (conflicts.isNotEmpty()) item { Text("状态冲突 · ${conflicts.size}", style = MaterialTheme.typography.titleSmall) }
+                    items(conflicts, key = { "conflict-${it.id}" }) { entry ->
+                        var showSources by remember(entry.id) { mutableStateOf(false) }
+                        Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
+                            Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                                Text(entry.conflict.description, style = MaterialTheme.typography.bodyMedium)
+                                Text("选择后停用另一条资料，并保留固定约束；决定可在最近变更中整体撤销。",
+                                    color = MutedInk, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+                                TextButton(onClick = { showSources = !showSources }) { Text(if (showSources) "收起来源" else "查看双方来源") }
+                                if (showSources) {
+                                    Text("原状态来源", fontWeight = FontWeight.SemiBold)
+                                    Text(entry.earlierSource, style = MaterialTheme.typography.bodySmall)
+                                    Text("新状态来源", fontWeight = FontWeight.SemiBold)
+                                    Text(entry.latestSource, style = MaterialTheme.typography.bodySmall)
+                                }
+                                Row {
+                                    TextButton(onClick = { onResolveConflict(entry, false) }, enabled = !undoBusy) { Text("保留原状态") }
+                                    TextButton(onClick = { onResolveConflict(entry, true) }, enabled = !undoBusy) { Text("采用新状态") }
+                                }
+                            }
+                        }
+                    }
                     if (proposals.isNotEmpty()) item { Text("待确认 · ${proposals.size}", style = MaterialTheme.typography.titleSmall) }
                     items(proposals, key = { "proposal-${it.id}" }) { proposal ->
                         Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
@@ -768,7 +794,7 @@ private fun StoryArchiveSheet(
                 val visible = stateView.records.filter { recordBelongsToSection(it.kind, section) }
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 30.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     if (stateView.conflicts.isNotEmpty()) item {
-                        Text("状态待处理：修改或停用错误记录；允许状态随剧情变化时解除固定。\n" +
+                        Text("状态待处理：请在「变更」中查看双方来源并决定保留哪一方，也可手动修正资料。\n" +
                             stateView.conflicts.joinToString("\n") { it.description },
                             color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                     }

@@ -27,12 +27,12 @@ class StorySchemaTest {
         assertTrue(sql.contains("CHECK(operation IN ('add','update','pin','deactivate'))"))
         assertTrue(sql.contains("UNIQUE(story_id, committed_version)"))
         assertTrue(sql.contains("FOREIGN KEY(record_id) REFERENCES ${StorySchema.MEMORIES}(id)"))
-        assertEquals(3, StoryDatabase.DATABASE_VERSION)
+        assertEquals(4, StoryDatabase.DATABASE_VERSION)
     }
 
     @Test
     fun schemaAndMigrationContainNoDestructiveStatements() {
-        val sql = (StorySchema.CREATE_STATEMENTS + StorySchema.MIGRATION_1_TO_2_STATEMENTS + StorySchema.MIGRATION_2_TO_3_STATEMENTS)
+        val sql = (StorySchema.CREATE_STATEMENTS + StorySchema.MIGRATION_1_TO_2_STATEMENTS + StorySchema.MIGRATION_2_TO_3_STATEMENTS + StorySchema.MIGRATION_3_TO_4_STATEMENTS)
             .joinToString("\n")
             .uppercase()
         assertFalse(sql.contains("DROP TABLE"))

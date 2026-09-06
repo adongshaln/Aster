@@ -105,6 +105,7 @@ internal object StoryTimelineHistory {
             .put("timeline_id", timelineId).put("content", content.trim()).put("state", "complete")
             .put("created_at", now).put("completed_at", now))
         switch(db, storyId, timelineId, oldTimeline)
+        StoryConflicts.refresh(db, storyId, timelineId)
         return timelineId
     }
 
@@ -134,6 +135,7 @@ internal object StoryTimelineHistory {
             put("current_timeline_id", target); put("memory_version", Math.addExact(base, 1L)); put("updated_at", now)
         }, "id = ? AND current_timeline_id = ? AND memory_version = ?", arrayOf(storyId, expected, base.toString())) == 1)
         saveSnapshot(db, storyId, target, 0, "timeline_switch", JSONObject().put("from", expected).put("to", target).put("base_memory_version", base))
+        StoryConflicts.refresh(db, storyId, target)
         return true
     }
 
