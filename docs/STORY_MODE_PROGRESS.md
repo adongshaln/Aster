@@ -4,13 +4,21 @@ Branch: `feature/story-mode`
 
 Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / versionCode 57.
 
+## Current acceptance status (2026-09-06)
+
+Code checkpoint `7ba25bd0343962b8ae8d8e3b27ddfe257475d32e` passed Android Build #100, including tests, Release compilation and fixed-signature APK upload. Application remains 2.3.0 / versionCode 57.
+
+[Acceptance and design-gap review](STORY_MODE_ACCEPTANCE.md) is the current status authority; the sections below also retain historical checkpoint notes. [Original implementation plan](STORY_MODE_IMPLEMENTATION_PLAN.md) is preserved for comparison.
+
+The full first release is **not ready**: structured mutable state/directed relationships/character knowledge, conflict handling, long-story summary coverage and discussion-to-model-rewrite workflows remain incomplete. CI success does not close these product gaps. No real-provider or on-device acceptance is claimed. This review changes documentation only.
+
 ## Milestones
 
 - [x] M0 — repository audit and migration design
 - [x] M1a — story data foundation
 - [x] M1b — story entry, workspaces, archive manual editing shell
 - [x] M2a — story context composition and budget
-- [x] M2b — background memory maintenance and proposals
+- [ ] M2b full design — conservative append-only jobs/proposals are implemented and tested; structured semantic maintenance/conflicts remain
 - [ ] M3 — revision recovery and memory invalidation
 - [ ] M4 — UI polish, full acceptance tests, signed test APK
 
@@ -67,7 +75,7 @@ Current `deactivateRecord` is still only a soft deactivation/hide operation. It 
 M0 report: `docs/STORY_MODE_M0.md`.
 M1b runtime stabilization: `docs/STORY_MODE_FIX72.md`.
 
-Current task after M2b validation: M3 — revision switching/recovery, source invalidation, stale organizer handling across revisions, snapshot/replay foundations. Do not change the stable app version yet.
+Current next task: close the G1/G2 semantic-memory gaps documented in STORY_MODE_ACCEPTANCE.md, followed by long-story coverage and minimal product workflows. M3a–M3d checkpoint implementations are recorded below; full first-release acceptance is still open. Do not change the stable version yet.
 
 ## Organizer takeover checkpoint
 
@@ -153,4 +161,4 @@ M3d commit `cf70ef1ad3ad2a8cd90041ac9b02df2fcd498201` passed Android Build #98.
 - Pending proposals appear before the recent-change history so review actions are not buried below 100 audit rows.
 - API results carry explicit output-completion metadata. Chat requires finish_reason=stop; Responses requires its completion event/status. Truncation, filtering and missing completion confirmation retain text but do not qualify a story reply as complete. Organizer output requires the same confirmation before parsing/committing. Ordinary chat still receives its text without a new retry policy.
 - Added MockWebServer protocol-contract tests for Gemini-compatible Chat SSE/JSON and Responses JSON; these are synthetic gateway tests, not a real Gemini provider acceptance run.
-- Own CI pending. Remaining acceptance: on-device reading/keyboard/long-thread performance, real provider story and memory accuracy, full M1–M4 design-gap review. No main merge/version bump.
+- This checkpoint passed Android Build #100 at `7ba25bd0343962b8ae8d8e3b27ddfe257475d32e`. Remaining acceptance: on-device reading/keyboard/long-thread performance, real provider story and memory accuracy, full M1–M4 design-gap review. No main merge/version bump.
