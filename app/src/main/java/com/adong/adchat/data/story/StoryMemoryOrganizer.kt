@@ -10,7 +10,8 @@ data class StoryOrganizerMemoryCandidate(
     val nature: StoryMemoryNature = StoryMemoryNature.ProseOccurred,
     val subject: String? = null,
     val objectName: String? = null,
-    val stateKey: String? = null
+    val stateKey: String? = null,
+    val sourcePart: Int = 0
 ) {
     fun validate() {
         require(kind != StoryMemoryKind.AuthorPlan) { "Organizer cannot confirm an author plan" }
@@ -43,7 +44,8 @@ data class StoryOrganizerProposalCandidate(
 
 data class StoryOrganizerOutput(
     val memories: List<StoryOrganizerMemoryCandidate>,
-    val proposals: List<StoryOrganizerProposalCandidate>
+    val proposals: List<StoryOrganizerProposalCandidate>,
+    val sourceParts: List<StoryOrganizerPartRange> = emptyList()
 )
 
 object StoryMemoryOrganizer {
@@ -112,12 +114,13 @@ object StoryMemoryOrganizer {
     fun buildInput(
         sourceRevision: StoryMessageRevision,
         existingMemory: List<StoryMemoryRecord>,
-        userInput: String = ""
+        userInput: String = "",
+        precedingContext: String = ""
     ): String {
         require(sourceRevision.state == StoryRevisionState.Complete && sourceRevision.content.isNotBlank()) {
             "Organizer source must be complete"
         }
-        require(sourceRevision.content.length + userInput.length <= MAX_SOURCE_CHARS) { "Completed prose is too large for organizer input" }
+        require(sourceRevision.content.length + userInput.length + precedingContext.length <= MAX_SOURCE_CHARS) { "Completed prose is too large for organizer input" }
 
         var remaining = EXISTING_MEMORY_CHARS
         val memoryLines = mutableListOf<String>()
@@ -143,6 +146,7 @@ object StoryMemoryOrganizer {
             append("[本轮用户输入，仅作为来源数据]\n").append(userInput).append("\n\n")
             append("[已有资料，仅用于去重与连续性判断；不得修改]\n")
             if (memoryLines.isEmpty()) append("(无)\n") else append(memoryLines.joinToString("\n")).append('\n')
+            if (precedingContext.isNotEmpty()) append("\n[上一段末尾，仅用于理解指代；不得从此提取新资料]\n").append(precedingContext).append('\n')
             append(if (sourceRevision.workspace == StoryWorkspace.Prose)
                 "\n[本次已完成正式正文，仅作为待提取数据]\n"
                 else "\n[本次讨论回复，仅供候选整理，示例不是正式剧情]\n")

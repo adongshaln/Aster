@@ -21,6 +21,39 @@ sealed interface StoryMemoryApplyResult {
 class StoryMemoryStore(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
 
+    fun loadOrganizerChunk(job: StoryMemoryJob, index: Int, fingerprint: String): String? =
+        helper.readableDatabase.rawQuery("SELECT snapshot_json FROM ${StorySchema.SNAPSHOTS} WHERE story_id = ? AND timeline_id = ? AND log_cursor = ? ORDER BY rowid DESC LIMIT 1",
+            arrayOf(job.storyId, job.timelineId, "organizer_chunk:${job.id}:$index")).use { cursor ->
+            if (!cursor.moveToFirst()) null else JSONObject(cursor.getString(0)).let { saved ->
+                if (saved.optString("fingerprint") == fingerprint && saved.optLong("base_version", -1) == job.baseMemoryVersion)
+                    saved.getString("raw") else null
+            }
+        }
+
+    fun saveOrganizerChunk(job: StoryMemoryJob, chunk: StoryOrganizerChunk, fingerprint: String, raw: String): Boolean =
+        helper.writableDatabase.inTransaction { db ->
+            val current = queryJob(db, job.id)
+            val source = queryActiveCompleteSource(db, job.sourceRevisionId)
+            if (current?.state != StoryJobState.Running || source == null || source.timelineId != job.timelineId ||
+                queryStoryState(db, job.storyId)?.memoryVersion != job.baseMemoryVersion) return@inTransaction false
+            require(chunk.index in 0 until 16 && chunk.start >= 0 && chunk.end > chunk.start)
+            val fullText = db.rawQuery("SELECT content FROM ${StorySchema.REVISIONS} WHERE id = ?", arrayOf(job.sourceRevisionId))
+                .use { check(it.moveToFirst()); it.getString(0) }
+            require(chunk.end <= fullText.length && chunk.text == fullText.substring(chunk.start, chunk.end)) { "Chunk does not match source revision" }
+            // Validate before checkpointing; model-provided source ranges/IDs are never accepted.
+            StoryMemoryOrganizer.parse(raw, source.workspace)
+            val cursor = "organizer_chunk:${job.id}:${chunk.index}"
+            db.delete(StorySchema.SNAPSHOTS, "story_id = ? AND timeline_id = ? AND log_cursor = ?", arrayOf(job.storyId, job.timelineId, cursor))
+            db.insertOrThrow(StorySchema.SNAPSHOTS, null, ContentValues().apply {
+                put("id", "chunk_${java.util.UUID.randomUUID()}"); put("story_id", job.storyId); put("timeline_id", job.timelineId)
+                put("sequence_no", source.sequence); put("memory_version", job.baseMemoryVersion); put("log_cursor", cursor)
+                put("created_at", System.currentTimeMillis())
+                put("snapshot_json", JSONObject().put("fingerprint", fingerprint).put("base_version", job.baseMemoryVersion)
+                    .put("source_revision_id", job.sourceRevisionId).put("start", chunk.start).put("end", chunk.end).put("raw", raw).toString())
+            })
+            true
+        }
+
     fun recoverRunningJobs(): Int = helper.writableDatabase.update(
         StorySchema.JOBS,
         ContentValues().apply {
@@ -172,19 +205,41 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 return@inTransaction StoryMemoryApplyResult.Requeued(requeued?.id)
             }
 
-            output.memories.forEach { it.validate() }
+            if (output.sourceParts.isNotEmpty()) {
+                val length = db.rawQuery("SELECT content FROM ${StorySchema.REVISIONS} WHERE id = ?", arrayOf(job.sourceRevisionId))
+                    .use { check(it.moveToFirst()); it.getString(0).length }
+                require(output.sourceParts.size <= 16 && output.sourceParts.first().start == 0 && output.sourceParts.last().end == length &&
+                    output.sourceParts.all { it.end > it.start } && output.sourceParts.zipWithNext().all { (a, b) -> a.end == b.start }) { "Incomplete organizer source coverage" }
+                output.sourceParts.forEachIndexed { index, range ->
+                    val checkpoint = db.rawQuery("SELECT snapshot_json FROM ${StorySchema.SNAPSHOTS} WHERE story_id = ? AND timeline_id = ? AND log_cursor = ? ORDER BY rowid DESC LIMIT 1",
+                        arrayOf(job.storyId, job.timelineId, "organizer_chunk:${job.id}:$index")).use {
+                        require(it.moveToFirst()) { "Organizer chunk has not completed" }; JSONObject(it.getString(0))
+                    }
+                    require(checkpoint.getLong("base_version") == job.baseMemoryVersion && checkpoint.getInt("start") == range.start &&
+                        checkpoint.getInt("end") == range.end && checkpoint.getString("source_revision_id") == job.sourceRevisionId) { "Stale chunk coverage" }
+                }
+            }
+            output.memories.forEach {
+                it.validate()
+                require(it.sourcePart >= 0 && it.sourcePart < maxOf(1, output.sourceParts.size)) { "Invalid organizer part" }
+            }
             // Resolve names only within this route's effective records, never another route's entities.
             // Resolution and any new entities are in this same atomic memory transaction.
             val entities = StoryOrganizerEntities(db, persistedJob.storyId, persistedJob.timelineId)
-            val resolved = output.memories.distinct().map { candidate ->
+            val allResolved = output.memories.distinct().map { candidate ->
                 Triple(candidate, candidate.subject?.let(entities::resolve), candidate.objectName?.let(entities::resolve))
             }.distinctBy { (candidate, subjectId, objectId) ->
-                listOf(candidate.kind.dbValue, candidate.nature.dbValue, candidate.content, subjectId, objectId, candidate.stateKey)
+                listOf(candidate.kind.dbValue, candidate.nature.dbValue, candidate.content, subjectId, objectId, candidate.stateKey, candidate.sourcePart.toString())
             }
-            resolved.filter { it.first.kind == StoryMemoryKind.CurrentState }
-                .groupBy { it.second to it.first.stateKey }.values.forEach { states ->
+            allResolved.filter { it.first.kind == StoryMemoryKind.CurrentState }
+                .groupBy { listOf(it.second, it.first.stateKey, it.first.sourcePart.toString()) }.values.forEach { states ->
                     require(states.map { it.first.content }.distinct().size == 1) { "Conflicting state values after entity resolution" }
                 }
+            val finalStates = allResolved.filter { it.first.kind == StoryMemoryKind.CurrentState }
+                .groupBy { it.second to it.first.stateKey }.values.map { states -> states.maxBy { it.first.sourcePart } }
+            val resolved = allResolved.filterNot { it.first.kind == StoryMemoryKind.CurrentState }.distinctBy {
+                listOf(it.first.kind.dbValue, it.first.nature.dbValue, it.first.content, it.second, it.third)
+            } + finalStates
             val memoryCandidates = resolved.filterNot { (candidate, subjectId, objectId) ->
                 // A → B → A is a real transition. Job/source idempotence already protects retries.
                 candidate.kind != StoryMemoryKind.CurrentState &&
@@ -253,6 +308,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             val operationsJson = JSONObject()
                 .put("added_memory_ids", JSONArray(addedMemoryIds))
                 .put("proposal_ids", JSONArray(addedProposalIds))
+                .put("source_parts", JSONArray(output.sourceParts.map { JSONObject().put("start", it.start).put("end", it.end) }))
                 .toString()
             db.insertOrThrow(
                 StorySchema.CHANGE_SETS,

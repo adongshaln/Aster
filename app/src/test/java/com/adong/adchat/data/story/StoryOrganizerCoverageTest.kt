@@ -66,6 +66,27 @@ class StoryOrganizerCoverageTest {
         assertTrue(view.organizedProseRevisionIds.isEmpty()); assertTrue(view.records.isEmpty())
     }
 
+    @Test fun checkpointSurvivesRestartButDoesNotReleaseCoverageBeforeWholeCommit() {
+        val text = "甲".repeat(30_000)
+        val row = repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "assistant", text)
+        val running = memory.markRunning(job(row))!!
+        val chunks = StoryOrganizerChunks.plan(text, "")
+        val raw = """{"memories":[{"kind":"current_state","subject":"林遥","state_key":"location","content":"北门"}],"proposals":[]}"""
+        assertTrue(memory.saveOrganizerChunk(running, chunks[0], chunks[0].fingerprint(""), raw))
+        assertTrue(snapshot().organizedProseRevisionIds.isEmpty()); assertTrue(snapshot().records.isEmpty())
+        memory.close(); memory = StoryMemoryStore(context)
+        assertEquals(raw, memory.loadOrganizerChunk(running, 0, chunks[0].fingerprint("")))
+        assertNull(memory.loadOrganizerChunk(running, 0, "different"))
+        val second = raw.replace("北门", "港口")
+        val output = StoryOrganizerChunks.combine(chunks, listOf(StoryMemoryOrganizer.parse(raw), StoryMemoryOrganizer.parse(second)))
+        assertThrows(IllegalArgumentException::class.java) { memory.applyOrganizerOutput(running, output) }
+        assertTrue(snapshot().organizedProseRevisionIds.isEmpty())
+        assertTrue(memory.saveOrganizerChunk(running, chunks[1], chunks[1].fingerprint(""), second))
+        assertTrue(memory.applyOrganizerOutput(running, output) is StoryMemoryApplyResult.Committed)
+        assertEquals(setOf(row.revision.id), snapshot().organizedProseRevisionIds)
+        assertEquals("港口", snapshot().records.single().content)
+    }
+
     @Test fun inheritedCoverageUsesNewRouteRevisionIdsAndSurvivesRestart() {
         val first = source(); memory.applyOrganizerOutput(memory.markRunning(job(first))!!, facts())
         val target = source()

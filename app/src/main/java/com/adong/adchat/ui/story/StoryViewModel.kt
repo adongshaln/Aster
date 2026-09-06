@@ -670,23 +670,39 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                             webSearchEnabled = false,
                             fileCreationEnabled = false
                         )
-                        val organizerInput = StoryMemoryOrganizer.buildInput(
-                            sourceRevision = source,
-                            existingMemory = archiveStore.listMemoryRecords(storyId, timelineId),
-                            userInput = store.loadMessages(storyId, timelineId, source.workspace)
-                                .takeWhile { it.revision.id != source.id }
-                                .lastOrNull { it.message.role == "user" && it.revision.state == StoryRevisionState.Complete }
-                                ?.revision?.content.orEmpty()
-                        )
-                        val organizerResponse = api.streamChat(
-                            profile = organizerProfile,
-                            model = story.model,
-                            systemPrompt = if (source.workspace == StoryWorkspace.Prose) StoryMemoryOrganizer.systemPrompt else StoryMemoryOrganizer.discussionPrompt,
-                            history = listOf(ChatMessage(role = "user", content = organizerInput)),
-                            cacheKey = "aster-story-memory-$storyId-${running.sourceRevisionId}-${running.baseMemoryVersion}"
-                        ) { }
-                        check(organizerResponse.outputComplete) { "整理回复未完整结束，未提交资料" }
-                        val output = StoryMemoryOrganizer.parse(organizerResponse.text, source.workspace)
+                        val userInput = store.loadMessages(storyId, timelineId, source.workspace)
+                            .takeWhile { it.revision.id != source.id }
+                            .lastOrNull { it.message.role == "user" && it.revision.state == StoryRevisionState.Complete }
+                            ?.revision?.content.orEmpty()
+                        val chunks = com.adong.adchat.data.story.StoryOrganizerChunks.plan(source.content, userInput)
+                        val existingMemory = archiveStore.listMemoryRecords(storyId, timelineId)
+                        val outputs = mutableListOf<com.adong.adchat.data.story.StoryOrganizerOutput>()
+                        for (chunk in chunks) {
+                            check(memoryStore.currentMemoryVersion(storyId) == running.baseMemoryVersion &&
+                                store.getActiveRevision(source.id) != null) { "资料或正文已变化，需要重新整理" }
+                            withContext(Dispatchers.Main) {
+                                if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId)
+                                    memoryStatus = "正在整理记忆 ${chunk.index + 1}/${chunks.size}"
+                            }
+                            val fingerprint = chunk.fingerprint(userInput)
+                            val cached = memoryStore.loadOrganizerChunk(running, chunk.index, fingerprint)
+                            val raw = cached ?: if (chunk.text.isBlank()) "{\"memories\":[],\"proposals\":[]}" else {
+                                val organizerInput = StoryMemoryOrganizer.buildInput(source.copy(content = chunk.text), existingMemory,
+                                    userInput, chunk.precedingContext)
+                                val response = api.streamChat(
+                                    profile = organizerProfile, model = story.model,
+                                    systemPrompt = if (source.workspace == StoryWorkspace.Prose) StoryMemoryOrganizer.systemPrompt else StoryMemoryOrganizer.discussionPrompt,
+                                    history = listOf(ChatMessage(role = "user", content = organizerInput)),
+                                    cacheKey = "aster-story-memory-$storyId-${running.sourceRevisionId}-${running.baseMemoryVersion}-${chunk.index}"
+                                ) { }
+                                check(response.outputComplete) { "整理回复未完整结束，未提交资料" }
+                                response.text
+                            }
+                            val parsed = StoryMemoryOrganizer.parse(raw, source.workspace)
+                            if (cached == null) check(memoryStore.saveOrganizerChunk(running, chunk, fingerprint, raw)) { "资料版本已变化，分段结果未提交" }
+                            outputs += parsed
+                        }
+                        val output = com.adong.adchat.data.story.StoryOrganizerChunks.combine(chunks, outputs)
                         when (memoryStore.applyOrganizerOutput(running, output)) {
                             is StoryMemoryApplyResult.Committed -> {
                                 refreshArchive(storyId, timelineId)
