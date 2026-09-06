@@ -10,6 +10,19 @@ import org.json.JSONObject
 class StoryArchiveStore(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
 
+    /** Memory and completion coverage must come from one transaction, never two racing reads. */
+    fun contextMemorySnapshot(storyId: String, timelineId: String): StoryContextMemorySnapshot =
+        helper.readableDatabase.inTransaction { db ->
+            val organized = db.rawQuery("""SELECT DISTINCT r.id FROM ${StorySchema.REVISIONS} r
+                JOIN ${StorySchema.MESSAGES} m ON m.active_revision_id = r.id
+                JOIN ${StorySchema.JOBS} j ON j.source_revision_id = r.id
+                WHERE m.story_id = ? AND m.timeline_id = ? AND m.workspace = 'prose' AND m.role = 'assistant'
+                  AND r.state = 'complete' AND j.story_id = m.story_id AND j.timeline_id = m.timeline_id
+                  AND j.kind = 'organize_prose' AND j.state = 'completed'""",
+                arrayOf(storyId, timelineId)).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+            StoryContextMemorySnapshot(listMemoryRecords(storyId, timelineId), listPendingProposals(storyId, timelineId), organized)
+        }
+
     fun listMemoryRecords(storyId: String, timelineId: String): List<StoryMemoryRecord> {
         val records = helper.readableDatabase.query(
             StorySchema.MEMORIES,

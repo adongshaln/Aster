@@ -493,11 +493,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 refreshWorkspaceIfVisible(story.id, workspace)
 
+                val memorySnapshot = archiveStore.contextMemorySnapshot(story.id, story.currentTimelineId)
                 val context = StoryContextComposer.compose(
                     workspace = workspace,
                     baseInstruction = workspaceSystemPrompt(workspace),
-                    memoryRecords = archiveStore.listMemoryRecords(story.id, story.currentTimelineId),
-                    proposals = archiveStore.listPendingProposals(story.id, story.currentTimelineId),
+                    memoryRecords = memorySnapshot.records,
+                    proposals = memorySnapshot.proposals,
+                    organizedProseRevisionIds = memorySnapshot.organizedProseRevisionIds,
                     proseMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose),
                     discussionMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Discussion)
                 )

@@ -41,6 +41,16 @@ class StoryContextOverflowException(
     }
 )
 
+data class StoryContextMemorySnapshot(
+    val records: List<StoryMemoryRecord>,
+    val proposals: List<StoryProposal>,
+    val organizedProseRevisionIds: Set<String>
+)
+
+class StoryUnorganizedHistoryException(val protectedTurns: Int, val requiredChars: Int, val maxChars: Int) :
+    IllegalStateException("有 $protectedTurns 轮正文尚需保留，连同固定资料和当前输入超过上下文预算（$requiredChars > $maxChars）。" +
+        "本次未发送，也不会静默丢弃正文。请到档案检查自动整理与失败项，或精简输入、固定资料。")
+
 data class StoryContextTruncation(
     val section: String,
     val omittedItems: Int
@@ -53,7 +63,8 @@ data class StoryContextResult(
     val maxChars: Int,
     val includedMemoryIds: Set<String>,
     val includedProposalIds: Set<String>,
-    val truncations: List<StoryContextTruncation>
+    val truncations: List<StoryContextTruncation>,
+    val protectedProseRevisionIds: Set<String> = emptySet()
 ) {
     val wasTruncated: Boolean get() = truncations.isNotEmpty()
     val withinHardBudget: Boolean get() = estimatedChars <= maxChars
@@ -77,7 +88,8 @@ object StoryContextComposer {
         proposals: List<StoryProposal>,
         proseMessages: List<StoryMessageWithRevision>,
         discussionMessages: List<StoryMessageWithRevision>,
-        budget: StoryContextBudget = StoryContextBudget()
+        budget: StoryContextBudget = StoryContextBudget(),
+        organizedProseRevisionIds: Set<String> = emptySet()
     ): StoryContextResult {
         val stateView = StoryStateProjection.project(memoryRecords)
         if (workspace == StoryWorkspace.Prose && stateView.conflicts.isNotEmpty()) {
@@ -123,6 +135,18 @@ object StoryContextComposer {
             )
         }
 
+        val historyBeforeCurrent = eligibleHistory.filter { row ->
+            currentTurn == null || row.message.sequence < currentTurn.message.sequence
+        }
+        val completeTurns = completeHistoryTurns(historyBeforeCurrent)
+        val firstUnorganized = if (workspace == StoryWorkspace.Prose) completeTurns.indexOfFirst { turn ->
+            turn.rows.any { it.message.role == "assistant" && it.revision.id !in organizedProseRevisionIds }
+        } else -1
+        // Keep a continuous suffix beginning with the oldest unorganized reply; never cut a hole.
+        val protectedStart = if (firstUnorganized < 0) completeTurns.size else firstUnorganized
+        val protectedTurns = completeTurns.drop(protectedStart)
+        val protectedCost = protectedTurns.sumOf { it.cost }
+
         val includedMemoryIds = linkedSetOf<String>()
         val includedProposalIds = linkedSetOf<String>()
         val truncations = mutableListOf<StoryContextTruncation>()
@@ -148,7 +172,10 @@ object StoryContextComposer {
             )
         }
         pinned.forEach { includedMemoryIds += it.id }
-        var remaining = budget.maxInputChars - mandatoryCost
+        if (mandatoryCost + protectedCost > budget.maxInputChars) {
+            throw StoryUnorganizedHistoryException(protectedTurns.size, mandatoryCost + protectedCost, budget.maxInputChars)
+        }
+        var remaining = budget.maxInputChars - mandatoryCost - protectedCost
 
         val relevanceText = eligibleHistory.takeLast(6)
             .joinToString("\n") { it.revision.content }
@@ -198,14 +225,10 @@ object StoryContextComposer {
             )
         }
 
-        val historyBeforeCurrent = eligibleHistory.filter { row ->
-            currentTurn == null || row.message.sequence < currentTurn.message.sequence
-        }
-        val completeTurns = completeHistoryTurns(historyBeforeCurrent)
-        val selectedTurnsNewestFirst = mutableListOf<HistoryTurn>()
-        var historyRemaining = minOf(budget.recentHistoryChars, remaining)
+        val selectedTurnsNewestFirst = protectedTurns.asReversed().toMutableList()
+        var historyRemaining = minOf((budget.recentHistoryChars - protectedCost).coerceAtLeast(0), remaining)
         var omittedTurns = 0
-        for (index in completeTurns.indices.reversed()) {
+        for (index in (0 until protectedStart).reversed()) {
             val turn = completeTurns[index]
             val cost = turn.cost
             if (cost <= historyRemaining && cost <= remaining) {
@@ -261,7 +284,9 @@ object StoryContextComposer {
             maxChars = budget.maxInputChars,
             includedMemoryIds = includedMemoryIds,
             includedProposalIds = includedProposalIds,
-            truncations = truncations
+            truncations = truncations,
+            protectedProseRevisionIds = protectedTurns.flatMap { it.rows }.filter { it.message.role == "assistant" }
+                .map { it.revision.id }.toSet()
         )
     }
 
@@ -309,6 +334,9 @@ object StoryContextComposer {
                     if (user != null && user.message.sequence < row.message.sequence) {
                         turns += HistoryTurn(listOf(user, row))
                         pendingUser = null
+                    } else {
+                        // Legacy/orphan complete replies still contain story text and need protection.
+                        turns += HistoryTurn(listOf(row))
                     }
                 }
             }

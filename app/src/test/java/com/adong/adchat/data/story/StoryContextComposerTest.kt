@@ -169,6 +169,7 @@ class StoryContextComposerTest {
             memoryRecords = emptyList(),
             proposals = emptyList(),
             proseMessages = messages,
+            organizedProseRevisionIds = messages.filter { it.message.role == "assistant" }.map { it.revision.id }.toSet(),
             discussionMessages = emptyList(),
             budget = StoryContextBudget(
                 maxInputChars = 4_000,
@@ -198,6 +199,7 @@ class StoryContextComposerTest {
             memoryRecords = emptyList(),
             proposals = emptyList(),
             proseMessages = messages,
+            organizedProseRevisionIds = messages.filter { it.message.role == "assistant" }.map { it.revision.id }.toSet(),
             discussionMessages = emptyList(),
             budget = StoryContextBudget(
                 maxInputChars = 4_000,
@@ -278,6 +280,57 @@ class StoryContextComposerTest {
             assertTrue(result.systemPrompt.contains("尚未发生，不得提前兑现"))
             assertTrue(result.withinHardBudget)
         }
+    }
+
+    @Test fun unorganizedSuffixIsReservedBeforeOptionalMemoryEvenWithZeroHistoryCap() {
+        val rows = listOf(
+            message("u0", StoryWorkspace.Prose, "user", "旧输入", StoryRevisionState.Complete, 1),
+            message("a0", StoryWorkspace.Prose, "assistant", "已整理旧文", StoryRevisionState.Complete, 2),
+            message("u1", StoryWorkspace.Prose, "user", "待整理输入", StoryRevisionState.Complete, 3),
+            message("a1", StoryWorkspace.Prose, "assistant", "未整理" + "甲".repeat(1200), StoryRevisionState.Complete, 4),
+            message("u2", StoryWorkspace.Prose, "user", "后续输入", StoryRevisionState.Complete, 5),
+            message("a2", StoryWorkspace.Prose, "assistant", "较新但已整理" + "乙".repeat(1200), StoryRevisionState.Complete, 6),
+            message("u3", StoryWorkspace.Prose, "user", "继续", StoryRevisionState.Complete, 7)
+        )
+        val result = StoryContextComposer.compose(StoryWorkspace.Prose, "规则",
+            listOf(memory("large", "丙".repeat(2300), StoryMemoryNature.UserConfirmed)),
+            emptyList(), rows, emptyList(),
+            budget = StoryContextBudget(maxInputChars = 4000, recentHistoryChars = 0),
+            organizedProseRevisionIds = setOf("revision-a0", "revision-a2"))
+        assertEquals(rows.drop(2).map { it.revision.content }, result.history.map { it.content })
+        assertFalse("large" in result.includedMemoryIds)
+        assertEquals(setOf("revision-a1", "revision-a2"), result.protectedProseRevisionIds)
+        assertTrue(result.withinHardBudget)
+    }
+
+    @Test fun unorganizedGlobalOverflowFailsRatherThanDroppingStoryOrPinnedFacts() {
+        val rows = listOf(
+            message("u1", StoryWorkspace.Prose, "user", "输入", StoryRevisionState.Complete, 1),
+            message("a1", StoryWorkspace.Prose, "assistant", "正文" + "甲".repeat(2800), StoryRevisionState.Complete, 2),
+            message("u2", StoryWorkspace.Prose, "user", "继续", StoryRevisionState.Complete, 3)
+        )
+        org.junit.Assert.assertThrows(StoryUnorganizedHistoryException::class.java) {
+            StoryContextComposer.compose(StoryWorkspace.Prose, "规则",
+                listOf(memory("pin", "固".repeat(1300), StoryMemoryNature.UserConfirmed, pinned = true)),
+                emptyList(), rows, emptyList(), budget = StoryContextBudget(maxInputChars = 4000))
+        }
+    }
+
+    @Test fun unknownCoverageProtectsOrphanReplyButNeverInterruptedOrDiscussionText() {
+        val rows = listOf(
+            message("orphan", StoryWorkspace.Prose, "assistant", "旧版完整正文", StoryRevisionState.Complete, 1),
+            message("stopped", StoryWorkspace.Prose, "assistant", "停止的正文", StoryRevisionState.Stopped, 2),
+            message("current", StoryWorkspace.Prose, "user", "继续", StoryRevisionState.Complete, 3)
+        )
+        val result = StoryContextComposer.compose(StoryWorkspace.Prose, "规则", emptyList(), emptyList(), rows,
+            listOf(message("discussion", StoryWorkspace.Discussion, "assistant", "讨论秘密", StoryRevisionState.Complete, 4)),
+            budget = StoryContextBudget(recentHistoryChars = 0))
+        assertEquals(listOf("旧版完整正文", "继续"), result.history.map { it.content })
+        assertEquals(setOf("revision-orphan"), result.protectedProseRevisionIds)
+        val discussion = StoryContextComposer.compose(StoryWorkspace.Discussion, "讨论", emptyList(), emptyList(), rows,
+            emptyList(), budget = StoryContextBudget(recentHistoryChars = 0))
+        assertTrue(discussion.protectedProseRevisionIds.isEmpty())
+        assertTrue(discussion.history.isEmpty())
     }
 
     private fun expectOverflow(block: () -> Unit): StoryContextOverflowException {
