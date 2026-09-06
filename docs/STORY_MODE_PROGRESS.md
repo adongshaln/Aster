@@ -162,3 +162,14 @@ M3d commit `cf70ef1ad3ad2a8cd90041ac9b02df2fcd498201` passed Android Build #98.
 - API results carry explicit output-completion metadata. Chat requires finish_reason=stop; Responses requires its completion event/status. Truncation, filtering and missing completion confirmation retain text but do not qualify a story reply as complete. Organizer output requires the same confirmation before parsing/committing. Ordinary chat still receives its text without a new retry policy.
 - Added MockWebServer protocol-contract tests for Gemini-compatible Chat SSE/JSON and Responses JSON; these are synthetic gateway tests, not a real Gemini provider acceptance run.
 - This checkpoint passed Android Build #100 at `7ba25bd0343962b8ae8d8e3b27ddfe257475d32e`. Remaining acceptance: on-device reading/keyboard/long-thread performance, real provider story and memory accuracy, full M1–M4 design-gap review. No main merge/version bump.
+
+
+## G1a：人物认知与有向关系的数据边界（2026-09-06）
+
+- 已接入 organizer → SQLite → archive/context 的 nature、人物主体和关系客体；人物怀疑/误解使用 CharacterBelief，禁止无主体认知、伪造用户确认、把主观认知声明为 PlotEvent。
+- 同文案去重增加 kind/nature/主体/客体，避免不同人物的认知与反向关系互相吞掉。实体采用当前路线有效来源的规范名/已有别名精确匹配；多义匹配明确失败，不自动猜测合并。实体新增与资料、日志、版本处于同一事务。
+- 上下文、整理器输入与档案保留主观性质和归属；固定主观看法也不提升为世界事实。角色认知不自动传播到其他人物；作者计划明确未发生。有向关系目前明确为来源轮次的观察。
+- 复用 schema v2 现有字段，无数据迁移、无正式版本变动。新增实体保留供来源恢复与批次撤销恢复使用；单纯存在实体行不使任何事实可见。
+- 测试覆盖：解析白名单、主体/性质约束、不同认知和方向去重、存储边界防绕过、重启、撤销/恢复、历史另写实体重映射、来源替换失效、已知别名/歧义拒绝及原子回滚。
+- **边界：G1/G2 尚未关闭。** CurrentState 仍是历史观察；状态属性键、当前值选择、自动别名归并/同名消歧工作流、结构化冲突与用户解决仍待下一阶段。模型语义提取是否正确仍需真实 Gemini 验收。不会把旧 PlotEvent 自动改判成主观认知。
+- 本提交待 CI 验证；不得沿用 #100 为本提交背书。

@@ -172,8 +172,17 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 return@inTransaction StoryMemoryApplyResult.Requeued(requeued?.id)
             }
 
-            val memoryCandidates = output.memories.filterNot { candidate ->
-                activeMemoryContentExists(db, persistedJob.storyId, persistedJob.timelineId, candidate.content)
+            output.memories.forEach { it.validate() }
+            // Resolve names only within this route's effective records, never another route's entities.
+            // Resolution and any new entities are in this same atomic memory transaction.
+            val entities = StoryOrganizerEntities(db, persistedJob.storyId, persistedJob.timelineId)
+            val resolved = output.memories.distinct().map { candidate ->
+                Triple(candidate, candidate.subject?.let(entities::resolve), candidate.objectName?.let(entities::resolve))
+            }.distinctBy { (candidate, subjectId, objectId) ->
+                listOf(candidate.kind.dbValue, candidate.nature.dbValue, candidate.content, subjectId, objectId)
+            }
+            val memoryCandidates = resolved.filterNot { (candidate, subjectId, objectId) ->
+                activeMemoryContentExists(db, persistedJob.storyId, persistedJob.timelineId, candidate, subjectId, objectId)
             }
             val proposalCandidates = output.proposals.filterNot { candidate ->
                 pendingProposalContentExists(db, persistedJob.storyId, persistedJob.timelineId, candidate.content)
@@ -197,13 +206,15 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             check(versionLocked == 1) { "Story memoryVersion changed during organizer commit" }
 
             val addedMemoryIds = mutableListOf<String>()
-            memoryCandidates.forEach { candidate ->
+            memoryCandidates.forEach { (candidate, subjectId, objectId) ->
                 val record = StoryMemoryRecord(
                     storyId = persistedJob.storyId,
                     timelineId = persistedJob.timelineId,
                     kind = candidate.kind,
                     content = candidate.content,
-                    nature = StoryMemoryNature.ProseOccurred,
+                    nature = candidate.nature,
+                    subjectEntityId = subjectId,
+                    objectEntityId = objectId,
                     effectiveSequence = source.sequence,
                     sourceRevisionId = persistedJob.sourceRevisionId,
                     pinned = false,
@@ -372,13 +383,16 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         db: SQLiteDatabase,
         storyId: String,
         timelineId: String,
-        content: String
+        candidate: StoryOrganizerMemoryCandidate,
+        subjectId: String?,
+        objectId: String?
     ): Boolean = db.rawQuery(
         """SELECT 1 FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ? AND content = ?
+           AND kind = ? AND nature = ? AND subject_entity_id IS ? AND object_entity_id IS ?
            AND (source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
                JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
                WHERE r.id = ${StorySchema.MEMORIES}.source_revision_id AND r.state = 'complete')) LIMIT 1""",
-        arrayOf(storyId, timelineId, content)
+        arrayOf(storyId, timelineId, candidate.content, candidate.kind.dbValue, candidate.nature.dbValue, subjectId, objectId)
     ).use { it.moveToFirst() }
 
     private fun pendingProposalContentExists(
@@ -405,8 +419,8 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 put("kind", record.kind.dbValue)
                 put("content", record.content)
                 put("nature", record.nature.dbValue)
-                putNull("subject_entity_id")
-                putNull("object_entity_id")
+                put("subject_entity_id", record.subjectEntityId)
+                put("object_entity_id", record.objectEntityId)
                 put("scope", record.scope)
                 put("effective_sequence", record.effectiveSequence)
                 put("source_revision_id", record.sourceRevisionId)

@@ -254,7 +254,7 @@ class StoryContextComposerTest {
             budget = StoryContextBudget(
                 maxInputChars = 4_000,
                 pinnedMemoryChars = 0,
-                confirmedMemoryChars = 560,
+                confirmedMemoryChars = 650,
                 candidateChars = 0,
                 recentHistoryChars = 0
             )
@@ -263,6 +263,21 @@ class StoryContextComposerTest {
         assertTrue("alice" in result.includedMemoryIds)
         assertTrue("capital" in result.includedMemoryIds)
         assertFalse("other" in result.includedMemoryIds)
+    }
+
+    @Test fun pinnedBeliefAndAuthorPlanKeepTheirBoundariesInBothWorkspaces() {
+        val belief = memory("belief", "怀疑林遥偷了钥匙", StoryMemoryNature.CharacterBelief,
+            kind = StoryMemoryKind.CharacterKnowledge, entityNames = listOf("守卫")).copy(pinned = true)
+        val plan = memory("plan", "守卫未来背叛", StoryMemoryNature.UserConfirmed, kind = StoryMemoryKind.AuthorPlan)
+        StoryWorkspace.entries.forEach { workspace ->
+            val result = StoryContextComposer.compose(workspace, "规则", listOf(belief, plan),
+                emptyList(), emptyList(), emptyList())
+            assertTrue(result.systemPrompt.contains("角色主观看法 · 不等于事实"))
+            assertTrue(result.systemPrompt.contains("认知主体：守卫"))
+            assertTrue(result.systemPrompt.contains("不得扩散为其他角色已知"))
+            assertTrue(result.systemPrompt.contains("尚未发生，不得提前兑现"))
+            assertTrue(result.withinHardBudget)
+        }
     }
 
     private fun expectOverflow(block: () -> Unit): StoryContextOverflowException {

@@ -6,8 +6,30 @@ import org.json.JSONTokener
 
 data class StoryOrganizerMemoryCandidate(
     val kind: StoryMemoryKind,
-    val content: String
-)
+    val content: String,
+    val nature: StoryMemoryNature = StoryMemoryNature.ProseOccurred,
+    val subject: String? = null,
+    val objectName: String? = null
+) {
+    fun validate() {
+        require(kind != StoryMemoryKind.AuthorPlan) { "Organizer cannot confirm an author plan" }
+        require(content.isNotBlank() && content.length <= 1_200)
+        require(nature in setOf(StoryMemoryNature.ProseOccurred, StoryMemoryNature.CharacterBelief)) {
+            "Organizer cannot confirm user decisions or inference"
+        }
+        require(subject == null || (subject.isNotBlank() && subject.length <= 120))
+        require(objectName == null || (objectName.isNotBlank() && objectName.length <= 120))
+        require(nature != StoryMemoryNature.CharacterBelief || kind == StoryMemoryKind.CharacterKnowledge) {
+            "Subjective claims must be character knowledge"
+        }
+        if (kind == StoryMemoryKind.CharacterKnowledge) require(!subject.isNullOrBlank()) {
+            "Character knowledge requires its owner"
+        }
+        if (kind == StoryMemoryKind.DirectedRelationship) require(!subject.isNullOrBlank() && !objectName.isNullOrBlank()) {
+            "Directed relationship requires both endpoints"
+        }
+    }
+}
 
 data class StoryOrganizerProposalCandidate(
     val proposalKind: String,
@@ -53,7 +75,14 @@ object StoryMemoryOrganizer {
         只允许返回一个 JSON 对象，不要 Markdown，不要解释，不要代码围栏。结构严格为：
         {"memories":[{"kind":"plot_event","content":"..."}],"proposals":[{"kind":"plot","content":"..."}]}
 
-        memories 只能记录正文中已经明确发生或明确成立的内容；不要把猜测、修辞、角色误解或未来计划写成事实。
+        memories 只能记录正文中已经明确发生或明确成立的内容；不要把猜测、修辞、角色误解或未来计划写成客观事实。
+        人物认知必须使用 character_knowledge，且必须提供 nature 与 subject：
+        {"kind":"character_knowledge","nature":"character_belief","subject":"守卫","content":"怀疑林遥偷了钥匙"}。
+        nature 仅允许 prose_occurred（正文明确成立）和 character_belief（该角色的怀疑、误解、相信或听说，内容未必真实）。
+        只有正文明确说明某角色已获知真实信息时，其认知才可标 prose_occurred；其他人物不得自动获知。
+        定向关系必须提供 subject 和 object，例如 {"kind":"directed_relationship","subject":"守卫","object":"林遥","content":"信任"}。
+        关系只代表本轮观察，不代表反向关系或永久状态。名字使用已知规范名；身份不明确、同名或别名不确定时只能提出 continuity 候选，不得合并人物。
+        其他类型可省略 nature（默认 prose_occurred），可用 subject 关联明确人物。不得返回 user_confirmed 或 inference。
         memories.kind 只允许：world_fact、character_profile、current_state、directed_relationship、character_knowledge、plot_event、open_thread、summary。
         proposals 用于仍需用户确认的解释、计划或可能影响后续的候选；kind 只允许 plot、character、world、continuity、author_plan。
         不得返回、猜测或修改任何数据库 ID，不得要求删除、停用、覆盖或修改已有资料。
@@ -90,7 +119,7 @@ object StoryMemoryOrganizer {
                     .thenByDescending { it.updatedAt }
             )
             .forEach { record ->
-                val line = "- [${record.kind.dbValue}/${record.nature.dbValue}] ${record.content.trim()}"
+                val line = renderStoryMemory(record)
                 val cost = line.length + 1
                 if (cost <= remaining) {
                     memoryLines += line
@@ -127,7 +156,7 @@ object StoryMemoryOrganizer {
             for (index in 0 until memoryArray.length()) {
                 val item = memoryArray.optJSONObject(index)
                     ?: error("Organizer memory item $index is not an object")
-                requireOnlyKeys(item, setOf("kind", "content"), "memory[$index]")
+                requireOnlyKeys(item, setOf("kind", "content", "nature", "subject", "object"), "memory[$index]")
                 val kindValue = (item.get("kind") as? String ?: error("kind must be a string")).trim()
                 val kind = StoryMemoryKind.entries.firstOrNull { it.dbValue == kindValue }
                     ?: error("Unsupported organizer memory kind: $kindValue")
@@ -135,9 +164,20 @@ object StoryMemoryOrganizer {
                 val content = (item.get("content") as? String ?: error("content must be a string")).trim()
                 require(content.isNotBlank()) { "Organizer memory content is blank" }
                 require(content.length <= MAX_MEMORY_CONTENT_CHARS) { "Organizer memory content is too large" }
-                add(StoryOrganizerMemoryCandidate(kind, content))
+                val nature = if (item.has("nature")) {
+                    val value = item.get("nature") as? String ?: error("nature must be a string")
+                    StoryMemoryNature.entries.firstOrNull { it.dbValue == value }
+                        ?: error("Unsupported memory nature")
+                } else {
+                    require(kind != StoryMemoryKind.CharacterKnowledge) { "Knowledge requires explicit nature" }
+                    StoryMemoryNature.ProseOccurred
+                }
+                fun name(key: String): String? = if (item.has(key))
+                    (item.get(key) as? String ?: error("$key must be a name string")).trim() else null
+                add(StoryOrganizerMemoryCandidate(kind, content, nature, name("subject"), name("object"))
+                    .also { it.validate() })
             }
-        }.distinctBy { it.kind to it.content }
+        }.distinct()
 
         val proposals = buildList {
             for (index in 0 until proposalArray.length()) {
@@ -154,11 +194,10 @@ object StoryMemoryOrganizer {
         }.distinctBy { it.proposalKind to it.content }
 
         require(workspace == StoryWorkspace.Prose || memories.isEmpty()) { "Discussion cannot produce confirmed facts" }
-        // Until entity/attribute state keys exist, persist changing states as dated observations.
+        // Until attribute state keys exist, persist changing states as dated observations.
         // They must never masquerade as an authoritative current-state register.
         val observations = memories.map { candidate ->
-            if (candidate.kind in setOf(StoryMemoryKind.CurrentState, StoryMemoryKind.DirectedRelationship,
-                    StoryMemoryKind.CharacterKnowledge)) {
+            if (candidate.kind == StoryMemoryKind.CurrentState) {
                 candidate.copy(kind = StoryMemoryKind.PlotEvent, content = "本轮观察：${candidate.content}")
             } else candidate
         }

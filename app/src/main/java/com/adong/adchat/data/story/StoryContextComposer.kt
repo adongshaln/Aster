@@ -66,8 +66,8 @@ data class StoryContextResult(
 }
 
 object StoryContextComposer {
-    private const val PINNED_HEADER = "\n\n[固定且已确认的故事资料]\n"
-    private const val CONFIRMED_HEADER = "\n\n[已确认的故事资料]\n"
+    private const val PINNED_HEADER = "\n\n[固定故事资料；仍须遵守每项性质与认知归属]\n"
+    private const val CONFIRMED_HEADER = "\n\n[故事资料；主观看法不等于事实，资料可见不代表所有角色知情]\n"
     private const val CANDIDATE_HEADER = "\n\n[未确认候选，仅供讨论；不得当作已发生事实]\n"
 
     fun compose(
@@ -255,20 +255,7 @@ object StoryContextComposer {
         )
     }
 
-    private fun renderMemory(record: StoryMemoryRecord): String =
-        "• [${memoryLabel(record.kind)}] ${record.content.trim()}"
-
-    private fun memoryLabel(kind: StoryMemoryKind): String = when (kind) {
-        StoryMemoryKind.WorldFact -> "世界设定"
-        StoryMemoryKind.CharacterProfile -> "人物"
-        StoryMemoryKind.CurrentState -> "当前状态"
-        StoryMemoryKind.DirectedRelationship -> "关系"
-        StoryMemoryKind.CharacterKnowledge -> "角色认知"
-        StoryMemoryKind.PlotEvent -> "已发生剧情"
-        StoryMemoryKind.OpenThread -> "未完线索"
-        StoryMemoryKind.AuthorPlan -> "作者计划"
-        StoryMemoryKind.Summary -> "剧情摘要"
-    }
+    private fun renderMemory(record: StoryMemoryRecord): String = renderStoryMemory(record)
 
     private fun memoryPriority(kind: StoryMemoryKind): Int = when (kind) {
         StoryMemoryKind.CurrentState -> 0

@@ -84,6 +84,33 @@ class StoryMemoryOrganizerTest {
         assertTrue(output.memories.single().content.startsWith("本轮观察"))
     }
 
+    @Test fun subjectiveKnowledgeRequiresExplicitNatureAndOwner() {
+        val parsed = StoryMemoryOrganizer.parse("""{"memories":[
+            {"kind":"character_knowledge","nature":"character_belief","subject":"守卫","content":"怀疑林遥偷了钥匙"}
+        ],"proposals":[]}""").memories.single()
+        assertEquals(StoryMemoryKind.CharacterKnowledge, parsed.kind)
+        assertEquals(StoryMemoryNature.CharacterBelief, parsed.nature)
+        assertEquals("守卫", parsed.subject)
+        listOf(
+            """{"kind":"character_knowledge","content":"偷了钥匙"}""",
+            """{"kind":"character_knowledge","nature":"character_belief","content":"偷了钥匙"}""",
+            """{"kind":"plot_event","nature":"character_belief","subject":"守卫","content":"偷了钥匙"}""",
+            """{"kind":"plot_event","nature":"user_confirmed","content":"偷了钥匙"}""",
+            """{"kind":"directed_relationship","subject":"守卫","content":"信任"}""",
+            """{"kind":"character_knowledge","nature":"prose_occurred","subject":12,"content":"事实"}"""
+        ).forEach { item -> expectFailure { StoryMemoryOrganizer.parse("""{"memories":[$item],"proposals":[]}""") } }
+    }
+
+    @Test fun sameTextDoesNotMergeDifferentOwnersOrDirections() {
+        val parsed = StoryMemoryOrganizer.parse("""{"memories":[
+            {"kind":"character_knowledge","nature":"character_belief","subject":"守卫","content":"怀疑失窃"},
+            {"kind":"character_knowledge","nature":"character_belief","subject":"林遥","content":"怀疑失窃"},
+            {"kind":"directed_relationship","subject":"守卫","object":"林遥","content":"信任"},
+            {"kind":"directed_relationship","subject":"林遥","object":"守卫","content":"信任"}
+        ],"proposals":[]}""")
+        assertEquals(4, parsed.memories.size)
+    }
+
     private fun expectFailure(block: () -> Unit) {
         try {
             block()

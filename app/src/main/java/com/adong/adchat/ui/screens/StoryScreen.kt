@@ -848,10 +848,14 @@ private fun ArchiveRecordRow(record: StoryMemoryRecord, onEdit: () -> Unit, onPi
                         Spacer(Modifier.width(6.dp))
                         Icon(Icons.Rounded.PushPin, "已固定", Modifier.size(14.dp), tint = Accent)
                     }
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (record.nature.dbValue == "user_confirmed") "用户确认" else "自动记录", color = MutedInk, style = MaterialTheme.typography.labelSmall)
                 }
+                Text(com.adong.adchat.data.story.storyMemoryNatureLabel(record), color = MutedInk, style = MaterialTheme.typography.labelSmall)
                 Spacer(Modifier.height(6.dp))
+                if (record.subjectEntityNames.isNotEmpty()) {
+                    Text(record.subjectEntityNames.first() + record.objectEntityNames.firstOrNull()?.let { " → $it" }.orEmpty(),
+                        color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                    Spacer(Modifier.height(4.dp))
+                }
                 Text(record.content, style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onPin, modifier = Modifier.size(34.dp)) {
