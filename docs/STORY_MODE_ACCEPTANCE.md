@@ -5,9 +5,9 @@
 需求依据：[原始实施计划](STORY_MODE_IMPLEMENTATION_PLAN.md)。
 验证基准：[Android Build #100](https://github.com/adongshaln/Aster/actions/runs/33999201611)，与上述代码 SHA 一致，状态 success；单测、Release 和固定签名 APK 上传成功。
 
-## 后续代码进展：G1a（2026-09-06，待本提交 CI）
+## 后续代码进展：G1a（2026-09-06，CI #102 已通过）
 
-下面矩阵保留 #100 审计基准。后续 G1a 已接通人物认知性质、主体/有向关系客体、事务内实体精确匹配及上下文归属提示；参见进度文档与 StoryKnowledgeTest。A06/A07 的确定性边界有改善，但可变状态、语义同名消歧和真实模型验收尚缺，G1/G2 均未关闭。旧数据不做猜测性重分类。
+代码 `6b4db9a3f080515ed2fb282dcbf51e0b2d853367` 的 [Android Build #102](https://github.com/adongshaln/Aster/actions/runs/34004045211) 已通过单测、Release 编译与固定签名 APK 上传。下面矩阵保留 #100 审计基准。后续 G1a 已接通人物认知性质、主体/有向关系客体、事务内实体精确匹配及上下文归属提示；参见进度文档与 StoryKnowledgeTest。A06/A07 的确定性边界有改善，但可变状态、语义同名消歧和真实模型验收尚缺，G1/G2 均未关闭。旧数据不做猜测性重分类。
 
 ## 1. 结论与交付边界
 
