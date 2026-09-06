@@ -20,7 +20,8 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                   AND r.state = 'complete' AND j.story_id = m.story_id AND j.timeline_id = m.timeline_id
                   AND j.kind = 'organize_prose' AND j.state = 'completed'""",
                 arrayOf(storyId, timelineId)).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
-            val records = listMemoryRecords(storyId, timelineId)
+            val replaced = StorySummaryHierarchy.replacedInputs(db, storyId, timelineId, includeInactive = false)
+            val records = listMemoryRecords(storyId, timelineId).filterNot { it.id in replaced && !it.pinned }
             StoryContextMemorySnapshot(records, listPendingProposals(storyId, timelineId), organized,
                 records.filter { it.summarySourceRevisionIds.isNotEmpty() }.associate { it.id to it.summarySourceRevisionIds.toSet() })
         }

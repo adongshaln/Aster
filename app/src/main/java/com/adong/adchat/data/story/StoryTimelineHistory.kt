@@ -15,6 +15,7 @@ internal object StoryTimelineHistory {
             .put("revisions", rows(db, """SELECT r.id, r.state FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m
                 ON m.active_revision_id = r.id WHERE m.story_id = ? AND m.timeline_id = ?""", args))
             .put("memories", rows(db, "SELECT * FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ?", args))
+            .put("summary_inputs", rows(db, "SELECT d.* FROM ${StorySchema.SUMMARY_INPUTS} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?", args))
             .put("summary_sources", rows(db, "SELECT d.* FROM ${StorySchema.SUMMARY_SOURCES} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?", args))
             .put("proposals", rows(db, "SELECT * FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ?", args))
             .put("completed", rows(db, "SELECT source_revision_id FROM ${StorySchema.JOBS} WHERE story_id = ? AND timeline_id = ? AND state = 'completed'", args))
@@ -85,6 +86,12 @@ internal object StoryTimelineHistory {
             memoryIds[row.getString("record_id")]?.let { id ->
                 insert(db, StorySchema.SUMMARY_SOURCES, JSONObject().put("record_id", id)
                     .put("source_revision_id", revisionIds[row.getString("source_revision_id")] ?: row.getString("source_revision_id")))
+            }
+        }
+        (snapshot.optJSONArray("summary_inputs") ?: JSONArray()).objects().forEach { row ->
+            memoryIds[row.getString("record_id")]?.let { id ->
+                insert(db, StorySchema.SUMMARY_INPUTS, JSONObject(row.toString()).put("record_id", id)
+                    .put("input_record_id", memoryIds[row.getString("input_record_id")] ?: row.getString("input_record_id")))
             }
         }
         snapshot.getJSONArray("proposals").objects().forEach { row ->

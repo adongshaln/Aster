@@ -18,7 +18,7 @@ fun renderStoryMemory(record: StoryMemoryRecord): String {
         StoryMemoryKind.PlotEvent -> "已发生剧情"
         StoryMemoryKind.OpenThread -> "未完线索"
         StoryMemoryKind.AuthorPlan -> "作者计划 · 尚未发生，不得提前兑现或当作角色已知"
-        StoryMemoryKind.Summary -> if (record.summarySourceRevisionIds.isEmpty()) "资料摘要 · 无正文覆盖范围" else "历史摘要 · ${record.summarySourceRevisionIds.size} 个来源版本；不代替当前状态或固定规则"
+        StoryMemoryKind.Summary -> if (record.summarySourceRevisionIds.isEmpty()) "资料摘要 · 无正文覆盖范围" else "${if (record.scope == "summary:hierarchy:v1") "分层历史摘要" else "历史摘要"} · ${record.summarySourceRevisionIds.size} 个来源版本；不代替当前状态或固定规则"
     }
     val owner = record.subjectEntityNames.firstOrNull() ?: "归属未明确，不得推定角色知情"
     val ownership = when {

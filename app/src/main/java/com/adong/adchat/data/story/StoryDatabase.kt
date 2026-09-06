@@ -39,6 +39,10 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                     StorySchema.MIGRATION_4_TO_5_STATEMENTS.forEach(db::execSQL)
                     version = 5
                 }
+                5 -> {
+                    StorySchema.MIGRATION_5_TO_6_STATEMENTS.forEach(db::execSQL)
+                    version = 6
+                }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -46,7 +50,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
     }
 }
 
@@ -62,6 +66,7 @@ internal object StorySchema {
     const val JOBS = "memory_jobs"
     const val SNAPSHOTS = "story_snapshots"
     const val WORKSPACE_STATE = "story_workspace_state"
+    const val SUMMARY_INPUTS = "summary_inputs"
     const val SUMMARY_SOURCES = "summary_sources"
     const val CONFLICTS = "state_conflicts"
     const val MANUAL_MEMORY_CHANGES = "manual_memory_changes"
@@ -126,6 +131,17 @@ internal object StorySchema {
             PRIMARY KEY(record_id, source_revision_id),
             FOREIGN KEY(record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE
         )""".trimIndent()
+    )
+
+    val MIGRATION_5_TO_6_STATEMENTS = listOf(
+        """CREATE TABLE $SUMMARY_INPUTS (
+            record_id TEXT NOT NULL,
+            input_record_id TEXT NOT NULL,
+            input_content TEXT NOT NULL,
+            PRIMARY KEY(record_id, input_record_id),
+            FOREIGN KEY(record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE
+        )""".trimIndent(),
+        "CREATE INDEX idx_summary_inputs_child ON $SUMMARY_INPUTS(input_record_id)"
     )
 
     val CREATE_STATEMENTS: List<String> = listOf(
@@ -317,5 +333,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS
 }
