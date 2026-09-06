@@ -388,11 +388,11 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         objectId: String?
     ): Boolean = db.rawQuery(
         """SELECT 1 FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ? AND content = ?
-           AND kind = ? AND nature = ? AND subject_entity_id IS ? AND object_entity_id IS ?
+           AND kind = ? AND nature = ? AND COALESCE(subject_entity_id, '') = ? AND COALESCE(object_entity_id, '') = ?
            AND (source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
                JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
                WHERE r.id = ${StorySchema.MEMORIES}.source_revision_id AND r.state = 'complete')) LIMIT 1""",
-        arrayOf(storyId, timelineId, candidate.content, candidate.kind.dbValue, candidate.nature.dbValue, subjectId, objectId)
+        arrayOf(storyId, timelineId, candidate.content, candidate.kind.dbValue, candidate.nature.dbValue, subjectId.orEmpty(), objectId.orEmpty())
     ).use { it.moveToFirst() }
 
     private fun pendingProposalContentExists(
