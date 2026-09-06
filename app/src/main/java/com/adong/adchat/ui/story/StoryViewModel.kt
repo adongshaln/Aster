@@ -678,6 +678,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                         val existingMemory = archiveStore.listMemoryRecords(storyId, timelineId)
                         val outputs = mutableListOf<com.adong.adchat.data.story.StoryOrganizerOutput>()
                         for (chunk in chunks) {
+                            val currentStory = store.getStory(storyId)
+                            if (currentStory?.automaticMemoryEnabled != true || currentStory.currentTimelineId != timelineId)
+                                throw CancellationException("自动整理已暂停或路线已切换")
                             check(memoryStore.currentMemoryVersion(storyId) == running.baseMemoryVersion &&
                                 store.getActiveRevision(source.id) != null) { "资料或正文已变化，需要重新整理" }
                             withContext(Dispatchers.Main) {
