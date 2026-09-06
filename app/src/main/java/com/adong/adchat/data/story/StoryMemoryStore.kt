@@ -54,6 +54,10 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             true
         }
 
+    fun enqueueSummary(storyId: String, timelineId: String) = helper.writableDatabase.inTransaction { db -> StorySummaries.enqueue(db, storyId, timelineId) }
+    fun summaryRequest(job: StoryMemoryJob): String? = helper.writableDatabase.inTransaction { db -> StorySummaries.request(db, job) }
+    fun applySummary(job: StoryMemoryJob, raw: String): Boolean = helper.writableDatabase.inTransaction { db -> StorySummaries.apply(db, job, raw) }
+
     fun recoverRunningJobs(): Int = helper.writableDatabase.update(
         StorySchema.JOBS,
         ContentValues().apply {
@@ -61,8 +65,8 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             put("error", "Recovered after process restart")
             put("updated_at", System.currentTimeMillis())
         },
-        "state = ? AND kind IN (?, ?)",
-        arrayOf(StoryJobState.Running.dbValue, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND)
+        "state = ? AND kind IN (?, ?, ?)",
+        arrayOf(StoryJobState.Running.dbValue, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND, StorySummaries.KIND)
     )
 
     fun enqueueForRevision(storyId: String, timelineId: String, sourceRevisionId: String): StoryMemoryJob? =
@@ -79,9 +83,9 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         """SELECT j.* FROM ${StorySchema.JOBS} j
            JOIN ${StorySchema.REVISIONS} r ON r.id = j.source_revision_id
            JOIN ${StorySchema.MESSAGES} m ON m.id = r.message_id
-           WHERE j.story_id = ? AND j.timeline_id = ? AND j.kind IN (?, ?) AND j.state = ?
+           WHERE j.story_id = ? AND j.timeline_id = ? AND j.kind IN (?, ?, ?) AND j.state = ?
            ORDER BY m.sequence_no ASC, j.created_at ASC LIMIT 1""",
-        arrayOf(storyId, timelineId, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND, StoryJobState.Pending.dbValue)
+        arrayOf(storyId, timelineId, ORGANIZER_JOB_KIND, DISCUSSION_JOB_KIND, StorySummaries.KIND, StoryJobState.Pending.dbValue)
     ).use { cursor -> if (cursor.moveToFirst()) cursor.toJob() else null }
 
     fun markRunning(job: StoryMemoryJob, configurationAvailable: Boolean = true): StoryMemoryJob? {
@@ -90,7 +94,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         return helper.writableDatabase.inTransaction { db ->
             val current = queryJob(db, job.id) ?: return@inTransaction null
             if (current.state != StoryJobState.Pending) return@inTransaction null
-            val totalAttempts = sourceAttempts(db, current.sourceRevisionId)
+            val totalAttempts = sourceAttempts(db, current.sourceRevisionId, current.kind)
             if (totalAttempts >= MAX_SOURCE_ATTEMPTS) {
                 markJobState(db, current.id, StoryJobState.Failed, "Retry limit reached; review and retry manually")
                 return@inTransaction null
@@ -346,7 +350,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
     ): StoryMemoryJob? {
         if (db.rawQuery("SELECT 1 FROM ${StorySchema.JOBS} WHERE source_revision_id = ? AND state = 'completed' LIMIT 1",
                 arrayOf(source.revisionId)).use { it.moveToFirst() }) return null
-        if (sourceAttempts(db, source.revisionId) >= MAX_SOURCE_ATTEMPTS) {
+        if (sourceAttempts(db, source.revisionId, if (source.workspace == StoryWorkspace.Prose) ORGANIZER_JOB_KIND else DISCUSSION_JOB_KIND) >= MAX_SOURCE_ATTEMPTS) {
             db.execSQL("UPDATE ${StorySchema.JOBS} SET state = 'failed', error = 'Retry limit reached' WHERE source_revision_id = ? AND state = 'stale'",
                 arrayOf(source.revisionId))
             return null
@@ -572,9 +576,9 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
         val automaticMemoryEnabled: Boolean
     )
 
-    private fun sourceAttempts(db: SQLiteDatabase, revisionId: String): Int = db.rawQuery(
-        "SELECT COALESCE(SUM(attempts), 0) FROM ${StorySchema.JOBS} WHERE source_revision_id = ?",
-        arrayOf(revisionId)
+    private fun sourceAttempts(db: SQLiteDatabase, revisionId: String, kind: String): Int = db.rawQuery(
+        "SELECT COALESCE(SUM(attempts), 0) FROM ${StorySchema.JOBS} WHERE source_revision_id = ? AND kind = ?",
+        arrayOf(revisionId, kind)
     ).use { it.moveToFirst(); it.getInt(0) }
 
     // Recover the gap between a completed reply and enqueue, including while memory was disabled.
@@ -596,11 +600,15 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
     }
 
     fun retryFailed(storyId: String, timelineId: String) = helper.writableDatabase.inTransaction { db ->
-        val ids = db.rawQuery("SELECT DISTINCT source_revision_id FROM ${StorySchema.JOBS} WHERE story_id = ? AND timeline_id = ? AND state = 'failed'",
+        db.execSQL("UPDATE ${StorySchema.JOBS} SET attempts=0 WHERE story_id=? AND timeline_id=? AND kind=? AND source_revision_id IN (SELECT source_revision_id FROM ${StorySchema.JOBS} WHERE story_id=? AND timeline_id=? AND kind=? AND state='failed')",
+            arrayOf(storyId,timelineId,StorySummaries.KIND,storyId,timelineId,StorySummaries.KIND))
+        db.execSQL("UPDATE ${StorySchema.JOBS} SET attempts=0,state='pending' WHERE story_id=? AND timeline_id=? AND kind=? AND state='failed'",
+            arrayOf(storyId,timelineId,StorySummaries.KIND))
+        val ids = db.rawQuery("SELECT DISTINCT source_revision_id FROM ${StorySchema.JOBS} WHERE story_id = ? AND timeline_id = ? AND state = 'failed' AND kind != 'summarize_prose'",
             arrayOf(storyId, timelineId)).use { c -> buildList { while(c.moveToNext()) add(c.getString(0)) } }
         ids.forEach { id ->
             val source = queryActiveCompleteSource(db, id) ?: return@forEach
-            db.execSQL("UPDATE ${StorySchema.JOBS} SET attempts = 0 WHERE source_revision_id = ?", arrayOf(id))
+            db.execSQL("UPDATE ${StorySchema.JOBS} SET attempts = 0 WHERE source_revision_id = ? AND kind != 'summarize_prose'", arrayOf(id))
             val version = queryStoryState(db, storyId)?.memoryVersion ?: return@forEach
             val job = insertJobIfAbsent(db, source, version, System.currentTimeMillis()) ?: return@forEach
             if (job.state != StoryJobState.Completed) markJobState(db, job.id, StoryJobState.Pending, "User requested retry")

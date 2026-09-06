@@ -26,6 +26,7 @@ data class StoryContextBudget(
 enum class StoryContextOverflowSection {
     CurrentInput,
     PinnedMemory,
+    SummaryMemory,
     FinalRequest
 }
 
@@ -37,6 +38,7 @@ class StoryContextOverflowException(
     when (section) {
         StoryContextOverflowSection.CurrentInput -> "当前输入超过故事上下文硬预算（$requiredChars > $maxChars）。"
         StoryContextOverflowSection.PinnedMemory -> "固定资料与当前输入无法同时装入故事上下文（$requiredChars > $maxChars）。请先精简固定资料。"
+        StoryContextOverflowSection.SummaryMemory -> "摘要、固定资料与当前输入超过上下文预算（$requiredChars > $maxChars），尚未发送。"
         StoryContextOverflowSection.FinalRequest -> "最终故事请求超过上下文硬预算（$requiredChars > $maxChars）。"
     }
 )
@@ -44,7 +46,8 @@ class StoryContextOverflowException(
 data class StoryContextMemorySnapshot(
     val records: List<StoryMemoryRecord>,
     val proposals: List<StoryProposal>,
-    val organizedProseRevisionIds: Set<String>
+    val organizedProseRevisionIds: Set<String>,
+    val summarySources: Map<String, Set<String>> = emptyMap()
 )
 
 class StoryUnorganizedHistoryException(val protectedTurns: Int, val requiredChars: Int, val maxChars: Int) :
@@ -77,7 +80,7 @@ data class StoryContextResult(
 }
 
 object StoryContextComposer {
-    private const val PINNED_HEADER = "\n\n[固定故事资料；仍须遵守每项性质与认知归属]\n"
+    private const val PINNED_HEADER = "\n\n[必须保留的固定资料与历史摘要；遵守每项性质与认知归属，历史状态不等于当前状态]\n"
     private const val CONFIRMED_HEADER = "\n\n[故事资料；主观看法不等于事实，资料可见不代表所有角色知情]\n"
     private const val CANDIDATE_HEADER = "\n\n[未确认候选，仅供讨论；不得当作已发生事实]\n"
 
@@ -89,7 +92,8 @@ object StoryContextComposer {
         proseMessages: List<StoryMessageWithRevision>,
         discussionMessages: List<StoryMessageWithRevision>,
         budget: StoryContextBudget = StoryContextBudget(),
-        organizedProseRevisionIds: Set<String> = emptySet()
+        organizedProseRevisionIds: Set<String> = emptySet(),
+        summarySources: Map<String, Set<String>>? = null
     ): StoryContextResult {
         val stateView = StoryStateProjection.project(memoryRecords)
         if (workspace == StoryWorkspace.Prose && stateView.conflicts.isNotEmpty()) {
@@ -98,6 +102,8 @@ object StoryContextComposer {
         val confirmed = stateView.records.filter { record ->
             record.active && record.nature != StoryMemoryNature.Inference
         }
+        val mandatorySummaryIds = summarySources.orEmpty().keys.intersect(confirmed.filter { it.kind == StoryMemoryKind.Summary }.map { it.id }.toSet())
+        val summarizedRevisionIds = mandatorySummaryIds.flatMap { summarySources.orEmpty()[it].orEmpty() }.toSet()
         val inferred = memoryRecords.filter { record ->
             record.active && record.nature == StoryMemoryNature.Inference
         }
@@ -140,7 +146,7 @@ object StoryContextComposer {
         }
         val completeTurns = completeHistoryTurns(historyBeforeCurrent)
         val firstUnorganized = if (workspace == StoryWorkspace.Prose) completeTurns.indexOfFirst { turn ->
-            turn.rows.any { it.message.role == "assistant" && it.revision.id !in organizedProseRevisionIds }
+            turn.rows.any { it.message.role == "assistant" && (it.revision.id !in organizedProseRevisionIds || (summarySources != null && it.revision.id !in summarizedRevisionIds)) }
         } else -1
         // Keep a continuous suffix beginning with the oldest unorganized reply; never cut a hole.
         val protectedStart = if (firstUnorganized < 0) completeTurns.size else firstUnorganized
@@ -153,7 +159,7 @@ object StoryContextComposer {
 
         // Pinned confirmed material is mandatory. The pinned section cap is a planning target only;
         // it must never cause an individual pinned fact to disappear automatically.
-        val pinned = confirmed.filter(StoryMemoryRecord::pinned)
+        val pinned = confirmed.filter { it.pinned || it.id in mandatorySummaryIds }
             .sortedWith(compareByDescending<StoryMemoryRecord> { it.updatedAt }.thenByDescending { it.effectiveSequence })
         val pinnedLines = pinned.map(::renderMemory)
         val mandatorySystem = buildString {
@@ -166,7 +172,7 @@ object StoryContextComposer {
         val mandatoryCost = mandatorySystem.length + currentTurnCost
         if (mandatoryCost > budget.maxInputChars) {
             throw StoryContextOverflowException(
-                StoryContextOverflowSection.PinnedMemory,
+                if (mandatorySummaryIds.isEmpty()) StoryContextOverflowSection.PinnedMemory else StoryContextOverflowSection.SummaryMemory,
                 mandatoryCost,
                 budget.maxInputChars
             )
@@ -182,7 +188,7 @@ object StoryContextComposer {
             .lowercase()
 
         val confirmedLines = mutableListOf<String>()
-        val normalConfirmed = confirmed.filterNot(StoryMemoryRecord::pinned)
+        val normalConfirmed = confirmed.filterNot { it.pinned || it.id in mandatorySummaryIds }
             .sortedWith(
                 compareBy<StoryMemoryRecord> { relevancePriority(it, relevanceText) }
                     .thenBy { memoryPriority(it.kind) }

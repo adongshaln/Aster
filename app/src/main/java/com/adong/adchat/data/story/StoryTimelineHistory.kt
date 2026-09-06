@@ -15,6 +15,7 @@ internal object StoryTimelineHistory {
             .put("revisions", rows(db, """SELECT r.id, r.state FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m
                 ON m.active_revision_id = r.id WHERE m.story_id = ? AND m.timeline_id = ?""", args))
             .put("memories", rows(db, "SELECT * FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ?", args))
+            .put("summary_sources", rows(db, "SELECT d.* FROM ${StorySchema.SUMMARY_SOURCES} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?", args))
             .put("proposals", rows(db, "SELECT * FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ?", args))
             .put("completed", rows(db, "SELECT source_revision_id FROM ${StorySchema.JOBS} WHERE story_id = ? AND timeline_id = ? AND state = 'completed'", args))
             .put("entities", rows(db, "SELECT * FROM ${StorySchema.ENTITIES} WHERE story_id = ?", arrayOf(storyId)))
@@ -67,15 +68,23 @@ internal object StoryTimelineHistory {
             insert(db, StorySchema.ENTITIES, JSONObject(row.toString()).put("id", id))
         }
         val completeIds = revisions.filter { it.getString("state") == "complete" }.map { it.getString("id") }.toSet()
+        val memoryIds = mutableMapOf<String,String>()
         snapshot.getJSONArray("memories").objects().forEach { row ->
             val source = row.nullableString("source_revision_id")
             if (source == null || source in completeIds) {
-                val copy = JSONObject(row.toString()).put("id", newMemoryId()).put("timeline_id", timelineId)
+                val newId = newMemoryId(); memoryIds[row.getString("id")] = newId
+                val copy = JSONObject(row.toString()).put("id", newId).put("timeline_id", timelineId)
                     .put("source_revision_id", source?.let(revisionIds::get) ?: JSONObject.NULL)
                 listOf("subject_entity_id", "object_entity_id").forEach { field ->
                     copy.put(field, row.nullableString(field)?.let(entityIds::get) ?: JSONObject.NULL)
                 }
                 insert(db, StorySchema.MEMORIES, copy)
+            }
+        }
+        (snapshot.optJSONArray("summary_sources") ?: JSONArray()).objects().forEach { row ->
+            memoryIds[row.getString("record_id")]?.let { id ->
+                insert(db, StorySchema.SUMMARY_SOURCES, JSONObject().put("record_id", id)
+                    .put("source_revision_id", revisionIds[row.getString("source_revision_id")] ?: row.getString("source_revision_id")))
             }
         }
         snapshot.getJSONArray("proposals").objects().forEach { row ->

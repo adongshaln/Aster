@@ -888,6 +888,8 @@ private fun ArchiveRecordRow(record: StoryMemoryRecord, onEdit: () -> Unit, onPi
                         color = MutedInk, style = MaterialTheme.typography.labelSmall)
                     Spacer(Modifier.height(4.dp))
                 }
+                if (record.summarySourceRevisionIds.isNotEmpty()) Text("覆盖 ${record.summarySourceRevisionIds.size} 轮正文，来源重写后自动失效",
+                    color = MutedInk, style = MaterialTheme.typography.labelSmall)
                 record.stateKey?.let { Text("属性：$it · 正文轮次 ${record.effectiveSequence}",
                     color = MutedInk, style = MaterialTheme.typography.labelSmall) }
                 Text(record.content, style = MaterialTheme.typography.bodyMedium)

@@ -20,7 +20,9 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                   AND r.state = 'complete' AND j.story_id = m.story_id AND j.timeline_id = m.timeline_id
                   AND j.kind = 'organize_prose' AND j.state = 'completed'""",
                 arrayOf(storyId, timelineId)).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
-            StoryContextMemorySnapshot(listMemoryRecords(storyId, timelineId), listPendingProposals(storyId, timelineId), organized)
+            val records = listMemoryRecords(storyId, timelineId)
+            StoryContextMemorySnapshot(records, listPendingProposals(storyId, timelineId), organized,
+                records.filter { it.summarySourceRevisionIds.isNotEmpty() }.associate { it.id to it.summarySourceRevisionIds.toSet() })
         }
 
     fun listMemoryRecords(storyId: String, timelineId: String): List<StoryMemoryRecord> {
@@ -30,17 +32,19 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             """story_id = ? AND timeline_id = ? AND active = 1 AND
                (source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
                 JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
-                WHERE r.id = ${StorySchema.MEMORIES}.source_revision_id AND r.state = 'complete'))""",
+                WHERE r.id = ${StorySchema.MEMORIES}.source_revision_id AND r.state = 'complete'))
+               AND ${StorySummaries.validDependencies(StorySchema.MEMORIES)}""",
             arrayOf(storyId, timelineId),
             null,
             null,
             "pinned DESC, effective_sequence DESC, updated_at DESC"
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toMemory()) } }
-        if (records.none { it.subjectEntityId != null || it.objectEntityId != null }) return records
-
-        val namesByEntityId = activeCharacterAndPlaceNames(storyId)
+        val dependencies = helper.readableDatabase.rawQuery("SELECT d.record_id,d.source_revision_id FROM ${StorySchema.SUMMARY_SOURCES} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?",
+            arrayOf(storyId,timelineId)).use { c -> buildList { while(c.moveToNext()) add(c.getString(0) to c.getString(1)) } }.groupBy({ it.first }, { it.second })
+        val namesByEntityId = if (records.any { it.subjectEntityId != null || it.objectEntityId != null }) activeCharacterAndPlaceNames(storyId) else emptyMap()
         return records.map { record ->
             record.copy(
+                summarySourceRevisionIds = dependencies[record.id].orEmpty(),
                 subjectEntityNames = record.subjectEntityId?.let(namesByEntityId::get).orEmpty(),
                 objectEntityNames = record.objectEntityId?.let(namesByEntityId::get).orEmpty()
             )
@@ -282,10 +286,11 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         found
     }
 
-    private fun sourceIsEffective(db: SQLiteDatabase, record: StoryMemoryRecord): Boolean = record.sourceRevisionId == null ||
+    private fun sourceIsEffective(db: SQLiteDatabase, record: StoryMemoryRecord): Boolean = (record.sourceRevisionId == null ||
         db.rawQuery("""SELECT 1 FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m ON m.active_revision_id = r.id
             WHERE r.id = ? AND r.state = 'complete' AND m.story_id = ? AND m.timeline_id = ?""",
-            arrayOf(record.sourceRevisionId, record.storyId, record.timelineId)).use { it.moveToFirst() }
+            arrayOf(record.sourceRevisionId, record.storyId, record.timelineId)).use { it.moveToFirst() }) &&
+        db.rawQuery("SELECT 1 FROM ${StorySchema.MEMORIES} f WHERE f.id=? AND ${StorySummaries.validDependencies("f")}", arrayOf(record.id)).use { it.moveToFirst() }
 
     private fun sourceText(db: SQLiteDatabase, revisionId: String): String = db.rawQuery(
         "SELECT content FROM ${StorySchema.REVISIONS} WHERE id = ?", arrayOf(revisionId)

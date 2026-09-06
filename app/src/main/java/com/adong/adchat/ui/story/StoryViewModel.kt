@@ -500,6 +500,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     memoryRecords = memorySnapshot.records,
                     proposals = memorySnapshot.proposals,
                     organizedProseRevisionIds = memorySnapshot.organizedProseRevisionIds,
+                    summarySources = memorySnapshot.summarySources,
                     proseMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose),
                     discussionMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Discussion)
                 )
@@ -644,6 +645,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 while (isActive) {
                     val story = store.getStory(storyId) ?: break
                     if (!story.automaticMemoryEnabled || story.currentTimelineId != timelineId) break
+                    memoryStore.enqueueSummary(storyId, timelineId)
                     val pending = memoryStore.nextPendingJob(storyId, timelineId) ?: break
                     val resolvedProfile = organizerProfile(story, preferredProfile)
                     val running = memoryStore.markRunning(pending, configurationAvailable = resolvedProfile != null)
@@ -651,6 +653,20 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     if (running == null) continue
                     try {
                         withContext(Dispatchers.Main) { if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) memoryStatus = "正在整理记忆" }
+                        if (running.kind == com.adong.adchat.data.story.StorySummaries.KIND) {
+                            val summaryInput = memoryStore.summaryRequest(running) ?: continue
+                            withContext(Dispatchers.Main) { if(activeStoryId == storyId) memoryStatus = "正在生成剧情摘要" }
+                            val response = api.streamChat(
+                                profile = resolvedProfile.copy(webSearchEnabled=false,fileCreationEnabled=false), model=story.model,
+                                systemPrompt=com.adong.adchat.data.story.StorySummaries.prompt,
+                                history=listOf(ChatMessage(role="user",content=summaryInput)), cacheKey="aster-summary-${running.id}"
+                            ) { }
+                            check(response.outputComplete) { "摘要未完整结束，未提交" }
+                            if(memoryStore.applySummary(running,response.text)) {
+                                refreshArchive(storyId,timelineId); refreshStory(storyId)
+                            }
+                            continue
+                        }
                         val source = store.getActiveRevision(running.sourceRevisionId)
                         val currentVersion = memoryStore.currentMemoryVersion(storyId)
                         if (source == null || source.state != StoryRevisionState.Complete || source.content.isBlank()) {

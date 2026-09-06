@@ -167,7 +167,8 @@ data class StoryMemoryRecord(
     /** Runtime-only canonical names/aliases used by context relevance; not persisted in memory_records. */
     val subjectEntityNames: List<String> = emptyList(),
     val objectEntityNames: List<String> = emptyList(),
-    val stateKey: String? = null
+    val stateKey: String? = null,
+    val summarySourceRevisionIds: List<String> = emptyList()
 )
 
 data class StoryProposal(
