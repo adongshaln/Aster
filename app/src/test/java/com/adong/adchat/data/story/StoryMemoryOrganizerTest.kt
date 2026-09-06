@@ -13,7 +13,7 @@ class StoryMemoryOrganizerTest {
             {
               "memories": [
                 {"kind":"plot_event","content":"爱丽丝抵达莱茵城。"},
-                {"kind":"current_state","content":"爱丽丝目前位于北门。"}
+                {"kind":"current_state","subject":"爱丽丝","state_key":"location","content":"北门"}
               ],
               "proposals": [
                 {"kind":"continuity","content":"后续可以确认守门人是否认识她。"}
@@ -77,11 +77,12 @@ class StoryMemoryOrganizerTest {
         assertTrue(output.memories.isEmpty())
     }
 
-    @Test fun changingStateIsAnObservationNotAnEverlastingCurrentState() {
+    @Test fun changingStateKeepsItsOwnerAndStableAttribute() {
         val output = StoryMemoryOrganizer.parse(
-            """{"memories":[{"kind":"current_state","content":"人物抵达港口"}],"proposals":[]}""")
-        assertEquals(StoryMemoryKind.PlotEvent, output.memories.single().kind)
-        assertTrue(output.memories.single().content.startsWith("本轮观察"))
+            """{"memories":[{"kind":"current_state","subject":"人物","state_key":"location","content":"港口"}],"proposals":[]}""")
+        assertEquals(StoryMemoryKind.CurrentState, output.memories.single().kind)
+        assertEquals("location", output.memories.single().stateKey)
+        assertEquals("人物", output.memories.single().subject)
     }
 
     @Test fun subjectiveKnowledgeRequiresExplicitNatureAndOwner() {

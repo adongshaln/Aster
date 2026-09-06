@@ -179,10 +179,16 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
             val resolved = output.memories.distinct().map { candidate ->
                 Triple(candidate, candidate.subject?.let(entities::resolve), candidate.objectName?.let(entities::resolve))
             }.distinctBy { (candidate, subjectId, objectId) ->
-                listOf(candidate.kind.dbValue, candidate.nature.dbValue, candidate.content, subjectId, objectId)
+                listOf(candidate.kind.dbValue, candidate.nature.dbValue, candidate.content, subjectId, objectId, candidate.stateKey)
             }
+            resolved.filter { it.first.kind == StoryMemoryKind.CurrentState }
+                .groupBy { it.second to it.first.stateKey }.values.forEach { states ->
+                    require(states.map { it.first.content }.distinct().size == 1) { "Conflicting state values after entity resolution" }
+                }
             val memoryCandidates = resolved.filterNot { (candidate, subjectId, objectId) ->
-                activeMemoryContentExists(db, persistedJob.storyId, persistedJob.timelineId, candidate, subjectId, objectId)
+                // A → B → A is a real transition. Job/source idempotence already protects retries.
+                candidate.kind != StoryMemoryKind.CurrentState &&
+                    activeMemoryContentExists(db, persistedJob.storyId, persistedJob.timelineId, candidate, subjectId, objectId)
             }
             val proposalCandidates = output.proposals.filterNot { candidate ->
                 pendingProposalContentExists(db, persistedJob.storyId, persistedJob.timelineId, candidate.content)
@@ -215,6 +221,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                     nature = candidate.nature,
                     subjectEntityId = subjectId,
                     objectEntityId = objectId,
+                    stateKey = candidate.stateKey,
                     effectiveSequence = source.sequence,
                     sourceRevisionId = persistedJob.sourceRevisionId,
                     pinned = false,
@@ -422,6 +429,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 put("subject_entity_id", record.subjectEntityId)
                 put("object_entity_id", record.objectEntityId)
                 put("scope", record.scope)
+                put("state_key", record.stateKey)
                 put("effective_sequence", record.effectiveSequence)
                 put("source_revision_id", record.sourceRevisionId)
                 put("pinned", 0)

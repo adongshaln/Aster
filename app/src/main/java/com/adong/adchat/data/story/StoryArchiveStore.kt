@@ -436,6 +436,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 record.subjectEntityId?.let { put("subject_entity_id", it) } ?: putNull("subject_entity_id")
                 record.objectEntityId?.let { put("object_entity_id", it) } ?: putNull("object_entity_id")
                 put("scope", record.scope)
+                put("state_key", record.stateKey)
                 put("effective_sequence", record.effectiveSequence)
                 record.sourceRevisionId?.let { put("source_revision_id", it) } ?: putNull("source_revision_id")
                 put("pinned", if (record.pinned) 1 else 0)
@@ -525,6 +526,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         put("subjectEntityId", record.subjectEntityId ?: JSONObject.NULL)
         put("objectEntityId", record.objectEntityId ?: JSONObject.NULL)
         put("scope", record.scope)
+        record.stateKey?.let { put("stateKey", it) }
         put("effectiveSequence", record.effectiveSequence)
         put("sourceRevisionId", record.sourceRevisionId ?: JSONObject.NULL)
         put("pinned", record.pinned)
@@ -570,6 +572,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         subjectEntityId = nullableString("subject_entity_id"),
         objectEntityId = nullableString("object_entity_id"),
         scope = string("scope"),
+        stateKey = nullableString("state_key"),
         effectiveSequence = long("effective_sequence"),
         sourceRevisionId = nullableString("source_revision_id"),
         pinned = int("pinned") != 0,

@@ -79,7 +79,11 @@ object StoryContextComposer {
         discussionMessages: List<StoryMessageWithRevision>,
         budget: StoryContextBudget = StoryContextBudget()
     ): StoryContextResult {
-        val confirmed = memoryRecords.filter { record ->
+        val stateView = StoryStateProjection.project(memoryRecords)
+        if (workspace == StoryWorkspace.Prose && stateView.conflicts.isNotEmpty()) {
+            throw StoryStateConflictException(stateView.conflicts)
+        }
+        val confirmed = stateView.records.filter { record ->
             record.active && record.nature != StoryMemoryNature.Inference
         }
         val inferred = memoryRecords.filter { record ->
@@ -103,7 +107,13 @@ object StoryContextComposer {
 
         val currentTurn = eligibleHistory.lastOrNull { it.message.role == "user" }
         val currentTurnCost = currentTurn?.let(::historyCost) ?: 0
-        val base = baseInstruction.trim()
+        val base = buildString {
+            append(baseInstruction.trim())
+            if (stateView.conflicts.isNotEmpty()) {
+                append("\n[以下状态尚有冲突，仅供讨论，不得选一方当作既定事实]\n")
+                append(stateView.conflicts.joinToString("\n") { it.description })
+            }
+        }
         val baseAndCurrentCost = base.length + currentTurnCost
         if (baseAndCurrentCost > budget.maxInputChars) {
             throw StoryContextOverflowException(

@@ -764,8 +764,14 @@ private fun StoryArchiveSheet(
                     }
                 }
             } else {
-                val visible = records.filter { recordBelongsToSection(it.kind, section) }
+                val stateView = com.adong.adchat.data.story.StoryStateProjection.project(records)
+                val visible = stateView.records.filter { recordBelongsToSection(it.kind, section) }
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 30.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    if (stateView.conflicts.isNotEmpty()) item {
+                        Text("状态待处理：修改或停用错误记录；允许状态随剧情变化时解除固定。\n" +
+                            stateView.conflicts.joinToString("\n") { it.description },
+                            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
                     if (visible.isEmpty()) {
                         item {
                             Text(
@@ -856,6 +862,8 @@ private fun ArchiveRecordRow(record: StoryMemoryRecord, onEdit: () -> Unit, onPi
                         color = MutedInk, style = MaterialTheme.typography.labelSmall)
                     Spacer(Modifier.height(4.dp))
                 }
+                record.stateKey?.let { Text("属性：$it · 正文轮次 ${record.effectiveSequence}",
+                    color = MutedInk, style = MaterialTheme.typography.labelSmall) }
                 Text(record.content, style = MaterialTheme.typography.bodyMedium)
             }
             IconButton(onClick = onPin, modifier = Modifier.size(34.dp)) {

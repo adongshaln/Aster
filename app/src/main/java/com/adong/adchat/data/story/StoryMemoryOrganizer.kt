@@ -9,7 +9,8 @@ data class StoryOrganizerMemoryCandidate(
     val content: String,
     val nature: StoryMemoryNature = StoryMemoryNature.ProseOccurred,
     val subject: String? = null,
-    val objectName: String? = null
+    val objectName: String? = null,
+    val stateKey: String? = null
 ) {
     fun validate() {
         require(kind != StoryMemoryKind.AuthorPlan) { "Organizer cannot confirm an author plan" }
@@ -22,6 +23,10 @@ data class StoryOrganizerMemoryCandidate(
         require(nature != StoryMemoryNature.CharacterBelief || kind == StoryMemoryKind.CharacterKnowledge) {
             "Subjective claims must be character knowledge"
         }
+        if (kind == StoryMemoryKind.CurrentState) {
+            require(!subject.isNullOrBlank() && objectName == null) { "Current state requires one character owner" }
+            require(stateKey != null && stateKey.matches(Regex("[a-z][a-z0-9_:.]{0,63}"))) { "Current state requires a stable attribute key" }
+        } else require(stateKey == null) { "Only current state can have a state key" }
         if (kind == StoryMemoryKind.CharacterKnowledge) require(!subject.isNullOrBlank()) {
             "Character knowledge requires its owner"
         }
@@ -82,6 +87,11 @@ object StoryMemoryOrganizer {
         只有正文明确说明某角色已获知真实信息时，其认知才可标 prose_occurred；其他人物不得自动获知。
         定向关系必须提供 subject 和 object，例如 {"kind":"directed_relationship","subject":"守卫","object":"林遥","content":"信任"}。
         关系只代表本轮观察，不代表反向关系或永久状态。名字使用已知规范名；身份不明确、同名或别名不确定时只能提出 continuity 候选，不得合并人物。
+        当前状态必须提供人物 subject 和属性 state_key，例如：
+        {"kind":"current_state","subject":"林遥","state_key":"location","content":"北门"}。
+        位置使用 location，意识使用 consciousness，整体健康使用 health，局部伤势使用 injury:left_hand 等稳定键。
+        同一属性必须复用已有键，content 只写该轮结束时的值；每个人每个键只返回一个最终值。
+        状态是有时间顺序的变化；不要把角色推测或未来计划当作当前状态。不要用整段描述作为属性键。
         其他类型可省略 nature（默认 prose_occurred），可用 subject 关联明确人物。不得返回 user_confirmed 或 inference。
         memories.kind 只允许：world_fact、character_profile、current_state、directed_relationship、character_knowledge、plot_event、open_thread、summary。
         proposals 用于仍需用户确认的解释、计划或可能影响后续的候选；kind 只允许 plot、character、world、continuity、author_plan。
@@ -111,7 +121,9 @@ object StoryMemoryOrganizer {
 
         var remaining = EXISTING_MEMORY_CHARS
         val memoryLines = mutableListOf<String>()
-        existingMemory.asSequence()
+        val stateView = StoryStateProjection.project(existingMemory)
+        val conflictingIds = stateView.conflicts.flatMap { listOf(it.earlier.id, it.latest.id) }.toSet()
+        stateView.records.asSequence()
             .filter(StoryMemoryRecord::active)
             .sortedWith(
                 compareByDescending<StoryMemoryRecord> { it.pinned }
@@ -119,7 +131,7 @@ object StoryMemoryOrganizer {
                     .thenByDescending { it.updatedAt }
             )
             .forEach { record ->
-                val line = renderStoryMemory(record)
+                val line = (if (record.id in conflictingIds) "[状态冲突，待用户处理；不得自行裁决] " else "") + renderStoryMemory(record)
                 val cost = line.length + 1
                 if (cost <= remaining) {
                     memoryLines += line
@@ -156,7 +168,7 @@ object StoryMemoryOrganizer {
             for (index in 0 until memoryArray.length()) {
                 val item = memoryArray.optJSONObject(index)
                     ?: error("Organizer memory item $index is not an object")
-                requireOnlyKeys(item, setOf("kind", "content", "nature", "subject", "object"), "memory[$index]")
+                requireOnlyKeys(item, setOf("kind", "content", "nature", "subject", "object", "state_key"), "memory[$index]")
                 val kindValue = (item.get("kind") as? String ?: error("kind must be a string")).trim()
                 val kind = StoryMemoryKind.entries.firstOrNull { it.dbValue == kindValue }
                     ?: error("Unsupported organizer memory kind: $kindValue")
@@ -174,7 +186,7 @@ object StoryMemoryOrganizer {
                 }
                 fun name(key: String): String? = if (item.has(key))
                     (item.get(key) as? String ?: error("$key must be a name string")).trim() else null
-                add(StoryOrganizerMemoryCandidate(kind, content, nature, name("subject"), name("object"))
+                add(StoryOrganizerMemoryCandidate(kind, content, nature, name("subject"), name("object"), name("state_key"))
                     .also { it.validate() })
             }
         }.distinct()
@@ -194,14 +206,11 @@ object StoryMemoryOrganizer {
         }.distinctBy { it.proposalKind to it.content }
 
         require(workspace == StoryWorkspace.Prose || memories.isEmpty()) { "Discussion cannot produce confirmed facts" }
-        // Until attribute state keys exist, persist changing states as dated observations.
-        // They must never masquerade as an authoritative current-state register.
-        val observations = memories.map { candidate ->
-            if (candidate.kind == StoryMemoryKind.CurrentState) {
-                candidate.copy(kind = StoryMemoryKind.PlotEvent, content = "本轮观察：${candidate.content}")
-            } else candidate
-        }
-        return StoryOrganizerOutput(memories = observations, proposals = proposals)
+        memories.filter { it.kind == StoryMemoryKind.CurrentState }
+            .groupBy { it.subject to it.stateKey }.values.forEach { states ->
+                require(states.map { it.content }.distinct().size == 1) { "Conflicting values for one state in one source" }
+            }
+        return StoryOrganizerOutput(memories = memories, proposals = proposals)
     }
 
     private fun stripCodeFence(value: String): String {

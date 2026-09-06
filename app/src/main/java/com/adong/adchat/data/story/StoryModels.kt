@@ -166,7 +166,8 @@ data class StoryMemoryRecord(
     val updatedAt: Long = System.currentTimeMillis(),
     /** Runtime-only canonical names/aliases used by context relevance; not persisted in memory_records. */
     val subjectEntityNames: List<String> = emptyList(),
-    val objectEntityNames: List<String> = emptyList()
+    val objectEntityNames: List<String> = emptyList(),
+    val stateKey: String? = null
 )
 
 data class StoryProposal(

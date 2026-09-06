@@ -27,6 +27,10 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                     StorySchema.MIGRATION_1_TO_2_STATEMENTS.forEach(db::execSQL)
                     version = 2
                 }
+                2 -> {
+                    StorySchema.MIGRATION_2_TO_3_STATEMENTS.forEach(db::execSQL)
+                    version = 3
+                }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -34,7 +38,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
     }
 }
 
@@ -75,6 +79,10 @@ internal object StorySchema {
     )
 
     val MIGRATION_1_TO_2_STATEMENTS: List<String> = MANUAL_MEMORY_CHANGE_STATEMENTS
+
+    val MIGRATION_2_TO_3_STATEMENTS = listOf(
+        "ALTER TABLE $MEMORIES ADD COLUMN state_key TEXT"
+    )
 
     val CREATE_STATEMENTS: List<String> = listOf(
         """
@@ -163,6 +171,7 @@ internal object StorySchema {
             subject_entity_id TEXT,
             object_entity_id TEXT,
             scope TEXT NOT NULL DEFAULT 'story',
+            state_key TEXT,
             effective_sequence INTEGER NOT NULL DEFAULT 0,
             source_revision_id TEXT,
             pinned INTEGER NOT NULL DEFAULT 0,

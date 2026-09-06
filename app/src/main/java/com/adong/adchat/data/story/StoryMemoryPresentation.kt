@@ -12,7 +12,7 @@ fun renderStoryMemory(record: StoryMemoryRecord): String {
     val kind = when (record.kind) {
         StoryMemoryKind.WorldFact -> "世界设定"
         StoryMemoryKind.CharacterProfile -> "人物"
-        StoryMemoryKind.CurrentState -> "当前状态"
+        StoryMemoryKind.CurrentState -> if (record.stateKey == null) "旧版状态观察 · 非当前值" else "当前状态 · ${record.stateKey}"
         StoryMemoryKind.DirectedRelationship -> "本轮有向关系观察"
         StoryMemoryKind.CharacterKnowledge -> "角色认知"
         StoryMemoryKind.PlotEvent -> "已发生剧情"
