@@ -33,6 +33,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -271,6 +272,9 @@ private fun StoryWorkspaceContent(
     val dragging by listState.interactionSource.collectIsDraggedAsState()
     var autoFollow by remember { mutableStateOf(true) }
     val loading = storyVm.isLoading(workspace)
+    val lastIsStreamingAssistant = messages.lastOrNull()?.let {
+        it.message.role == "assistant" && it.revision.state == StoryRevisionState.Streaming
+    } == true
 
     DisposableEffect(workspace) {
         onDispose {
@@ -281,8 +285,14 @@ private fun StoryWorkspaceContent(
         if (dragging) autoFollow = !listState.canScrollForward
     }
     LaunchedEffect(messages.size, messages.lastOrNull()?.revision?.content?.length, loading) {
-        if (messages.isNotEmpty() && autoFollow && !dragging) {
-            listState.animateScrollToItem(messages.lastIndex)
+        if (autoFollow && !dragging) {
+            val target = when {
+                loading && !lastIsStreamingAssistant -> messages.size
+                messages.isNotEmpty() -> messages.lastIndex
+                loading -> 0
+                else -> -1
+            }
+            if (target >= 0) runCatching { listState.animateScrollToItem(target) }
         }
     }
 
@@ -396,37 +406,40 @@ private fun StoryWorkspaceContent(
     }
 
     Box(Modifier.fillMaxSize().imePadding()) {
-        if (messages.isEmpty()) {
-            StoryWorkspaceEmpty(workspace, Modifier.fillMaxSize().padding(bottom = 92.dp))
+        if (messages.isEmpty() && !loading) {
+            StoryWorkspaceEmpty(workspace, Modifier.fillMaxSize().padding(bottom = composerHeight))
         } else {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = composerHeight + 20.dp),
-                verticalArrangement = Arrangement.spacedBy(28.dp)
+                verticalArrangement = Arrangement.spacedBy(30.dp)
             ) {
                 items(messages, key = { it.message.id }) { row ->
-                    Column {
-                        StoryMessageItem(row)
-                        if(workspace==StoryWorkspace.Discussion && row.message.role=="assistant" && row.revision.state==StoryRevisionState.Complete) {
-                            TextButton(onClick={storyVm.openDiscussionAction(row)},enabled=!storyVm.revisionBusy) {Text("应用讨论结果",color=MutedInk)}
-                            val pending=storyVm.archiveProposals.count { it.sourceRevisionId==row.revision.id }
-                            if(pending>0) TextButton(onClick=storyVm::openPendingCandidates) {Text("$pending 项待定设定")}
-                        }
-                        if (workspace == StoryWorkspace.Prose &&
-                            row.message.role == "assistant" && row.revision.state != StoryRevisionState.Streaming) {
-                            TextButton(onClick = { storyVm.openRevisionEditor(row) },
-                                enabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) }) {
-                                Text("修订 / 版本", color = MutedInk)
-                            }
-                        }
+                    val assistant = row.message.role == "assistant"
+                    val pending = if (assistant && workspace == StoryWorkspace.Discussion) {
+                        storyVm.archiveProposals.count { it.sourceRevisionId == row.revision.id }
+                    } else 0
+                    StoryMessageItem(
+                        row = row,
+                        workspace = workspace,
+                        pendingCount = pending,
+                        actionsEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
+                        onOpenDiscussionAction = { storyVm.openDiscussionAction(row) },
+                        onOpenPendingCandidates = storyVm::openPendingCandidates,
+                        onOpenRevision = { storyVm.openRevisionEditor(row) }
+                    )
+                }
+                if (loading && !lastIsStreamingAssistant) {
+                    item(key = "story-thinking-${workspace.name}") {
+                        StoryThinkingIndicator()
                     }
                 }
             }
         }
 
         Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(92.dp).background(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight).background(
                 Brush.verticalGradient(
                     0f to Color.Transparent,
                     .46f to Canvas.copy(alpha = .38f),
@@ -440,7 +453,7 @@ private fun StoryWorkspaceContent(
                 color = DangerSoft,
                 contentColor = Danger,
                 shape = RoundedCornerShape(13.dp),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 20.dp, bottom = 92.dp)
+                modifier = Modifier.align(Alignment.BottomCenter).padding(horizontal = 20.dp, bottom = composerHeight)
                     .clickable { storyVm.clearError(workspace) }
             ) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -456,15 +469,22 @@ private fun StoryWorkspaceContent(
             Surface(
                 onClick = {
                     autoFollow = true
-                    if (messages.isNotEmpty()) scope.launch { listState.animateScrollToItem(messages.lastIndex) }
+                    val target = if (loading && !lastIsStreamingAssistant) messages.size else messages.lastIndex
+                    if (target >= 0) scope.launch { listState.animateScrollToItem(target) }
                 },
-                shape = CircleShape,
+                shape = RoundedCornerShape(24.dp),
                 color = Surface,
                 contentColor = Accent,
                 border = BorderStroke(1.dp, Hairline),
+                shadowElevation = 0.dp,
+                tonalElevation = 0.dp,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = composerHeight + 8.dp)
             ) {
-                Icon(Icons.Rounded.KeyboardArrowDown, "回到底部", Modifier.padding(12.dp).size(20.dp))
+                Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (loading) "跟随生成" else "回到底部", style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
 
@@ -490,9 +510,24 @@ private fun StoryWorkspaceContent(
 }
 
 @Composable
-private fun StoryMessageItem(row: StoryMessageWithRevision) {
+private fun StoryMessageItem(
+    row: StoryMessageWithRevision,
+    workspace: StoryWorkspace,
+    pendingCount: Int,
+    actionsEnabled: Boolean,
+    onOpenDiscussionAction: () -> Unit,
+    onOpenPendingCandidates: () -> Unit,
+    onOpenRevision: () -> Unit
+) {
     val user = row.message.role == "user"
+    val waitingForFirstToken = !user && row.revision.content.isBlank() && row.revision.state == StoryRevisionState.Streaming
     val context = LocalContext.current
+    var showDetails by remember(row.message.id) { mutableStateOf(false) }
+    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {
+        StoryWorkspace.Discussion -> row.revision.state == StoryRevisionState.Complete
+        StoryWorkspace.Prose -> true
+    }
+
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
@@ -503,43 +538,161 @@ private fun StoryMessageItem(row: StoryMessageWithRevision) {
             horizontalAlignment = if (user) Alignment.End else Alignment.Start
         ) {
             if (user) {
-                StoryImageStrip(row.revision.attachments)
                 Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
+                    Column(Modifier.padding(7.dp)) {
+                        if (row.revision.attachments.isNotEmpty()) StoryImageStrip(row.revision.attachments)
+                        if (row.revision.content.isNotBlank()) {
+                            SelectionContainer {
+                                Text(
+                                    text = storyAnnotatedText(row.revision.content),
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Ink
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                if (!waitingForFirstToken) {
+                    Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsterMark(Modifier.size(26.dp), tint = Accent)
+                        Spacer(Modifier.width(5.dp))
+                        Text("Aster", color = MutedInk, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
+                    }
+                }
+                if (waitingForFirstToken) {
+                    StoryThinkingIndicator()
+                } else {
                     StructuredMessageText(
                         content = row.revision.content,
                         streaming = row.revision.state == StoryRevisionState.Streaming,
                         error = false
                     )
-                    if (row.revision.state in setOf(StoryRevisionState.Interrupted, StoryRevisionState.Stopped)) {
-                        Surface(
-                            color = if (row.revision.state == StoryRevisionState.Stopped) Color(0xFFF0EDE8) else Color(0xFFFFF1D8),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.padding(top = 8.dp)
-                        ) {
-                            Text(
-                                if (row.revision.state == StoryRevisionState.Stopped) "已停止生成，当前内容已保留" else "回复未完整结束，内容已保留且不计入正式剧情",
-                                Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                                color = MutedInk,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
+                }
+                if (row.revision.state in setOf(StoryRevisionState.Interrupted, StoryRevisionState.Stopped)) {
+                    Surface(
+                        color = if (row.revision.state == StoryRevisionState.Stopped) Color(0xFFF0EDE8) else Color(0xFFFFF1D8),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        Text(
+                            if (row.revision.state == StoryRevisionState.Stopped) "已停止生成，当前内容已保留" else "回复未完整结束，内容已保留且不计入正式剧情",
+                            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                            color = MutedInk,
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
-                    if (row.revision.state != StoryRevisionState.Streaming && row.revision.content.isNotBlank()) {
-                        TextButton(
-                            onClick = {
-                                context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(
-                                    android.content.ClipData.newPlainText("Aster Story", row.revision.content)
+                }
+                if (row.revision.state != StoryRevisionState.Streaming && row.revision.content.isNotBlank()) {
+                    Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StoryMessageActionButton(
+                                icon = Icons.Outlined.ContentCopy,
+                                label = "复制",
+                                onClick = {
+                                    context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(
+                                        android.content.ClipData.newPlainText("Aster Story", row.revision.content)
+                                    )
+                                }
+                            )
+                            if (hasDetails) {
+                                StoryMessageActionButton(
+                                    icon = Icons.Rounded.MoreHoriz,
+                                    label = if (showDetails) "收起" else "详情",
+                                    onClick = { showDetails = !showDetails }
                                 )
-                            },
-                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 3.dp)
-                        ) {
-                            Icon(Icons.Outlined.ContentCopy, null, Modifier.size(16.dp))
-                            Spacer(Modifier.width(5.dp))
-                            Text("复制", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                        if (showDetails && hasDetails) {
+                            Column(
+                                Modifier.fillMaxWidth().padding(top = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                if (workspace == StoryWorkspace.Discussion && row.revision.state == StoryRevisionState.Complete) {
+                                    StoryDetailAction(
+                                        icon = Icons.Rounded.Rule,
+                                        label = "应用讨论结果",
+                                        detail = "确认采用的设定、计划，或用于重写正文",
+                                        enabled = actionsEnabled,
+                                        onClick = onOpenDiscussionAction
+                                    )
+                                    if (pendingCount > 0) {
+                                        StoryDetailAction(
+                                            icon = Icons.Rounded.PendingActions,
+                                            label = "$pendingCount 项待定设定",
+                                            detail = "查看自动整理出的候选，并决定采用或废弃",
+                                            enabled = true,
+                                            onClick = onOpenPendingCandidates
+                                        )
+                                    }
+                                }
+                                if (workspace == StoryWorkspace.Prose) {
+                                    StoryDetailAction(
+                                        icon = Icons.Rounded.History,
+                                        label = "修订 / 版本",
+                                        detail = "编辑这一段、查看历史版本或从这里另写",
+                                        enabled = actionsEnabled,
+                                        onClick = onOpenRevision
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StoryMessageActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        color = Color.Transparent,
+        contentColor = Ink,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.heightIn(min = 36.dp)
+    ) {
+        Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = label, modifier = Modifier.size(17.dp))
+            Spacer(Modifier.width(5.dp))
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun StoryDetailAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    detail: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        color = if (enabled) Surface else SurfaceInset,
+        contentColor = if (enabled) Ink else MutedInk.copy(alpha = .55f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, Hairline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(18.dp), tint = if (enabled) Accent else MutedInk.copy(alpha = .45f))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Text(detail, color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            }
+            Icon(Icons.Rounded.ChevronRight, null, Modifier.size(18.dp), tint = MutedInk)
         }
     }
 }
@@ -603,10 +756,9 @@ private fun StoryComposer(
     val density = LocalDensity.current
     val imeInsets = WindowInsets.ime
     val imeTarget = WindowInsets.imeAnimationTarget
+    val capsuleShape = RoundedCornerShape(31.dp)
     LaunchedEffect(focused, workspace, density) {
         if (!focused) return@LaunchedEffect
-        // Hiding the IME does not blur BasicTextField. Match the ordinary chat composer,
-        // but do not clear a newly acquired focus before the keyboard first opens.
         var imeWasVisible = imeInsets.getBottom(density) > 0
         snapshotFlow { imeInsets.getBottom(density) to imeTarget.getBottom(density) }
             .collect { (bottom, target) ->
@@ -614,59 +766,94 @@ private fun StoryComposer(
                 if (imeWasVisible && target == 0) focusManager.clearFocus()
             }
     }
-    Surface(
-        color = Surface.copy(alpha = .97f),
-        shape = RoundedCornerShape(31.dp),
-        border = BorderStroke(1.dp, if (focused) Accent.copy(alpha = .35f) else Hairline),
-        modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
-    ) {
-        Column {
-        if(attachments.isNotEmpty()) StoryImageStrip(attachments, onRemoveImage)
-        if(attachmentBusy) LinearProgressIndicator(modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp))
-        Row(
-            Modifier.defaultMinSize(minHeight = if (focused) 92.dp else 60.dp).padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = if (focused) Alignment.Bottom else Alignment.CenterVertically
-        ) {
-            Box {
-                IconButton(onClick={showAttachments=true}, enabled=!loading && !attachmentBusy) {
-                    Icon(Icons.Rounded.Add,"添加图片或文件",tint=Accent)
-                }
-                DropdownMenu(expanded=showAttachments,onDismissRequest={showAttachments=false}) {
-                    DropdownMenuItem(text={Text("图片")},onClick={showAttachments=false;onPickImages()},enabled=attachments.size<4)
-                    DropdownMenuItem(text={Text("文件 · 文本 / DOCX / PDF")},onClick={showAttachments=false;onPickDocument()})
-                }
-            }
-            Spacer(Modifier.width(10.dp))
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.weight(1f).heightIn(min = 28.dp, max = 128.dp).onFocusChanged { focused = it.isFocused },
-                maxLines = if (focused) 5 else 1,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
-                cursorBrush = SolidColor(Accent),
-                decorationBox = { inner ->
-                    Box {
-                        if (value.isEmpty()) {
-                            Text(
-                                if (!routeAvailable) "先选择故事使用的模型" else if (workspace == StoryWorkspace.Discussion) "讨论设定、人物或下一步…" else "告诉 Aster 接下来发生什么…",
-                                color = MutedInk,
-                                style = MaterialTheme.typography.bodyLarge
-                            )
-                        }
-                        inner()
-                    }
-                }
-            )
-            Spacer(Modifier.width(9.dp))
-            FilledIconButton(
-                onClick = if (loading) onStop else onSend,
-                enabled = loading || (!attachmentBusy && (value.isNotBlank() || attachments.isNotEmpty() || !routeAvailable)),
-                colors = IconButtonDefaults.filledIconButtonColors(containerColor = Night, contentColor = WarmWhite),
-                modifier = Modifier.size(48.dp)
+
+    Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+        if (attachments.isNotEmpty()) {
+            Surface(
+                color = Surface.copy(alpha = .94f),
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Hairline.copy(alpha = .72f)),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
             ) {
-                Icon(if (loading) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward, if (loading) "停止" else "发送")
+                StoryImageStrip(attachments, onRemoveImage)
             }
         }
+        Surface(
+            color = Surface.copy(alpha = .97f),
+            shape = capsuleShape,
+            border = BorderStroke(1.dp, if (focused) Accent.copy(alpha = .35f) else Hairline),
+            shadowElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth().shadow(
+                elevation = 4.dp,
+                shape = capsuleShape,
+                ambientColor = Color.Black.copy(alpha = .07f),
+                spotColor = Color.Black.copy(alpha = .10f)
+            )
+        ) {
+            Column {
+                if (attachmentBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = if (focused) 110.dp else 60.dp)) {
+                    BasicTextField(
+                        value = value,
+                        onValueChange = onValueChange,
+                        modifier = Modifier.fillMaxWidth()
+                            .padding(
+                                start = if (focused) 18.dp else 64.dp,
+                                end = if (focused) 18.dp else 64.dp,
+                                top = 17.dp,
+                                bottom = if (focused) 58.dp else 17.dp
+                            )
+                            .heightIn(min = 26.dp, max = 128.dp)
+                            .onFocusChanged { focused = it.isFocused },
+                        maxLines = if (focused) 5 else 1,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
+                        cursorBrush = SolidColor(Accent),
+                        decorationBox = { inner ->
+                            Box(Modifier.fillMaxWidth()) {
+                                if (value.isEmpty() && !focused) {
+                                    Text(
+                                        if (!routeAvailable) "先选择故事使用的模型" else if (workspace == StoryWorkspace.Discussion) "讨论设定、人物或下一步…" else "告诉 Aster 接下来发生什么…",
+                                        color = MutedInk,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                inner()
+                            }
+                        }
+                    )
+                    Row(
+                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(58.dp).padding(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box {
+                            IconButton(onClick = { showAttachments = true }, enabled = !loading && !attachmentBusy, modifier = Modifier.size(46.dp)) {
+                                if (attachmentBusy) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                                else Icon(Icons.Rounded.Add, "添加图片或文件", Modifier.size(29.dp), tint = Ink)
+                            }
+                            DropdownMenu(expanded = showAttachments, onDismissRequest = { showAttachments = false }) {
+                                DropdownMenuItem(text = { Text("图片") }, onClick = { showAttachments = false; onPickImages() }, enabled = attachments.size < 4)
+                                DropdownMenuItem(text = { Text("文件 · 文本 / DOCX / PDF") }, onClick = { showAttachments = false; onPickDocument() })
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        FilledIconButton(
+                            onClick = if (loading) onStop else { { focusManager.clearFocus(); onSend() } },
+                            enabled = loading || (!attachmentBusy && (value.isNotBlank() || attachments.isNotEmpty() || !routeAvailable)),
+                            colors = IconButtonDefaults.filledIconButtonColors(
+                                containerColor = Night,
+                                contentColor = Color.White,
+                                disabledContainerColor = Color(0xFFE6E1DB),
+                                disabledContentColor = Color(0xFFA9A39C)
+                            ),
+                            modifier = Modifier.size(46.dp)
+                        ) {
+                            Icon(if (loading) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward, if (loading) "停止生成" else "发送", Modifier.size(if (loading) 21.dp else 23.dp))
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -762,7 +949,7 @@ private fun StoryPickerSheet(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun StoryArchiveSheet(
     story: Story,
@@ -807,8 +994,8 @@ private fun StoryArchiveSheet(
         var text by remember(proposal.id) { mutableStateOf(proposal.content) }
         AlertDialog(onDismissRequest={editingProposal=null},title={Text("编辑后采用")},
             text={OutlinedTextField(value=text,onValueChange={text=it},modifier=Modifier.heightIn(max=280.dp))},
-            confirmButton={TextButton(onClick={onDecide(proposal.id,true,text);editingProposal=null},enabled=text.isNotBlank() && text.length<=8000) {Text("采用这一项")}},
-            dismissButton={TextButton(onClick={editingProposal=null}) {Text("取消")}})
+            confirmButton={Button(onClick={onDecide(proposal.id,true,text);editingProposal=null},enabled=text.isNotBlank() && text.length<=8000) {Text("采用这一项")}},
+            dismissButton={OutlinedButton(onClick={editingProposal=null}) {Text("取消")}})
     }
     var viewingChange by remember { mutableStateOf<StoryChangeEntry?>(null) }
     viewingChange?.let { change ->
@@ -819,7 +1006,7 @@ private fun StoryArchiveSheet(
                 if (change.after.isNotBlank()) { Text("变更后", fontWeight = FontWeight.SemiBold); Text(change.after) }
                 if (change.source.isNotBlank()) { Text("来源正文 / 讨论", fontWeight = FontWeight.SemiBold); Text(change.source) }
                 if (change.note.isNotBlank()) Text(change.note, color = MutedInk)
-            } }, confirmButton = { TextButton(onClick = { viewingChange = null }) { Text("关闭") } })
+            } }, confirmButton = { Button(onClick = { viewingChange = null }) { Text("关闭") } })
     }
     var editing by remember { mutableStateOf<StoryMemoryRecord?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -832,8 +1019,8 @@ private fun StoryArchiveSheet(
                     Text("故事档案", style = MaterialTheme.typography.titleLarge)
                     Text(story.title, color = MutedInk, style = MaterialTheme.typography.bodySmall)
                 }
-                if (section != 3) TextButton(onClick = { adding = true }) {
-                    Icon(Icons.Rounded.Add, null)
+                if (section != 3) OutlinedButton(onClick = { adding = true }, shape = RoundedCornerShape(12.dp)) {
+                    Icon(Icons.Rounded.Add, null, Modifier.size(17.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("添加")
                 }
@@ -853,12 +1040,12 @@ private fun StoryArchiveSheet(
                         }
                     }
                     item { ArchiveInfoCard("整理状态", memoryStatus) {
-                        TextButton(onClick = onRetryMemory, enabled = story.automaticMemoryEnabled) { Text("重试失败项") }
+                        ArchiveActionButton("重试失败项", onRetryMemory, enabled = story.automaticMemoryEnabled)
                     } }
                     item {
                         var expanded by remember { mutableStateOf(false) }
                         ArchiveInfoCard("故事用量", if (expanded) usageText else "创作、讨论、整理与摘要的调用记录") {
-                            TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起" else "查看") }
+                            ArchiveActionButton(if (expanded) "收起" else "查看", { expanded = !expanded })
                         }
                     }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
@@ -871,16 +1058,16 @@ private fun StoryArchiveSheet(
                                 Text(entry.conflict.description, style = MaterialTheme.typography.bodyMedium)
                                 Text("选择后停用另一条资料，并保留固定约束；决定可在最近变更中整体撤销。",
                                     color = MutedInk, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
-                                TextButton(onClick = { showSources = !showSources }) { Text(if (showSources) "收起来源" else "查看双方来源") }
+                                ArchiveActionButton(if (showSources) "收起来源" else "查看双方来源", { showSources = !showSources })
                                 if (showSources) {
                                     Text("原资料来源", fontWeight = FontWeight.SemiBold)
                                     Text(entry.earlierSource, style = MaterialTheme.typography.bodySmall)
                                     Text("新资料来源", fontWeight = FontWeight.SemiBold)
                                     Text(entry.latestSource, style = MaterialTheme.typography.bodySmall)
                                 }
-                                Row {
-                                    TextButton(onClick = { onResolveConflict(entry, false) }, enabled = !undoBusy) { Text("保留原资料") }
-                                    TextButton(onClick = { onResolveConflict(entry, true) }, enabled = !undoBusy) { Text("采用新资料") }
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ArchiveActionButton("保留原资料", { onResolveConflict(entry, false) }, enabled = !undoBusy)
+                                    ArchiveActionButton("采用新资料", { onResolveConflict(entry, true) }, enabled = !undoBusy, primary = true)
                                 }
                             }
                         }
@@ -888,14 +1075,16 @@ private fun StoryArchiveSheet(
                     if(reviewRecords.isNotEmpty()) item {Text("待复核 · 引用的正文已变化",style=MaterialTheme.typography.titleSmall)}
                     items(reviewRecords,key={"review-${it.id}"}) { record ->
                         ArchiveInfoCard("暂不用于正文",record.content+"\n引用来源已变化，需要重新判断是否适用。") {
-                            TextButton(onClick={reapplying=record to true},enabled=!undoBusy) {Text("复核并确认")}
-                            if(record.timelineId==story.currentTimelineId) TextButton(onClick={onRemove(record.id)},enabled=!undoBusy) {Text("停用")}
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                ArchiveActionButton("复核并确认", { reapplying=record to true }, enabled=!undoBusy, primary = true)
+                                if(record.timelineId==story.currentTimelineId) ArchiveActionButton("停用", { onRemove(record.id) }, enabled=!undoBusy, danger = true)
+                            }
                         }
                     }
                     if(reapplicableRecords.isNotEmpty()) item {Text("旧路线的独立设定",style=MaterialTheme.typography.titleSmall)}
                     items(reapplicableRecords,key={"reapply-${it.id}"}) { record ->
                         ArchiveInfoCard("尚未用于当前路线",record.content) {
-                            TextButton(onClick={reapplying=record to false},enabled=!undoBusy) {Text("检查并采用")}
+                            ArchiveActionButton("检查并采用", { reapplying=record to false }, enabled=!undoBusy, primary = true)
                         }
                     }
                     if (proposals.isNotEmpty()) item { Text("待确认 · ${proposals.size}", style = MaterialTheme.typography.titleSmall) }
@@ -904,10 +1093,10 @@ private fun StoryArchiveSheet(
                             Column(Modifier.fillMaxWidth().padding(14.dp)) {
                                 Text("待确认候选", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                                 Text(proposal.content, modifier = Modifier.padding(vertical = 8.dp))
-                                Row {
-                                    TextButton(onClick = { onDecide(proposal.id, true,null) }) { Text("采用") }
-                                    TextButton(onClick={editingProposal=proposal}) {Text("编辑后采用")}
-                                    TextButton(onClick = { onDecide(proposal.id, false,null) }) { Text("废弃") }
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ArchiveActionButton("采用", { onDecide(proposal.id, true,null) }, primary = true)
+                                    ArchiveActionButton("编辑后采用", { editingProposal=proposal })
+                                    ArchiveActionButton("废弃", { onDecide(proposal.id, false,null) }, danger = true)
                                 }
                             }
                         }
@@ -922,9 +1111,9 @@ private fun StoryArchiveSheet(
                                 if (preview.isNotBlank()) Text(preview, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.padding(vertical = 6.dp), style = MaterialTheme.typography.bodySmall)
                                 if (change.note.isNotBlank()) Text(change.note, color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                                Row {
-                                    TextButton(onClick = { viewingChange = change }) { Text("查看详情") }
-                                    if (change.canUndo) TextButton(onClick = { onUndo(change.id, change.batch) }, enabled = !undoBusy) { Text(if (change.batch) "整体撤销" else "撤销此改动") }
+                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ArchiveActionButton("查看详情", { viewingChange = change })
+                                    if (change.canUndo) ArchiveActionButton(if (change.batch) "整体撤销" else "撤销此改动", { onUndo(change.id, change.batch) }, enabled = !undoBusy, danger = true)
                                 }
                             }
                         }
@@ -1012,7 +1201,7 @@ private fun StoryArchiveSheet(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showRouteMenu = false }) { Text("关闭") } }
+            confirmButton = { Button(onClick = { showRouteMenu = false }) { Text("关闭") } }
         )
     }
 
@@ -1031,6 +1220,34 @@ private fun StoryArchiveSheet(
             onSave = { _, text, pinned -> onUpdate(record.id, text, pinned); editing = null },
             onDismiss = { editing = null }
         )
+    }
+}
+
+@Composable
+private fun ArchiveActionButton(
+    label: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    primary: Boolean = false,
+    danger: Boolean = false
+) {
+    if (primary) {
+        Button(
+            onClick = onClick,
+            enabled = enabled,
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = WarmWhite),
+            contentPadding = PaddingValues(horizontal = 13.dp, vertical = 8.dp)
+        ) { Text(label, style = MaterialTheme.typography.labelLarge) }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            enabled = enabled,
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, if (danger) Danger.copy(alpha = .38f) else Hairline),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = if (danger) Danger else Ink),
+            contentPadding = PaddingValues(horizontal = 13.dp, vertical = 8.dp)
+        ) { Text(label, style = MaterialTheme.typography.labelLarge) }
     }
 }
 
@@ -1132,7 +1349,7 @@ private fun MemoryEditDialog(
                 }
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = { OutlinedButton(onClick = onDismiss) { Text("取消") } },
         confirmButton = { Button(onClick = { onSave(kind, content.trim(), pinned) }, enabled = content.isNotBlank()) { Text("保存") } }
     )
 }
@@ -1179,7 +1396,6 @@ private fun storyAnnotatedText(text: String): AnnotatedString = buildAnnotatedSt
         cursor = end + 1
     }
 }
-
 
 @Composable
 private fun StoryImageStrip(images: List<com.adong.adchat.data.ChatImageAttachment>, onRemove: ((String)->Unit)? = null) {
