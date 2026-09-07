@@ -93,7 +93,7 @@ class SharedUiInteractionTest {
         }
         rule.onNodeWithText("模型 54", useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithText("搜索").performTextInput("模型 2")
-        rule.onNodeWithText("模型 2", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNode(hasText("模型 2") and hasClickAction() and !hasSetTextAction()).assertIsDisplayed()
         rule.onNodeWithText("模型 54", useUnmergedTree = true).assertDoesNotExist()
         screenshot("model-search")
     }
@@ -136,6 +136,13 @@ class SharedUiInteractionTest {
         val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         assertNotNull(bitmap)
         val directory = File(rule.activity.getExternalFilesDir(null), "ui-preview").apply { mkdirs() }
-        File(directory, "shared-$name.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val file = File(directory, "shared-$name.png")
+        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        // UTP can uninstall the app after tests. Preserve screenshots outside its data directory.
+        val command = "sh -c 'mkdir -p /sdcard/Download/aster-ui-preview; " +
+            "run-as com.adong.adchat cat ${file.absolutePath} > /sdcard/Download/aster-ui-preview/shared-$name.png'"
+        android.os.ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
+        ).use { it.readBytes() }
     }
 }

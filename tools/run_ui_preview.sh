@@ -12,4 +12,5 @@ fi
 test_result=$?
 mkdir -p ui-preview
 adb pull /sdcard/Android/data/com.adong.adchat/files/ui-preview ui-preview || true
+adb pull /sdcard/Download/aster-ui-preview ui-preview || true
 exit "$test_result"

@@ -44,7 +44,12 @@ jobs:
           arch: x86_64
           profile: pixel_2
           disable-animations: false
-          script: bash tools/run_ui_preview.sh com.adong.adchat.SharedUiInteractionTest
+          script: |
+            if [[ "$GITHUB_REF" == "refs/heads/feature/story-mode" ]]; then
+              bash tools/run_ui_preview.sh com.adong.adchat.SharedUiInteractionTest
+            else
+              bash tools/run_ui_preview.sh
+            fi
       - name: Upload native screenshots and test report
         if: always()
         uses: actions/upload-artifact@v4
