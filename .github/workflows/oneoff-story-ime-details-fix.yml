@@ -1,0 +1,151 @@
+name: One-off story IME and details fix
+
+on:
+  push:
+    branches: ["feature/story-mode"]
+    paths: [".github/workflows/oneoff-story-ime-details-fix.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/story-mode
+          fetch-depth: 0
+      - name: Fix story IME follow and details focus
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt")
+          text = path.read_text()
+
+          def replace_once(old: str, new: str):
+              global text
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected exactly one match, got {text.count(old)} for:\n{old[:180]}")
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              "import androidx.compose.foundation.BorderStroke\n",
+              "import androidx.compose.foundation.BorderStroke\nimport androidx.compose.foundation.ExperimentalFoundationApi\nimport androidx.compose.foundation.relocation.BringIntoViewRequester\nimport androidx.compose.foundation.relocation.bringIntoViewRequester\n"
+          )
+
+          replace_once(
+              "    val composerDensity=LocalDensity.current\n    var composerHeight by remember { mutableStateOf(100.dp) }\n",
+              "    val composerDensity=LocalDensity.current\n    val focusManager = LocalFocusManager.current\n    val imeInsets = WindowInsets.ime\n    val imeAnimationTarget = WindowInsets.imeAnimationTarget\n    var composerFocused by remember { mutableStateOf(false) }\n    var composerHeight by remember { mutableStateOf(100.dp) }\n"
+          )
+
+          old_follow = '''    LaunchedEffect(messages.size, messages.lastOrNull()?.revision?.content?.length, loading) {
+        if (autoFollow && !dragging) {
+            val target = when {
+                loading && !lastIsStreamingAssistant -> messages.size
+                messages.isNotEmpty() -> messages.lastIndex
+                loading -> 0
+                else -> -1
+            }
+            if (target >= 0) runCatching { listState.animateScrollToItem(target) }
+        }
+    }
+'''
+          new_follow = old_follow + '''    LaunchedEffect(
+        composerFocused,
+        targetStory.id,
+        targetStory.currentTimelineId,
+        workspace,
+        messages.size,
+        loading,
+        lastIsStreamingAssistant
+    ) {
+        if (!composerFocused) return@LaunchedEffect
+        autoFollow = true
+        var imeWasVisible = imeInsets.getBottom(composerDensity) > 0
+        snapshotFlow {
+            imeInsets.getBottom(composerDensity) to imeAnimationTarget.getBottom(composerDensity)
+        }.collect { (imeBottom, imeTargetBottom) ->
+            val target = when {
+                loading && !lastIsStreamingAssistant -> messages.size
+                messages.isNotEmpty() -> messages.lastIndex
+                loading -> 0
+                else -> -1
+            }
+            if (target >= 0) {
+                // Match ordinary chat: follow every keyboard inset update so the
+                // conversation and composer move together instead of serially.
+                runCatching { listState.scrollToItem(target) }
+            }
+            if (imeBottom > 0) imeWasVisible = true
+            if (imeWasVisible && imeTargetBottom == 0) focusManager.clearFocus()
+        }
+    }
+'''
+          replace_once(old_follow, new_follow)
+
+          replace_once(
+              "            onStop = { storyVm.stop(workspace) },\n            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }\n",
+              "            onStop = { storyVm.stop(workspace) },\n            onFocusChange = { composerFocused = it },\n            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }\n"
+          )
+
+          replace_once(
+              "@Composable\nprivate fun StoryMessageItem(\n",
+              "@OptIn(ExperimentalFoundationApi::class)\n@Composable\nprivate fun StoryMessageItem(\n"
+          )
+
+          replace_once(
+              "    var showDetails by remember(row.message.id) { mutableStateOf(false) }\n    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {\n",
+              "    var showDetails by remember(row.message.id) { mutableStateOf(false) }\n    val detailsBringIntoViewRequester = remember(row.message.id) { BringIntoViewRequester() }\n    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {\n"
+          )
+
+          replace_once(
+              "        StoryWorkspace.Prose -> true\n    }\n\n    Row(\n",
+              "        StoryWorkspace.Prose -> true\n    }\n    LaunchedEffect(showDetails) {\n        if (showDetails) {\n            // Wait for the expanded detail block to be measured, then reveal only\n            // the newly inserted area instead of jumping the whole message to top.\n            withFrameNanos { }\n            runCatching { detailsBringIntoViewRequester.bringIntoView() }\n        }\n    }\n\n    Row(\n"
+          )
+
+          replace_once(
+              "                                Modifier.fillMaxWidth().padding(top = 8.dp),\n                                verticalArrangement = Arrangement.spacedBy(8.dp)\n",
+              "                                Modifier.fillMaxWidth().padding(top = 8.dp)\n                                    .bringIntoViewRequester(detailsBringIntoViewRequester),\n                                verticalArrangement = Arrangement.spacedBy(8.dp)\n"
+          )
+
+          replace_once(
+              "    onSend: () -> Unit,\n    onStop: () -> Unit,\n    modifier: Modifier = Modifier\n",
+              "    onSend: () -> Unit,\n    onStop: () -> Unit,\n    onFocusChange: (Boolean) -> Unit,\n    modifier: Modifier = Modifier\n"
+          )
+
+          replace_once(
+              "    val focusManager = LocalFocusManager.current\n    val density = LocalDensity.current\n    val imeInsets = WindowInsets.ime\n    val imeTarget = WindowInsets.imeAnimationTarget\n    val capsuleShape = RoundedCornerShape(31.dp)\n",
+              "    val focusManager = LocalFocusManager.current\n    val capsuleShape = RoundedCornerShape(31.dp)\n"
+          )
+
+          old_internal_ime = '''    LaunchedEffect(focused, workspace, density) {
+        if (!focused) return@LaunchedEffect
+        var imeWasVisible = imeInsets.getBottom(density) > 0
+        snapshotFlow { imeInsets.getBottom(density) to imeTarget.getBottom(density) }
+            .collect { (bottom, target) ->
+                if (bottom > 0) imeWasVisible = true
+                if (imeWasVisible && target == 0) focusManager.clearFocus()
+            }
+    }
+
+'''
+          replace_once(old_internal_ime, "")
+
+          replace_once(
+              "                            .heightIn(min = 24.dp, max = 132.dp)\n                            .onFocusChanged { focused = it.isFocused },\n",
+              "                            .heightIn(min = 24.dp, max = 132.dp)\n                            .onFocusChanged { state ->\n                                if (focused != state.isFocused) {\n                                    focused = state.isFocused\n                                    onFocusChange(state.isFocused)\n                                }\n                            },\n"
+          )
+
+          path.write_text(text)
+
+          workflow = Path(".github/workflows/oneoff-story-ime-details-fix.yml")
+          workflow.unlink()
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt .github/workflows/oneoff-story-ime-details-fix.yml
+          git commit -m "fix(story): follow IME and reveal expanded details"
+          git push origin HEAD:feature/story-mode
