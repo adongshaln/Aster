@@ -31,4 +31,23 @@ class DocumentImportTest {
         val text=DocumentImport.docx(bytes.toByteArray())
         assertTrue(text.startsWith("北方积雪\n"));assertTrue(text.contains("人物"));assertFalse(text.contains("<w:"))
     }
+    @Test fun pdfTextLayerIsImportedAndScannedOnlyPageIsRejected() {
+        val context=org.robolectric.RuntimeEnvironment.getApplication<android.app.Application>()
+        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context)
+        val file=java.io.File(context.cacheDir,"reference.pdf")
+        com.tom_roush.pdfbox.pdmodel.PDDocument().use { pdf ->
+            val page=com.tom_roush.pdfbox.pdmodel.PDPage();pdf.addPage(page)
+            com.tom_roush.pdfbox.pdmodel.PDPageContentStream(pdf,page).use { stream ->
+                stream.beginText();stream.setFont(com.tom_roush.pdfbox.pdmodel.font.PDType1Font.HELVETICA,12f)
+                stream.newLineAtOffset(40f,700f);stream.showText("Northern kingdom");stream.endText()
+            }
+            pdf.save(file)
+        }
+        assertTrue(DocumentImport.read(context,android.net.Uri.fromFile(file)).contains("Northern kingdom"))
+        com.tom_roush.pdfbox.pdmodel.PDDocument().use { pdf ->
+            pdf.addPage(com.tom_roush.pdfbox.pdmodel.PDPage());pdf.save(file)
+        }
+        assertThrows(IllegalArgumentException::class.java) {DocumentImport.read(context,android.net.Uri.fromFile(file))}
+    }
+
 }
