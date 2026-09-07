@@ -69,10 +69,11 @@ class SharedUiInteractionTest {
         }
         try { rule.waitUntil(10_000) { !imeVisible() } }
         catch (error: Throwable) { throw AssertionError("$mode: software keyboard did not close", error) }
-        rule.onNodeWithTag("$mode-input").assertIsNotFocused()
+        // Window visibility changes before the final IME / Compose animation frames.
         rule.waitUntil(5_000) {
             kotlin.math.abs(rule.onNodeWithTag("$mode-composer").fetchSemanticsNode().boundsInRoot.height - compact) < 3
         }
+        rule.onNodeWithTag("$mode-input").assertIsNotFocused()
         rule.runOnIdle { assertEquals("第一行\n第二行\n第三行", draft) }
         screenshot("$mode-collapsed")
     }
