@@ -185,4 +185,38 @@ class StorySummariesTest {
         assertEquals(7,view().records.size)
     }
 
+    @Test fun oversizedSingleProseUsesResumableBoundedSummaryTree() = kotlinx.coroutines.runBlocking {
+        val row=repo.appendMessage(story.id,story.currentTimelineId,StoryWorkspace.Prose,"assistant","甲".repeat(72_001))
+        val organizer=memory.markRunning(memory.enqueueForRevision(story.id,story.currentTimelineId,row.revision.id)!!)!!
+        memory.applyOrganizerOutput(organizer,StoryOrganizerOutput(emptyList(),emptyList()))
+        seed(2)
+        val job=running(); val parts=memory.summaryRequestParts(job)!!
+        assertEquals(4,parts.size);assertTrue(parts.all { it.length < 24_100 })
+        var calls=0
+        suspend fun execute(fail: Boolean) = StorySummaryPipeline.run(parts,
+            load={ node, hash -> memory.summaryCheckpoint(job,node,hash) },
+            save={ node, hash, value -> check(memory.summaryCheckpoint(job,node,hash,value) != null) },
+            generate={ input ->
+                assertTrue(input.length < 24_100);calls++
+                if(fail && calls == 3) error("network interruption")
+                raw
+            })
+        try { execute(true);fail("Expected interruption") } catch (_: IllegalStateException) { }
+        assertTrue(view().summarySources.isEmpty())
+        val output=execute(false)
+        assertEquals(6,calls) // two cached leaves, one failed call, remaining leaves and root
+        assertTrue(memory.applySummary(job,output))
+        assertEquals(setOf(row.revision.id),view().summarySources.values.single())
+    }
+
+    @Test fun summaryCheckpointCannotSurviveMemoryVersionChange() {
+        seed();val job=running()
+        assertEquals(raw,memory.summaryCheckpoint(job,"0:0","hash",raw))
+        assertEquals(raw,memory.summaryCheckpoint(job,"0:0","hash"))
+        assertNull(memory.summaryCheckpoint(job,"0:0","different"))
+        archive.addConfirmedRecord(story.id,story.currentTimelineId,StoryMemoryKind.WorldFact,"新设定")
+        assertNull(memory.summaryCheckpoint(job,"0:0","hash"))
+        assertFalse(memory.applySummary(job,raw))
+    }
+
 }

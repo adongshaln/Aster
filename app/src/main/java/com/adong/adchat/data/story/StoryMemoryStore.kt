@@ -56,6 +56,10 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
 
     fun enqueueSummary(storyId: String, timelineId: String) = helper.writableDatabase.inTransaction { db -> StorySummaries.enqueue(db, storyId, timelineId) }
     fun summaryRequest(job: StoryMemoryJob): String? = helper.writableDatabase.inTransaction { db -> StorySummaries.request(db, job) }
+    fun summaryRequestParts(job: StoryMemoryJob): List<String>? = helper.writableDatabase.inTransaction { db -> StorySummaries.requestParts(db, job) }
+    fun summaryCheckpoint(job: StoryMemoryJob, node: String, fingerprint: String, raw: String? = null): String? =
+        helper.writableDatabase.inTransaction { db -> StorySummaries.checkpoint(db, job, node, fingerprint, raw) }
+
     fun applySummary(job: StoryMemoryJob, raw: String): Boolean = helper.writableDatabase.inTransaction { db -> StorySummaries.apply(db, job, raw) }
 
     fun recoverRunningJobs(): Int = helper.writableDatabase.update(

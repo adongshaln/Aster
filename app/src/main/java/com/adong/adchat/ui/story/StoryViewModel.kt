@@ -876,16 +876,23 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     try {
                         withContext(Dispatchers.Main) { if (activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) memoryStatus = "正在整理记忆" }
                         if (running.kind == com.adong.adchat.data.story.StorySummaries.KIND) {
-                            val summaryInput = memoryStore.summaryRequest(running) ?: continue
+                            val summaryParts = memoryStore.summaryRequestParts(running) ?: continue
                             withContext(Dispatchers.Main) { if(activeStoryId == storyId) memoryStatus = "正在生成剧情摘要" }
-                            val response = trackedChat(
-                                storyId = storyId, timelineId = timelineId, category = "summary", sourceId = running.id,
-                                profile = resolvedProfile.copy(webSearchEnabled=false,fileCreationEnabled=false), model=story.model,
-                                systemPrompt=com.adong.adchat.data.story.StorySummaries.prompt,
-                                history=listOf(ChatMessage(role="user",content=summaryInput)), cacheKey="aster-summary-${running.id}"
-                            ) { }
-                            check(response.outputComplete) { "摘要未完整结束，未提交" }
-                            if(memoryStore.applySummary(running,response.text)) {
+                            val summaryRaw = com.adong.adchat.data.story.StorySummaryPipeline.run(summaryParts,
+                                load = { node, hash -> memoryStore.summaryCheckpoint(running, node, hash) },
+                                save = { node, hash, raw -> check(memoryStore.summaryCheckpoint(running, node, hash, raw) != null) { "摘要来源或记忆版本已变化" } },
+                                generate = { input ->
+                                    check(memoryStore.summaryRequestParts(running) != null) { "摘要任务已失效" }
+                                    val response = trackedChat(
+                                        storyId = storyId, timelineId = timelineId, category = "summary", sourceId = running.id,
+                                        profile = resolvedProfile.copy(webSearchEnabled=false,fileCreationEnabled=false), model=story.model,
+                                        systemPrompt=com.adong.adchat.data.story.StorySummaries.prompt,
+                                        history=listOf(ChatMessage(role="user",content=input)), cacheKey="aster-summary-${running.id}"
+                                    ) { }
+                                    check(response.outputComplete) { "摘要未完整结束，未提交" }
+                                    response.text
+                                })
+                            if(memoryStore.applySummary(running,summaryRaw)) {
                                 refreshArchive(storyId,timelineId); refreshStory(storyId)
                             }
                             continue

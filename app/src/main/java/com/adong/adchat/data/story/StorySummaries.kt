@@ -53,7 +53,10 @@ internal object StorySummaries {
             }
             candidate
         }.firstOrNull { it.size >= 2 && (it.size == 6 || it.sumOf { source -> source.text.length } >= 12_000) }
-        val plan = if (block != null) JSONObject().put("sources", JSONArray(block.map { it.id }))
+        val oversized = older.firstOrNull { it.id !in covered && it.id in organized && it.text.length > 28_000 &&
+            runCatching { StoryOrganizerChunks.plan(it.text, "") }.isSuccess }
+        val plan = if (oversized != null) JSONObject().put("sources", JSONArray().put(oversized.id)).put("chunked", true)
+            else if (block != null) JSONObject().put("sources", JSONArray(block.map { it.id }))
             else StorySummaryHierarchy.plan(db, story, timeline) ?: return
         val ids = plan.getJSONArray("sources")
         val anchor = sources(db, story, timeline).last { it.id == ids.getString(ids.length() - 1) }
@@ -92,10 +95,11 @@ internal object StorySummaries {
         val ids = List(sourceIds.length()) { sourceIds.getString(it) }
         val hierarchical = plan.has("inputs")
         if (hierarchical && !StorySummaryHierarchy.validPlan(db, job, plan)) return null
-        if(ids.size !in 2..(if (hierarchical) 4096 else 6) || ids.distinct().size != ids.size) return null
+        val chunked = plan.optBoolean("chunked")
+        if(ids.size !in (if (chunked) 1..1 else 2..(if (hierarchical) 4096 else 6)) || ids.distinct().size != ids.size) return null
         val active = sources(db,job.storyId,job.timelineId)
         val selected = active.filter { it.id in ids }
-        return selected.takeIf { it.map { row -> row.id } == ids && (hierarchical || it.sumOf { row -> row.text.length } <= 28_000) }
+        return selected.takeIf { it.map { row -> row.id } == ids && (hierarchical || (chunked && runCatching { StoryOrganizerChunks.plan(it.single().text, "") }.isSuccess) || (!chunked && it.sumOf { row -> row.text.length } <= 28_000)) }
     }
 
     private fun stale(db: SQLiteDatabase, job: StoryMemoryJob) {
@@ -103,10 +107,36 @@ internal object StorySummaries {
         enqueue(db,job.storyId,job.timelineId)
     }
 
-    fun request(db: SQLiteDatabase, job: StoryMemoryJob): String? {
+    fun request(db: SQLiteDatabase, job: StoryMemoryJob): String? = requestParts(db, job)?.singleOrNull()
+
+    fun requestParts(db: SQLiteDatabase, job: StoryMemoryJob): List<String>? {
         val rows = valid(db,job) ?: run { stale(db,job); return null }
-        planned(db,job).optString("input_text").takeIf { it.isNotBlank() }?.let { return it }
-        return rows.joinToString("\n\n") { "[正式正文，轮次 ${it.sequence}]\n${it.text}" }
+        val plan = planned(db,job)
+        plan.optString("input_text").takeIf { it.isNotBlank() }?.let { return listOf(it) }
+        if (plan.optBoolean("chunked")) return StoryOrganizerChunks.plan(rows.single().text, "").map {
+            "[同一完整正文的第 ${it.index + 1} 段，字符 ${it.start}–${it.end}，按此顺序摘要]\n${it.text}"
+        }
+        return listOf(rows.joinToString("\n\n") { "[正式正文，轮次 ${it.sequence}]\n${it.text}" })
+    }
+
+    fun checkpoint(db: SQLiteDatabase, job: StoryMemoryJob, node: String, fingerprint: String, raw: String? = null): String? {
+        if (valid(db, job) == null) { stale(db, job); return null }
+        require(node.matches(Regex("[0-9]+:[0-9]+")))
+        val cursor = "summary_node:${job.id}:$node"
+        if (raw == null) return db.rawQuery("SELECT snapshot_json FROM ${StorySchema.SNAPSHOTS} WHERE log_cursor=? AND story_id=? AND timeline_id=?",
+            arrayOf(cursor, job.storyId, job.timelineId)).use { c ->
+            if (!c.moveToFirst()) null else JSONObject(c.getString(0)).let {
+                it.optString("raw").takeIf { _ -> it.optString("fingerprint") == fingerprint && it.optLong("version", -1) == job.baseMemoryVersion }
+            }
+        }
+        parse(raw)
+        db.delete(StorySchema.SNAPSHOTS, "log_cursor=? AND story_id=? AND timeline_id=?", arrayOf(cursor,job.storyId,job.timelineId))
+        db.insertOrThrow(StorySchema.SNAPSHOTS, null, ContentValues().apply {
+            put("id", "summary_node_${java.util.UUID.randomUUID()}"); put("story_id", job.storyId); put("timeline_id", job.timelineId)
+            put("sequence_no", 0); put("memory_version", job.baseMemoryVersion); put("created_at", System.currentTimeMillis()); put("log_cursor", cursor)
+            put("snapshot_json", JSONObject().put("fingerprint",fingerprint).put("version",job.baseMemoryVersion).put("raw",raw).toString())
+        })
+        return raw
     }
 
     fun parse(raw: String): String {
