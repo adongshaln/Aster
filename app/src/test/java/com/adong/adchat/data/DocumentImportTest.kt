@@ -32,7 +32,7 @@ class DocumentImportTest {
         assertTrue(text.startsWith("北方积雪\n"));assertTrue(text.contains("人物"));assertFalse(text.contains("<w:"))
     }
     @Test fun pdfTextLayerIsImportedAndScannedOnlyPageIsRejected() {
-        val context=org.robolectric.RuntimeEnvironment.getApplication<android.app.Application>()
+        val context=org.robolectric.RuntimeEnvironment.getApplication()
         com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context)
         val file=java.io.File(context.cacheDir,"reference.pdf")
         com.tom_roush.pdfbox.pdmodel.PDDocument().use { pdf ->
