@@ -17,7 +17,7 @@ jobs:
           ref: feature/story-mode
           fetch-depth: 0
       - name: Fix story IME follow and details focus
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
 
