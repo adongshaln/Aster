@@ -1,0 +1,97 @@
+name: One-off story UI refinement
+
+on:
+  push:
+    branches: [feature/story-mode]
+    paths: [.github/workflows/oneoff-story-ui-refine.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/story-mode
+          fetch-depth: 0
+      - name: Refine Story UI
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt')
+          text = path.read_text()
+
+          def replace_once(old, new, label):
+              global text
+              if old not in text:
+                  raise SystemExit(f'missing patch target: {label}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '''import androidx.compose.animation.core.LinearEasing\nimport androidx.compose.animation.core.animateFloat\nimport androidx.compose.animation.core.infiniteRepeatable\nimport androidx.compose.animation.core.rememberInfiniteTransition\nimport androidx.compose.animation.core.tween''',
+              '''import androidx.compose.animation.core.FastOutSlowInEasing\nimport androidx.compose.animation.core.LinearEasing\nimport androidx.compose.animation.core.RepeatMode\nimport androidx.compose.animation.core.animateFloat\nimport androidx.compose.animation.core.animateFloatAsState\nimport androidx.compose.animation.core.infiniteRepeatable\nimport androidx.compose.animation.core.rememberInfiniteTransition\nimport androidx.compose.animation.core.tween''',
+              'animation imports'
+          )
+
+          replace_once(
+              '''import com.adong.adchat.ui.components.AsterIconButton\nimport com.adong.adchat.ui.components.AsterMark''',
+              '''import com.adong.adchat.ui.components.AsterArtwork\nimport com.adong.adchat.ui.components.AsterIconButton\nimport com.adong.adchat.ui.components.AsterMark''',
+              'AsterArtwork import'
+          )
+
+          replace_once(
+              '''    val transition = rememberInfiniteTransition(label = "story-thinking")\n    val motion by transition.animateFloat(\n        initialValue = 0f,\n        targetValue = 4f,\n        animationSpec = infiniteRepeatable(tween(3520, easing = LinearEasing)),\n        label = "story-thinking-motion"\n    )\n    val step = motion.toInt().coerceIn(0, 3)''',
+              '''    val transition = rememberInfiniteTransition(label = "story-thinking")\n    val motion by transition.animateFloat(\n        initialValue = 0f,\n        targetValue = 4f,\n        animationSpec = infiniteRepeatable(tween(3520, easing = LinearEasing)),\n        label = "story-thinking-motion"\n    )\n    val subtitleAlpha by transition.animateFloat(\n        initialValue = .58f,\n        targetValue = .86f,\n        animationSpec = infiniteRepeatable(tween(900), repeatMode = RepeatMode.Reverse),\n        label = "story-thinking-subtitle"\n    )\n    val step = motion.toInt().coerceIn(0, 3)''',
+              'thinking subtitle animation'
+          )
+
+          replace_once(
+              '''            AsterMark(\n                Modifier.size(28.dp).graphicsLayer {\n                    translationY = jumpPx\n                    rotationZ = rotation\n                },\n                tint = Accent\n            )''',
+              '''            AsterArtwork(\n                Modifier.size(28.dp).graphicsLayer {\n                    translationY = jumpPx\n                    rotationZ = rotation\n                }\n            )''',
+              'thinking artwork'
+          )
+
+          replace_once(
+              '''        Column {\n            Text("Aster 正在思考", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)\n            Text("正在组织回答…", color = MutedInk, style = MaterialTheme.typography.labelSmall)\n        }''',
+              '''        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {\n            Text(\n                "Aster 正在思考",\n                color = Ink,\n                style = MaterialTheme.typography.labelLarge,\n                fontWeight = FontWeight.Medium\n            )\n            Text(\n                "正在组织回答…",\n                color = MutedInk.copy(alpha = subtitleAlpha),\n                style = MaterialTheme.typography.labelSmall\n            )\n        }''',
+              'thinking text'
+          )
+
+          replace_once(
+              '''    val capsuleShape = RoundedCornerShape(31.dp)\n    LaunchedEffect(focused, workspace, density) {''',
+              '''    val capsuleShape = RoundedCornerShape(31.dp)\n    val focusProgress by animateFloatAsState(\n        targetValue = if (focused) 1f else 0f,\n        animationSpec = tween(\n            durationMillis = if (focused) 230 else 180,\n            easing = FastOutSlowInEasing\n        ),\n        label = "story-composer-focus-progress"\n    )\n    val minimumHeight = 58.dp + 52.dp * focusProgress\n    val fieldStart = 58.dp - 40.dp * focusProgress\n    val fieldEnd = 58.dp - 40.dp * focusProgress\n    val fieldTop = 17.dp - 2.dp * focusProgress\n    val fieldBottom = 15.dp + 42.dp * focusProgress\n    LaunchedEffect(focused, workspace, density) {''',
+              'composer focus metrics'
+          )
+
+          replace_once(
+              '''                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = if (focused) 110.dp else 60.dp)) {\n                    BasicTextField(\n                        value = value,\n                        onValueChange = onValueChange,\n                        modifier = Modifier.fillMaxWidth()\n                            .padding(\n                                start = if (focused) 18.dp else 64.dp,\n                                end = if (focused) 18.dp else 64.dp,\n                                top = 17.dp,\n                                bottom = if (focused) 58.dp else 17.dp\n                            )\n                            .heightIn(min = 26.dp, max = 128.dp)''',
+              '''                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = minimumHeight)) {\n                    BasicTextField(\n                        value = value,\n                        onValueChange = onValueChange,\n                        modifier = Modifier.fillMaxWidth()\n                            .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)\n                            .heightIn(min = 24.dp, max = 132.dp)''',
+              'composer field geometry'
+          )
+
+          replace_once(
+              '''                        Box {\n                            IconButton(onClick = { showAttachments = true }, enabled = !loading && !attachmentBusy, modifier = Modifier.size(46.dp)) {\n                                if (attachmentBusy) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)\n                                else Icon(Icons.Rounded.Add, "添加图片或文件", Modifier.size(29.dp), tint = Ink)\n                            }\n                            DropdownMenu(expanded = showAttachments, onDismissRequest = { showAttachments = false }) {\n                                DropdownMenuItem(text = { Text("图片") }, onClick = { showAttachments = false; onPickImages() }, enabled = attachments.size < 4)\n                                DropdownMenuItem(text = { Text("文件 · 文本 / DOCX / PDF") }, onClick = { showAttachments = false; onPickDocument() })\n                            }\n                        }''',
+              '''                        IconButton(\n                            onClick = {\n                                focusManager.clearFocus()\n                                showAttachments = true\n                            },\n                            enabled = !loading && !attachmentBusy,\n                            modifier = Modifier.size(46.dp)\n                        ) {\n                            if (attachmentBusy) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)\n                            else Icon(Icons.Rounded.Add, "添加图片或文件", Modifier.size(29.dp), tint = Ink)\n                        }''',
+              'attachment dropdown removal'
+          )
+
+          replace_once(
+              '''        }\n    }\n}\n\n@Composable\nprivate fun StoryWorkspaceEmpty''',
+              '''        }\n    }\n\n    if (showAttachments) {\n        ModalBottomSheet(\n            onDismissRequest = { showAttachments = false },\n            containerColor = Canvas\n        ) {\n            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {\n                Text("添加到故事", style = MaterialTheme.typography.titleLarge, color = Ink)\n                Text(\n                    if (workspace == StoryWorkspace.Discussion) "图片和文档会作为本轮讨论的上下文" else "图片和文档会随本轮正文输入一起保存",\n                    color = MutedInk,\n                    style = MaterialTheme.typography.labelMedium\n                )\n                Spacer(Modifier.height(18.dp))\n                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {\n                    StoryComposerSheetAction(\n                        icon = Icons.Rounded.AddPhotoAlternate,\n                        label = "图片",\n                        detail = "最多 4 张",\n                        enabled = !loading && !attachmentBusy && attachments.size < 4,\n                        onClick = { showAttachments = false; onPickImages() },\n                        modifier = Modifier.weight(1f)\n                    )\n                    StoryComposerSheetAction(\n                        icon = Icons.Rounded.AttachFile,\n                        label = "文件",\n                        detail = "文本 / DOCX / PDF",\n                        enabled = !loading && !attachmentBusy,\n                        onClick = { showAttachments = false; onPickDocument() },\n                        modifier = Modifier.weight(1f)\n                    )\n                }\n            }\n        }\n    }\n}\n\n@Composable\nprivate fun StoryComposerSheetAction(\n    icon: androidx.compose.ui.graphics.vector.ImageVector,\n    label: String,\n    detail: String,\n    enabled: Boolean,\n    onClick: () -> Unit,\n    modifier: Modifier = Modifier\n) {\n    Surface(\n        onClick = onClick,\n        enabled = enabled,\n        color = Surface,\n        contentColor = if (enabled) Ink else MutedInk.copy(alpha = .45f),\n        shape = RoundedCornerShape(16.dp),\n        border = BorderStroke(1.dp, Hairline.copy(alpha = .75f)),\n        modifier = modifier\n    ) {\n        Column(\n            Modifier.padding(horizontal = 10.dp, vertical = 15.dp),\n            horizontalAlignment = Alignment.CenterHorizontally\n        ) {\n            Icon(icon, null, Modifier.size(23.dp), tint = if (enabled) Accent else MutedInk.copy(alpha = .4f))\n            Spacer(Modifier.height(7.dp))\n            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)\n            Text(detail, color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)\n        }\n    }\n}\n\n@Composable\nprivate fun StoryWorkspaceEmpty''',
+              'story attachment sheet'
+          )
+
+          path.write_text(text)
+          PY
+
+          rm .github/workflows/oneoff-story-ui-refine.yml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt .github/workflows/oneoff-story-ui-refine.yml
+          git commit -m "refine(story): reuse ordinary composer interaction"
+          git push origin HEAD:feature/story-mode
