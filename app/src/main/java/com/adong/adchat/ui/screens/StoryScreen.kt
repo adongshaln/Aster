@@ -5,8 +5,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.layout.onSizeChanged
 import coil.compose.AsyncImage
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -60,6 +63,7 @@ import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRevisionState
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.MainViewModel
+import com.adong.adchat.ui.components.AsterArtwork
 import com.adong.adchat.ui.components.AsterIconButton
 import com.adong.adchat.ui.components.AsterMark
 import com.adong.adchat.ui.components.READING_BODY_FONT_SP
@@ -707,6 +711,12 @@ private fun StoryThinkingIndicator() {
         animationSpec = infiniteRepeatable(tween(3520, easing = LinearEasing)),
         label = "story-thinking-motion"
     )
+    val subtitleAlpha by transition.animateFloat(
+        initialValue = .58f,
+        targetValue = .86f,
+        animationSpec = infiniteRepeatable(tween(900), repeatMode = RepeatMode.Reverse),
+        label = "story-thinking-subtitle"
+    )
     val step = motion.toInt().coerceIn(0, 3)
     val local = (motion - step).coerceIn(0f, 1f)
     val hopPortion = .62f
@@ -717,18 +727,26 @@ private fun StoryThinkingIndicator() {
     val jumpPx = with(density) { jumpDp.dp.toPx() }
     Row(Modifier.heightIn(min = 46.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
-            AsterMark(
+            AsterArtwork(
                 Modifier.size(28.dp).graphicsLayer {
                     translationY = jumpPx
                     rotationZ = rotation
-                },
-                tint = Accent
+                }
             )
         }
         Spacer(Modifier.width(9.dp))
-        Column {
-            Text("Aster 正在思考", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-            Text("正在组织回答…", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                "Aster 正在思考",
+                color = Ink,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                "正在组织回答…",
+                color = MutedInk.copy(alpha = subtitleAlpha),
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
@@ -757,6 +775,19 @@ private fun StoryComposer(
     val imeInsets = WindowInsets.ime
     val imeTarget = WindowInsets.imeAnimationTarget
     val capsuleShape = RoundedCornerShape(31.dp)
+    val focusProgress by animateFloatAsState(
+        targetValue = if (focused) 1f else 0f,
+        animationSpec = tween(
+            durationMillis = if (focused) 230 else 180,
+            easing = FastOutSlowInEasing
+        ),
+        label = "story-composer-focus-progress"
+    )
+    val minimumHeight = 58.dp + 52.dp * focusProgress
+    val fieldStart = 58.dp - 40.dp * focusProgress
+    val fieldEnd = 58.dp - 40.dp * focusProgress
+    val fieldTop = 17.dp - 2.dp * focusProgress
+    val fieldBottom = 15.dp + 42.dp * focusProgress
     LaunchedEffect(focused, workspace, density) {
         if (!focused) return@LaunchedEffect
         var imeWasVisible = imeInsets.getBottom(density) > 0
@@ -792,18 +823,13 @@ private fun StoryComposer(
         ) {
             Column {
                 if (attachmentBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = if (focused) 110.dp else 60.dp)) {
+                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = minimumHeight)) {
                     BasicTextField(
                         value = value,
                         onValueChange = onValueChange,
                         modifier = Modifier.fillMaxWidth()
-                            .padding(
-                                start = if (focused) 18.dp else 64.dp,
-                                end = if (focused) 18.dp else 64.dp,
-                                top = 17.dp,
-                                bottom = if (focused) 58.dp else 17.dp
-                            )
-                            .heightIn(min = 26.dp, max = 128.dp)
+                            .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
+                            .heightIn(min = 24.dp, max = 132.dp)
                             .onFocusChanged { focused = it.isFocused },
                         maxLines = if (focused) 5 else 1,
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
@@ -827,15 +853,16 @@ private fun StoryComposer(
                         Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(58.dp).padding(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box {
-                            IconButton(onClick = { showAttachments = true }, enabled = !loading && !attachmentBusy, modifier = Modifier.size(46.dp)) {
-                                if (attachmentBusy) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
-                                else Icon(Icons.Rounded.Add, "添加图片或文件", Modifier.size(29.dp), tint = Ink)
-                            }
-                            DropdownMenu(expanded = showAttachments, onDismissRequest = { showAttachments = false }) {
-                                DropdownMenuItem(text = { Text("图片") }, onClick = { showAttachments = false; onPickImages() }, enabled = attachments.size < 4)
-                                DropdownMenuItem(text = { Text("文件 · 文本 / DOCX / PDF") }, onClick = { showAttachments = false; onPickDocument() })
-                            }
+                        IconButton(
+                            onClick = {
+                                focusManager.clearFocus()
+                                showAttachments = true
+                            },
+                            enabled = !loading && !attachmentBusy,
+                            modifier = Modifier.size(46.dp)
+                        ) {
+                            if (attachmentBusy) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                            else Icon(Icons.Rounded.Add, "添加图片或文件", Modifier.size(29.dp), tint = Ink)
                         }
                         Spacer(Modifier.weight(1f))
                         FilledIconButton(
@@ -854,6 +881,71 @@ private fun StoryComposer(
                     }
                 }
             }
+        }
+    }
+
+    if (showAttachments) {
+        ModalBottomSheet(
+            onDismissRequest = { showAttachments = false },
+            containerColor = Canvas
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
+                Text("添加到故事", style = MaterialTheme.typography.titleLarge, color = Ink)
+                Text(
+                    if (workspace == StoryWorkspace.Discussion) "图片和文档会作为本轮讨论的上下文" else "图片和文档会随本轮正文输入一起保存",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Spacer(Modifier.height(18.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StoryComposerSheetAction(
+                        icon = Icons.Rounded.AddPhotoAlternate,
+                        label = "图片",
+                        detail = "最多 4 张",
+                        enabled = !loading && !attachmentBusy && attachments.size < 4,
+                        onClick = { showAttachments = false; onPickImages() },
+                        modifier = Modifier.weight(1f)
+                    )
+                    StoryComposerSheetAction(
+                        icon = Icons.Rounded.AttachFile,
+                        label = "文件",
+                        detail = "文本 / DOCX / PDF",
+                        enabled = !loading && !attachmentBusy,
+                        onClick = { showAttachments = false; onPickDocument() },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StoryComposerSheetAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    detail: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        color = Surface,
+        contentColor = if (enabled) Ink else MutedInk.copy(alpha = .45f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Hairline.copy(alpha = .75f)),
+        modifier = modifier
+    ) {
+        Column(
+            Modifier.padding(horizontal = 10.dp, vertical = 15.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(icon, null, Modifier.size(23.dp), tint = if (enabled) Accent else MutedInk.copy(alpha = .4f))
+            Spacer(Modifier.height(7.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Text(detail, color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }
 }
