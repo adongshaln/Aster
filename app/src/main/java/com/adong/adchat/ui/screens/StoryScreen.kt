@@ -17,6 +17,9 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -266,6 +269,10 @@ private fun StoryWorkspaceContent(
         if(uri!=null) storyVm.importAttachments(listOf(uri),false,targetStory.id,targetStory.currentTimelineId,workspace)
     }
     val composerDensity=LocalDensity.current
+    val focusManager = LocalFocusManager.current
+    val imeInsets = WindowInsets.ime
+    val imeAnimationTarget = WindowInsets.imeAnimationTarget
+    var composerFocused by remember { mutableStateOf(false) }
     var composerHeight by remember { mutableStateOf(100.dp) }
 
     val listState = rememberLazyListState(
@@ -297,6 +304,36 @@ private fun StoryWorkspaceContent(
                 else -> -1
             }
             if (target >= 0) runCatching { listState.animateScrollToItem(target) }
+        }
+    }
+    LaunchedEffect(
+        composerFocused,
+        targetStory.id,
+        targetStory.currentTimelineId,
+        workspace,
+        messages.size,
+        loading,
+        lastIsStreamingAssistant
+    ) {
+        if (!composerFocused) return@LaunchedEffect
+        autoFollow = true
+        var imeWasVisible = imeInsets.getBottom(composerDensity) > 0
+        snapshotFlow {
+            imeInsets.getBottom(composerDensity) to imeAnimationTarget.getBottom(composerDensity)
+        }.collect { (imeBottom, imeTargetBottom) ->
+            val target = when {
+                loading && !lastIsStreamingAssistant -> messages.size
+                messages.isNotEmpty() -> messages.lastIndex
+                loading -> 0
+                else -> -1
+            }
+            if (target >= 0) {
+                // Match ordinary chat: follow every keyboard inset update so the
+                // conversation and composer move together instead of serially.
+                runCatching { listState.scrollToItem(target) }
+            }
+            if (imeBottom > 0) imeWasVisible = true
+            if (imeWasVisible && imeTargetBottom == 0) focusManager.clearFocus()
         }
     }
 
@@ -508,11 +545,13 @@ private fun StoryWorkspaceContent(
                 autoFollow = true
             },
             onStop = { storyVm.stop(workspace) },
+            onFocusChange = { composerFocused = it },
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun StoryMessageItem(
     row: StoryMessageWithRevision,
@@ -527,9 +566,16 @@ private fun StoryMessageItem(
     val waitingForFirstToken = !user && row.revision.content.isBlank() && row.revision.state == StoryRevisionState.Streaming
     val context = LocalContext.current
     var showDetails by remember(row.message.id) { mutableStateOf(false) }
+    val detailsBringIntoViewRequester = remember(row.message.id) { BringIntoViewRequester() }
     val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {
         StoryWorkspace.Discussion -> row.revision.state == StoryRevisionState.Complete
         StoryWorkspace.Prose -> true
+    }
+    LaunchedEffect(showDetails) {
+        if (showDetails) {
+            withFrameNanos { }
+            runCatching { detailsBringIntoViewRequester.bringIntoView() }
+        }
     }
 
     Row(
@@ -610,7 +656,8 @@ private fun StoryMessageItem(
                         }
                         if (showDetails && hasDetails) {
                             Column(
-                                Modifier.fillMaxWidth().padding(top = 8.dp),
+                                Modifier.fillMaxWidth().padding(top = 8.dp)
+                                    .bringIntoViewRequester(detailsBringIntoViewRequester),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 if (workspace == StoryWorkspace.Discussion && row.revision.state == StoryRevisionState.Complete) {
@@ -766,14 +813,12 @@ private fun StoryComposer(
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showAttachments by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    val density = LocalDensity.current
-    val imeInsets = WindowInsets.ime
-    val imeTarget = WindowInsets.imeAnimationTarget
     val capsuleShape = RoundedCornerShape(31.dp)
     val focusProgress by animateFloatAsState(
         targetValue = if (focused) 1f else 0f,
@@ -788,16 +833,6 @@ private fun StoryComposer(
     val fieldEnd = 58.dp - 40.dp * focusProgress
     val fieldTop = 17.dp - 2.dp * focusProgress
     val fieldBottom = 15.dp + 42.dp * focusProgress
-    LaunchedEffect(focused, workspace, density) {
-        if (!focused) return@LaunchedEffect
-        var imeWasVisible = imeInsets.getBottom(density) > 0
-        snapshotFlow { imeInsets.getBottom(density) to imeTarget.getBottom(density) }
-            .collect { (bottom, target) ->
-                if (bottom > 0) imeWasVisible = true
-                if (imeWasVisible && target == 0) focusManager.clearFocus()
-            }
-    }
-
     Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
         if (attachments.isNotEmpty()) {
             Surface(
@@ -830,7 +865,12 @@ private fun StoryComposer(
                         modifier = Modifier.fillMaxWidth()
                             .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
                             .heightIn(min = 24.dp, max = 132.dp)
-                            .onFocusChanged { focused = it.isFocused },
+                            .onFocusChanged { state ->
+                                if (focused != state.isFocused) {
+                                    focused = state.isFocused
+                                    onFocusChange(state.isFocused)
+                                }
+                              },
                         maxLines = if (focused) 5 else 1,
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
                         cursorBrush = SolidColor(Accent),
