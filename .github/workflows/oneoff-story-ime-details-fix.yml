@@ -2,8 +2,8 @@ name: One-off story IME and details fix
 
 on:
   push:
-    branches: ["feature/story-mode"]
-    paths: [".github/workflows/oneoff-story-ime-details-fix.yml"]
+    branches: [feature/story-mode]
+    paths: [.github/workflows/oneoff-story-ime-details-fix.yml]
 
 permissions:
   contents: write
@@ -17,27 +17,30 @@ jobs:
           ref: feature/story-mode
           fetch-depth: 0
       - name: Fix story IME follow and details focus
-        shell: python {0}
+        shell: bash
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt")
+          path = Path('app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt')
           text = path.read_text()
 
-          def replace_once(old: str, new: str):
+          def replace_once(old, new, label):
               global text
               if text.count(old) != 1:
-                  raise SystemExit(f"expected exactly one match, got {text.count(old)} for:\n{old[:180]}")
+                  raise SystemExit(f'{label}: expected exactly one match, got {text.count(old)}')
               text = text.replace(old, new, 1)
 
           replace_once(
-              "import androidx.compose.foundation.BorderStroke\n",
-              "import androidx.compose.foundation.BorderStroke\nimport androidx.compose.foundation.ExperimentalFoundationApi\nimport androidx.compose.foundation.relocation.BringIntoViewRequester\nimport androidx.compose.foundation.relocation.bringIntoViewRequester\n"
+              'import androidx.compose.foundation.BorderStroke\n',
+              'import androidx.compose.foundation.BorderStroke\nimport androidx.compose.foundation.ExperimentalFoundationApi\nimport androidx.compose.foundation.relocation.BringIntoViewRequester\nimport androidx.compose.foundation.relocation.bringIntoViewRequester\n',
+              'foundation imports'
           )
 
           replace_once(
-              "    val composerDensity=LocalDensity.current\n    var composerHeight by remember { mutableStateOf(100.dp) }\n",
-              "    val composerDensity=LocalDensity.current\n    val focusManager = LocalFocusManager.current\n    val imeInsets = WindowInsets.ime\n    val imeAnimationTarget = WindowInsets.imeAnimationTarget\n    var composerFocused by remember { mutableStateOf(false) }\n    var composerHeight by remember { mutableStateOf(100.dp) }\n"
+              '    val composerDensity=LocalDensity.current\n    var composerHeight by remember { mutableStateOf(100.dp) }\n',
+              '    val composerDensity=LocalDensity.current\n    val focusManager = LocalFocusManager.current\n    val imeInsets = WindowInsets.ime\n    val imeAnimationTarget = WindowInsets.imeAnimationTarget\n    var composerFocused by remember { mutableStateOf(false) }\n    var composerHeight by remember { mutableStateOf(100.dp) }\n',
+              'workspace IME state'
           )
 
           old_follow = '''    LaunchedEffect(messages.size, messages.lastOrNull()?.revision?.content?.length, loading) {
@@ -83,41 +86,48 @@ jobs:
         }
     }
 '''
-          replace_once(old_follow, new_follow)
+          replace_once(old_follow, new_follow, 'workspace IME follow')
 
           replace_once(
-              "            onStop = { storyVm.stop(workspace) },\n            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }\n",
-              "            onStop = { storyVm.stop(workspace) },\n            onFocusChange = { composerFocused = it },\n            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }\n"
+              '            onStop = { storyVm.stop(workspace) },\n            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }\n',
+              '            onStop = { storyVm.stop(workspace) },\n            onFocusChange = { composerFocused = it },\n            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }\n',
+              'composer focus callback wiring'
           )
 
           replace_once(
-              "@Composable\nprivate fun StoryMessageItem(\n",
-              "@OptIn(ExperimentalFoundationApi::class)\n@Composable\nprivate fun StoryMessageItem(\n"
+              '@Composable\nprivate fun StoryMessageItem(\n',
+              '@OptIn(ExperimentalFoundationApi::class)\n@Composable\nprivate fun StoryMessageItem(\n',
+              'message opt-in'
           )
 
           replace_once(
-              "    var showDetails by remember(row.message.id) { mutableStateOf(false) }\n    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {\n",
-              "    var showDetails by remember(row.message.id) { mutableStateOf(false) }\n    val detailsBringIntoViewRequester = remember(row.message.id) { BringIntoViewRequester() }\n    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {\n"
+              '    var showDetails by remember(row.message.id) { mutableStateOf(false) }\n    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {\n',
+              '    var showDetails by remember(row.message.id) { mutableStateOf(false) }\n    val detailsBringIntoViewRequester = remember(row.message.id) { BringIntoViewRequester() }\n    val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {\n',
+              'details requester state'
           )
 
           replace_once(
-              "        StoryWorkspace.Prose -> true\n    }\n\n    Row(\n",
-              "        StoryWorkspace.Prose -> true\n    }\n    LaunchedEffect(showDetails) {\n        if (showDetails) {\n            // Wait for the expanded detail block to be measured, then reveal only\n            // the newly inserted area instead of jumping the whole message to top.\n            withFrameNanos { }\n            runCatching { detailsBringIntoViewRequester.bringIntoView() }\n        }\n    }\n\n    Row(\n"
+              '        StoryWorkspace.Prose -> true\n    }\n\n    Row(\n',
+              '        StoryWorkspace.Prose -> true\n    }\n    LaunchedEffect(showDetails) {\n        if (showDetails) {\n            withFrameNanos { }\n            runCatching { detailsBringIntoViewRequester.bringIntoView() }\n        }\n    }\n\n    Row(\n',
+              'details bring into view effect'
           )
 
           replace_once(
-              "                                Modifier.fillMaxWidth().padding(top = 8.dp),\n                                verticalArrangement = Arrangement.spacedBy(8.dp)\n",
-              "                                Modifier.fillMaxWidth().padding(top = 8.dp)\n                                    .bringIntoViewRequester(detailsBringIntoViewRequester),\n                                verticalArrangement = Arrangement.spacedBy(8.dp)\n"
+              '                                Modifier.fillMaxWidth().padding(top = 8.dp),\n                                verticalArrangement = Arrangement.spacedBy(8.dp)\n',
+              '                                Modifier.fillMaxWidth().padding(top = 8.dp)\n                                    .bringIntoViewRequester(detailsBringIntoViewRequester),\n                                verticalArrangement = Arrangement.spacedBy(8.dp)\n',
+              'details requester modifier'
           )
 
           replace_once(
-              "    onSend: () -> Unit,\n    onStop: () -> Unit,\n    modifier: Modifier = Modifier\n",
-              "    onSend: () -> Unit,\n    onStop: () -> Unit,\n    onFocusChange: (Boolean) -> Unit,\n    modifier: Modifier = Modifier\n"
+              '    onSend: () -> Unit,\n    onStop: () -> Unit,\n    modifier: Modifier = Modifier\n',
+              '    onSend: () -> Unit,\n    onStop: () -> Unit,\n    onFocusChange: (Boolean) -> Unit,\n    modifier: Modifier = Modifier\n',
+              'composer callback parameter'
           )
 
           replace_once(
-              "    val focusManager = LocalFocusManager.current\n    val density = LocalDensity.current\n    val imeInsets = WindowInsets.ime\n    val imeTarget = WindowInsets.imeAnimationTarget\n    val capsuleShape = RoundedCornerShape(31.dp)\n",
-              "    val focusManager = LocalFocusManager.current\n    val capsuleShape = RoundedCornerShape(31.dp)\n"
+              '    val focusManager = LocalFocusManager.current\n    val density = LocalDensity.current\n    val imeInsets = WindowInsets.ime\n    val imeTarget = WindowInsets.imeAnimationTarget\n    val capsuleShape = RoundedCornerShape(31.dp)\n',
+              '    val focusManager = LocalFocusManager.current\n    val capsuleShape = RoundedCornerShape(31.dp)\n',
+              'remove local IME tracking'
           )
 
           old_internal_ime = '''    LaunchedEffect(focused, workspace, density) {
@@ -131,19 +141,19 @@ jobs:
     }
 
 '''
-          replace_once(old_internal_ime, "")
+          replace_once(old_internal_ime, '', 'remove old local IME effect')
 
           replace_once(
-              "                            .heightIn(min = 24.dp, max = 132.dp)\n                            .onFocusChanged { focused = it.isFocused },\n",
-              "                            .heightIn(min = 24.dp, max = 132.dp)\n                            .onFocusChanged { state ->\n                                if (focused != state.isFocused) {\n                                    focused = state.isFocused\n                                    onFocusChange(state.isFocused)\n                                }\n                            },\n"
+              '                            .heightIn(min = 24.dp, max = 132.dp)\n                            .onFocusChanged { focused = it.isFocused },\n',
+              '                            .heightIn(min = 24.dp, max = 132.dp)\n                            .onFocusChanged { state ->\n                                if (focused != state.isFocused) {\n                                    focused = state.isFocused\n                                    onFocusChange(state.isFocused)\n                                }\n                            },\n',
+              'composer focus observer'
           )
 
           path.write_text(text)
+          PY
 
-          workflow = Path(".github/workflows/oneoff-story-ime-details-fix.yml")
-          workflow.unlink()
-      - name: Commit fix
-        run: |
+          rm .github/workflows/oneoff-story-ime-details-fix.yml
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt .github/workflows/oneoff-story-ime-details-fix.yml
