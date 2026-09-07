@@ -52,9 +52,20 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         }
     }
 
-    fun listReviewRecords(storyId:String,timelineId:String): List<StoryMemoryRecord> = helper.readableDatabase.query(
-        StorySchema.MEMORIES,null,"story_id=? AND timeline_id=? AND active=1 AND NOT (${StoryDiscussionLinks.validDependencies(StorySchema.MEMORIES)})",
-        arrayOf(storyId,timelineId),null,null,"updated_at DESC").use { c -> buildList { while(c.moveToNext()) add(c.toMemory()) } }
+    fun listReviewRecords(storyId:String,timelineId:String): List<StoryMemoryRecord> {
+        val local = helper.readableDatabase.query(StorySchema.MEMORIES,null,
+            "story_id=? AND timeline_id=? AND active=1 AND NOT (${StoryDiscussionLinks.validDependencies(StorySchema.MEMORIES)})",
+            arrayOf(storyId,timelineId),null,null,"updated_at DESC").use { c -> buildList { while(c.moveToNext()) add(c.toMemory()) } }
+        val parent = helper.readableDatabase.rawQuery("SELECT parent_timeline_id FROM ${StorySchema.TIMELINES} WHERE id=? AND story_id=?",
+            arrayOf(timelineId,storyId)).use { if(it.moveToFirst()) it.getString(0) else null } ?: return local
+        val current = listMemoryRecords(storyId,timelineId) + local
+        val inherited = helper.readableDatabase.query(StorySchema.MEMORIES,null,
+            "story_id=? AND timeline_id=? AND active=1 AND nature='user_confirmed' AND EXISTS (SELECT 1 FROM ${StorySchema.MEMORY_DEPENDENCIES} d WHERE d.record_id=${StorySchema.MEMORIES}.id)",
+            arrayOf(storyId,parent),null,null,"updated_at DESC").use { c -> buildList { while(c.moveToNext()) add(c.toMemory()) } }
+        return local + inherited.filter { record -> current.none {
+            (it.kind==record.kind && it.content==record.content) || it.scope=="reviewed:${record.id}"
+        } }
+    }
 
     fun addDiscussionRecord(storyId:String,timelineId:String,source:String,content:String,kind:StoryMemoryKind): StoryMemoryRecord =
         helper.writableDatabase.inTransaction { db ->
@@ -64,6 +75,54 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             StoryDiscussionLinks.attach(db,record.id,source)
             record
         }
+
+    /** Explicit reapplication, never automatic carry of later plot facts into an earlier route. */
+    fun listReapplicableSettings(storyId: String, timelineId: String): List<StoryMemoryRecord> {
+        val parent = helper.readableDatabase.rawQuery("SELECT parent_timeline_id FROM ${StorySchema.TIMELINES} WHERE id=? AND story_id=?",
+            arrayOf(timelineId, storyId)).use { if (it.moveToFirst()) it.getString(0) else null } ?: return emptyList()
+        val current = listMemoryRecords(storyId, timelineId)
+        return listMemoryRecords(storyId, parent).filter { record ->
+            record.nature == StoryMemoryNature.UserConfirmed && record.kind in setOf(StoryMemoryKind.WorldFact, StoryMemoryKind.CharacterProfile, StoryMemoryKind.AuthorPlan, StoryMemoryKind.OpenThread) &&
+                !helper.readableDatabase.rawQuery("SELECT 1 FROM ${StorySchema.MEMORY_DEPENDENCIES} WHERE record_id=?",arrayOf(record.id)).use { it.moveToFirst() } &&
+                current.none { (it.kind == record.kind && it.content == record.content) || it.scope == "reapplied:${record.id}" }
+        }
+    }
+
+    fun reapplySetting(storyId: String, timelineId: String, recordId: String, content: String): StoryMemoryRecord =
+        helper.writableDatabase.inTransaction { db ->
+            requireCurrentRoute(db, storyId, timelineId)
+            val source = listReapplicableSettings(storyId,timelineId).singleOrNull { it.id == recordId }
+                ?: error("该独立设定已变化或已采用，请刷新档案")
+            val entities = StoryOrganizerEntities(db, storyId, timelineId)
+            fun mapped(id: String?): String? = id?.let { entity ->
+                db.rawQuery("SELECT canonical_name FROM ${StorySchema.ENTITIES} WHERE id=? AND story_id=?",arrayOf(entity,storyId))
+                    .use { if(it.moveToFirst()) it.getString(0) else null }?.let(entities::resolve)
+            }
+            require(content.isNotBlank() && content.length <= 8_000)
+            addConfirmedRecord(storyId,timelineId,source.kind,content,source.pinned,mapped(source.subjectEntityId),mapped(source.objectEntityId),"reapplied:${source.id}")
+        }
+
+    fun reconfirmReviewedRecord(storyId: String, timelineId: String, recordId: String, content: String): StoryMemoryRecord =
+        helper.writableDatabase.inTransaction { db ->
+            requireCurrentRoute(db,storyId,timelineId)
+            val source = listReviewRecords(storyId,timelineId).singleOrNull { it.id == recordId }
+                ?: error("待复核资料已变化，请刷新档案")
+            require(content.isNotBlank() && content.length <= 8_000)
+            if(source.timelineId == timelineId) check(deactivateRecord(recordId))
+            // Both mutations and both audit entries commit together. Old evidence remains recoverable.
+            val entities = StoryOrganizerEntities(db,storyId,timelineId)
+            fun mapped(id:String?):String? = id?.let { entity ->
+                db.rawQuery("SELECT canonical_name FROM ${StorySchema.ENTITIES} WHERE id=? AND story_id=?",arrayOf(entity,storyId))
+                    .use { if(it.moveToFirst()) it.getString(0) else null }?.let(entities::resolve)
+            }
+            addConfirmedRecord(storyId,timelineId,source.kind,content,source.pinned,mapped(source.subjectEntityId),mapped(source.objectEntityId),"reviewed:${source.id}")
+        }
+
+    private fun requireCurrentRoute(db: SQLiteDatabase, storyId: String, timelineId: String) {
+        require(db.rawQuery("SELECT 1 FROM ${StorySchema.STORIES} WHERE id=? AND current_timeline_id=?",arrayOf(storyId,timelineId)).use { it.moveToFirst() }) {
+            "故事路线已变化，请重新打开档案"
+        }
+    }
 
     fun listStateConflicts(storyId: String, timelineId: String): List<StoryConflictEntry> =
         helper.writableDatabase.inTransaction { db -> StoryConflicts.refresh(db, storyId, timelineId) }

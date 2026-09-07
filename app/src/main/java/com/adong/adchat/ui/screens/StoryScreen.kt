@@ -147,6 +147,8 @@ fun StoryScreen(
             usageText = storyVm.usageText,
             initialSection = storyVm.archiveInitialSection,
             reviewRecords = storyVm.archiveReviewRecords,
+            reapplicableRecords = storyVm.archiveReapplicableRecords,
+            onReapply = storyVm::reapplyArchiveSetting,
             changes = storyVm.archiveChanges,
             changeError = storyVm.archiveChangeError,
             undoBusy = storyVm.undoBusy,
@@ -721,6 +723,8 @@ private fun StoryArchiveSheet(
     usageText: String,
     initialSection: Int,
     reviewRecords: List<StoryMemoryRecord>,
+    reapplicableRecords: List<StoryMemoryRecord>,
+    onReapply: (String, String, Boolean) -> Unit,
     changes: List<StoryChangeEntry>,
     changeError: String?,
     undoBusy: Boolean,
@@ -737,6 +741,16 @@ private fun StoryArchiveSheet(
     onDismiss: () -> Unit
 ) {
     var section by remember { mutableIntStateOf(initialSection) }
+    var reapplying by remember { mutableStateOf<Pair<StoryMemoryRecord,Boolean>?>(null) }
+    reapplying?.let { (record, review) ->
+        var text by remember(record.id) { mutableStateOf(record.content) }
+        AlertDialog(onDismissRequest={reapplying=null},title={Text(if(review) "复核并重新确认" else "用于当前路线")},
+            text={Column {
+                Text(if(review) "请根据新正文修正内容。确认后保存为独立资料，旧记录保留在变更历史中。" else "这是旧路线中的独立设定。确认适用于当前路线后再保存；旧路线保持原样。")
+                OutlinedTextField(value=text,onValueChange={text=it},modifier=Modifier.heightIn(max=280.dp))
+            }},confirmButton={TextButton(onClick={onReapply(record.id,text,review);reapplying=null},enabled=!undoBusy && text.isNotBlank() && text.length<=8000) {Text("确认保存")}},
+            dismissButton={TextButton(onClick={reapplying=null}) {Text("取消")}})
+    }
     var editingProposal by remember { mutableStateOf<StoryProposal?>(null) }
     editingProposal?.let { proposal ->
         var text by remember(proposal.id) { mutableStateOf(proposal.content) }
@@ -822,8 +836,15 @@ private fun StoryArchiveSheet(
                     }
                     if(reviewRecords.isNotEmpty()) item {Text("待复核 · 引用的正文已变化",style=MaterialTheme.typography.titleSmall)}
                     items(reviewRecords,key={"review-${it.id}"}) { record ->
-                        ArchiveInfoCard("暂不用于正文",record.content+"\n引用来源已变化。可先添加修正后的独立资料，再停用此旧记录。") {
-                            TextButton(onClick={onRemove(record.id)}) {Text("停用")}
+                        ArchiveInfoCard("暂不用于正文",record.content+"\n引用来源已变化，需要重新判断是否适用。") {
+                            TextButton(onClick={reapplying=record to true},enabled=!undoBusy) {Text("复核并确认")}
+                            if(record.timelineId==story.currentTimelineId) TextButton(onClick={onRemove(record.id)},enabled=!undoBusy) {Text("停用")}
+                        }
+                    }
+                    if(reapplicableRecords.isNotEmpty()) item {Text("旧路线的独立设定",style=MaterialTheme.typography.titleSmall)}
+                    items(reapplicableRecords,key={"reapply-${it.id}"}) { record ->
+                        ArchiveInfoCard("尚未用于当前路线",record.content) {
+                            TextButton(onClick={reapplying=record to false},enabled=!undoBusy) {Text("检查并采用")}
                         }
                     }
                     if (proposals.isNotEmpty()) item { Text("待确认 · ${proposals.size}", style = MaterialTheme.typography.titleSmall) }

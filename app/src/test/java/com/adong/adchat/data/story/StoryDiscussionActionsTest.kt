@@ -59,7 +59,44 @@ class StoryDiscussionActionsTest {
         val proposal=StoryProposal(storyId=story.id,timelineId=story.currentTimelineId,content="钥匙来自家族",proposalKind="world",sourceRevisionId=prose.revision.id)
         assertEquals(proposal,StoryExplicitDecision.match("采用：钥匙来自家族",listOf(proposal)))
         assertNull(StoryExplicitDecision.match("这个不错",listOf(proposal)))
+        assertTrue(StoryExplicitDecision.needsClarification("这个不错！",listOf(proposal)))
+        assertFalse(StoryExplicitDecision.needsClarification("这个不错",emptyList()))
         assertNull(StoryExplicitDecision.match("采用：钥匙来自家族",listOf(proposal,proposal.copy(id="duplicate"))))
         assertNull(StoryExplicitDecision.match("采用：钥匙",listOf(proposal)))
     }
+    @Test fun reviewReconfirmationIsAtomicAndDoesNotDependOnOldProse() {
+        val reply=discussion()
+        val fact=archive.addDiscussionRecord(story.id,story.currentTimelineId,reply.revision.id,"钥匙来自家族",StoryMemoryKind.WorldFact)
+        val revised=repo.replaceMessageRevision(prose.message.id,"没有钥匙",expectedRevisionId=prose.revision.id,allowLaterDiscussion=true)!!
+        val helper=StoryDatabase(context)
+        helper.writableDatabase.execSQL("CREATE TRIGGER fail_review BEFORE INSERT ON memory_records BEGIN SELECT RAISE(ABORT,'fail'); END")
+        val version=repo.getStory(story.id)!!.memoryVersion
+        assertThrows(Exception::class.java) { archive.reconfirmReviewedRecord(story.id,story.currentTimelineId,fact.id,"家族保管钥匙") }
+        assertEquals(version,repo.getStory(story.id)!!.memoryVersion)
+        assertEquals(fact.id,archive.listReviewRecords(story.id,story.currentTimelineId).single().id)
+        helper.writableDatabase.execSQL("DROP TRIGGER fail_review");helper.close()
+        val fresh=archive.reconfirmReviewedRecord(story.id,story.currentTimelineId,fact.id,"家族保管钥匙")
+        assertNull(fresh.sourceRevisionId);assertTrue(archive.listReviewRecords(story.id,story.currentTimelineId).isEmpty())
+        repo.restoreMessageRevision(prose.message.id,prose.revision.id,revised.revision.id)
+        assertEquals(fresh.id,archive.listMemoryRecords(story.id,story.currentTimelineId).single().id)
+    }
+
+    @Test fun forkOffersIndependentSettingsAndLinkedDecisionsWithoutChangingOldRoute() {
+        val reply=discussion()
+        val linked=archive.addDiscussionRecord(story.id,story.currentTimelineId,reply.revision.id,"钥匙属于家族",StoryMemoryKind.WorldFact)
+        val independent=archive.addConfirmedRecord(story.id,story.currentTimelineId,StoryMemoryKind.WorldFact,"北方终年积雪",true)
+        val route=repo.forkProseRevision(prose.message.id,prose.revision.id,"她没有发现钥匙")
+        assertTrue(archive.listMemoryRecords(story.id,route).isEmpty())
+        assertEquals(independent.id,archive.listReapplicableSettings(story.id,route).single().id)
+        assertEquals(linked.id,archive.listReviewRecords(story.id,route).single().id)
+        val copy=archive.reapplySetting(story.id,route,independent.id,independent.content)
+        assertTrue(copy.pinned);assertNull(copy.sourceRevisionId)
+        assertTrue(archive.listReapplicableSettings(story.id,route).isEmpty())
+        assertThrows(IllegalStateException::class.java) {archive.reapplySetting(story.id,route,independent.id,independent.content)}
+        archive.reconfirmReviewedRecord(story.id,route,linked.id,"家族仍保管钥匙")
+        assertTrue(archive.listReviewRecords(story.id,route).isEmpty())
+        assertEquals(setOf(linked.id,independent.id),archive.listMemoryRecords(story.id,story.currentTimelineId).map { it.id }.toSet())
+        assertEquals(2,archive.listMemoryRecords(story.id,route).size)
+    }
+
 }

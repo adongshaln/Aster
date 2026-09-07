@@ -51,5 +51,7 @@ object StoryExplicitDecision {
         val content=input.removePrefix(prefix).trim().removeSurrounding("「","」")
         return proposals.filter { it.state==StoryProposalState.Pending && it.content.trim()==content }.singleOrNull()
     }
+    fun needsClarification(input:String,proposals:List<StoryProposal>):Boolean = proposals.any { it.state==StoryProposalState.Pending } &&
+        input.trim().trimEnd('。','！','!','.').trim() in setOf("这个不错","这个可以","就这个","采用这个","选这个","都不错")
     fun isExplicit(input:String)=listOf("确认采用：","确认采用:","采用：","采用:").any { input.startsWith(it) }
 }

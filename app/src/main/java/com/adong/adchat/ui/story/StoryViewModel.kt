@@ -63,6 +63,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     var memoryStatus by mutableStateOf("暂无整理任务")
         private set
     val archiveRecords = mutableStateListOf<StoryMemoryRecord>()
+    val archiveReapplicableRecords = mutableStateListOf<StoryMemoryRecord>()
     val archiveReviewRecords = mutableStateListOf<StoryMemoryRecord>()
     val archiveConflicts = mutableStateListOf<StoryConflictEntry>()
     val archiveChanges = mutableStateListOf<StoryChangeEntry>()
@@ -692,9 +693,10 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     content = input,
                     state = StoryRevisionState.Complete
                 )
-                if(workspace==StoryWorkspace.Discussion && com.adong.adchat.data.story.StoryExplicitDecision.isExplicit(input)) {
-                    val proposal=com.adong.adchat.data.story.StoryExplicitDecision.match(input,
-                        archiveStore.listPendingProposals(story.id,story.currentTimelineId))
+                val pendingDecisions = if(workspace==StoryWorkspace.Discussion) archiveStore.listPendingProposals(story.id,story.currentTimelineId) else emptyList()
+                if(workspace==StoryWorkspace.Discussion && (com.adong.adchat.data.story.StoryExplicitDecision.isExplicit(input) ||
+                    com.adong.adchat.data.story.StoryExplicitDecision.needsClarification(input,pendingDecisions))) {
+                    val proposal=com.adong.adchat.data.story.StoryExplicitDecision.match(input,pendingDecisions)
                     val accepted=proposal!=null && archiveStore.decideProposal(story.id,story.currentTimelineId,proposal.id,true,
                         decisionRevisionId=userMessage.revision.id)
                     store.appendMessage(story.id,story.currentTimelineId,workspace,"assistant",
@@ -992,6 +994,21 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         task.start()
     }
 
+    fun reapplyArchiveSetting(id: String, content: String, review: Boolean) {
+        val story = activeStory ?: return
+        if (undoBusy) return
+        undoBusy = true; archiveChangeError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                if (review) archiveStore.reconfirmReviewedRecord(story.id,story.currentTimelineId,id,content)
+                else archiveStore.reapplySetting(story.id,story.currentTimelineId,id,content)
+                refreshArchive(story.id,story.currentTimelineId);refreshStory(story.id)
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { archiveChangeError=e.message ?: "资料未保存，请重试" }
+            } finally { withContext(Dispatchers.Main) { undoBusy=false } }
+        }
+    }
+
     private fun loadActiveStoryState(story: Story) {
         val epoch = stateEpoch
         viewModelScope.launch(Dispatchers.IO) {
@@ -1038,6 +1055,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val conflicts = archiveStore.listStateConflicts(storyId, timelineId)
         val changes = archiveStore.listChanges(storyId, timelineId)
         val reviews=archiveStore.listReviewRecords(storyId,timelineId)
+        val reapplicable=archiveStore.listReapplicableSettings(storyId,timelineId)
         val usage = com.adong.adchat.data.story.renderStoryUsage(usageStore.totals(storyId))
         withContext(Dispatchers.Main) {
             if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
@@ -1049,6 +1067,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 archiveChanges.clear()
                 archiveChanges.addAll(changes)
                 archiveReviewRecords.clear();archiveReviewRecords.addAll(reviews)
+                archiveReapplicableRecords.clear();archiveReapplicableRecords.addAll(reapplicable)
                 usageText = usage
             }
         }
