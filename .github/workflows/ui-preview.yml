@@ -2,7 +2,12 @@ name: Native UI preview
 
 on:
   push:
-    branches: ["design/**"]
+    branches: ["design/**", "feature/story-mode"]
+    paths:
+      - "app/src/main/java/com/adong/adchat/ui/**"
+      - "app/src/androidTest/**"
+      - ".github/workflows/ui-preview.yml"
+      - "tools/run_ui_preview.sh"
   workflow_dispatch:
 
 permissions:
@@ -39,7 +44,7 @@ jobs:
           arch: x86_64
           profile: pixel_2
           disable-animations: false
-          script: bash tools/run_ui_preview.sh
+          script: bash tools/run_ui_preview.sh com.adong.adchat.SharedUiInteractionTest
       - name: Upload native screenshots and test report
         if: always()
         uses: actions/upload-artifact@v4
