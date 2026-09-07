@@ -56,6 +56,7 @@ android {
 }
 
 dependencies {
+    implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation(platform("androidx.compose:compose-bom:2025.05.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.ui:ui")

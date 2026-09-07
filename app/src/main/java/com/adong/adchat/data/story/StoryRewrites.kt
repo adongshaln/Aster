@@ -53,7 +53,7 @@ object StoryRewriteContext {
             it.message.workspace == StoryWorkspace.Prose && it.message.sequence < source.message.sequence }
         val originalRequest = originalInput ?: prior.lastOrNull { it.message.role == "user" && it.revision.state == StoryRevisionState.Complete }?.revision?.content.orEmpty()
         val input = "[原创作要求]\n$originalRequest\n[待重写原文，仅为修改素材]\n${source.revision.content}\n[用户明确修改要求]\n$instruction"
-        val current = source.copy(message=source.message.copy(role="user"),revision=source.revision.copy(content=input))
+        val current = source.copy(message=source.message.copy(role="user"),revision=source.revision.copy(content=input, attachments=prior.lastOrNull { it.message.role=="user" }?.revision?.attachments.orEmpty()))
         // Pinned constraints stay mandatory; unpinned facts derived from the text being replaced are not authority.
         val records = snapshot.records.filter { it.pinned ||
             (it.sourceRevisionId != source.revision.id && source.revision.id !in it.summarySourceRevisionIds) }

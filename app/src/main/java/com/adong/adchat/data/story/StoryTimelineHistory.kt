@@ -178,6 +178,7 @@ internal object StoryTimelineHistory {
             val restored = saved.firstOrNull { it.getString("workspace") == previous.getString("workspace") }
             val values = ContentValues().apply {
                 put("draft", restored?.getString("draft") ?: "")
+                put("attachments_json", restored?.optString("attachments_json", "[]") ?: "[]")
                 put("first_visible_index", restored?.getInt("first_visible_index") ?: 0)
                 put("first_visible_offset", restored?.getInt("first_visible_offset") ?: 0)
                 put("updated_at", nextStoryWorkspaceUpdatedAt(previous.getLong("updated_at"), now))

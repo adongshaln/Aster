@@ -143,7 +143,8 @@ class StoryRepository(context: Context) : AutoCloseable {
         content: String,
         state: StoryRevisionState = StoryRevisionState.Complete,
         profileName: String = "",
-        model: String = ""
+        model: String = "",
+        attachments: List<com.adong.adchat.data.ChatImageAttachment> = emptyList()
     ): StoryMessageWithRevision {
         val messageId = newMessageId()
         val revisionId = newRevisionId()
@@ -168,6 +169,7 @@ class StoryRepository(context: Context) : AutoCloseable {
                 timelineId = timelineId,
                 workspace = workspace,
                 content = content,
+                attachments = attachments,
                 state = state,
                 profileName = profileName,
                 model = model,
@@ -359,7 +361,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             m.id AS m_id, m.story_id AS m_story_id, m.timeline_id AS m_timeline_id,
             m.workspace AS m_workspace, m.role AS m_role, m.sequence_no AS m_sequence_no,
             m.active_revision_id AS m_active_revision_id, m.created_at AS m_created_at,
-            r.id AS r_id, r.content AS r_content, r.state AS r_state,
+            r.id AS r_id, r.attachments_json AS r_attachments_json, r.content AS r_content, r.state AS r_state,
             r.profile_name AS r_profile_name, r.model AS r_model,
             r.created_at AS r_created_at, r.completed_at AS r_completed_at
         FROM ${StorySchema.MESSAGES} m
@@ -388,6 +390,7 @@ class StoryRepository(context: Context) : AutoCloseable {
                     timelineId = message.timelineId,
                     workspace = message.workspace,
                     content = cursor.string("r_content"),
+                    attachments = StoryImages.decode(cursor.string("r_attachments_json")),
                     state = StoryRevisionState.fromDb(cursor.string("r_state")),
                     profileName = cursor.string("r_profile_name"),
                     model = cursor.string("r_model"),
@@ -410,6 +413,7 @@ class StoryRepository(context: Context) : AutoCloseable {
                 storyId = storyId,
                 workspace = workspace,
                 draft = cursor.string("draft"),
+                attachments = StoryImages.decode(cursor.string("attachments_json")),
                 firstVisibleIndex = cursor.int("first_visible_index"),
                 firstVisibleOffset = cursor.int("first_visible_offset"),
                 updatedAt = cursor.long("updated_at"),
@@ -430,6 +434,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             put("story_id", state.storyId)
             put("workspace", state.workspace.dbValue)
             put("draft", state.draft.take(MAX_WORKSPACE_DRAFT))
+            put("attachments_json", StoryImages.encode(state.attachments))
             put("first_visible_index", state.firstVisibleIndex.coerceAtLeast(0))
             put("first_visible_offset", state.firstVisibleOffset)
             put("updated_at", state.updatedAt)
@@ -550,6 +555,7 @@ class StoryRepository(context: Context) : AutoCloseable {
                 put("timeline_id", revision.timelineId)
                 put("workspace", revision.workspace.dbValue)
                 put("content", revision.content)
+                put("attachments_json", StoryImages.encode(revision.attachments))
                 put("state", revision.state.dbValue)
                 put("profile_name", revision.profileName)
                 put("model", revision.model)
@@ -565,7 +571,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             m.id AS m_id, m.story_id AS m_story_id, m.timeline_id AS m_timeline_id,
             m.workspace AS m_workspace, m.role AS m_role, m.sequence_no AS m_sequence_no,
             m.active_revision_id AS m_active_revision_id, m.created_at AS m_created_at,
-            r.id AS r_id, r.content AS r_content, r.state AS r_state,
+            r.id AS r_id, r.attachments_json AS r_attachments_json, r.content AS r_content, r.state AS r_state,
             r.profile_name AS r_profile_name, r.model AS r_model,
             r.created_at AS r_created_at, r.completed_at AS r_completed_at
         FROM ${StorySchema.MESSAGES} m
@@ -593,6 +599,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             timelineId = message.timelineId,
             workspace = message.workspace,
             content = cursor.string("r_content"),
+                    attachments = StoryImages.decode(cursor.string("r_attachments_json")),
             state = StoryRevisionState.fromDb(cursor.string("r_state")),
             profileName = cursor.string("r_profile_name"),
             model = cursor.string("r_model"),
@@ -643,6 +650,7 @@ class StoryRepository(context: Context) : AutoCloseable {
         timelineId = string("timeline_id"),
         workspace = StoryWorkspace.fromDb(string("workspace")),
         content = string("content"),
+        attachments = StoryImages.decode(string("attachments_json")),
         state = StoryRevisionState.fromDb(string("state")),
         profileName = string("profile_name"),
         model = string("model"),

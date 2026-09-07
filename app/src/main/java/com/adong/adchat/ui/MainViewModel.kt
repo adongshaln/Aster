@@ -538,6 +538,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scheduleSessionSave()
     }
 
+    fun attachChatDocument(uri: Uri) {
+        if (isChatAttachmentLoading || isChatLoading) return
+        val conversation = activeConversationId
+        isChatAttachmentLoading = true
+        viewModelScope.launch {
+            try {
+                val block = withContext(Dispatchers.IO) { DocumentImport.read(getApplication(), uri) }
+                check(activeConversationId == conversation) { "对话已切换，请在目标对话重新选择文件" }
+                updateChatInput(DocumentImport.append(chatInput, block))
+                notice = "文件文字已加入草稿，可检查后发送"
+            } catch (e: Exception) { notice = e.message ?: "文件读取失败" }
+            finally { isChatAttachmentLoading = false }
+        }
+    }
+
     fun attachChatImages(uris: List<Uri>) {
         val remaining = (MAX_CHAT_IMAGES - chatAttachments.size).coerceAtLeast(0)
         if (remaining == 0) {

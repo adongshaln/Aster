@@ -1,10 +1,16 @@
 package com.adong.adchat.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.ui.layout.onSizeChanged
+import coil.compose.AsyncImage
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
@@ -247,6 +253,16 @@ private fun StoryWorkspaceContent(
     val workspace = storyVm.activeWorkspace
     val messages = storyVm.messages(workspace)
     val savedState = storyVm.workspaceState(workspace)
+    val targetStory = storyVm.activeStory ?: return
+    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
+        if(uris.isNotEmpty()) storyVm.importAttachments(uris,true,targetStory.id,targetStory.currentTimelineId,workspace)
+    }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if(uri!=null) storyVm.importAttachments(listOf(uri),false,targetStory.id,targetStory.currentTimelineId,workspace)
+    }
+    val composerDensity=LocalDensity.current
+    var composerHeight by remember { mutableStateOf(100.dp) }
+
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = savedState.firstVisibleIndex.coerceAtMost(messages.lastIndex.coerceAtLeast(0)),
         initialFirstVisibleItemScrollOffset = savedState.firstVisibleOffset.coerceAtLeast(0)
@@ -386,7 +402,7 @@ private fun StoryWorkspaceContent(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = 124.dp),
+                contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = composerHeight + 20.dp),
                 verticalArrangement = Arrangement.spacedBy(28.dp)
             ) {
                 items(messages, key = { it.message.id }) { row ->
@@ -446,7 +462,7 @@ private fun StoryWorkspaceContent(
                 color = Surface,
                 contentColor = Accent,
                 border = BorderStroke(1.dp, Hairline),
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 96.dp)
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = composerHeight + 8.dp)
             ) {
                 Icon(Icons.Rounded.KeyboardArrowDown, "回到底部", Modifier.padding(12.dp).size(20.dp))
             }
@@ -454,6 +470,11 @@ private fun StoryWorkspaceContent(
 
         StoryComposer(
             value = storyVm.draft(workspace),
+            attachments = savedState.attachments,
+            attachmentBusy = storyVm.attachmentBusy,
+            onPickImages = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+            onPickDocument = { documentPicker.launch(com.adong.adchat.data.DocumentImport.mimeTypes) },
+            onRemoveImage = { storyVm.removeDraftImage(it,workspace) },
             workspace = workspace,
             loading = loading,
             routeAvailable = profile != null,
@@ -463,7 +484,7 @@ private fun StoryWorkspaceContent(
                 autoFollow = true
             },
             onStop = { storyVm.stop(workspace) },
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding()
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }
         )
     }
 }
@@ -482,6 +503,7 @@ private fun StoryMessageItem(row: StoryMessageWithRevision) {
             horizontalAlignment = if (user) Alignment.End else Alignment.Start
         ) {
             if (user) {
+                StoryImageStrip(row.revision.attachments)
                 Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
                     StructuredMessageText(
                         content = row.revision.content,
@@ -562,6 +584,11 @@ private fun StoryThinkingIndicator() {
 @Composable
 private fun StoryComposer(
     value: String,
+    attachments: List<com.adong.adchat.data.ChatImageAttachment>,
+    attachmentBusy: Boolean,
+    onPickImages: () -> Unit,
+    onPickDocument: () -> Unit,
+    onRemoveImage: (String) -> Unit,
     workspace: StoryWorkspace,
     loading: Boolean,
     routeAvailable: Boolean,
@@ -570,6 +597,7 @@ private fun StoryComposer(
     onStop: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showAttachments by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val density = LocalDensity.current
@@ -592,17 +620,21 @@ private fun StoryComposer(
         border = BorderStroke(1.dp, if (focused) Accent.copy(alpha = .35f) else Hairline),
         modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)
     ) {
+        Column {
+        if(attachments.isNotEmpty()) StoryImageStrip(attachments, onRemoveImage)
+        if(attachmentBusy) LinearProgressIndicator(modifier=Modifier.fillMaxWidth().padding(horizontal=22.dp))
         Row(
             Modifier.defaultMinSize(minHeight = if (focused) 92.dp else 60.dp).padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = if (focused) Alignment.Bottom else Alignment.CenterVertically
         ) {
-            Box(Modifier.size(38.dp).clip(CircleShape).background(AccentSoft), contentAlignment = Alignment.Center) {
-                Icon(
-                    if (workspace == StoryWorkspace.Discussion) Icons.Rounded.Forum else Icons.Rounded.AutoStories,
-                    null,
-                    Modifier.size(19.dp),
-                    tint = Accent
-                )
+            Box {
+                IconButton(onClick={showAttachments=true}, enabled=!loading && !attachmentBusy) {
+                    Icon(Icons.Rounded.Add,"添加图片或文件",tint=Accent)
+                }
+                DropdownMenu(expanded=showAttachments,onDismissRequest={showAttachments=false}) {
+                    DropdownMenuItem(text={Text("图片")},onClick={showAttachments=false;onPickImages()},enabled=attachments.size<4)
+                    DropdownMenuItem(text={Text("文件 · 文本 / DOCX / PDF")},onClick={showAttachments=false;onPickDocument()})
+                }
             }
             Spacer(Modifier.width(10.dp))
             BasicTextField(
@@ -628,12 +660,13 @@ private fun StoryComposer(
             Spacer(Modifier.width(9.dp))
             FilledIconButton(
                 onClick = if (loading) onStop else onSend,
-                enabled = loading || value.isNotBlank() || !routeAvailable,
+                enabled = loading || (!attachmentBusy && (value.isNotBlank() || attachments.isNotEmpty() || !routeAvailable)),
                 colors = IconButtonDefaults.filledIconButtonColors(containerColor = Night, contentColor = WarmWhite),
                 modifier = Modifier.size(48.dp)
             ) {
                 Icon(if (loading) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward, if (loading) "停止" else "发送")
             }
+        }
         }
     }
 }
@@ -1144,5 +1177,21 @@ private fun storyAnnotatedText(text: String): AnnotatedString = buildAnnotatedSt
         if (end < 0) break
         addStyle(SpanStyle(color = Accent), start, end + 1)
         cursor = end + 1
+    }
+}
+
+
+@Composable
+private fun StoryImageStrip(images: List<com.adong.adchat.data.ChatImageAttachment>, onRemove: ((String)->Unit)? = null) {
+    if(images.isEmpty()) return
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=14.dp,vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+        images.forEach { image ->
+            Box {
+                AsyncImage(model=image.uri,contentDescription=image.name,modifier=Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)))
+                if(onRemove!=null) IconButton(onClick={onRemove(image.id)},modifier=Modifier.align(Alignment.TopEnd).size(28.dp).background(Surface,CircleShape)) {
+                    Icon(Icons.Rounded.Close,"移除 ${image.name}",modifier=Modifier.size(16.dp))
+                }
+            }
+        }
     }
 }

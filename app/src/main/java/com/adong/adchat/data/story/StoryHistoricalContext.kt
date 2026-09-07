@@ -19,7 +19,7 @@ internal object StoryHistoricalContext {
             StoryMessageWithRevision(StoryMessage(m.getString("id"),source.message.storyId,source.message.timelineId,workspace,
                 m.getString("role"),m.getLong("sequence_no"),revision,m.getLong("created_at")),
                 StoryMessageRevision(revision,m.getString("id"),source.message.storyId,source.message.timelineId,workspace,text,
-                    StoryRevisionState.fromDb(states.getValue(revision))))
+                    StoryRevisionState.fromDb(states.getValue(revision)), attachments=db.rawQuery("SELECT attachments_json FROM ${StorySchema.REVISIONS} WHERE id=?",arrayOf(revision)).use { check(it.moveToFirst());StoryImages.decode(it.getString(0)) }))
         }
         val complete=history.filter { it.revision.state==StoryRevisionState.Complete }.map { it.revision.id }.toSet()
         val summarySources=(snapshot.optJSONArray("summary_sources") ?: JSONArray()).rows()

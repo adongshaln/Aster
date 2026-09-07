@@ -58,6 +58,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var stateEpoch = 0L
     private val stopRequested = ConcurrentHashMap.newKeySet<String>()
 
+    var attachmentBusy by mutableStateOf(false)
+        private set
     val stories = mutableStateListOf<Story>()
     val archiveProposals = mutableStateListOf<StoryProposal>()
     var memoryStatus by mutableStateOf("暂无整理任务")
@@ -223,6 +225,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             store.deleteStory(storyId)
+            com.adong.adchat.data.story.StoryImages.directory(getApplication(),storyId).deleteRecursively()
             val remaining = store.listStories()
             withContext(Dispatchers.Main) {
                 stories.clear()
@@ -240,12 +243,42 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateDraft(value: String, workspace: StoryWorkspace = activeWorkspace) {
+    fun importAttachments(uris: List<android.net.Uri>, images: Boolean, storyId: String, timelineId: String, workspace: StoryWorkspace) {
+        if(attachmentBusy || revisionBusy || isLoading(workspace)) return
+        if(activeStoryId!=storyId || activeStory?.currentTimelineId!=timelineId) return
+        val epoch=stateEpoch
+        attachmentBusy=true
+        viewModelScope.launch {
+            try {
+                if(images) {
+                    val available=4-workspaceState(workspace).attachments.size
+                    require(uris.size<=available) { "每条消息最多添加 4 张图片" }
+                    val loaded=withContext(Dispatchers.IO) { uris.map { com.adong.adchat.data.story.StoryImages.importImage(getApplication(),storyId,it) } }
+                    check(epoch==stateEpoch && activeStoryId==storyId && activeStory?.currentTimelineId==timelineId) { "故事路线已切换，请重新选择图片" }
+                    updateDraft(draft(workspace),workspace,workspaceState(workspace).attachments+loaded)
+                } else {
+                    val blocks=withContext(Dispatchers.IO) { uris.map { com.adong.adchat.data.DocumentImport.read(getApplication(),it) } }
+                    check(epoch==stateEpoch && activeStoryId==storyId && activeStory?.currentTimelineId==timelineId) { "故事路线已切换，请重新选择文件" }
+                    val text=blocks.fold(draft(workspace),com.adong.adchat.data.DocumentImport::append)
+                    updateDraft(text,workspace)
+                }
+            } catch(e: Exception) {
+                if(epoch==stateEpoch && activeStoryId==storyId) errors[workspace]=e.message ?: "附件读取失败"
+            } finally { attachmentBusy=false }
+        }
+    }
+    fun removeDraftImage(id: String, workspace: StoryWorkspace) {
+        if(attachmentBusy)return
+        updateDraft(draft(workspace),workspace,workspaceState(workspace).attachments.filterNot { it.id==id })
+    }
+
+    fun updateDraft(value: String, workspace: StoryWorkspace = activeWorkspace, attachments: List<com.adong.adchat.data.ChatImageAttachment>? = null) {
         val storyId = activeStoryId ?: return
         val current = workspaceState(workspace)
         val next = current.copy(
             storyId = storyId,
             draft = value,
+            attachments = attachments ?: current.attachments,
             updatedAt = nextStoryWorkspaceUpdatedAt(current.updatedAt, System.currentTimeMillis())
         )
         workspaceStates[workspace] = next
@@ -661,8 +694,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     fun send(profile: ApiProfile, workspace: StoryWorkspace = activeWorkspace) {
         val story = activeStory ?: return
-        val input = draft(workspace).trim()
-        if (input.isBlank() || revisionBusy) return
+        val attachments = workspaceState(workspace).attachments.toList()
+        val input = draft(workspace).trim().ifBlank { if(attachments.isNotEmpty()) "请参考所附图片，按当前工作区处理。" else "" }
+        if (input.isBlank() || revisionBusy || attachmentBusy) return
         val key = jobKey(story.id, workspace)
         if (loadingKeys[key] == true) return
         if (profile.id != story.profileId) {
@@ -675,7 +709,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        updateDraft("", workspace)
+        updateDraft("", workspace, emptyList())
         errors.remove(workspace)
         loadingKeys[key] = true
         stopRequested.remove(key)
@@ -691,6 +725,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     workspace = workspace,
                     role = "user",
                     content = input,
+                    attachments = attachments,
                     state = StoryRevisionState.Complete
                 )
                 val pendingDecisions = if(workspace==StoryWorkspace.Discussion) archiveStore.listPendingProposals(story.id,story.currentTimelineId) else emptyList()
@@ -1092,11 +1127,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         profile: ApiProfile, model: String, systemPrompt: String, history: List<ChatMessage>, cacheKey: String,
         onDelta: suspend (String) -> Unit
     ): com.adong.adchat.data.ChatCompletionResult {
+        val preparedHistory = com.adong.adchat.data.story.StoryImages.hydrate(getApplication(),storyId,history)
         val id = usageStore.begin(storyId,timelineId,category,profile.id,model,sourceId)
         var result: com.adong.adchat.data.ChatCompletionResult? = null
         var state = "failed"
         try {
-            val response = api.streamChat(profile,model,systemPrompt,history,cacheKey,onDelta=onDelta)
+            val response = api.streamChat(profile,model,systemPrompt,preparedHistory,cacheKey,onDelta=onDelta)
             result = response
             state = if(response.outputComplete) "completed" else "incomplete"
             return response

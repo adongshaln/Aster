@@ -266,7 +266,7 @@ object StoryContextComposer {
             .toMutableList()
         currentTurn?.let(historyRows::add)
         val history = historyRows.map { row ->
-            ChatMessage(role = row.message.role, content = row.revision.content)
+            ChatMessage(role = row.message.role, content = row.revision.content, attachments = row.revision.attachments)
         }
 
         val systemPrompt = buildString {
@@ -331,9 +331,9 @@ object StoryContextComposer {
     }
 
     private fun historyCost(row: StoryMessageWithRevision): Int =
-        row.message.role.length + row.revision.content.length + 16
+        row.message.role.length + row.revision.content.length + 16 + row.revision.attachments.size * 4096
 
-    private fun messageCost(message: ChatMessage): Int = message.role.length + message.content.length + 16
+    private fun messageCost(message: ChatMessage): Int = message.role.length + message.content.length + 16 + message.attachments.size * 4096
 
     private fun completeHistoryTurns(rows: List<StoryMessageWithRevision>): List<HistoryTurn> {
         val turns = mutableListOf<HistoryTurn>()

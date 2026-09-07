@@ -126,7 +126,8 @@ data class StoryMessageRevision(
     val profileName: String = "",
     val model: String = "",
     val createdAt: Long = System.currentTimeMillis(),
-    val completedAt: Long? = null
+    val completedAt: Long? = null,
+    val attachments: List<com.adong.adchat.data.ChatImageAttachment> = emptyList()
 ) {
     val eligibleForMemory: Boolean
         get() = workspace == StoryWorkspace.Prose && state == StoryRevisionState.Complete && content.isNotBlank()
@@ -208,7 +209,8 @@ data class StoryWorkspaceState(
     val firstVisibleIndex: Int = 0,
     val firstVisibleOffset: Int = 0,
     val updatedAt: Long = System.currentTimeMillis(),
-    val timelineId: String? = null
+    val timelineId: String? = null,
+    val attachments: List<com.adong.adchat.data.ChatImageAttachment> = emptyList()
 )
 
 fun newStoryId(): String = "story_${UUID.randomUUID()}"

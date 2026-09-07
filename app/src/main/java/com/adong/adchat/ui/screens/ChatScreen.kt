@@ -154,6 +154,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             result.data?.data?.let { target -> vm.exportGeneratedFile(file, target) }
         }
     }
+    val chatDocumentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(vm::attachChatDocument)
+    }
     val chatImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         if (uris.isNotEmpty()) vm.attachChatImages(uris)
     }
@@ -413,6 +416,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onPickImages = {
                         chatImagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                     },
+                    onPickDocument = { chatDocumentPicker.launch(com.adong.adchat.data.DocumentImport.mimeTypes) },
                     onRemoveImage = vm::removeChatImage,
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
@@ -1789,6 +1793,7 @@ private fun ChatComposer(
     onFileCreationToggle: (Boolean) -> Unit,
     onValueChange: (String) -> Unit,
     onPickImages: () -> Unit,
+    onPickDocument: () -> Unit,
     onRemoveImage: (String) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
@@ -1974,7 +1979,9 @@ private fun ChatComposer(
             webSearchEnabled = webSearchEnabled,
             fileCreationEnabled = fileCreationEnabled,
             canPickImages = !loading && !attachmentLoading && attachments.size < 4,
+            canPickDocuments = !loading && !attachmentLoading,
             onPickImages = { showToolsSheet = false; onPickImages() },
+            onPickDocument = { showToolsSheet = false; onPickDocument() },
             onModelClick = { showToolsSheet = false; onModelClick() },
             onReasoningClick = { showToolsSheet = false; showEffortSheet = true },
             onWebSearchToggle = onWebSearchToggle,
@@ -2025,7 +2032,9 @@ private fun ChatToolsSheet(
     webSearchEnabled: Boolean,
     fileCreationEnabled: Boolean,
     canPickImages: Boolean,
+    canPickDocuments: Boolean,
     onPickImages: () -> Unit,
+    onPickDocument: () -> Unit,
     onModelClick: () -> Unit,
     onReasoningClick: () -> Unit,
     onWebSearchToggle: (Boolean) -> Unit,
@@ -2046,6 +2055,7 @@ private fun ChatToolsSheet(
             Spacer(Modifier.height(18.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ComposerSheetAction(Icons.Rounded.AddPhotoAlternate, "图片", canPickImages, onPickImages, Modifier.weight(1f))
+                ComposerSheetAction(Icons.Rounded.AttachFile, "文件", canPickDocuments, onPickDocument, Modifier.weight(1f))
                 ComposerSheetAction(Icons.Rounded.Hub, "模型", true, onModelClick, Modifier.weight(1f))
                 ComposerSheetAction(Icons.Rounded.Psychology, "思考", true, onReasoningClick, Modifier.weight(1f))
             }
