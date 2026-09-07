@@ -8,6 +8,8 @@
 
 本轮计划的代码补齐已完成，完成自动回归和签名构建，进入人工验收交接。讨论应用、历史模型重写、长篇摘要、资料冲突、关联决定复核和独立设定重新适用已接入实际产品。自动测试验证数据和请求边界，不能代替模型整理准确性或真机体验。
 
+真机 UI 验收继续进行中：2026-09-07 发现“详情展开后新内容未自动进入视口”和“故事输入框打开 IME 后消息区未同步上移”两项小问题。修复提交 `3eb40591005715da4a2b0c7361730e18eb941287`：详情区域在布局完成后主动 bring-into-view；故事页复用普通聊天已验收的 IME inset 跟随策略，在输入框聚焦期间每次键盘 inset 更新都同步保持当前对话底部。待本轮完整 CI 与手机复测后关闭这两项。
+
 最终代码：`268bf99dd952eca562946b154db4fc4366ad97a6`。[Android Build #121](https://github.com/adongshaln/Aster/actions/runs/34104526654) 已成功：`testDebugUnitTest assembleRelease`、固定签名校验和 APK 上传均通过。预算修复 #120 执行 219 项测试，仅一项旧提示文案断言失败；修正后 #121 全部通过。此前 #115–#119 均成功，包括单测、Release 编译和固定签名 APK 上传。
 
 [下载签名测试 APK（Actions artifact）](https://github.com/adongshaln/Aster/actions/runs/34104526654/artifacts/10011930146)：`aster-release-signed`，ZIP 14,950,380 字节，解压后安装 APK。需登录 GitHub，产物有保留期限。证书 SHA-256：`3e4da1d062819d9f1065f85654de71ae5f0ad93aa10c52fc85faad0338a4e3b1`。
