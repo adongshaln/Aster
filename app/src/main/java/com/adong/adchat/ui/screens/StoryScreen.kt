@@ -751,7 +751,7 @@ private fun StoryThinkingIndicator() {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun StoryComposer(
     value: String,
