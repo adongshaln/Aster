@@ -63,6 +63,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     var memoryStatus by mutableStateOf("暂无整理任务")
         private set
     val archiveRecords = mutableStateListOf<StoryMemoryRecord>()
+    val archiveReviewRecords = mutableStateListOf<StoryMemoryRecord>()
     val archiveConflicts = mutableStateListOf<StoryConflictEntry>()
     val archiveChanges = mutableStateListOf<StoryChangeEntry>()
     var archiveChangeError by mutableStateOf<String?>(null)
@@ -156,7 +157,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         errors.remove(workspace)
     }
 
+    var archiveInitialSection by mutableStateOf(0)
+        private set
+    fun openPendingCandidates() { openArchive();archiveInitialSection=3 }
     fun openArchive() {
+        archiveInitialSection=0
         archiveOpen = true
         archiveChanges.clear()
         usageText = "正在读取用量…"
@@ -465,6 +470,64 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    var discussionActionTarget by mutableStateOf<StoryMessageWithRevision?>(null)
+        private set
+    var discussionActionText by mutableStateOf("")
+        private set
+    var discussionActionError by mutableStateOf<String?>(null)
+        private set
+    val discussionRewriteTargets=mutableStateListOf<StoryMessageWithRevision>()
+    fun openDiscussionAction(row:StoryMessageWithRevision) {
+        if(revisionBusy) return
+        discussionActionTarget=row;discussionActionText=row.revision.content;discussionActionError=null
+        discussionRewriteTargets.clear()
+        viewModelScope.launch(Dispatchers.IO) {
+            val linked=store.proseForDiscussion(row.revision.id)
+            val choices=linked.ifEmpty { store.loadMessages(row.message.storyId,row.message.timelineId,StoryWorkspace.Prose)
+                .filter { it.message.role=="assistant" && it.revision.state==StoryRevisionState.Complete }.takeLast(12) }
+            withContext(Dispatchers.Main) { if(discussionActionTarget?.revision?.id==row.revision.id) discussionRewriteTargets.addAll(choices) }
+        }
+    }
+    fun updateDiscussionActionText(text:String) { discussionActionText=text }
+    fun closeDiscussionAction() { if(!revisionBusy) discussionActionTarget=null }
+    fun applyDiscussionAction(kind:String,target:StoryMessageWithRevision?=null) {
+        val source=discussionActionTarget ?: return
+        val story=activeStory ?: return
+        if(revisionBusy || source.message.storyId!=story.id || source.message.timelineId!=story.currentTimelineId) return
+        val text=discussionActionText.trim()
+        if(text.isBlank() || text.length>8000) { discussionActionError="请整理为 1–8,000 字符的明确修改意见。";return }
+        if(kind=="rewrite" && target!=null) {
+            if(StoryWorkspace.entries.any { isLoading(it) }) { discussionActionError="请先等待生成结束。";return }
+            discussionActionTarget=null;openRevisionEditor(target);rewriteOpen=true;rewriteInstruction=text
+            rewriteCandidate=null;rewriteOriginalInput="";rewriteOriginalBaseline=""
+            revisionBusy=true
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    val original=store.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose)
+                        .lastOrNull { it.message.sequence<target.message.sequence && it.message.role=="user" }?.revision?.content.orEmpty()
+                    withContext(Dispatchers.Main) { rewriteOriginalBaseline=original;rewriteOriginalInput=original }
+                } finally { withContext(NonCancellable+Dispatchers.Main) { revisionBusy=false } }
+            }
+            return
+        }
+        if(kind=="future") {
+            val existing=draft(StoryWorkspace.Prose)
+            val next=existing+(if(existing.isBlank()) "" else "\n\n")+"[本轮明确采用的创作方向，尚未发生]\n"+text
+            if(next.length>40000) { discussionActionError="正文草稿过长，请先处理已有草稿。";return }
+            updateDraft(next,StoryWorkspace.Prose);discussionActionTarget=null;switchWorkspace(StoryWorkspace.Prose);return
+        }
+        revisionBusy=true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                archiveStore.addDiscussionRecord(story.id,story.currentTimelineId,source.revision.id,text,
+                    if(kind=="plan") StoryMemoryKind.AuthorPlan else StoryMemoryKind.WorldFact)
+                refreshArchive(story.id,story.currentTimelineId);refreshStory(story.id)
+                withContext(Dispatchers.Main) { discussionActionTarget=null }
+            } catch(error:Exception) { withContext(Dispatchers.Main) { discussionActionError=error.message } }
+            finally { withContext(NonCancellable+Dispatchers.Main) { revisionBusy=false } }
+        }
+    }
+
     fun openRevisionEditor(row: StoryMessageWithRevision) {
         if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
         revisionTarget = row
@@ -621,7 +684,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val streamed = StringBuilder()
             var lastPersistAt = 0L
             try {
-                store.appendMessage(
+                val userMessage=store.appendMessage(
                     storyId = story.id,
                     timelineId = story.currentTimelineId,
                     workspace = workspace,
@@ -629,6 +692,16 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     content = input,
                     state = StoryRevisionState.Complete
                 )
+                if(workspace==StoryWorkspace.Discussion && com.adong.adchat.data.story.StoryExplicitDecision.isExplicit(input)) {
+                    val proposal=com.adong.adchat.data.story.StoryExplicitDecision.match(input,
+                        archiveStore.listPendingProposals(story.id,story.currentTimelineId))
+                    val accepted=proposal!=null && archiveStore.decideProposal(story.id,story.currentTimelineId,proposal.id,true,
+                        decisionRevisionId=userMessage.revision.id)
+                    store.appendMessage(story.id,story.currentTimelineId,workspace,"assistant",
+                        if(accepted) "已采用这一项候选；可在档案变更中撤销。" else "没有找到唯一对应的待定候选。请逐字引用候选内容，或到档案选择具体条目。")
+                    refreshWorkspaceIfVisible(story.id,workspace);refreshArchive(story.id,story.currentTimelineId);refreshStory(story.id)
+                    return@launch
+                }
                 assistant = store.appendMessage(
                     storyId = story.id,
                     timelineId = story.currentTimelineId,
@@ -761,11 +834,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun decideProposal(proposalId: String, accept: Boolean) {
+    fun decideProposal(proposalId: String, accept: Boolean, editedContent: String? = null) {
         val story = activeStory ?: return
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                archiveStore.decideProposal(story.id, story.currentTimelineId, proposalId, accept)
+                archiveStore.decideProposal(story.id, story.currentTimelineId, proposalId, accept,editedContent)
                 refreshArchive(story.id, story.currentTimelineId)
                 refreshStory(story.id)
             } catch (error: Exception) {
@@ -957,6 +1030,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val proposals = archiveStore.listPendingProposals(storyId, timelineId)
         val conflicts = archiveStore.listStateConflicts(storyId, timelineId)
         val changes = archiveStore.listChanges(storyId, timelineId)
+        val reviews=archiveStore.listReviewRecords(storyId,timelineId)
         val usage = com.adong.adchat.data.story.renderStoryUsage(usageStore.totals(storyId))
         withContext(Dispatchers.Main) {
             if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == timelineId) {
@@ -967,6 +1041,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 archiveProposals.addAll(proposals)
                 archiveChanges.clear()
                 archiveChanges.addAll(changes)
+                archiveReviewRecords.clear();archiveReviewRecords.addAll(reviews)
                 usageText = usage
             }
         }

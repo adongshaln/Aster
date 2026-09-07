@@ -52,6 +52,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                     version = 8
                 }
                 8 -> { StorySchema.MIGRATION_8_TO_9_STATEMENTS.forEach(db::execSQL); version = 9 }
+                9 -> { StorySchema.MIGRATION_9_TO_10_STATEMENTS.forEach(db::execSQL); version = 10 }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -59,7 +60,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 9
+        const val DATABASE_VERSION = 10
     }
 }
 
@@ -75,6 +76,8 @@ internal object StorySchema {
     const val JOBS = "memory_jobs"
     const val SNAPSHOTS = "story_snapshots"
     const val WORKSPACE_STATE = "story_workspace_state"
+    const val DISCUSSION_LINKS = "story_discussion_links"
+    const val MEMORY_DEPENDENCIES = "memory_dependencies"
     const val REWRITES = "story_rewrites"
     const val USAGE = "story_usage"
     const val SUMMARY_INPUTS = "summary_inputs"
@@ -199,6 +202,17 @@ internal object StorySchema {
 
     val MIGRATION_8_TO_9_STATEMENTS = listOf("ALTER TABLE $REWRITES ADD COLUMN mode TEXT NOT NULL DEFAULT 'replace'",
         "ALTER TABLE $REWRITES ADD COLUMN replacement_input TEXT")
+
+    val MIGRATION_9_TO_10_STATEMENTS = listOf(
+        """CREATE TABLE $DISCUSSION_LINKS (
+            id TEXT PRIMARY KEY NOT NULL, story_id TEXT NOT NULL, timeline_id TEXT NOT NULL,
+            source_revision_id TEXT NOT NULL, quote_text TEXT NOT NULL, user_revision_id TEXT,
+            FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE)""",
+        """CREATE TABLE $MEMORY_DEPENDENCIES (
+            record_id TEXT NOT NULL, source_revision_id TEXT NOT NULL,
+            PRIMARY KEY(record_id,source_revision_id),
+            FOREIGN KEY(record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE)"""
+    )
 
     val CREATE_STATEMENTS: List<String> = listOf(
         """
@@ -389,5 +403,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS + MIGRATION_8_TO_9_STATEMENTS
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS + MIGRATION_8_TO_9_STATEMENTS + MIGRATION_9_TO_10_STATEMENTS
 }

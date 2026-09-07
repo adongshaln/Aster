@@ -145,6 +145,8 @@ fun StoryScreen(
             proposals = storyVm.archiveProposals,
             memoryStatus = storyVm.memoryStatus,
             usageText = storyVm.usageText,
+            initialSection = storyVm.archiveInitialSection,
+            reviewRecords = storyVm.archiveReviewRecords,
             changes = storyVm.archiveChanges,
             changeError = storyVm.archiveChangeError,
             undoBusy = storyVm.undoBusy,
@@ -355,6 +357,25 @@ private fun StoryWorkspaceContent(
             dismissButton={ TextButton(onClick=storyVm::closeModelRewrite,enabled=!storyVm.revisionBusy) { Text("返回原文") } })
     }
 
+    storyVm.discussionActionTarget?.let {
+        AlertDialog(onDismissRequest=storyVm::closeDiscussionAction,title={Text("应用讨论结果")},
+            text={Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState())) {
+                Text("请删去备选、示例和解释，仅保留你决定采用的内容。",style=MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value=storyVm.discussionActionText,onValueChange=storyVm::updateDiscussionActionText,
+                    enabled=!storyVm.revisionBusy,modifier=Modifier.fillMaxWidth().heightIn(min=120.dp,max=240.dp))
+                TextButton(onClick={storyVm.applyDiscussionAction("future")},enabled=!storyVm.revisionBusy) {Text("用于后续 · 放入正文草稿")}
+                TextButton(onClick={storyVm.applyDiscussionAction("world")},enabled=!storyVm.revisionBusy) {Text("确认为世界设定")}
+                TextButton(onClick={storyVm.applyDiscussionAction("plan")},enabled=!storyVm.revisionBusy) {Text("保存为作者计划 · 尚未发生")}
+                Text("重写哪一段？",style=MaterialTheme.typography.labelMedium)
+                storyVm.discussionRewriteTargets.forEach { target ->
+                    TextButton(onClick={storyVm.applyDiscussionAction("rewrite",target)},enabled=!storyVm.revisionBusy) {
+                        Text(target.revision.content.take(60),maxLines=2,overflow=TextOverflow.Ellipsis)
+                    }
+                }
+                storyVm.discussionActionError?.let { error -> Text(error,color=MaterialTheme.colorScheme.error) }
+            }},confirmButton={TextButton(onClick=storyVm::closeDiscussionAction,enabled=!storyVm.revisionBusy) {Text("关闭")}})
+    }
+
     Box(Modifier.fillMaxSize().imePadding()) {
         if (messages.isEmpty()) {
             StoryWorkspaceEmpty(workspace, Modifier.fillMaxSize().padding(bottom = 92.dp))
@@ -368,6 +389,11 @@ private fun StoryWorkspaceContent(
                 items(messages, key = { it.message.id }) { row ->
                     Column {
                         StoryMessageItem(row)
+                        if(workspace==StoryWorkspace.Discussion && row.message.role=="assistant" && row.revision.state==StoryRevisionState.Complete) {
+                            TextButton(onClick={storyVm.openDiscussionAction(row)},enabled=!storyVm.revisionBusy) {Text("应用讨论结果",color=MutedInk)}
+                            val pending=storyVm.archiveProposals.count { it.sourceRevisionId==row.revision.id }
+                            if(pending>0) TextButton(onClick=storyVm::openPendingCandidates) {Text("$pending 项待定设定")}
+                        }
                         if (workspace == StoryWorkspace.Prose &&
                             row.message.role == "assistant" && row.revision.state != StoryRevisionState.Streaming) {
                             TextButton(onClick = { storyVm.openRevisionEditor(row) },
@@ -693,11 +719,13 @@ private fun StoryArchiveSheet(
     proposals: List<StoryProposal>,
     memoryStatus: String,
     usageText: String,
+    initialSection: Int,
+    reviewRecords: List<StoryMemoryRecord>,
     changes: List<StoryChangeEntry>,
     changeError: String?,
     undoBusy: Boolean,
     onUndo: (String, Boolean) -> Unit,
-    onDecide: (String, Boolean) -> Unit,
+    onDecide: (String, Boolean, String?) -> Unit,
     onRetryMemory: () -> Unit,
     availableProfiles: List<ApiProfile>,
     onReplaceRoute: (ApiProfile) -> Unit,
@@ -708,7 +736,15 @@ private fun StoryArchiveSheet(
     onRemove: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var section by remember { mutableIntStateOf(0) }
+    var section by remember { mutableIntStateOf(initialSection) }
+    var editingProposal by remember { mutableStateOf<StoryProposal?>(null) }
+    editingProposal?.let { proposal ->
+        var text by remember(proposal.id) { mutableStateOf(proposal.content) }
+        AlertDialog(onDismissRequest={editingProposal=null},title={Text("编辑后采用")},
+            text={OutlinedTextField(value=text,onValueChange={text=it},modifier=Modifier.heightIn(max=280.dp))},
+            confirmButton={TextButton(onClick={onDecide(proposal.id,true,text);editingProposal=null},enabled=text.isNotBlank() && text.length<=8000) {Text("采用这一项")}},
+            dismissButton={TextButton(onClick={editingProposal=null}) {Text("取消")}})
+    }
     var viewingChange by remember { mutableStateOf<StoryChangeEntry?>(null) }
     viewingChange?.let { change ->
         AlertDialog(onDismissRequest = { viewingChange = null }, title = { Text(change.title) },
@@ -784,6 +820,12 @@ private fun StoryArchiveSheet(
                             }
                         }
                     }
+                    if(reviewRecords.isNotEmpty()) item {Text("待复核 · 引用的正文已变化",style=MaterialTheme.typography.titleSmall)}
+                    items(reviewRecords,key={"review-${it.id}"}) { record ->
+                        ArchiveInfoCard("暂不用于正文",record.content+"\n引用来源已变化。可先添加修正后的独立资料，再停用此旧记录。") {
+                            TextButton(onClick={onRemove(record.id)}) {Text("停用")}
+                        }
+                    }
                     if (proposals.isNotEmpty()) item { Text("待确认 · ${proposals.size}", style = MaterialTheme.typography.titleSmall) }
                     items(proposals, key = { "proposal-${it.id}" }) { proposal ->
                         Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
@@ -791,8 +833,9 @@ private fun StoryArchiveSheet(
                                 Text("待确认候选", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                                 Text(proposal.content, modifier = Modifier.padding(vertical = 8.dp))
                                 Row {
-                                    TextButton(onClick = { onDecide(proposal.id, true) }) { Text("采用") }
-                                    TextButton(onClick = { onDecide(proposal.id, false) }) { Text("废弃") }
+                                    TextButton(onClick = { onDecide(proposal.id, true,null) }) { Text("采用") }
+                                    TextButton(onClick={editingProposal=proposal}) {Text("编辑后采用")}
+                                    TextButton(onClick = { onDecide(proposal.id, false,null) }) { Text("废弃") }
                                 }
                             }
                         }

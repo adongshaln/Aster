@@ -179,6 +179,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             }
             insertMessage(db, message)
             insertRevision(db, revision)
+            if(workspace==StoryWorkspace.Discussion && role=="user") StoryDiscussionLinks.bind(db,revision)
             touchStory(db, storyId, now)
             StoryMessageWithRevision(message, revision)
         }
@@ -492,6 +493,13 @@ class StoryRepository(context: Context) : AutoCloseable {
         revised
     }
 
+    fun discussionSources(revisionId: String): Set<String> = StoryDiscussionLinks.sources(helper.readableDatabase,revisionId)
+    fun proseForDiscussion(revisionId: String): List<StoryMessageWithRevision> = discussionSources(revisionId).mapNotNull { source ->
+        helper.readableDatabase.rawQuery("SELECT id FROM ${StorySchema.MESSAGES} WHERE active_revision_id=?",arrayOf(source)).use {
+            if(it.moveToFirst()) queryMessageWithRevision(helper.readableDatabase,it.getString(0)) else null
+        }
+    }
+
     fun appendDiscussionQuote(messageId: String, expectedRevisionId: String, start: Int, end: Int,
         expectedDraft: StoryWorkspaceState): StoryWorkspaceState = helper.writableDatabase.inTransaction { db ->
         val source = queryMessageWithRevision(db,messageId) ?: error("正文已不存在")
@@ -508,6 +516,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             updatedAt = nextStoryWorkspaceUpdatedAt(expectedDraft.updatedAt,System.currentTimeMillis())
         )
         check(saveWorkspaceState(next)) { "路线或草稿已变化，引用未写入。" }
+        StoryDiscussionLinks.saveQuote(db,source,StoryDiscussionQuote.append("",source,start,end))
         next
     }
 

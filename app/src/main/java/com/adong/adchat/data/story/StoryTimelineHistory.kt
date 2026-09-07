@@ -15,6 +15,8 @@ internal object StoryTimelineHistory {
             .put("revisions", rows(db, """SELECT r.id, r.state FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m
                 ON m.active_revision_id = r.id WHERE m.story_id = ? AND m.timeline_id = ?""", args))
             .put("memories", rows(db, "SELECT * FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ?", args))
+            .put("memory_dependencies", rows(db,"SELECT d.* FROM ${StorySchema.MEMORY_DEPENDENCIES} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?",args))
+            .put("discussion_links",rows(db,"SELECT * FROM ${StorySchema.DISCUSSION_LINKS} WHERE story_id=? AND timeline_id=?",args))
             .put("summary_inputs", rows(db, "SELECT d.* FROM ${StorySchema.SUMMARY_INPUTS} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?", args))
             .put("summary_sources", rows(db, "SELECT d.* FROM ${StorySchema.SUMMARY_SOURCES} d JOIN ${StorySchema.MEMORIES} f ON f.id=d.record_id WHERE f.story_id=? AND f.timeline_id=?", args))
             .put("proposals", rows(db, "SELECT * FROM ${StorySchema.PROPOSALS} WHERE story_id = ? AND timeline_id = ?", args))
@@ -75,6 +77,17 @@ internal object StoryTimelineHistory {
                     copy.put(field, row.nullableString(field)?.let(entityIds::get) ?: JSONObject.NULL)
                 }
                 insert(db, StorySchema.MEMORIES, copy)
+            }
+        }
+        (snapshot.optJSONArray("memory_dependencies") ?: JSONArray()).objects().forEach { row ->
+            memoryIds[row.getString("record_id")]?.let { id -> insert(db,StorySchema.MEMORY_DEPENDENCIES,
+                JSONObject().put("record_id",id).put("source_revision_id",revisionIds[row.getString("source_revision_id")] ?: row.getString("source_revision_id"))) }
+        }
+        (snapshot.optJSONArray("discussion_links") ?: JSONArray()).objects().forEach { row ->
+            row.nullableString("user_revision_id")?.let(revisionIds::get)?.let { user ->
+                insert(db,StorySchema.DISCUSSION_LINKS,JSONObject(row.toString()).put("id",UUID.randomUUID().toString())
+                    .put("timeline_id",timelineId).put("user_revision_id",user)
+                    .put("source_revision_id",revisionIds[row.getString("source_revision_id")] ?: row.getString("source_revision_id")))
             }
         }
         (snapshot.optJSONArray("summary_sources") ?: JSONArray()).objects().forEach { row ->

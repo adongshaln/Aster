@@ -21,7 +21,7 @@ internal object StorySummaries {
         WHERE dep.record_id = $alias.id AND NOT EXISTS (
             SELECT 1 FROM ${StorySchema.MESSAGES} m JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
             WHERE r.id = dep.source_revision_id AND r.state = 'complete' AND m.role = 'assistant'
-              AND m.workspace = 'prose' AND m.story_id = $alias.story_id AND m.timeline_id = $alias.timeline_id)) AND ${StorySummaryHierarchy.validInputs(alias)}"""
+              AND m.workspace = 'prose' AND m.story_id = $alias.story_id AND m.timeline_id = $alias.timeline_id)) AND ${StorySummaryHierarchy.validInputs(alias)} AND ${StoryDiscussionLinks.validDependencies(alias)}"""
 
     private data class Source(val id: String, val sequence: Long, val text: String)
     private fun sources(db: SQLiteDatabase, story: String, timeline: String) = db.rawQuery(

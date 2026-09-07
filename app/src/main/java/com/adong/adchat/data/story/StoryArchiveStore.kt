@@ -52,6 +52,19 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         }
     }
 
+    fun listReviewRecords(storyId:String,timelineId:String): List<StoryMemoryRecord> = helper.readableDatabase.query(
+        StorySchema.MEMORIES,null,"story_id=? AND timeline_id=? AND active=1 AND NOT (${StoryDiscussionLinks.validDependencies(StorySchema.MEMORIES)})",
+        arrayOf(storyId,timelineId),null,null,"updated_at DESC").use { c -> buildList { while(c.moveToNext()) add(c.toMemory()) } }
+
+    fun addDiscussionRecord(storyId:String,timelineId:String,source:String,content:String,kind:StoryMemoryKind): StoryMemoryRecord =
+        helper.writableDatabase.inTransaction { db ->
+            check(StoryDiscussionLinks.isCompleteReply(db,source,storyId,timelineId)) { "讨论来源已变化" }
+            require(kind in setOf(StoryMemoryKind.WorldFact,StoryMemoryKind.AuthorPlan))
+            val record=addConfirmedRecord(storyId,timelineId,kind,content,sourceRevisionId=source)
+            StoryDiscussionLinks.attach(db,record.id,source)
+            record
+        }
+
     fun listStateConflicts(storyId: String, timelineId: String): List<StoryConflictEntry> =
         helper.writableDatabase.inTransaction { db -> StoryConflicts.refresh(db, storyId, timelineId) }
 
@@ -73,7 +86,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toProposal()) } }
 
     /** Explicit UI decision; proposal state, optional memory record, change set and version are atomic. */
-    fun decideProposal(storyId: String, timelineId: String, proposalId: String, accept: Boolean): Boolean =
+    fun decideProposal(storyId: String, timelineId: String, proposalId: String, accept: Boolean, editedContent: String? = null, decisionRevisionId: String? = null): Boolean =
         helper.writableDatabase.inTransaction { db ->
             val proposal = db.query(
                 StorySchema.PROPOSALS,
@@ -92,6 +105,9 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             ).use { cursor -> cursor.moveToFirst() }
             if (!sourceActive) return@inTransaction false
 
+            if(decisionRevisionId!=null) check(StoryDiscussionLinks.isUserDecision(db,decisionRevisionId,storyId,timelineId))
+            val chosenContent=(editedContent ?: proposal.content).trim()
+            require(chosenContent.isNotBlank() && chosenContent.length<=8000)
             val baseVersion = requireStoryMemoryVersion(db, storyId)
             val now = System.currentTimeMillis()
             val record = if (accept) {
@@ -104,7 +120,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                         "author_plan", "plot" -> StoryMemoryKind.AuthorPlan
                         else -> StoryMemoryKind.OpenThread
                     },
-                    content = proposal.content.trim(),
+                    content = chosenContent,
                     nature = StoryMemoryNature.UserConfirmed,
                     scope = "story",
                     effectiveSequence = db.rawQuery(
@@ -118,6 +134,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                     updatedAt = now
                 )
                 insertMemory(db, record)
+                StoryDiscussionLinks.attach(db,record.id,proposal.sourceRevisionId)
                 commitManualChange(db, StoryManualMemoryOperation.Add, null, record, baseVersion, now)
                 record
             } else null
@@ -135,6 +152,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
             check(db.update(
                 StorySchema.PROPOSALS,
                 ContentValues().apply {
+                    put("decision_source_revision_id",decisionRevisionId)
                     put("state", if (accept) StoryProposalState.Accepted.dbValue else StoryProposalState.Rejected.dbValue)
                     put("updated_at", now)
                 },
@@ -148,7 +166,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 put("source_revision_id", proposal.sourceRevisionId)
                 put("status", "committed")
                 put("committed_version", committedVersion)
-                put("operations_json", JSONObject().put("actor", "user_ui")
+                put("operations_json", JSONObject().put("actor", if(decisionRevisionId==null) "user_ui" else "user_message").put("decision_revision_id",decisionRevisionId)
                     .put("proposal_id", proposalId).put("before", "pending")
                     .put("after", if (accept) "accepted" else "rejected")
                     .put("record_id", record?.id ?: JSONObject.NULL).toString())
@@ -317,7 +335,8 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         pinned: Boolean = false,
         subjectEntityId: String? = null,
         objectEntityId: String? = null,
-        scope: String = "story"
+        scope: String = "story",
+        sourceRevisionId: String? = null
     ): StoryMemoryRecord {
         val cleaned = content.trim()
         require(cleaned.isNotBlank()) { "Memory content is required" }
@@ -338,7 +357,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 objectEntityId = objectEntityId,
                 scope = scope,
                 effectiveSequence = effectiveSequence,
-                sourceRevisionId = null,
+                sourceRevisionId = sourceRevisionId,
                 pinned = pinned,
                 active = true,
                 createdAt = now,

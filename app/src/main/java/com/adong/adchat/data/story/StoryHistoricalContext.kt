@@ -24,11 +24,13 @@ internal object StoryHistoricalContext {
         val complete=history.filter { it.revision.state==StoryRevisionState.Complete }.map { it.revision.id }.toSet()
         val summarySources=(snapshot.optJSONArray("summary_sources") ?: JSONArray()).rows()
             .groupBy({ it.getString("record_id") },{ it.getString("source_revision_id") })
+        val dependent=(snapshot.optJSONArray("memory_dependencies") ?: JSONArray()).rows()
+            .groupBy({it.getString("record_id")},{it.getString("source_revision_id")})
         val inputs=(snapshot.optJSONArray("summary_inputs") ?: JSONArray()).rows().groupBy { it.getString("record_id") }
         val raw=snapshot.getJSONArray("memories").rows().associateBy { it.getString("id") }
         val names=snapshot.getJSONArray("entities").rows().associate { it.getString("id") to listOf(it.getString("canonical_name")) }
         val records=raw.values.filter { m ->
-            m.getInt("active")==1 && (m.nullable("source_revision_id")==null || m.getString("source_revision_id") in complete) &&
+            m.getInt("active")==1 && dependent[m.getString("id")].orEmpty().all { it in complete } && (m.nullable("source_revision_id")==null || m.getString("source_revision_id") in complete) &&
                 summarySources[m.getString("id")].orEmpty().all { it in complete } &&
                 inputs[m.getString("id")].orEmpty().all { dependency ->
                     val child=raw[dependency.getString("input_record_id")]
