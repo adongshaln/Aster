@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/feature/story-mode" ]]; then
+  set -- com.adong.adchat.SharedUiInteractionTest
+fi
+
 adb shell wm size 1080x2400
 adb shell wm density 480
 adb shell settings put secure show_ime_with_hard_keyboard 1
