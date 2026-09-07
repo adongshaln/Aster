@@ -18,8 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -108,12 +107,14 @@ fun StoryScreen(
         TextButton(onClick = storyVm::openTimelineHistory, modifier = Modifier.align(Alignment.End), enabled = !storyVm.revisionBusy) {
             Text("历史路线", style = MaterialTheme.typography.labelSmall, color = MutedInk)
         }
-        key(story.id, story.currentTimelineId, storyVm.activeWorkspace) {
-            StoryWorkspaceContent(
-                storyVm = storyVm,
-                profile = profile,
-                onOpenSettings = onOpenSettings
-            )
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            key(story.id, story.currentTimelineId, storyVm.activeWorkspace) {
+                StoryWorkspaceContent(
+                    storyVm = storyVm,
+                    profile = profile,
+                    onOpenSettings = onOpenSettings
+                )
+            }
         }
     }
 
@@ -287,6 +288,11 @@ private fun StoryWorkspaceContent(
     val lastIsStreamingAssistant = messages.lastOrNull()?.let {
         it.message.role == "assistant" && it.revision.state == StoryRevisionState.Streaming
     } == true
+    val hasStandaloneThinking = loading && !lastIsStreamingAssistant
+    // Match ordinary chat: always keep a real trailing LazyColumn item that can be
+    // anchored during IME animation. Scrolling to lastIndex only aligns the message
+    // itself and does not keep the conversation bottom attached to the composer.
+    val bottomItemIndex = messages.size + if (hasStandaloneThinking) 1 else 0
 
     DisposableEffect(workspace) {
         onDispose {
@@ -297,14 +303,8 @@ private fun StoryWorkspaceContent(
         if (dragging) autoFollow = !listState.canScrollForward
     }
     LaunchedEffect(messages.size, messages.lastOrNull()?.revision?.content?.length, loading) {
-        if (autoFollow && !dragging) {
-            val target = when {
-                loading && !lastIsStreamingAssistant -> messages.size
-                messages.isNotEmpty() -> messages.lastIndex
-                loading -> 0
-                else -> -1
-            }
-            if (target >= 0) runCatching { listState.animateScrollToItem(target) }
+        if (autoFollow && !dragging && (messages.isNotEmpty() || loading)) {
+            runCatching { listState.animateScrollToItem(bottomItemIndex) }
         }
     }
     LaunchedEffect(
@@ -322,16 +322,11 @@ private fun StoryWorkspaceContent(
         snapshotFlow {
             imeInsets.getBottom(composerDensity) to imeAnimationTarget.getBottom(composerDensity)
         }.collect { (imeBottom, imeTargetBottom) ->
-            val target = when {
-                loading && !lastIsStreamingAssistant -> messages.size
-                messages.isNotEmpty() -> messages.lastIndex
-                loading -> 0
-                else -> -1
-            }
-            if (target >= 0) {
-                // Match ordinary chat: follow every keyboard inset update so the
-                // conversation and composer move together instead of serially.
-                runCatching { listState.scrollToItem(target) }
+            if (messages.isNotEmpty() || loading) {
+                // Same contract as ordinary chat: the list follows every IME inset
+                // frame and anchors to the trailing spacer, so content and composer
+                // move as one surface while the keyboard opens/closes.
+                runCatching { listState.scrollToItem(bottomItemIndex) }
             }
             if (imeBottom > 0) imeWasVisible = true
             if (imeWasVisible && imeTargetBottom == 0) focusManager.clearFocus()
@@ -469,14 +464,36 @@ private fun StoryWorkspaceContent(
                         actionsEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
                         onOpenDiscussionAction = { storyVm.openDiscussionAction(row) },
                         onOpenPendingCandidates = storyVm::openPendingCandidates,
-                        onOpenRevision = { storyVm.openRevisionEditor(row) }
+                        onOpenRevision = { storyVm.openRevisionEditor(row) },
+                        onDetailsExpanded = { messageId ->
+                            val messageIndex = messages.indexOfFirst { it.message.id == messageId }
+                            if (messageIndex >= 0) {
+                                autoFollow = false
+                                scope.launch {
+                                    // Wait for the expanded detail cards to take their final size,
+                                    // then scroll by the exact amount that fell below the viewport.
+                                    withFrameNanos { }
+                                    withFrameNanos { }
+                                    val layout = listState.layoutInfo
+                                    val item = layout.visibleItemsInfo.firstOrNull { it.index == messageIndex }
+                                    if (item != null) {
+                                        val comfort = with(composerDensity) { 12.dp.toPx() }
+                                        val overflow = item.offset + item.size + comfort - layout.viewportEndOffset
+                                        if (overflow > 0f) listState.animateScrollBy(overflow)
+                                    } else {
+                                        listState.animateScrollToItem(messageIndex)
+                                    }
+                                }
+                            }
+                        }
                     )
                 }
-                if (loading && !lastIsStreamingAssistant) {
+                if (hasStandaloneThinking) {
                     item(key = "story-thinking-${workspace.name}") {
                         StoryThinkingIndicator()
                     }
                 }
+                item(key = "story-bottom-spacer") { Spacer(Modifier.height(4.dp)) }
             }
         }
 
@@ -511,8 +528,7 @@ private fun StoryWorkspaceContent(
             Surface(
                 onClick = {
                     autoFollow = true
-                    val target = if (loading && !lastIsStreamingAssistant) messages.size else messages.lastIndex
-                    if (target >= 0) scope.launch { listState.animateScrollToItem(target) }
+                    scope.launch { listState.animateScrollToItem(bottomItemIndex) }
                 },
                 shape = RoundedCornerShape(24.dp),
                 color = Surface,
@@ -561,24 +577,17 @@ private fun StoryMessageItem(
     actionsEnabled: Boolean,
     onOpenDiscussionAction: () -> Unit,
     onOpenPendingCandidates: () -> Unit,
-    onOpenRevision: () -> Unit
+    onOpenRevision: () -> Unit,
+    onDetailsExpanded: (String) -> Unit
 ) {
     val user = row.message.role == "user"
     val waitingForFirstToken = !user && row.revision.content.isBlank() && row.revision.state == StoryRevisionState.Streaming
     val context = LocalContext.current
     var showDetails by remember(row.message.id) { mutableStateOf(false) }
-    val detailsBringIntoViewRequester = remember(row.message.id) { BringIntoViewRequester() }
     val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {
         StoryWorkspace.Discussion -> row.revision.state == StoryRevisionState.Complete
         StoryWorkspace.Prose -> true
     }
-    LaunchedEffect(showDetails) {
-        if (showDetails) {
-            withFrameNanos { }
-            runCatching { detailsBringIntoViewRequester.bringIntoView() }
-        }
-    }
-
     Row(
         Modifier.fillMaxWidth(),
         horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
@@ -651,14 +660,17 @@ private fun StoryMessageItem(
                                 StoryMessageActionButton(
                                     icon = Icons.Rounded.MoreHoriz,
                                     label = if (showDetails) "收起" else "详情",
-                                    onClick = { showDetails = !showDetails }
+                                    onClick = {
+                                        val expanding = !showDetails
+                                        showDetails = expanding
+                                        if (expanding) onDetailsExpanded(row.message.id)
+                                    }
                                 )
                             }
                         }
                         if (showDetails && hasDetails) {
                             Column(
-                                Modifier.fillMaxWidth().padding(top = 8.dp)
-                                    .bringIntoViewRequester(detailsBringIntoViewRequester),
+                                Modifier.fillMaxWidth().padding(top = 8.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 if (workspace == StoryWorkspace.Discussion && row.revision.state == StoryRevisionState.Complete) {
