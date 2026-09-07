@@ -139,10 +139,13 @@ class SharedUiInteractionTest {
         val file = File(directory, "shared-$name.png")
         file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         // UTP can uninstall the app after tests. Preserve screenshots outside its data directory.
-        val command = "sh -c 'mkdir -p /sdcard/Download/aster-ui-preview; " +
-            "run-as com.adong.adchat cat ${file.absolutePath} > /sdcard/Download/aster-ui-preview/shared-$name.png'"
-        android.os.ParcelFileDescriptor.AutoCloseInputStream(
-            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)
-        ).use { it.readBytes() }
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "shared-$name.png")
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/aster-ui-preview")
+        }
+        val resolver = rule.activity.contentResolver
+        val uri = requireNotNull(resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values))
+        requireNotNull(resolver.openOutputStream(uri)).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 }
