@@ -252,6 +252,7 @@ private fun StoryHeader(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StoryWorkspaceContent(
     storyVm: StoryViewModel,
