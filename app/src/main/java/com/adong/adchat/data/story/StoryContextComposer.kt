@@ -128,7 +128,7 @@ object StoryContextComposer {
         val base = buildString {
             append(baseInstruction.trim())
             if (stateView.conflicts.isNotEmpty()) {
-                append("\n[以下状态尚有冲突，仅供讨论，不得选一方当作既定事实]\n")
+                append("\n[以下资料尚有冲突，仅供讨论，不得选一方当作既定事实]\n")
                 append(stateView.conflicts.joinToString("\n") { it.description })
             }
         }
@@ -144,7 +144,13 @@ object StoryContextComposer {
         val historyBeforeCurrent = eligibleHistory.filter { row ->
             currentTurn == null || row.message.sequence < currentTurn.message.sequence
         }
-        val completeTurns = completeHistoryTurns(historyBeforeCurrent)
+        // An actually loaded, source-validated summary can replace a whole covered turn even
+        // inside the protected suffix. Otherwise a giant latest reply could never be escaped.
+        val completeTurns = completeHistoryTurns(historyBeforeCurrent).filterNot { turn ->
+            workspace == StoryWorkspace.Prose && turn.rows.filter { it.message.role == "assistant" }.let { replies ->
+                replies.isNotEmpty() && replies.all { it.revision.id in summarizedRevisionIds && it.revision.id in organizedProseRevisionIds }
+            }
+        }
         val firstUnorganized = if (workspace == StoryWorkspace.Prose) completeTurns.indexOfFirst { turn ->
             turn.rows.any { it.message.role == "assistant" && (it.revision.id !in organizedProseRevisionIds || (summarySources != null && it.revision.id !in summarizedRevisionIds)) }
         } else -1

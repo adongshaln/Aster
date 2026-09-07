@@ -219,4 +219,22 @@ class StorySummariesTest {
         assertFalse(memory.applySummary(job,raw))
     }
 
+    @Test fun latestOversizedProseCanBeSummarizedBeforeNextRoundAndEscapeBudgetDeadlock() {
+        seed(1) // Earlier unsummarized turn must not force covered giant text back into the suffix.
+        repo.appendMessage(story.id,story.currentTimelineId,StoryWorkspace.Prose,"user","写长篇")
+        val row=repo.appendMessage(story.id,story.currentTimelineId,StoryWorkspace.Prose,"assistant","乙".repeat(72_001))
+        val organizer=memory.markRunning(memory.enqueueForRevision(story.id,story.currentTimelineId,row.revision.id)!!)!!
+        memory.applyOrganizerOutput(organizer,StoryOrganizerOutput(emptyList(),emptyList()))
+        val job=running();assertEquals(4,memory.summaryRequestParts(job)!!.size)
+        assertTrue(memory.applySummary(job,raw))
+        repo.appendMessage(story.id,story.currentTimelineId,StoryWorkspace.Prose,"user","继续")
+        val snapshot=view()
+        val result=StoryContextComposer.compose(StoryWorkspace.Prose,"规则",snapshot.records,snapshot.proposals,
+            repo.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose),emptyList(),
+            organizedProseRevisionIds=snapshot.organizedProseRevisionIds,summarySources=snapshot.summarySources)
+        assertFalse(result.history.any { it.content.contains("乙".repeat(100)) })
+        assertTrue(result.history.any { it.content.contains("第1轮正文") })
+        assertTrue(result.includedMemoryIds.contains(snapshot.records.single().id))
+    }
+
 }

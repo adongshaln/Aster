@@ -53,7 +53,7 @@ internal object StorySummaries {
             }
             candidate
         }.firstOrNull { it.size >= 2 && (it.size == 6 || it.sumOf { source -> source.text.length } >= 12_000) }
-        val oversized = older.firstOrNull { it.id !in covered && it.id in organized && it.text.length > 28_000 &&
+        val oversized = sources(db,story,timeline).firstOrNull { it.id !in covered && it.id in organized && it.text.length > 28_000 &&
             runCatching { StoryOrganizerChunks.plan(it.text, "") }.isSuccess }
         val plan = if (oversized != null) JSONObject().put("sources", JSONArray().put(oversized.id)).put("chunked", true)
             else if (block != null) JSONObject().put("sources", JSONArray(block.map { it.id }))
