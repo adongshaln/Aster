@@ -445,6 +445,25 @@ class StoryRepository(context: Context) : AutoCloseable {
         }
     }
 
+    fun appendDiscussionQuote(messageId: String, expectedRevisionId: String, start: Int, end: Int,
+        expectedDraft: StoryWorkspaceState): StoryWorkspaceState = helper.writableDatabase.inTransaction { db ->
+        val source = queryMessageWithRevision(db,messageId) ?: error("正文已不存在")
+        check(source.revision.id == expectedRevisionId) { "正文版本已变化，请重新打开后选择。" }
+        check(source.message.storyId == expectedDraft.storyId && source.message.timelineId == expectedDraft.timelineId &&
+            expectedDraft.workspace == StoryWorkspace.Discussion) { "故事或路线已变化，请重新选择。" }
+        val stored = loadWorkspaceState(expectedDraft.storyId,StoryWorkspace.Discussion)
+        check(stored.updatedAt <= expectedDraft.updatedAt &&
+            (stored.updatedAt != expectedDraft.updatedAt || stored.draft == expectedDraft.draft)) {
+            "讨论草稿已变化，请重新打开后重试。"
+        }
+        val next = expectedDraft.copy(
+            draft = StoryDiscussionQuote.append(expectedDraft.draft,source,start,end),
+            updatedAt = nextStoryWorkspaceUpdatedAt(expectedDraft.updatedAt,System.currentTimeMillis())
+        )
+        check(saveWorkspaceState(next)) { "路线或草稿已变化，引用未写入。" }
+        next
+    }
+
     override fun close() = helper.close()
 
     private fun insertMessage(db: SQLiteDatabase, message: StoryMessage) {

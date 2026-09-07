@@ -372,6 +372,36 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         if (!revisionBusy) { revisionTarget = null; revisionHistory.clear(); revisionError = null }
     }
 
+    fun discussProseSelection(start: Int, end: Int) {
+        val target = revisionTarget ?: return
+        val story = activeStory ?: return
+        val current = workspaceStates[StoryWorkspace.Discussion]
+        if(revisionBusy || current == null) { revisionError = "讨论草稿尚在加载，请稍后重试。"; return }
+        if(target.message.storyId != story.id || target.message.timelineId != story.currentTimelineId) {
+            revisionError = "故事或路线已变化，请重新打开正文。"; return
+        }
+        val epoch = stateEpoch
+        val expected = current.copy(timelineId=story.currentTimelineId)
+        revisionBusy = true;revisionError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val saved = store.appendDiscussionQuote(target.message.id,target.revision.id,start,end,expected)
+                withContext(Dispatchers.Main) {
+                    if(epoch == stateEpoch && activeStoryId == story.id &&
+                        workspaceStates[StoryWorkspace.Discussion]?.updatedAt == current.updatedAt) {
+                        workspaceStates[StoryWorkspace.Discussion] = saved
+                        activeWorkspace = StoryWorkspace.Discussion
+                        revisionTarget = null;revisionHistory.clear()
+                    } else if(activeStoryId == story.id) revisionError = "引用已保存到讨论草稿，请重新打开讨论查看。"
+                }
+            } catch(error: Exception) {
+                withContext(Dispatchers.Main) { revisionError = error.message ?: "引用未保存，请重试。" }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { revisionBusy = false }
+            }
+        }
+    }
+
     fun saveProseRevision(content: String, restoreRevisionId: String? = null, fork: Boolean = false) {
         val target = revisionTarget ?: return
         if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return

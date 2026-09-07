@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -265,7 +266,7 @@ private fun StoryWorkspaceContent(
     }
 
     storyVm.revisionTarget?.let { target ->
-        var revisedText by remember(target.revision.id) { mutableStateOf(target.revision.content) }
+        var revisedText by remember(target.revision.id) { mutableStateOf(TextFieldValue(target.revision.content)) }
         AlertDialog(
             onDismissRequest = storyVm::closeRevisionEditor,
             title = { Text("修订正文") },
@@ -275,9 +276,20 @@ private fun StoryWorkspaceContent(
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(value = revisedText, onValueChange = { revisedText = it },
                         enabled = !storyVm.revisionBusy, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 220.dp))
+                    if(target.revision.state == StoryRevisionState.Complete) {
+                        TextButton(onClick = {
+                            val selection = revisedText.selection
+                            storyVm.discussProseSelection(
+                                if(selection.collapsed) 0 else selection.start,
+                                if(selection.collapsed) revisedText.text.length else selection.end
+                            )
+                        }, enabled = !storyVm.revisionBusy && revisedText.text == target.revision.content) {
+                            Text(if(revisedText.selection.collapsed) "带入讨论草稿（整段）" else "带入讨论草稿（选中文字）")
+                        }
+                    }
                     storyVm.revisionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { storyVm.saveProseRevision(revisedText, fork = true) },
-                        enabled = !storyVm.revisionBusy && revisedText.isNotBlank() && revisedText.trim() != target.revision.content) {
+                    TextButton(onClick = { storyVm.saveProseRevision(revisedText.text, fork = true) },
+                        enabled = !storyVm.revisionBusy && revisedText.text.isNotBlank() && revisedText.text.trim() != target.revision.content) {
                         Text("保留旧后续，从这里另写")
                     }
                     Spacer(Modifier.height(8.dp))
@@ -299,8 +311,8 @@ private fun StoryWorkspaceContent(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { storyVm.saveProseRevision(revisedText) },
-                    enabled = !storyVm.revisionBusy && revisedText.isNotBlank() && revisedText.trim() != target.revision.content) {
+                TextButton(onClick = { storyVm.saveProseRevision(revisedText.text) },
+                    enabled = !storyVm.revisionBusy && revisedText.text.isNotBlank() && revisedText.text.trim() != target.revision.content) {
                     Text(if (storyVm.revisionBusy) "保存中…" else "保存新版本")
                 }
             },
