@@ -178,10 +178,12 @@ class StoryMemoryStoreTest {
             repo.replaceMessageRevision(original.message.id, "过期编辑", expectedRevisionId = original.revision.id)
         }
         repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Discussion, "user", "讨论后续")
+        assertTrue(repo.restoreMessageRevision(original.message.id, original.revision.id, revised.revision.id))
+        repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "user", "继续正文")
         assertThrows(IllegalArgumentException::class.java) {
-            repo.restoreMessageRevision(original.message.id, original.revision.id, revised.revision.id)
+            repo.restoreMessageRevision(original.message.id, revised.revision.id, original.revision.id)
         }
-        assertTrue(repo.isRevisionActive(revised.revision.id))
+        assertTrue(repo.isRevisionActive(original.revision.id))
     }
 
     @Test fun finalizedRevisionCannotBeMutatedOrDeletedAndStoppedRevisionCannotBeRestoredAsComplete() {
