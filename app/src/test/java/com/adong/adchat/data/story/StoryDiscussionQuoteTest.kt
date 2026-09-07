@@ -24,10 +24,10 @@ class StoryDiscussionQuoteTest {
     }
     @After fun close() { repo.close() }
     private fun draft(text: String="原有想法",version: Long=10)=StoryWorkspaceState(
-        story.id,StoryWorkspace.Discussion,draft=text,updatedAt=version,timelineId=story.currentTimelineId)
+        story.id,StoryWorkspace.Discussion,draft=text,updatedAt=story.updatedAt+version,timelineId=story.currentTimelineId)
 
     @Test fun selectionAppendsToDraftDurablyWithoutSendingOrChangingMemory() {
-        val before=draft();repo.saveWorkspaceState(before)
+        val before=draft();assertTrue(repo.saveWorkspaceState(before))
         val version=repo.getStory(story.id)!!.memoryVersion
         val saved=repo.appendDiscussionQuote(source.message.id,source.revision.id,5,0,before)
         assertTrue(saved.draft.startsWith("原有想法\n\n"));assertTrue(saved.draft.contains("> 她推开门。"))
@@ -41,8 +41,8 @@ class StoryDiscussionQuoteTest {
     }
 
     @Test fun staleDraftSourceAndRouteAreRejectedWithoutOverwrite() {
-        val old=draft();repo.saveWorkspaceState(old)
-        val newer=draft("刚改的草稿",11);repo.saveWorkspaceState(newer)
+        val old=draft();assertTrue(repo.saveWorkspaceState(old))
+        val newer=draft("刚改的草稿",11);assertTrue(repo.saveWorkspaceState(newer))
         assertThrows(Exception::class.java) { repo.appendDiscussionQuote(source.message.id,source.revision.id,0,5,old) }
         assertEquals(newer.draft,repo.loadWorkspaceState(story.id,StoryWorkspace.Discussion).draft)
         val updated=repo.replaceMessageRevision(source.message.id,"新版正文",expectedRevisionId=source.revision.id)!!
@@ -52,7 +52,7 @@ class StoryDiscussionQuoteTest {
     }
 
     @Test fun unsavedNewerDraftIsPreservedButOversizeQuoteIsNeverTruncated() {
-        repo.saveWorkspaceState(draft("旧草稿"))
+        assertTrue(repo.saveWorkspaceState(draft("旧草稿")))
         val current=draft("尚在写入的新草稿",20)
         val saved=repo.appendDiscussionQuote(source.message.id,source.revision.id,0,5,current)
         assertTrue(saved.draft.startsWith(current.draft))
