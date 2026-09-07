@@ -168,7 +168,9 @@ data class StoryMemoryRecord(
     val subjectEntityNames: List<String> = emptyList(),
     val objectEntityNames: List<String> = emptyList(),
     val stateKey: String? = null,
-    val summarySourceRevisionIds: List<String> = emptyList()
+    val summarySourceRevisionIds: List<String> = emptyList(),
+    val conflictsWithId: String? = null,
+    val conflictsWithContent: String? = null
 )
 
 data class StoryProposal(

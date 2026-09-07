@@ -276,6 +276,15 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
 
             val addedMemoryIds = mutableListOf<String>()
             memoryCandidates.forEach { (candidate, subjectId, objectId) ->
+                val conflictingId = candidate.contradicts?.let { content ->
+                    db.rawQuery("""SELECT f.id FROM ${StorySchema.MEMORIES} f WHERE f.story_id=? AND f.timeline_id=? AND f.active=1
+                        AND f.content=? AND f.nature IN ('user_confirmed','prose_occurred') AND ${StorySummaries.validDependencies("f")}
+                        AND (f.source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m JOIN ${StorySchema.REVISIONS} r
+                            ON r.id=m.active_revision_id WHERE r.id=f.source_revision_id AND r.state='complete'))""",
+                        arrayOf(job.storyId,job.timelineId,content)).use { c ->
+                        require(c.count == 1) { "矛盾对应资料不唯一或已失效，未自动写入" };c.moveToFirst();c.getString(0)
+                    }
+                }
                 val record = StoryMemoryRecord(
                     storyId = persistedJob.storyId,
                     timelineId = persistedJob.timelineId,
@@ -285,6 +294,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                     subjectEntityId = subjectId,
                     objectEntityId = objectId,
                     stateKey = candidate.stateKey,
+                    conflictsWithId = conflictingId, conflictsWithContent = candidate.contradicts,
                     effectiveSequence = source.sequence,
                     sourceRevisionId = persistedJob.sourceRevisionId,
                     pinned = false,
@@ -495,6 +505,7 @@ class StoryMemoryStore(context: Context) : AutoCloseable {
                 put("object_entity_id", record.objectEntityId)
                 put("scope", record.scope)
                 put("state_key", record.stateKey)
+                put("conflicts_with_id", record.conflictsWithId); put("conflicts_with_content", record.conflictsWithContent)
                 put("effective_sequence", record.effectiveSequence)
                 put("source_revision_id", record.sourceRevisionId)
                 put("pinned", 0)

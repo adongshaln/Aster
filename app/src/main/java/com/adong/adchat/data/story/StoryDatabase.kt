@@ -53,6 +53,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                 }
                 8 -> { StorySchema.MIGRATION_8_TO_9_STATEMENTS.forEach(db::execSQL); version = 9 }
                 9 -> { StorySchema.MIGRATION_9_TO_10_STATEMENTS.forEach(db::execSQL); version = 10 }
+                10 -> { StorySchema.MIGRATION_10_TO_11_STATEMENTS.forEach(db::execSQL); version = 11 }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -60,7 +61,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 10
+        const val DATABASE_VERSION = 11
     }
 }
 
@@ -212,6 +213,11 @@ internal object StorySchema {
             record_id TEXT NOT NULL, source_revision_id TEXT NOT NULL,
             PRIMARY KEY(record_id,source_revision_id),
             FOREIGN KEY(record_id) REFERENCES $MEMORIES(id) ON DELETE CASCADE)"""
+    )
+
+    val MIGRATION_10_TO_11_STATEMENTS = listOf(
+        "ALTER TABLE $MEMORIES ADD COLUMN conflicts_with_id TEXT",
+        "ALTER TABLE $MEMORIES ADD COLUMN conflicts_with_content TEXT"
     )
 
     val CREATE_STATEMENTS: List<String> = listOf(
@@ -403,5 +409,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS + MIGRATION_8_TO_9_STATEMENTS + MIGRATION_9_TO_10_STATEMENTS
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS + MIGRATION_8_TO_9_STATEMENTS + MIGRATION_9_TO_10_STATEMENTS + MIGRATION_10_TO_11_STATEMENTS
 }

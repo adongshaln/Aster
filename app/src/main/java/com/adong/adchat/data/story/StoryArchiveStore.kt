@@ -261,7 +261,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 val description = when {
                     operations.optString("operation") == "reverse_change_set" -> "撤销 / 恢复整批变更"
                     operations.optString("operation") == "resolve_state_conflict" ->
-                        if (operations.optBoolean("accept_new")) "处理冲突：采用新状态" else "处理冲突：保留原状态"
+                        if (operations.optBoolean("accept_new")) "处理冲突：采用新资料" else "处理冲突：保留原资料"
                     operations.optString("operation") == "switch_revision" -> "切换正文版本"
                     operations.has("proposal_id") -> if (operations.optString("after") == "accepted") "采用候选" else "废弃候选"
                     else -> "自动整理：新增 ${operations.optJSONArray("added_memory_ids")?.length() ?: 0} 条资料、${operations.optJSONArray("proposal_ids")?.length() ?: 0} 条候选"
@@ -489,6 +489,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
                 record.objectEntityId?.let { put("object_entity_id", it) } ?: putNull("object_entity_id")
                 put("scope", record.scope)
                 put("state_key", record.stateKey)
+                put("conflicts_with_id", record.conflictsWithId); put("conflicts_with_content", record.conflictsWithContent)
                 put("effective_sequence", record.effectiveSequence)
                 record.sourceRevisionId?.let { put("source_revision_id", it) } ?: putNull("source_revision_id")
                 put("pinned", if (record.pinned) 1 else 0)
@@ -626,6 +627,7 @@ class StoryArchiveStore(context: Context) : AutoCloseable {
         objectEntityId = nullableString("object_entity_id"),
         scope = string("scope"),
         stateKey = nullableString("state_key"),
+        conflictsWithId = nullableString("conflicts_with_id"), conflictsWithContent = nullableString("conflicts_with_content"),
         effectiveSequence = long("effective_sequence"),
         sourceRevisionId = nullableString("source_revision_id"),
         pinned = int("pinned") != 0,

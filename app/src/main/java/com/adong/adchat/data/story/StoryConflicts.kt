@@ -116,16 +116,17 @@ internal object StoryConflicts {
     private fun records(db: SQLiteDatabase, storyId: String, timelineId: String): List<StoryMemoryRecord> = db.rawQuery(
         """SELECT f.*, e.canonical_name AS owner_name FROM ${StorySchema.MEMORIES} f
             LEFT JOIN ${StorySchema.ENTITIES} e ON e.id = f.subject_entity_id
-            WHERE f.story_id = ? AND f.timeline_id = ? AND f.active = 1 AND f.kind = 'current_state'
+            WHERE f.story_id = ? AND f.timeline_id = ? AND f.active = 1 AND ${StorySummaries.validDependencies("f")}
             AND (f.source_revision_id IS NULL OR EXISTS (SELECT 1 FROM ${StorySchema.MESSAGES} m
                 JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id WHERE r.id = f.source_revision_id AND r.state = 'complete'))""",
         arrayOf(storyId, timelineId)).use { c ->
         fun string(key: String): String? = c.getString(c.getColumnIndexOrThrow(key))
         fun long(key: String): Long = c.getLong(c.getColumnIndexOrThrow(key))
         buildList { while (c.moveToNext()) add(StoryMemoryRecord(
-            id = string("id")!!, storyId = storyId, timelineId = timelineId, kind = StoryMemoryKind.CurrentState,
+            id = string("id")!!, storyId = storyId, timelineId = timelineId, kind = StoryMemoryKind.fromDb(string("kind")!!),
             content = string("content")!!, nature = StoryMemoryNature.fromDb(string("nature")!!),
             subjectEntityId = string("subject_entity_id"), stateKey = string("state_key"),
+            conflictsWithId = string("conflicts_with_id"), conflictsWithContent = string("conflicts_with_content"),
             sourceRevisionId = string("source_revision_id"), effectiveSequence = long("effective_sequence"),
             pinned = long("pinned") != 0L, active = true, createdAt = long("created_at"), updatedAt = long("updated_at"),
             subjectEntityNames = listOfNotNull(string("owner_name"))

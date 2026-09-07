@@ -798,7 +798,7 @@ private fun StoryArchiveSheet(
                     }
                     item { ArchiveInfoCard("记忆版本", story.memoryVersion.toString()) }
                     changeError?.let { message -> item { Text(message, color = MaterialTheme.colorScheme.error) } }
-                    if (conflicts.isNotEmpty()) item { Text("状态冲突 · ${conflicts.size}", style = MaterialTheme.typography.titleSmall) }
+                    if (conflicts.isNotEmpty()) item { Text("资料冲突 · ${conflicts.size}", style = MaterialTheme.typography.titleSmall) }
                     items(conflicts, key = { "conflict-${it.id}" }) { entry ->
                         var showSources by remember(entry.id) { mutableStateOf(false) }
                         Surface(color = Surface, shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, Hairline)) {
@@ -808,14 +808,14 @@ private fun StoryArchiveSheet(
                                     color = MutedInk, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
                                 TextButton(onClick = { showSources = !showSources }) { Text(if (showSources) "收起来源" else "查看双方来源") }
                                 if (showSources) {
-                                    Text("原状态来源", fontWeight = FontWeight.SemiBold)
+                                    Text("原资料来源", fontWeight = FontWeight.SemiBold)
                                     Text(entry.earlierSource, style = MaterialTheme.typography.bodySmall)
-                                    Text("新状态来源", fontWeight = FontWeight.SemiBold)
+                                    Text("新资料来源", fontWeight = FontWeight.SemiBold)
                                     Text(entry.latestSource, style = MaterialTheme.typography.bodySmall)
                                 }
                                 Row {
-                                    TextButton(onClick = { onResolveConflict(entry, false) }, enabled = !undoBusy) { Text("保留原状态") }
-                                    TextButton(onClick = { onResolveConflict(entry, true) }, enabled = !undoBusy) { Text("采用新状态") }
+                                    TextButton(onClick = { onResolveConflict(entry, false) }, enabled = !undoBusy) { Text("保留原资料") }
+                                    TextButton(onClick = { onResolveConflict(entry, true) }, enabled = !undoBusy) { Text("采用新资料") }
                                 }
                             }
                         }

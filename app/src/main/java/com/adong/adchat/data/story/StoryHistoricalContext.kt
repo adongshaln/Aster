@@ -43,7 +43,7 @@ internal object StoryHistoricalContext {
             subjectEntityId=m.nullable("subject_entity_id"),objectEntityId=m.nullable("object_entity_id"),scope=m.getString("scope"),
             effectiveSequence=m.getLong("effective_sequence"),sourceRevisionId=m.nullable("source_revision_id"),pinned=m.getInt("pinned")==1,
             subjectEntityNames=names[m.nullable("subject_entity_id")].orEmpty(),objectEntityNames=names[m.nullable("object_entity_id")].orEmpty(),
-            stateKey=m.nullable("state_key"),summarySourceRevisionIds=summarySources[m.getString("id")].orEmpty()) }
+            stateKey=m.nullable("state_key"),conflictsWithId=m.nullable("conflicts_with_id"),conflictsWithContent=m.nullable("conflicts_with_content"),summarySourceRevisionIds=summarySources[m.getString("id")].orEmpty()) }
         val replaced=records.flatMap { inputs[it.id].orEmpty().map { row -> row.getString("input_record_id") } }.toSet()
         val visible=records.filter { it.pinned || it.id !in replaced }
         val coverage=snapshot.getJSONArray("completed").rows().map { it.getString("source_revision_id") }.toSet()

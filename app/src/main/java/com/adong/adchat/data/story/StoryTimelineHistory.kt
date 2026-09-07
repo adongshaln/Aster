@@ -79,6 +79,13 @@ internal object StoryTimelineHistory {
                 insert(db, StorySchema.MEMORIES, copy)
             }
         }
+        snapshot.getJSONArray("memories").objects().forEach { row ->
+            val id = memoryIds[row.getString("id")]
+            val target = row.nullableString("conflicts_with_id")
+            if (id != null && target != null) db.update(StorySchema.MEMORIES, ContentValues().apply {
+                put("conflicts_with_id", memoryIds[target] ?: target)
+            }, "id=?", arrayOf(id))
+        }
         (snapshot.optJSONArray("memory_dependencies") ?: JSONArray()).objects().forEach { row ->
             memoryIds[row.getString("record_id")]?.let { id -> insert(db,StorySchema.MEMORY_DEPENDENCIES,
                 JSONObject().put("record_id",id).put("source_revision_id",revisionIds[row.getString("source_revision_id")] ?: row.getString("source_revision_id"))) }

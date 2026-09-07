@@ -2,14 +2,14 @@ package com.adong.adchat.data.story
 
 /** A conflict retains both durable records and their source revision IDs; no automatic mutation. */
 data class StoryStateConflict(val earlier: StoryMemoryRecord, val latest: StoryMemoryRecord) {
-    val description: String get() = "${latest.subjectEntityNames.firstOrNull() ?: "人物"} · ${latest.stateKey}：" +
+    val description: String get() = if (latest.conflictsWithId == earlier.id) "设定疑似矛盾：「${earlier.content}」与「${latest.content}」" else "${latest.subjectEntityNames.firstOrNull() ?: "人物"} · ${latest.stateKey}：" +
         "「${earlier.content}」（轮次 ${earlier.effectiveSequence}）与「${latest.content}」（轮次 ${latest.effectiveSequence}）不一致"
 }
 
 data class StoryStateView(val records: List<StoryMemoryRecord>, val conflicts: List<StoryStateConflict>)
 
 class StoryStateConflictException(val conflicts: List<StoryStateConflict>) : IllegalStateException(
-    "当前状态存在冲突，正文尚未发送。请到故事档案「变更」处理冲突，也可修改、停用错误记录或解除固定。\n" +
+    "故事资料存在待处理冲突，正文尚未发送。请到故事档案「变更」处理冲突，也可修改、停用错误记录或解除固定。\n" +
         conflicts.take(3).joinToString("\n") { it.description }
 )
 
@@ -36,6 +36,11 @@ object StoryStateProjection {
                 }
             }
         }
+        val byId = active.associateBy { it.id }
+        active.forEach { latest -> byId[latest.conflictsWithId]?.let { earlier ->
+            if (earlier.content == latest.conflictsWithContent && earlier.content != latest.content)
+                conflicts += StoryStateConflict(earlier, latest)
+        } }
         val structuredIds = structured.map { it.id }.toSet()
         return StoryStateView(active.filter { it.id !in structuredIds || it.id in selected }, conflicts)
     }
