@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +67,13 @@ fun AdSelectionSheet(
         }
     }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val listState = rememberLazyListState()
+    // Reopening starts at the current choice; searching always starts at the first result.
+    LaunchedEffect(query, selectedId, options.map { it.id }) {
+        val index = if (query.isBlank()) visible.indexOfFirst { it.id == selectedId }.coerceAtLeast(0) else 0
+        if (visible.isNotEmpty()) listState.scrollToItem(index)
+    }
+    val maximumHeight = LocalConfiguration.current.screenHeightDp.dp * .85f
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -72,7 +81,7 @@ fun AdSelectionSheet(
         shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
         dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp).imePadding()) {
+        Column(Modifier.fillMaxWidth().heightIn(max = maximumHeight).imePadding().padding(horizontal = 18.dp)) {
             SheetHeader(title, subtitle, headerIcon, onDismiss)
             if (searchEnabled) {
                 Spacer(Modifier.height(16.dp))
@@ -108,7 +117,8 @@ fun AdSelectionSheet(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 430.dp),
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(visible, key = { it.id }) { option ->
@@ -117,7 +127,7 @@ fun AdSelectionSheet(
                     }
                 }
             }
-            Spacer(Modifier.navigationBarsPadding().height(18.dp))
+            Spacer(Modifier.height(18.dp))
         }
     }
 }
@@ -132,17 +142,7 @@ fun AdActionSheet(
     onDismiss: () -> Unit,
     headerIcon: ImageVector? = null
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = Canvas,
-        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
-        dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
-    ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
-            SheetHeader(title, subtitle, headerIcon, onDismiss)
-            Spacer(Modifier.height(16.dp))
+    AsterOptionsSheet(title = title, subtitle = subtitle, onDismiss = onDismiss) {
             actions.forEach { action ->
                 val actionColor = if (action.destructive) Danger else Ink
                 Surface(
@@ -167,8 +167,6 @@ fun AdActionSheet(
                     }
                 }
             }
-            Spacer(Modifier.navigationBarsPadding().height(14.dp))
-        }
     }
 }
 
@@ -200,10 +198,11 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
     val iconTint by animateColorAsState(if (selected) Accent else MutedInk, tween(170), label = "choiceIconTint")
     val indicator by animateColorAsState(if (selected) Accent else Hairline, tween(170), label = "choiceIndicator")
     Surface(
+        selected = selected,
         onClick = onClick,
         color = container,
         contentColor = Ink,
-        border = if (selected) BorderStroke(1.dp, Color(0xFFFFB9A7)) else null,
+        border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .35f) else Hairline.copy(alpha = .6f)),
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth()
     ) {

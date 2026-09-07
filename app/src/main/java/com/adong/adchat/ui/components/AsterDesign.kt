@@ -11,6 +11,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -86,11 +89,13 @@ fun AsterSegmentedControl(
         .selectableGroup().padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         labels.forEachIndexed { index, label ->
             val selected = index == selectedIndex
-            Surface(color = if (selected) Surface else Color.Transparent,
-                shape = RoundedCornerShape(14.dp), shadowElevation = if (selected) 1.dp else 0.dp,
+            val fill by animateColorAsState(if (selected) Surface else Color.Transparent, tween(160), label = "segment-fill")
+            Surface(color = fill,
+                shape = RoundedCornerShape(14.dp), shadowElevation = 0.dp,
+                border = BorderStroke(1.dp, if (selected) Hairline else Color.Transparent),
                 modifier = Modifier.weight(1f)) {
                 Box(Modifier.selectable(selected, enabled = enabled, role = Role.Tab,
-                    onClick = { onSelect(index) }).heightIn(min = 46.dp)
+                    onClick = { if (!selected) onSelect(index) }).heightIn(min = 48.dp)
                     .padding(horizontal = 8.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
                     Text(label, color = if (selected) Ink else MutedInk,
                         style = MaterialTheme.typography.labelLarge,

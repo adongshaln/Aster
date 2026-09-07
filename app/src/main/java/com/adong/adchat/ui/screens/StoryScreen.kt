@@ -4,16 +4,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.layout.onSizeChanged
-import coil.compose.AsyncImage
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.BorderStroke
@@ -26,24 +16,16 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
@@ -54,7 +36,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryChangeEntry
@@ -65,16 +46,12 @@ import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRevisionState
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.MainViewModel
-import com.adong.adchat.ui.components.AsterArtwork
+import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.components.AsterIconButton
 import com.adong.adchat.ui.components.AsterMark
-import com.adong.adchat.ui.components.READING_BODY_FONT_SP
-import com.adong.adchat.ui.components.READING_BODY_LINE_SP
 import com.adong.adchat.ui.story.StoryViewModel
 import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.launch
-import kotlin.math.PI
-import kotlin.math.sin
 
 @Composable
 fun StoryScreen(
@@ -217,39 +194,12 @@ private fun StoryHeader(
             AsterIconButton(Icons.Rounded.FolderOpen, "故事档案", onArchive)
             AsterIconButton(Icons.Rounded.Add, "新建故事", onCreateStory)
         }
-        Row(
-            Modifier.fillMaxWidth().padding(start = 48.dp, end = 48.dp, top = 2.dp, bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            StoryWorkspace.entries.forEach { item ->
-                val selected = workspace == item
-                Surface(
-                    onClick = { onWorkspace(item) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp),
-                    color = if (selected) AccentSoft else Color.Transparent,
-                    contentColor = if (selected) Accent else MutedInk
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (item == StoryWorkspace.Discussion) Icons.Rounded.Forum else Icons.Rounded.AutoStories,
-                            null,
-                            Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            if (item == StoryWorkspace.Discussion) "讨论" else "正文",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-                        )
-                    }
-                }
-            }
-        }
+        AsterSegmentedControl(
+            labels = listOf("讨论", "正文"),
+            selectedIndex = StoryWorkspace.entries.indexOf(workspace),
+            onSelect = { onWorkspace(StoryWorkspace.entries[it]) },
+            modifier = Modifier.padding(start = 48.dp, end = 48.dp, top = 2.dp, bottom = 4.dp)
+        )
     }
 }
 
@@ -271,7 +221,6 @@ private fun StoryWorkspaceContent(
         if(uri!=null) storyVm.importAttachments(listOf(uri),false,targetStory.id,targetStory.currentTimelineId,workspace)
     }
     val composerDensity=LocalDensity.current
-    val focusManager = LocalFocusManager.current
     val imeInsets = WindowInsets.ime
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     var composerFocused by remember { mutableStateOf(false) }
@@ -318,7 +267,7 @@ private fun StoryWorkspaceContent(
     ) {
         if (!composerFocused) return@LaunchedEffect
         autoFollow = true
-        var imeWasVisible = imeInsets.getBottom(composerDensity) > 0
+
         snapshotFlow {
             imeInsets.getBottom(composerDensity) to imeAnimationTarget.getBottom(composerDensity)
         }.collect { (imeBottom, imeTargetBottom) ->
@@ -328,8 +277,7 @@ private fun StoryWorkspaceContent(
                 // move as one surface while the keyboard opens/closes.
                 runCatching { listState.scrollToItem(bottomItemIndex) }
             }
-            if (imeBottom > 0) imeWasVisible = true
-            if (imeWasVisible && imeTargetBottom == 0) focusManager.clearFocus()
+
         }
     }
 
@@ -490,22 +438,14 @@ private fun StoryWorkspaceContent(
                 }
                 if (hasStandaloneThinking) {
                     item(key = "story-thinking-${workspace.name}") {
-                        StoryThinkingIndicator()
+                        ConversationThinkingIndicator()
                     }
                 }
                 item(key = "story-bottom-spacer") { Spacer(Modifier.height(4.dp)) }
             }
         }
 
-        Box(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight).background(
-                Brush.verticalGradient(
-                    0f to Color.Transparent,
-                    .46f to Canvas.copy(alpha = .38f),
-                    1f to Canvas.copy(alpha = .96f)
-                )
-            )
-        )
+        ConversationReadingVeil(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight))
 
         storyVm.error(workspace)?.let { error ->
             Surface(
@@ -524,27 +464,12 @@ private fun StoryWorkspaceContent(
             }
         }
 
-        if (listState.canScrollForward) {
-            Surface(
-                onClick = {
-                    autoFollow = true
-                    scope.launch { listState.animateScrollToItem(bottomItemIndex) }
-                },
-                shape = RoundedCornerShape(24.dp),
-                color = Surface,
-                contentColor = Accent,
-                border = BorderStroke(1.dp, Hairline),
-                shadowElevation = 0.dp,
-                tonalElevation = 0.dp,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = composerHeight + 8.dp)
-            ) {
-                Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(20.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (loading) "跟随生成" else "回到底部", style = MaterialTheme.typography.labelLarge)
-                }
-            }
-        }
+        ConversationJumpToBottom(
+            visible = listState.canScrollForward && storyVm.error(workspace) == null,
+            loading = loading,
+            onClick = { autoFollow = true; scope.launch { listState.animateScrollToItem(bottomItemIndex) } },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = composerHeight + 18.dp)
+        )
 
         StoryComposer(
             value = storyVm.draft(workspace),
@@ -558,7 +483,7 @@ private fun StoryWorkspaceContent(
             routeAvailable = profile != null,
             onValueChange = { storyVm.updateDraft(it, workspace) },
             onSend = {
-                if (profile != null) storyVm.send(profile, workspace) else onOpenSettings()
+                if (profile != null) storyVm.send(profile, workspace) else storyVm.openArchive()
                 autoFollow = true
             },
             onStop = { storyVm.stop(workspace) },
@@ -600,7 +525,7 @@ private fun StoryMessageItem(
             if (user) {
                 Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
                     Column(Modifier.padding(7.dp)) {
-                        if (row.revision.attachments.isNotEmpty()) StoryImageStrip(row.revision.attachments)
+                        if (row.revision.attachments.isNotEmpty()) ConversationImages(row.revision.attachments)
                         if (row.revision.content.isNotBlank()) {
                             SelectionContainer {
                                 Text(
@@ -622,7 +547,7 @@ private fun StoryMessageItem(
                     }
                 }
                 if (waitingForFirstToken) {
-                    StoryThinkingIndicator()
+                    ConversationThinkingIndicator()
                 } else {
                     StructuredMessageText(
                         content = row.revision.content,
@@ -647,17 +572,9 @@ private fun StoryMessageItem(
                 if (row.revision.state != StoryRevisionState.Streaming && row.revision.content.isNotBlank()) {
                     Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            StoryMessageActionButton(
-                                icon = Icons.Outlined.ContentCopy,
-                                label = "复制",
-                                onClick = {
-                                    context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(
-                                        android.content.ClipData.newPlainText("Aster Story", row.revision.content)
-                                    )
-                                }
-                            )
+                            ConversationCopyAction(row.revision.content)
                             if (hasDetails) {
-                                StoryMessageActionButton(
+                                ConversationMessageAction(
                                     icon = Icons.Rounded.MoreHoriz,
                                     label = if (showDetails) "收起" else "详情",
                                     onClick = {
@@ -710,27 +627,6 @@ private fun StoryMessageItem(
 }
 
 @Composable
-private fun StoryMessageActionButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        onClick = onClick,
-        color = Color.Transparent,
-        contentColor = Ink,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.heightIn(min = 36.dp)
-    ) {
-        Row(Modifier.padding(horizontal = 7.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = label, modifier = Modifier.size(17.dp))
-            Spacer(Modifier.width(5.dp))
-            Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-        }
-    }
-}
-
-@Composable
 private fun StoryDetailAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
@@ -761,56 +657,6 @@ private fun StoryDetailAction(
     }
 }
 
-@Composable
-private fun StoryThinkingIndicator() {
-    val density = LocalDensity.current
-    val transition = rememberInfiniteTransition(label = "story-thinking")
-    val motion by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 4f,
-        animationSpec = infiniteRepeatable(tween(3520, easing = LinearEasing)),
-        label = "story-thinking-motion"
-    )
-    val subtitleAlpha by transition.animateFloat(
-        initialValue = .58f,
-        targetValue = .86f,
-        animationSpec = infiniteRepeatable(tween(900), repeatMode = RepeatMode.Reverse),
-        label = "story-thinking-subtitle"
-    )
-    val step = motion.toInt().coerceIn(0, 3)
-    val local = (motion - step).coerceIn(0f, 1f)
-    val hopPortion = .62f
-    val hopProgress = (local / hopPortion).coerceIn(0f, 1f)
-    val eased = hopProgress * hopProgress * (3f - 2f * hopProgress)
-    val jumpDp = if (local < hopPortion) (-6f * sin(PI * hopProgress)).toFloat() else 0f
-    val rotation = step * 90f + if (local < hopPortion) eased * 90f else 90f
-    val jumpPx = with(density) { jumpDp.dp.toPx() }
-    Row(Modifier.heightIn(min = 46.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
-            AsterArtwork(
-                Modifier.size(28.dp).graphicsLayer {
-                    translationY = jumpPx
-                    rotationZ = rotation
-                }
-            )
-        }
-        Spacer(Modifier.width(9.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(
-                "Aster 正在思考",
-                color = Ink,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Medium
-            )
-            Text(
-                "正在组织回答…",
-                color = MutedInk.copy(alpha = subtitleAlpha),
-                style = MaterialTheme.typography.labelSmall
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun StoryComposer(
@@ -830,175 +676,28 @@ private fun StoryComposer(
     modifier: Modifier = Modifier
 ) {
     var showAttachments by remember { mutableStateOf(false) }
-    var focused by remember { mutableStateOf(false) }
-    val focusManager = LocalFocusManager.current
-    val capsuleShape = RoundedCornerShape(31.dp)
-    val focusProgress by animateFloatAsState(
-        targetValue = if (focused) 1f else 0f,
-        animationSpec = tween(
-            durationMillis = if (focused) 230 else 180,
-            easing = FastOutSlowInEasing
-        ),
-        label = "story-composer-focus-progress"
+    ConversationComposer(
+        value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentBusy,
+        onValueChange = onValueChange, onOptionsClick = { showAttachments = true }, onRemoveImage = onRemoveImage,
+        onSend = onSend, onStop = onStop, onFocusChange = onFocusChange, modifier = modifier,
+        configureRequired = !routeAvailable, testTag = "story",
+        placeholder = if (!routeAvailable) "先选择故事使用的模型" else if (workspace == StoryWorkspace.Discussion)
+            "讨论设定、人物或下一步…" else "告诉 Aster 接下来发生什么…"
     )
-    val minimumHeight = 58.dp + 52.dp * focusProgress
-    val fieldStart = 58.dp - 40.dp * focusProgress
-    val fieldEnd = 58.dp - 40.dp * focusProgress
-    val fieldTop = 17.dp - 2.dp * focusProgress
-    val fieldBottom = 15.dp + 42.dp * focusProgress
-    Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
-        if (attachments.isNotEmpty()) {
-            Surface(
-                color = Surface.copy(alpha = .94f),
-                shape = RoundedCornerShape(18.dp),
-                border = BorderStroke(1.dp, Hairline.copy(alpha = .72f)),
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 5.dp)
-            ) {
-                StoryImageStrip(attachments, onRemoveImage)
-            }
-        }
-        Surface(
-            color = Surface.copy(alpha = .97f),
-            shape = capsuleShape,
-            border = BorderStroke(1.dp, if (focused) Accent.copy(alpha = .35f) else Hairline),
-            shadowElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth().shadow(
-                elevation = 4.dp,
-                shape = capsuleShape,
-                ambientColor = Color.Black.copy(alpha = .07f),
-                spotColor = Color.Black.copy(alpha = .10f)
-            )
-        ) {
-            Column {
-                if (attachmentBusy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = minimumHeight)) {
-                    BasicTextField(
-                        value = value,
-                        onValueChange = onValueChange,
-                        modifier = Modifier.fillMaxWidth()
-                            .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
-                            .heightIn(min = 24.dp, max = 132.dp)
-                            .onFocusChanged { state ->
-                                if (focused != state.isFocused) {
-                                    focused = state.isFocused
-                                    onFocusChange(state.isFocused)
-                                }
-                              },
-                        maxLines = if (focused) 5 else 1,
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
-                        cursorBrush = SolidColor(Accent),
-                        decorationBox = { inner ->
-                            Box(Modifier.fillMaxWidth()) {
-                                if (value.isEmpty() && !focused) {
-                                    Text(
-                                        if (!routeAvailable) "先选择故事使用的模型" else if (workspace == StoryWorkspace.Discussion) "讨论设定、人物或下一步…" else "告诉 Aster 接下来发生什么…",
-                                        color = MutedInk,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                inner()
-                            }
-                        }
-                    )
-                    Row(
-                        Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(58.dp).padding(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = {
-                                focusManager.clearFocus()
-                                showAttachments = true
-                            },
-                            enabled = !loading && !attachmentBusy,
-                            modifier = Modifier.size(46.dp)
-                        ) {
-                            if (attachmentBusy) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
-                            else Icon(Icons.Rounded.Add, "添加图片或文件", Modifier.size(29.dp), tint = Ink)
-                        }
-                        Spacer(Modifier.weight(1f))
-                        FilledIconButton(
-                            onClick = if (loading) onStop else { { focusManager.clearFocus(); onSend() } },
-                            enabled = loading || (!attachmentBusy && (value.isNotBlank() || attachments.isNotEmpty() || !routeAvailable)),
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = Night,
-                                contentColor = Color.White,
-                                disabledContainerColor = Color(0xFFE6E1DB),
-                                disabledContentColor = Color(0xFFA9A39C)
-                            ),
-                            modifier = Modifier.size(46.dp)
-                        ) {
-                            Icon(if (loading) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward, if (loading) "停止生成" else "发送", Modifier.size(if (loading) 21.dp else 23.dp))
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     if (showAttachments) {
-        ModalBottomSheet(
-            onDismissRequest = { showAttachments = false },
-            containerColor = Canvas
+        AsterOptionsSheet(
+            title = "输入选项",
+            subtitle = if (workspace == StoryWorkspace.Discussion) "添加参考资料，继续讨论设定" else "添加参考资料，继续创作正文",
+            onDismiss = { showAttachments = false }
         ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(bottom = 28.dp)) {
-                Text("添加到故事", style = MaterialTheme.typography.titleLarge, color = Ink)
-                Text(
-                    if (workspace == StoryWorkspace.Discussion) "图片和文档会作为本轮讨论的上下文" else "图片和文档会随本轮正文输入一起保存",
-                    color = MutedInk,
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Spacer(Modifier.height(18.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    StoryComposerSheetAction(
-                        icon = Icons.Rounded.AddPhotoAlternate,
-                        label = "图片",
-                        detail = "最多 4 张",
-                        enabled = !loading && !attachmentBusy && attachments.size < 4,
-                        onClick = { showAttachments = false; onPickImages() },
-                        modifier = Modifier.weight(1f)
-                    )
-                    StoryComposerSheetAction(
-                        icon = Icons.Rounded.AttachFile,
-                        label = "文件",
-                        detail = "文本 / DOCX / PDF",
-                        enabled = !loading && !attachmentBusy,
-                        onClick = { showAttachments = false; onPickDocument() },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ConversationSheetAction(Icons.Rounded.AddPhotoAlternate, "图片",
+                    !loading && !attachmentBusy && attachments.size < 4,
+                    { showAttachments = false; onPickImages() }, Modifier.weight(1f), "${attachments.size} / 4 张")
+                ConversationSheetAction(Icons.Rounded.AttachFile, "文件", !loading && !attachmentBusy,
+                    { showAttachments = false; onPickDocument() }, Modifier.weight(1f), "文本 / DOCX / PDF")
             }
-        }
-    }
-}
-
-@Composable
-private fun StoryComposerSheetAction(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    detail: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        onClick = onClick,
-        enabled = enabled,
-        color = Surface,
-        contentColor = if (enabled) Ink else MutedInk.copy(alpha = .45f),
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, Hairline.copy(alpha = .75f)),
-        modifier = modifier
-    ) {
-        Column(
-            Modifier.padding(horizontal = 10.dp, vertical = 15.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Icon(icon, null, Modifier.size(23.dp), tint = if (enabled) Accent else MutedInk.copy(alpha = .4f))
-            Spacer(Modifier.height(7.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            Text(detail, color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }
 }
@@ -1539,20 +1238,5 @@ private fun storyAnnotatedText(text: String): AnnotatedString = buildAnnotatedSt
         if (end < 0) break
         addStyle(SpanStyle(color = Accent), start, end + 1)
         cursor = end + 1
-    }
-}
-
-@Composable
-private fun StoryImageStrip(images: List<com.adong.adchat.data.ChatImageAttachment>, onRemove: ((String)->Unit)? = null) {
-    if(images.isEmpty()) return
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal=14.dp,vertical=8.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-        images.forEach { image ->
-            Box {
-                AsyncImage(model=image.uri,contentDescription=image.name,modifier=Modifier.size(72.dp).clip(RoundedCornerShape(12.dp)))
-                if(onRemove!=null) IconButton(onClick={onRemove(image.id)},modifier=Modifier.align(Alignment.TopEnd).size(28.dp).background(Surface,CircleShape)) {
-                    Icon(Icons.Rounded.Close,"移除 ${image.name}",modifier=Modifier.size(16.dp))
-                }
-            }
-        }
     }
 }
