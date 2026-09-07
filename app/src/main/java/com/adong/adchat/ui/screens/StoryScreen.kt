@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.AnnotatedString
@@ -557,6 +558,7 @@ private fun StoryThinkingIndicator() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StoryComposer(
     value: String,
@@ -569,6 +571,21 @@ private fun StoryComposer(
     modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    val imeTarget = WindowInsets.imeAnimationTarget
+    LaunchedEffect(focused, workspace, density) {
+        if (!focused) return@LaunchedEffect
+        // Hiding the IME does not blur BasicTextField. Match the ordinary chat composer,
+        // but do not clear a newly acquired focus before the keyboard first opens.
+        var imeWasVisible = imeInsets.getBottom(density) > 0
+        snapshotFlow { imeInsets.getBottom(density) to imeTarget.getBottom(density) }
+            .collect { (bottom, target) ->
+                if (bottom > 0) imeWasVisible = true
+                if (imeWasVisible && target == 0) focusManager.clearFocus()
+            }
+    }
     Surface(
         color = Surface.copy(alpha = .97f),
         shape = RoundedCornerShape(31.dp),
@@ -592,6 +609,7 @@ private fun StoryComposer(
                 value = value,
                 onValueChange = onValueChange,
                 modifier = Modifier.weight(1f).heightIn(min = 28.dp, max = 128.dp).onFocusChanged { focused = it.isFocused },
+                maxLines = if (focused) 5 else 1,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
                 cursorBrush = SolidColor(Accent),
                 decorationBox = { inner ->
