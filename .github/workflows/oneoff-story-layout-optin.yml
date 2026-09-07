@@ -1,0 +1,37 @@
+name: One-off story layout opt-in
+
+on:
+  push:
+    branches: [feature/story-mode]
+    paths: [.github/workflows/oneoff-story-layout-optin.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/story-mode
+          fetch-depth: 0
+      - name: Add layout opt-in
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt')
+          s = p.read_text()
+          old = '@Composable\nprivate fun StoryWorkspaceContent(\n'
+          new = '@OptIn(ExperimentalLayoutApi::class)\n@Composable\nprivate fun StoryWorkspaceContent(\n'
+          if s.count(old) != 1:
+              raise SystemExit(f'expected one StoryWorkspaceContent declaration, got {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          rm .github/workflows/oneoff-story-layout-optin.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/ui/screens/StoryScreen.kt .github/workflows/oneoff-story-layout-optin.yml
+          git commit -m "fix(story): opt in IME animation target layout API"
+          git push origin HEAD:feature/story-mode
