@@ -82,7 +82,7 @@ fun AdSelectionSheet(
         dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
     ) {
         Column(Modifier.fillMaxWidth().heightIn(max = maximumHeight).imePadding().padding(horizontal = 18.dp)) {
-            SheetHeader(title, subtitle, headerIcon, onDismiss)
+            AsterSheetHeader(title, subtitle, headerIcon, onDismiss)
             if (searchEnabled) {
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
@@ -142,7 +142,7 @@ fun AdActionSheet(
     onDismiss: () -> Unit,
     headerIcon: ImageVector? = null
 ) {
-    AsterOptionsSheet(title = title, subtitle = subtitle, onDismiss = onDismiss) {
+    AsterOptionsSheet(title = title, subtitle = subtitle, onDismiss = onDismiss, headerIcon = headerIcon) {
             actions.forEach { action ->
                 val actionColor = if (action.destructive) Danger else Ink
                 Surface(
@@ -171,7 +171,7 @@ fun AdActionSheet(
 }
 
 @Composable
-private fun SheetHeader(title: String, subtitle: String, icon: ImageVector?, onDismiss: () -> Unit) {
+internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector?, onDismiss: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
             Box(

@@ -9,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.adong.adchat.ui.theme.*
 
@@ -19,6 +20,7 @@ fun AsterOptionsSheet(
     title: String,
     subtitle: String,
     onDismiss: () -> Unit,
+    headerIcon: ImageVector? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     ModalBottomSheet(
@@ -28,13 +30,7 @@ fun AsterOptionsSheet(
     ) {
         Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, color = Ink)
-                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MutedInk)
-                }
-                AsterIconButton(Icons.Rounded.Close, "关闭", onDismiss)
-            }
+            AsterSheetHeader(title, subtitle, headerIcon, onDismiss)
             content()
         }
     }

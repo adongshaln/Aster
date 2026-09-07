@@ -497,6 +497,7 @@ private fun EmptyDownloadHistory() {
 
 @Composable
 private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
+    var showActions by remember(record.id) { mutableStateOf(false) }
     Surface(
         color = Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Hairline),
         modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen)
@@ -525,9 +526,23 @@ private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit,
                     }, color = MutedInk, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
             }
-            IconButton(onClick = onShare, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.Share, "分享", tint = MutedInk, modifier = Modifier.size(18.dp)) }
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) { Icon(Icons.Rounded.DeleteOutline, "删除", tint = MutedInk, modifier = Modifier.size(18.dp)) }
+            AsterIconButton(Icons.Rounded.MoreHoriz, "视频操作", { showActions = true })
         }
+    }
+    if (showActions) {
+        AdActionSheet(
+            title = "视频操作", subtitle = record.title,
+            actions = listOf(
+                AdActionOption("open", "播放视频", icon = Icons.Rounded.PlayArrow),
+                AdActionOption("share", "分享", icon = Icons.Rounded.Share),
+                AdActionOption("delete", "删除", icon = Icons.Rounded.DeleteOutline, destructive = true)
+            ),
+            onAction = {
+                showActions = false
+                when (it.id) { "open" -> onOpen(); "share" -> onShare(); "delete" -> onDelete() }
+            },
+            onDismiss = { showActions = false }
+        )
     }
 }
 
@@ -691,6 +706,5 @@ private fun formatBytes(bytes: Long): String {
 
 private fun formatSpeed(bytesPerSecond: Long): String = "${formatBytes(bytesPerSecond)}/s"
 private fun formatDate(timestamp: Long): String = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(timestamp))
-
 
 
