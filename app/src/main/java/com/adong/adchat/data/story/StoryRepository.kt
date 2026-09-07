@@ -446,15 +446,24 @@ class StoryRepository(context: Context) : AutoCloseable {
         }
     }
 
+    fun historicalRewriteContext(messageId: String, revisionId: String, instruction: String, originalInput: String? = null): StoryContextResult =
+        helper.readableDatabase.inTransaction { db ->
+            val source=queryMessageWithRevision(db,messageId) ?: error("正文不存在")
+            val boundary=StoryTimelineHistory.readBoundary(db,messageId,revisionId)
+            StoryHistoricalContext.compose(db,source,boundary,instruction,originalInput)
+        }
+
     fun beginRewrite(messageId: String, revisionId: String, memoryVersion: Long, instruction: String,
-        profileName: String, model: String): StoryRewriteCandidate = helper.writableDatabase.inTransaction { db ->
+        profileName: String, model: String, historical: Boolean = false, replacementInput: String? = null): StoryRewriteCandidate = helper.writableDatabase.inTransaction { db ->
         val source = queryMessageWithRevision(db,messageId) ?: error("正文已不存在")
-        requireRevisionChangeAllowed(db,source,revisionId,allowLaterDiscussion=true)
+        require(replacementInput==null || (historical && replacementInput.isNotBlank() && replacementInput.length<=16000))
+        if(historical) StoryTimelineHistory.readBoundary(db,messageId,revisionId)
+        else requireRevisionChangeAllowed(db,source,revisionId,allowLaterDiscussion=true)
         check(source.revision.state == StoryRevisionState.Complete) { "只能重写完整正文。" }
         val story = getStory(source.message.storyId) ?: error("故事已删除")
         check(story.memoryVersion == memoryVersion) { "资料已变化，请重新生成。" }
         require(instruction.isNotBlank() && instruction.length <= 8000) { "请填写 1–8,000 字符的修改要求。" }
-        StoryRewrites.begin(db,source,memoryVersion,instruction,profileName,model)
+        StoryRewrites.begin(db,source,memoryVersion,instruction,profileName,model,if(historical) "fork" else "replace",replacementInput)
     }
 
     fun updateRewrite(id: String, content: String, state: String): Boolean =
@@ -472,7 +481,10 @@ class StoryRepository(context: Context) : AutoCloseable {
             "路线或资料已变化，候选仍保留，请重新生成后再采用。"
         }
         check(queryMessageWithRevision(db,candidate.messageId)?.revision?.state == StoryRevisionState.Complete) { "原文已不再是完整正文。" }
-        val revised = replaceMessageRevision(candidate.messageId,candidate.content,
+        val revised = if(candidate.mode=="fork") {
+            val timeline=StoryTimelineHistory.fork(db,candidate.messageId,candidate.baseRevisionId,candidate.content,candidate.replacementInput)
+            loadMessages(candidate.storyId,timeline,StoryWorkspace.Prose).last()
+        } else replaceMessageRevision(candidate.messageId,candidate.content,
             profileName=candidate.profileName,model=candidate.model,expectedRevisionId=candidate.baseRevisionId,
             allowLaterDiscussion=true) ?: error("原文已不存在")
         check(db.update(StorySchema.REWRITES,ContentValues().apply { put("state","adopted");put("updated_at",System.currentTimeMillis()) },

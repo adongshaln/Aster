@@ -359,10 +359,14 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var rewriteInstruction by mutableStateOf("")
         private set
+    var rewriteOriginalInput by mutableStateOf("")
+        private set
+    private var rewriteOriginalBaseline = ""
+    fun updateRewriteOriginalInput(value: String) { if(!revisionBusy) rewriteOriginalInput=value }
     private var rewriteJob: Job? = null
     fun updateRewriteInstruction(value: String) { if(!revisionBusy) rewriteInstruction=value }
-    fun canModelRewrite(target: StoryMessageWithRevision): Boolean = target.revision.state == StoryRevisionState.Complete &&
-        messages(StoryWorkspace.Prose).lastOrNull()?.revision?.id == target.revision.id
+    fun canModelRewrite(target: StoryMessageWithRevision): Boolean = target.revision.state == StoryRevisionState.Complete
+    fun isHistoricalRewrite(): Boolean = revisionTarget?.revision?.id != messages(StoryWorkspace.Prose).lastOrNull()?.revision?.id
 
     fun openModelRewrite() {
         val target=revisionTarget ?: return
@@ -371,9 +375,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val saved=store.latestRewrite(target.message.id)
+                val original=store.loadMessages(target.message.storyId,target.message.timelineId,StoryWorkspace.Prose)
+                    .lastOrNull { it.message.sequence<target.message.sequence && it.message.role=="user" }?.revision?.content.orEmpty()
                 withContext(Dispatchers.Main) {
                     if(revisionTarget?.revision?.id==target.revision.id) {
                         rewriteCandidate=saved;rewriteInstruction=saved?.instruction.orEmpty()
+                        rewriteOriginalBaseline=original;rewriteOriginalInput=saved?.replacementInput ?: original
                     }
                 }
             } finally { withContext(NonCancellable+Dispatchers.Main) { revisionBusy=false } }
@@ -388,6 +395,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         if(revisionBusy || StoryWorkspace.entries.any { isLoading(it) } || target.message.storyId!=story.id ||
             target.message.timelineId!=story.currentTimelineId) return
         val instruction=rewriteInstruction.trim()
+        val replacementInput=rewriteOriginalInput.takeIf { it!=rewriteOriginalBaseline }
         if(instruction.isBlank()) { revisionError="请先填写明确的修改要求。";return }
         revisionBusy=true;revisionError=null
         val task=viewModelScope.launch(Dispatchers.IO,start=CoroutineStart.LAZY) {
@@ -396,10 +404,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val fresh=store.getStory(story.id) ?: error("故事已删除")
                 val profile=organizerProfile(fresh) ?: error("请先配置故事使用的服务。")
-                val snapshot=archiveStore.contextMemorySnapshot(story.id,story.currentTimelineId)
-                val context=com.adong.adchat.data.story.StoryRewriteContext.compose(target,instruction,snapshot,
-                    store.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose))
-                val created=store.beginRewrite(target.message.id,target.revision.id,fresh.memoryVersion,instruction,profile.name,fresh.model)
+                val prose=store.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose)
+                val historical=replacementInput!=null || prose.lastOrNull()?.revision?.id!=target.revision.id
+                val context=if(historical) store.historicalRewriteContext(target.message.id,target.revision.id,instruction,replacementInput)
+                    else com.adong.adchat.data.story.StoryRewriteContext.compose(target,instruction,
+                        archiveStore.contextMemorySnapshot(story.id,story.currentTimelineId),prose)
+                val created=store.beginRewrite(target.message.id,target.revision.id,fresh.memoryVersion,instruction,profile.name,fresh.model,historical,replacementInput)
                 candidate=created
                 withContext(Dispatchers.Main) { rewriteCandidate=created }
                 val result=trackedChat(story.id,story.currentTimelineId,"prose",created.id,

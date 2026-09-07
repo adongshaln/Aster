@@ -95,4 +95,29 @@ class StoryRewritesTest {
             StoryRewriteContext.compose(source.copy(revision=source.revision.copy(content="字".repeat(48000))),"改写",snapshot,emptyList())
         }
 }
+    @Test fun historicalRewriteUsesBoundaryAndForksWithoutCopyingFutureFacts() {
+        archive.addConfirmedRecord(story.id,story.currentTimelineId,StoryMemoryKind.WorldFact,"未来新增秘密")
+        repo.appendMessage(story.id,story.currentTimelineId,StoryWorkspace.Prose,"user","推进后续")
+        repo.appendMessage(story.id,story.currentTimelineId,StoryWorkspace.Prose,"assistant","未来剧情秘密")
+        val context=repo.historicalRewriteContext(source.message.id,source.revision.id,"步行抵达")
+        val all=context.systemPrompt+context.history.joinToString { it.content }
+        assertFalse(all.contains("未来新增秘密"));assertFalse(all.contains("未来剧情秘密"))
+        val candidate=repo.beginRewrite(source.message.id,source.revision.id,repo.getStory(story.id)!!.memoryVersion,
+            "步行抵达","p","m",historical=true)
+        repo.updateRewrite(candidate.id,"她步行抵达。","ready")
+        val result=repo.adoptRewrite(candidate.id)
+        assertNotEquals(story.currentTimelineId,result.message.timelineId)
+        assertEquals(2,repo.loadMessages(story.id,result.message.timelineId,StoryWorkspace.Prose).size)
+        assertEquals(4,repo.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose).size)
+        assertFalse(archive.listMemoryRecords(story.id,result.message.timelineId).any { it.content.contains("未来新增秘密") })
+    }
+    @Test fun changingOriginalInputOnlyChangesTheNewRoute() {
+        val candidate=repo.beginRewrite(source.message.id,source.revision.id,repo.getStory(story.id)!!.memoryVersion,
+            "重写","p","m",historical=true,replacementInput="描写徒步抵达山村")
+        repo.updateRewrite(candidate.id,"她走进山村。","ready")
+        val result=repo.adoptRewrite(candidate.id)
+        assertEquals("描写徒步抵达山村",repo.loadMessages(story.id,result.message.timelineId,StoryWorkspace.Prose).first().revision.content)
+        assertEquals("描写抵达港口",repo.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose).first().revision.content)
+    }
+
 }

@@ -327,11 +327,18 @@ private fun StoryWorkspaceContent(
         AlertDialog(onDismissRequest=storyVm::closeModelRewrite,
             title={ Text("重写候选") },
             text={ Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState())) {
-                Text("只重写最新一段正文。请明确写下讨论后决定采用的修改；生成后先预览，原文在采用前保持不变。",
+                Text(if(storyVm.isHistoricalRewrite()) "从这段原文生成前的资料重写。采用后从此另写，旧后续保留在历史路线，不会自动接入新路线。" else "请明确写下讨论后决定采用的修改；生成后先预览，原文在采用前保持不变。",
                     style=MaterialTheme.typography.bodySmall)
                 OutlinedTextField(value=storyVm.rewriteInstruction,onValueChange=storyVm::updateRewriteInstruction,
                     label={ Text("修改要求") },enabled=!storyVm.revisionBusy,
                     modifier=Modifier.fillMaxWidth().heightIn(min=80.dp,max=160.dp))
+                var editOriginal by remember { mutableStateOf(false) }
+                TextButton(onClick={editOriginal=!editOriginal}) { Text(if(editOriginal) "收起原始输入" else "修改这段的原始输入") }
+                if(editOriginal) {
+                    Text("修改原始输入会保留旧路线，从该段重新创作。",style=MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(value=storyVm.rewriteOriginalInput,onValueChange=storyVm::updateRewriteOriginalInput,
+                        enabled=!storyVm.revisionBusy,modifier=Modifier.fillMaxWidth().heightIn(max=160.dp))
+                }
                 TextButton(onClick=storyVm::generateModelRewrite,enabled=!storyVm.revisionBusy && storyVm.rewriteInstruction.isNotBlank()) {
                     Text(if(candidate==null) "生成候选" else "重新生成候选")
                 }
@@ -344,7 +351,7 @@ private fun StoryWorkspaceContent(
                 storyVm.revisionError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
             } },
             confirmButton={ TextButton(onClick=storyVm::adoptModelRewrite,
-                enabled=!storyVm.revisionBusy && candidate?.state=="ready") { Text("采用为新版本") } },
+                enabled=!storyVm.revisionBusy && candidate?.state=="ready") { Text(if(candidate?.mode=="fork") "采用并从这里另写" else "采用为新版本") } },
             dismissButton={ TextButton(onClick=storyVm::closeModelRewrite,enabled=!storyVm.revisionBusy) { Text("返回原文") } })
     }
 

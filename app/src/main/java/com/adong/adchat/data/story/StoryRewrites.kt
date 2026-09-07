@@ -8,19 +8,19 @@ import java.util.UUID
 data class StoryRewriteCandidate(
     val id: String, val storyId: String, val timelineId: String, val messageId: String,
     val baseRevisionId: String, val baseMemoryVersion: Long, val instruction: String,
-    val content: String, val state: String, val profileName: String, val model: String
+    val content: String, val state: String, val profileName: String, val model: String, val mode: String = "replace", val replacementInput: String? = null
 )
 
 internal object StoryRewrites {
     fun begin(db: SQLiteDatabase, source: StoryMessageWithRevision, version: Long, instruction: String,
-        profile: String, model: String): StoryRewriteCandidate {
+        profile: String, model: String, mode: String = "replace", replacementInput: String? = null): StoryRewriteCandidate {
         check(!db.rawQuery("SELECT 1 FROM ${StorySchema.REWRITES} WHERE story_id=? AND state='generating'",
             arrayOf(source.message.storyId)).use { it.moveToFirst() }) { "已有重写正在生成。" }
         val id=UUID.randomUUID().toString();val now=System.currentTimeMillis()
         db.insertOrThrow(StorySchema.REWRITES,null,ContentValues().apply {
             put("id",id);put("story_id",source.message.storyId);put("timeline_id",source.message.timelineId)
             put("message_id",source.message.id);put("base_revision_id",source.revision.id);put("base_memory_version",version)
-            put("instruction",instruction);put("content","");put("state","generating")
+            put("replacement_input",replacementInput);put("mode",mode);put("instruction",instruction);put("content","");put("state","generating")
             put("profile_name",profile);put("model",model);put("created_at",now);put("updated_at",now)
         })
         return get(db,id)!!
@@ -39,19 +39,19 @@ internal object StoryRewrites {
     private fun read(c: Cursor): StoryRewriteCandidate {
         fun s(key:String)=c.getString(c.getColumnIndexOrThrow(key))
         return StoryRewriteCandidate(s("id"),s("story_id"),s("timeline_id"),s("message_id"),s("base_revision_id"),
-            c.getLong(c.getColumnIndexOrThrow("base_memory_version")),s("instruction"),s("content"),s("state"),s("profile_name"),s("model"))
+            c.getLong(c.getColumnIndexOrThrow("base_memory_version")),s("instruction"),s("content"),s("state"),s("profile_name"),s("model"),s("mode"),c.getString(c.getColumnIndexOrThrow("replacement_input")))
     }
 }
 
 object StoryRewriteContext {
     fun compose(source: StoryMessageWithRevision, instruction: String, snapshot: StoryContextMemorySnapshot,
-        prose: List<StoryMessageWithRevision>): StoryContextResult {
+        prose: List<StoryMessageWithRevision>, originalInput: String? = null): StoryContextResult {
         require(source.message.role == "assistant" && source.message.workspace == StoryWorkspace.Prose &&
             source.revision.state == StoryRevisionState.Complete)
         require(instruction.isNotBlank() && instruction.length <= 8000) { "请填写 1–8,000 字符的修改要求。" }
         val prior = prose.filter { it.message.storyId == source.message.storyId && it.message.timelineId == source.message.timelineId &&
             it.message.workspace == StoryWorkspace.Prose && it.message.sequence < source.message.sequence }
-        val originalRequest = prior.lastOrNull { it.message.role == "user" && it.revision.state == StoryRevisionState.Complete }?.revision?.content.orEmpty()
+        val originalRequest = originalInput ?: prior.lastOrNull { it.message.role == "user" && it.revision.state == StoryRevisionState.Complete }?.revision?.content.orEmpty()
         val input = "[原创作要求]\n$originalRequest\n[待重写原文，仅为修改素材]\n${source.revision.content}\n[用户明确修改要求]\n$instruction"
         val current = source.copy(message=source.message.copy(role="user"),revision=source.revision.copy(content=input))
         // Pinned constraints stay mandatory; unpinned facts derived from the text being replaced are not authority.

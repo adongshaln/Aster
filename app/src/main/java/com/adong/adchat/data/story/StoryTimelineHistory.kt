@@ -23,7 +23,7 @@ internal object StoryTimelineHistory {
         saveSnapshot(db, storyId, timelineId, sequence, "boundary:$messageId", snapshot)
     }
 
-    fun fork(db: SQLiteDatabase, messageId: String, expectedRevisionId: String, content: String): String {
+    fun fork(db: SQLiteDatabase, messageId: String, expectedRevisionId: String, content: String, replacementInput: String? = null): String {
         require(content.isNotBlank()) { "修订正文不能为空" }
         val message = rows(db, "SELECT * FROM ${StorySchema.MESSAGES} WHERE id = ?", arrayOf(messageId)).objects().single()
         val storyId = message.getString("story_id")
@@ -31,20 +31,8 @@ internal object StoryTimelineHistory {
         requireCurrentAndIdle(db, storyId, oldTimeline)
         require(message.getString("active_revision_id") == expectedRevisionId) { "正文版本已变化，请重新打开" }
         require(message.getString("workspace") == "prose" && message.getString("role") == "assistant") { "只能从正文回复修订" }
-        val boundary = rows(db, """SELECT snapshot_json FROM ${StorySchema.SNAPSHOTS}
-            WHERE story_id = ? AND timeline_id = ? AND log_cursor = ? ORDER BY rowid DESC LIMIT 1""",
-            arrayOf(storyId, oldTimeline, "boundary:$messageId")).objects().firstOrNull()
-        require(boundary != null) { "这段旧正文没有生成前快照，暂不能安全重写较早章节" }
-        val snapshot = JSONObject(boundary.getString("snapshot_json"))
-        require(snapshot.getInt("format") == 1)
+        val snapshot = readBoundary(db,messageId,expectedRevisionId)
         val prefix = snapshot.getJSONArray("messages").objects()
-        // Never replay a checkpoint against a different prefix after another revision change.
-        prefix.forEach { previous ->
-            val active = rows(db, "SELECT active_revision_id FROM ${StorySchema.MESSAGES} WHERE id = ? AND timeline_id = ?",
-                arrayOf(previous.getString("id"), oldTimeline)).objects().singleOrNull()
-            require(active?.getString("active_revision_id") == previous.getString("active_revision_id")) { "前文已变化，原快照不再适用" }
-        }
-        require(prefix.all { it.getLong("sequence_no") < message.getLong("sequence_no") })
         val timelineId = newTimelineId()
         val now = System.currentTimeMillis()
         insert(db, StorySchema.TIMELINES, JSONObject().put("id", timelineId).put("story_id", storyId)
@@ -63,6 +51,13 @@ internal object StoryTimelineHistory {
         revisions.forEach { row -> insert(db, StorySchema.REVISIONS, JSONObject(row.toString())
             .put("id", revisionIds.getValue(row.getString("id"))).put("timeline_id", timelineId)
             .put("message_id", messageIds.getValue(row.getString("message_id")))) }
+        if(replacementInput!=null) {
+            require(replacementInput.isNotBlank() && replacementInput.length<=16000)
+            val user=prefix.lastOrNull { it.getString("workspace")=="prose" && it.getString("role")=="user" }
+                ?: error("该段没有可修改的原始用户输入")
+            check(db.update(StorySchema.REVISIONS,ContentValues().apply { put("content",replacementInput) },"id=?",
+                arrayOf(revisionIds.getValue(user.getString("active_revision_id"))))==1)
+        }
         val entityIds = mutableMapOf<String, String>()
         snapshot.getJSONArray("entities").objects().forEach { row ->
             val id = newEntityId(); entityIds[row.getString("id")] = id
@@ -123,6 +118,29 @@ internal object StoryTimelineHistory {
         switch(db, storyId, timelineId, oldTimeline)
         StoryConflicts.refresh(db, storyId, timelineId)
         return timelineId
+    }
+
+    fun readBoundary(db: SQLiteDatabase, messageId: String, expectedRevisionId: String): JSONObject {
+        val message = rows(db,"SELECT * FROM ${StorySchema.MESSAGES} WHERE id=?",arrayOf(messageId)).objects().single()
+        val storyId=message.getString("story_id");val oldTimeline=message.getString("timeline_id")
+        requireCurrentAndIdle(db,storyId,oldTimeline)
+        require(message.getString("active_revision_id")==expectedRevisionId) { "正文版本已变化" }
+        val boundary = rows(db, """SELECT snapshot_json FROM ${StorySchema.SNAPSHOTS}
+            WHERE story_id = ? AND timeline_id = ? AND log_cursor = ? ORDER BY rowid DESC LIMIT 1""",
+            arrayOf(storyId, oldTimeline, "boundary:$messageId")).objects().firstOrNull()
+        require(boundary != null) { "这段旧正文没有生成前快照，暂不能安全重写较早章节" }
+        val snapshot = JSONObject(boundary.getString("snapshot_json"))
+        require(snapshot.getInt("format") == 1)
+        val prefix = snapshot.getJSONArray("messages").objects()
+        // Never replay a checkpoint against a different prefix after another revision change.
+        prefix.forEach { previous ->
+            val active = rows(db, "SELECT active_revision_id FROM ${StorySchema.MESSAGES} WHERE id = ? AND timeline_id = ?",
+                arrayOf(previous.getString("id"), oldTimeline)).objects().singleOrNull()
+            require(active?.getString("active_revision_id") == previous.getString("active_revision_id")) { "前文已变化，原快照不再适用" }
+        }
+        require(prefix.all { it.getLong("sequence_no") < message.getLong("sequence_no") })
+        require(snapshot.getJSONArray("revisions").objects().none { it.getString("state")=="streaming" }) { "快照包含未完成生成" }
+        return snapshot
     }
 
     fun switch(db: SQLiteDatabase, storyId: String, target: String, expected: String): Boolean {
