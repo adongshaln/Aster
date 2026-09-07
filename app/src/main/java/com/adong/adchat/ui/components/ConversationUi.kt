@@ -64,10 +64,12 @@ fun ConversationComposer(
     val imeTarget = WindowInsets.imeAnimationTarget
     LaunchedEffect(isFocused) {
         if (!isFocused) return@LaunchedEffect
-        var wasVisible = ime.getBottom(density) > 0
+        var previousBottom = ime.getBottom(density)
         snapshotFlow { ime.getBottom(density) to imeTarget.getBottom(density) }.collect { (bottom, target) ->
-            if (bottom > 0) wasVisible = true
-            if (wasVisible && target == 0) focus.clearFocus()
+            // Some IMEs report a zero target briefly while opening. Only a decreasing
+            // visible height proves dismissal; collapse on its first frame, not after it.
+            if (target == 0 && bottom < previousBottom) focus.clearFocus()
+            previousBottom = bottom
         }
     }
     val enabledToSend = value.isNotBlank() || attachments.isNotEmpty() || configureRequired

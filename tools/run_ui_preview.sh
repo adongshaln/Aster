@@ -14,6 +14,18 @@ else
   ./gradlew --no-daemon connectedDebugAndroidTest
 fi
 test_result=$?
+if [[ $test_result -ne 0 ]]; then
+  python3 - <<'PY'
+from pathlib import Path
+import xml.etree.ElementTree as ET
+for report in Path('app/build/outputs/androidTest-results').rglob('*.xml'):
+    try:
+        for failure in ET.parse(report).getroot().iter('failure'):
+            print(failure.get('message', ''), failure.text or '')
+    except ET.ParseError:
+        pass
+PY
+fi
 mkdir -p ui-preview
 adb pull /sdcard/Android/data/com.adong.adchat/files/ui-preview ui-preview || true
 adb pull /sdcard/Download/aster-ui-preview ui-preview || true

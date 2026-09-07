@@ -16,6 +16,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -50,13 +51,24 @@ class SharedUiInteractionTest {
         }
         val compact = rule.onNodeWithTag("$mode-composer").fetchSemanticsNode().boundsInRoot.height
         rule.onNodeWithTag("$mode-input").performClick()
-        rule.waitUntil(10_000) { imeVisible() }
+        rule.onNodeWithTag("$mode-input").assertIsFocused()
+        // Request the software IME explicitly: CI emulators also have a hardware keyboard.
+        rule.runOnUiThread {
+            WindowCompat.getInsetsController(rule.activity.window, rule.activity.window.decorView)
+                .show(WindowInsetsCompat.Type.ime())
+        }
+        try { rule.waitUntil(10_000) { imeVisible() } }
+        catch (error: Throwable) { throw AssertionError("$mode: software keyboard did not open", error) }
         rule.waitUntil(5_000) {
             rule.onNodeWithTag("$mode-composer").fetchSemanticsNode().boundsInRoot.height > compact + 20
         }
         screenshot("$mode-expanded")
-        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-        rule.waitUntil(10_000) { !imeVisible() }
+        rule.runOnUiThread {
+            WindowCompat.getInsetsController(rule.activity.window, rule.activity.window.decorView)
+                .hide(WindowInsetsCompat.Type.ime())
+        }
+        try { rule.waitUntil(10_000) { !imeVisible() } }
+        catch (error: Throwable) { throw AssertionError("$mode: software keyboard did not close", error) }
         rule.onNodeWithTag("$mode-input").assertIsNotFocused()
         rule.waitUntil(5_000) {
             kotlin.math.abs(rule.onNodeWithTag("$mode-composer").fetchSemanticsNode().boundsInRoot.height - compact) < 3
