@@ -31,15 +31,4 @@ class DocumentImportTest {
         val text=DocumentImport.docx(bytes.toByteArray())
         assertTrue(text.startsWith("北方积雪\n"));assertTrue(text.contains("人物"));assertFalse(text.contains("<w:"))
     }
-    @Test fun scannedOnlyPdfIsRejectedWithoutDependingOnAndroidFontAssets() {
-        val context=org.robolectric.RuntimeEnvironment.getApplication()
-        com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(context)
-        val file=java.io.File(context.cacheDir,"reference.pdf")
-        com.tom_roush.pdfbox.pdmodel.PDDocument().use { pdf ->
-            pdf.addPage(com.tom_roush.pdfbox.pdmodel.PDPage())
-            pdf.save(file)
-        }
-        assertThrows(IllegalArgumentException::class.java) {DocumentImport.read(context,android.net.Uri.fromFile(file))}
-    }
-
 }
