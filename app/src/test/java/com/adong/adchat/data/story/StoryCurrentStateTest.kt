@@ -85,7 +85,10 @@ class StoryCurrentStateTest {
             StoryContextComposer.compose(StoryWorkspace.Prose, "继续", records(), emptyList(), emptyList(), emptyList())
         }
         val discussion = StoryContextComposer.compose(StoryWorkspace.Discussion, "讨论", records(), emptyList(), emptyList(), emptyList())
-        assertTrue(discussion.systemPrompt.contains("以下状态尚有冲突"))
+        assertTrue(discussion.systemPrompt.contains("尚有冲突"))
+        assertTrue(discussion.systemPrompt.contains("仅供讨论，不得选一方当作既定事实"))
+        assertTrue(discussion.systemPrompt.contains("北门"))
+        assertTrue(discussion.systemPrompt.contains("港口"))
         archive.setPinned(fixed.id, false)
         assertTrue(current().conflicts.isEmpty())
         assertEquals("港口", current().records.single().content)
