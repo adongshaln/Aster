@@ -15,12 +15,12 @@ import org.robolectric.annotation.Config
 class StoryStateMigrationTest {
     @Test fun populatedOlderDatabasesUpgradeWithoutReclassifyingOldData() {
         val context: Context = RuntimeEnvironment.getApplication()
-        for (version in listOf(1, 2, 3, 4, 5, 6)) {
+        for (version in listOf(1, 2, 3, 4, 5, 6, 7)) {
             context.deleteDatabase(StoryDatabase.DATABASE_NAME)
             val old = object : SQLiteOpenHelper(context, StoryDatabase.DATABASE_NAME, null, version) {
                 override fun onCreate(db: SQLiteDatabase) {
                     StorySchema.CREATE_STATEMENTS.filterNot {
-                        (version == 1 && it.contains(StorySchema.MANUAL_MEMORY_CHANGES)) || (version < 4 && it.contains(StorySchema.CONFLICTS)) || (version < 5 && it.contains(StorySchema.SUMMARY_SOURCES)) || (version < 6 && it.contains(StorySchema.SUMMARY_INPUTS)) || it.contains(StorySchema.USAGE)
+                        (version == 1 && it.contains(StorySchema.MANUAL_MEMORY_CHANGES)) || (version < 4 && it.contains(StorySchema.CONFLICTS)) || (version < 5 && it.contains(StorySchema.SUMMARY_SOURCES)) || (version < 6 && it.contains(StorySchema.SUMMARY_INPUTS)) || (version < 7 && it.contains(StorySchema.USAGE)) || it.contains(StorySchema.REWRITES)
                     }.forEach { db.execSQL(it.lineSequence().filterNot { line -> version < 3 && line.trim() == "state_key TEXT," }.joinToString("\n")) }
                 }
                 override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = error("not used")
@@ -39,7 +39,7 @@ class StoryStateMigrationTest {
             old.close()
             val upgraded = StoryDatabase(context)
             try {
-                assertEquals(7, upgraded.readableDatabase.version)
+                assertEquals(8, upgraded.readableDatabase.version)
                 upgraded.readableDatabase.rawQuery("SELECT content,state_key,pinned FROM memory_records WHERE id='f'", null).use {
                     assertTrue(it.moveToFirst()); assertEquals("旧版位置描述", it.getString(0)); assertTrue(it.isNull(1)); assertEquals(1, it.getInt(2))
                 }

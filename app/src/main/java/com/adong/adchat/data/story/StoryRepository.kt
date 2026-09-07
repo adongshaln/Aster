@@ -190,10 +190,11 @@ class StoryRepository(context: Context) : AutoCloseable {
         state: StoryRevisionState = StoryRevisionState.Complete,
         profileName: String = "",
         model: String = "",
-        expectedRevisionId: String? = null
+        expectedRevisionId: String? = null,
+        allowLaterDiscussion: Boolean = false
     ): StoryMessageWithRevision? = helper.writableDatabase.inTransaction { db ->
         val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction null
-        requireRevisionChangeAllowed(db, current, expectedRevisionId)
+        requireRevisionChangeAllowed(db, current, expectedRevisionId, allowLaterDiscussion)
         require(state == StoryRevisionState.Complete && content.isNotBlank()) { "修订正文不能为空，且必须保存为完整版本" }
         if (current.revision.content == content && current.revision.state == state) return@inTransaction current
         val now = System.currentTimeMillis()
@@ -235,7 +236,7 @@ class StoryRepository(context: Context) : AutoCloseable {
     fun restoreMessageRevision(messageId: String, revisionId: String, expectedRevisionId: String): Boolean =
         helper.writableDatabase.inTransaction { db ->
             val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
-            requireRevisionChangeAllowed(db, current, expectedRevisionId)
+            requireRevisionChangeAllowed(db, current, expectedRevisionId, allowLaterDiscussion=true)
             if (current.revision.id == revisionId) return@inTransaction false
             val target = db.query(StorySchema.REVISIONS, null, "id = ? AND message_id = ?",
                 arrayOf(revisionId, messageId), null, null, null).use { cursor ->
@@ -248,7 +249,7 @@ class StoryRepository(context: Context) : AutoCloseable {
             true
         }
 
-    private fun requireRevisionChangeAllowed(db: SQLiteDatabase, current: StoryMessageWithRevision, expected: String?) {
+    private fun requireRevisionChangeAllowed(db: SQLiteDatabase, current: StoryMessageWithRevision, expected: String?, allowLaterDiscussion: Boolean = false) {
         require(expected == null || current.revision.id == expected) { "正文版本已变化，请重新打开后操作" }
         require(current.message.workspace == StoryWorkspace.Prose && current.message.role == "assistant") {
             "目前仅支持修订末尾正文回复"
@@ -256,7 +257,7 @@ class StoryRepository(context: Context) : AutoCloseable {
         require(current.revision.state != StoryRevisionState.Streaming) { "请等待正文生成结束" }
         val blocked = db.rawQuery(
             """SELECT 1 FROM ${StorySchema.MESSAGES} m JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
-               WHERE m.story_id = ? AND m.timeline_id = ? AND (m.sequence_no > ? OR r.state = 'streaming') LIMIT 1""",
+               WHERE m.story_id = ? AND m.timeline_id = ? AND ((m.sequence_no > ? ${if (allowLaterDiscussion) "AND m.workspace = 'prose'" else ""}) OR r.state = 'streaming') LIMIT 1""",
             arrayOf(current.message.storyId, current.message.timelineId, current.message.sequence.toString())
         ).use { it.moveToFirst() }
         require(!blocked) { "已有后续内容或正在生成，请先结束生成；较早正文的分支修订尚未开放" }
@@ -443,6 +444,40 @@ class StoryRepository(context: Context) : AutoCloseable {
                 arrayOf(state.storyId, state.workspace.dbValue)
             ) == 1
         }
+    }
+
+    fun beginRewrite(messageId: String, revisionId: String, memoryVersion: Long, instruction: String,
+        profileName: String, model: String): StoryRewriteCandidate = helper.writableDatabase.inTransaction { db ->
+        val source = queryMessageWithRevision(db,messageId) ?: error("正文已不存在")
+        requireRevisionChangeAllowed(db,source,revisionId,allowLaterDiscussion=true)
+        check(source.revision.state == StoryRevisionState.Complete) { "只能重写完整正文。" }
+        val story = getStory(source.message.storyId) ?: error("故事已删除")
+        check(story.memoryVersion == memoryVersion) { "资料已变化，请重新生成。" }
+        require(instruction.isNotBlank() && instruction.length <= 8000) { "请填写 1–8,000 字符的修改要求。" }
+        StoryRewrites.begin(db,source,memoryVersion,instruction,profileName,model)
+    }
+
+    fun updateRewrite(id: String, content: String, state: String): Boolean =
+        StoryRewrites.update(helper.writableDatabase,id,content,state)
+    fun latestRewrite(messageId: String): StoryRewriteCandidate? = StoryRewrites.latest(helper.readableDatabase,messageId)
+    fun recoverRewrites(): Int = helper.writableDatabase.update(StorySchema.REWRITES,ContentValues().apply {
+        put("state","interrupted");put("updated_at",System.currentTimeMillis())
+    },"state='generating'",null)
+
+    fun adoptRewrite(id: String): StoryMessageWithRevision = helper.writableDatabase.inTransaction { db ->
+        val candidate = StoryRewrites.get(db,id) ?: error("候选已不存在")
+        check(candidate.state == "ready" && candidate.content.isNotBlank()) { "只有完整候选可以采用。" }
+        val story = getStory(candidate.storyId) ?: error("故事已删除")
+        check(story.currentTimelineId == candidate.timelineId && story.memoryVersion == candidate.baseMemoryVersion) {
+            "路线或资料已变化，候选仍保留，请重新生成后再采用。"
+        }
+        check(queryMessageWithRevision(db,candidate.messageId)?.revision?.state == StoryRevisionState.Complete) { "原文已不再是完整正文。" }
+        val revised = replaceMessageRevision(candidate.messageId,candidate.content,
+            profileName=candidate.profileName,model=candidate.model,expectedRevisionId=candidate.baseRevisionId,
+            allowLaterDiscussion=true) ?: error("原文已不存在")
+        check(db.update(StorySchema.REWRITES,ContentValues().apply { put("state","adopted");put("updated_at",System.currentTimeMillis()) },
+            "id=? AND state='ready'",arrayOf(id)) == 1)
+        revised
     }
 
     fun appendDiscussionQuote(messageId: String, expectedRevisionId: String, start: Int, end: Int,

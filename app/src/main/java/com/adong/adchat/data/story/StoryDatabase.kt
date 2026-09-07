@@ -47,6 +47,10 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                     StorySchema.MIGRATION_6_TO_7_STATEMENTS.forEach(db::execSQL)
                     version = 7
                 }
+                7 -> {
+                    StorySchema.MIGRATION_7_TO_8_STATEMENTS.forEach(db::execSQL)
+                    version = 8
+                }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -54,7 +58,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 7
+        const val DATABASE_VERSION = 8
     }
 }
 
@@ -70,6 +74,7 @@ internal object StorySchema {
     const val JOBS = "memory_jobs"
     const val SNAPSHOTS = "story_snapshots"
     const val WORKSPACE_STATE = "story_workspace_state"
+    const val REWRITES = "story_rewrites"
     const val USAGE = "story_usage"
     const val SUMMARY_INPUTS = "summary_inputs"
     const val SUMMARY_SOURCES = "summary_sources"
@@ -169,6 +174,26 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )""".trimIndent(),
         "CREATE INDEX idx_story_usage_scope ON $USAGE(story_id, category)"
+    )
+
+    val MIGRATION_7_TO_8_STATEMENTS = listOf(
+        """CREATE TABLE $REWRITES (
+            id TEXT PRIMARY KEY NOT NULL,
+            story_id TEXT NOT NULL,
+            timeline_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            base_revision_id TEXT NOT NULL,
+            base_memory_version INTEGER NOT NULL,
+            instruction TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            state TEXT NOT NULL CHECK(state IN ('generating','ready','incomplete','stopped','failed','interrupted','adopted')),
+            profile_name TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
+        )""".trimIndent(),
+        "CREATE INDEX idx_story_rewrites_message ON $REWRITES(message_id, created_at)"
     )
 
     val CREATE_STATEMENTS: List<String> = listOf(
@@ -360,5 +385,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS
 }

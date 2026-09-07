@@ -265,7 +265,7 @@ private fun StoryWorkspaceContent(
         }
     }
 
-    storyVm.revisionTarget?.let { target ->
+    storyVm.revisionTarget?.takeIf { !storyVm.rewriteOpen }?.let { target ->
         var revisedText by remember(target.revision.id) { mutableStateOf(TextFieldValue(target.revision.content)) }
         AlertDialog(
             onDismissRequest = storyVm::closeRevisionEditor,
@@ -287,6 +287,8 @@ private fun StoryWorkspaceContent(
                             Text(if(revisedText.selection.collapsed) "带入讨论草稿（整段）" else "带入讨论草稿（选中文字）")
                         }
                     }
+                    if(storyVm.canModelRewrite(target)) TextButton(onClick=storyVm::openModelRewrite,
+                        enabled=!storyVm.revisionBusy && revisedText.text==target.revision.content) { Text("让模型重写这一段") }
                     storyVm.revisionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { storyVm.saveProseRevision(revisedText.text, fork = true) },
                         enabled = !storyVm.revisionBusy && revisedText.text.isNotBlank() && revisedText.text.trim() != target.revision.content) {
@@ -318,6 +320,32 @@ private fun StoryWorkspaceContent(
             },
             dismissButton = { TextButton(onClick = storyVm::closeRevisionEditor, enabled = !storyVm.revisionBusy) { Text("关闭") } }
         )
+    }
+
+    if(storyVm.rewriteOpen && storyVm.revisionTarget != null) {
+        val candidate=storyVm.rewriteCandidate
+        AlertDialog(onDismissRequest=storyVm::closeModelRewrite,
+            title={ Text("重写候选") },
+            text={ Column(Modifier.heightIn(max=480.dp).verticalScroll(rememberScrollState())) {
+                Text("只重写最新一段正文。请明确写下讨论后决定采用的修改；生成后先预览，原文在采用前保持不变。",
+                    style=MaterialTheme.typography.bodySmall)
+                OutlinedTextField(value=storyVm.rewriteInstruction,onValueChange=storyVm::updateRewriteInstruction,
+                    label={ Text("修改要求") },enabled=!storyVm.revisionBusy,
+                    modifier=Modifier.fillMaxWidth().heightIn(min=80.dp,max=160.dp))
+                TextButton(onClick=storyVm::generateModelRewrite,enabled=!storyVm.revisionBusy && storyVm.rewriteInstruction.isNotBlank()) {
+                    Text(if(candidate==null) "生成候选" else "重新生成候选")
+                }
+                if(storyVm.revisionBusy && candidate?.state=="generating") TextButton(onClick=storyVm::stopModelRewrite) { Text("停止生成") }
+                candidate?.let {
+                    Text(when(it.state) { "ready" -> "已完整生成 · 尚未采用"; "generating" -> "正在生成…"; "adopted" -> "已采用"; else -> "未完整完成 · 不可采用，可重新生成" },
+                        style=MaterialTheme.typography.labelMedium)
+                    if(it.content.isNotBlank()) SelectionContainer { Text(it.content,modifier=Modifier.padding(top=8.dp)) }
+                }
+                storyVm.revisionError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
+            } },
+            confirmButton={ TextButton(onClick=storyVm::adoptModelRewrite,
+                enabled=!storyVm.revisionBusy && candidate?.state=="ready") { Text("采用为新版本") } },
+            dismissButton={ TextButton(onClick=storyVm::closeModelRewrite,enabled=!storyVm.revisionBusy) { Text("返回原文") } })
     }
 
     Box(Modifier.fillMaxSize().imePadding()) {

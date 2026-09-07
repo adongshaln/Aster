@@ -84,6 +84,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     init {
         viewModelScope.launch(Dispatchers.IO) {
             store.recoverInterruptedGenerations()
+            store.recoverRewrites()
             memoryStore.recoverRunningJobs()
             usageStore.recoverInterrupted()
             val loaded = store.listStories()
@@ -352,6 +353,108 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     var revisionError by mutableStateOf<String?>(null)
         private set
 
+    var rewriteOpen by mutableStateOf(false)
+        private set
+    var rewriteCandidate by mutableStateOf<com.adong.adchat.data.story.StoryRewriteCandidate?>(null)
+        private set
+    var rewriteInstruction by mutableStateOf("")
+        private set
+    private var rewriteJob: Job? = null
+    fun updateRewriteInstruction(value: String) { if(!revisionBusy) rewriteInstruction=value }
+    fun canModelRewrite(target: StoryMessageWithRevision): Boolean = target.revision.state == StoryRevisionState.Complete &&
+        messages(StoryWorkspace.Prose).lastOrNull()?.revision?.id == target.revision.id
+
+    fun openModelRewrite() {
+        val target=revisionTarget ?: return
+        if(revisionBusy || !canModelRewrite(target)) return
+        rewriteOpen=true;revisionBusy=true;revisionError=null;rewriteCandidate=null;rewriteInstruction=""
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val saved=store.latestRewrite(target.message.id)
+                withContext(Dispatchers.Main) {
+                    if(revisionTarget?.revision?.id==target.revision.id) {
+                        rewriteCandidate=saved;rewriteInstruction=saved?.instruction.orEmpty()
+                    }
+                }
+            } finally { withContext(NonCancellable+Dispatchers.Main) { revisionBusy=false } }
+        }
+    }
+    fun closeModelRewrite() { if(!revisionBusy) rewriteOpen=false }
+    fun stopModelRewrite() { rewriteJob?.cancel() }
+
+    fun generateModelRewrite() {
+        val target=revisionTarget ?: return
+        val story=activeStory ?: return
+        if(revisionBusy || StoryWorkspace.entries.any { isLoading(it) } || target.message.storyId!=story.id ||
+            target.message.timelineId!=story.currentTimelineId) return
+        val instruction=rewriteInstruction.trim()
+        if(instruction.isBlank()) { revisionError="请先填写明确的修改要求。";return }
+        revisionBusy=true;revisionError=null
+        val task=viewModelScope.launch(Dispatchers.IO,start=CoroutineStart.LAZY) {
+            var candidate: com.adong.adchat.data.story.StoryRewriteCandidate?=null
+            val output=StringBuilder();var lastPersist=0L
+            try {
+                val fresh=store.getStory(story.id) ?: error("故事已删除")
+                val profile=organizerProfile(fresh) ?: error("请先配置故事使用的服务。")
+                val snapshot=archiveStore.contextMemorySnapshot(story.id,story.currentTimelineId)
+                val context=com.adong.adchat.data.story.StoryRewriteContext.compose(target,instruction,snapshot,
+                    store.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose))
+                val created=store.beginRewrite(target.message.id,target.revision.id,fresh.memoryVersion,instruction,profile.name,fresh.model)
+                candidate=created
+                withContext(Dispatchers.Main) { rewriteCandidate=created }
+                val result=trackedChat(story.id,story.currentTimelineId,"prose",created.id,
+                    profile.copy(webSearchEnabled=false,fileCreationEnabled=false),fresh.model,
+                    context.systemPrompt,context.history,"aster-rewrite-${created.id}") { delta ->
+                    check(output.length+delta.length<=100_000) { "候选超过 100,000 字符，已停止；保留已收到的内容。" }
+                    output.append(delta)
+                    val now=SystemClock.elapsedRealtime()
+                    if(now-lastPersist>=150L) {
+                        lastPersist=now
+                        check(store.updateRewrite(created.id,output.toString(),"generating"))
+                        withContext(Dispatchers.Main) { rewriteCandidate=created.copy(content=output.toString()) }
+                    }
+                }
+                val text=result.text.ifBlank { output.toString() }
+                val state=if(result.outputComplete && text.isNotBlank()) "ready" else "incomplete"
+                check(store.updateRewrite(created.id,text,state))
+                withContext(Dispatchers.Main) { rewriteCandidate=created.copy(content=text,state=state) }
+            } catch(error: Throwable) {
+                withContext(NonCancellable+Dispatchers.IO) {
+                    candidate?.let { saved ->
+                        val state=if(error is CancellationException) "stopped" else "failed"
+                        store.updateRewrite(saved.id,output.toString(),state)
+                        withContext(Dispatchers.Main) { rewriteCandidate=saved.copy(content=output.toString(),state=state) }
+                    }
+                    withContext(Dispatchers.Main) { revisionError=if(error is CancellationException) "已停止，部分候选保留，不能直接采用。" else friendlyStoryError(error) }
+                }
+            } finally { withContext(NonCancellable+Dispatchers.Main) { revisionBusy=false;rewriteJob=null } }
+        }
+        rewriteJob=task;task.start()
+    }
+
+    fun adoptModelRewrite() {
+        val candidate=rewriteCandidate ?: return
+        val target=revisionTarget ?: return
+        if(revisionBusy || activeStoryId!=candidate.storyId || target.message.id!=candidate.messageId) return
+        revisionBusy=true;revisionError=null
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val result=store.adoptRewrite(candidate.id)
+                memoryStore.enqueueForRevision(result.message.storyId,result.message.timelineId,result.revision.id)
+                val updated=store.getStory(result.message.storyId) ?: error("故事已删除")
+                withContext(Dispatchers.Main) {
+                    if(activeStoryId==updated.id) {
+                        stateEpoch++;replaceStory(updated);loadActiveStoryState(updated)
+                        rewriteOpen=false;revisionTarget=null;rewriteCandidate=null;revisionHistory.clear()
+                    }
+                }
+                scheduleMemoryMaintenance(updated.id,updated.currentTimelineId)
+            } catch(error: Exception) {
+                withContext(Dispatchers.Main) { revisionError=error.message ?: "候选未采用，请重试。" }
+            } finally { withContext(NonCancellable+Dispatchers.Main) { revisionBusy=false } }
+        }
+    }
+
     fun openRevisionEditor(row: StoryMessageWithRevision) {
         if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
         revisionTarget = row
@@ -369,7 +472,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeRevisionEditor() {
-        if (!revisionBusy) { revisionTarget = null; revisionHistory.clear(); revisionError = null }
+        if (!revisionBusy) { rewriteOpen=false;revisionTarget = null; revisionHistory.clear(); revisionError = null }
     }
 
     fun discussProseSelection(start: Int, end: Int) {
@@ -905,9 +1008,10 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private fun memoryJobKey(storyId: String, timelineId: String): String = "$storyId|$timelineId"
 
     override fun onCleared() {
+        rewriteJob?.cancel()
         jobs.values.forEach { it.cancel() }
         organizerJobs.values.forEach { it.cancel() }
-        val pending = jobs.values.toList() + organizerJobs.values.toList()
+        val pending = jobs.values.toList() + organizerJobs.values.toList() + listOfNotNull(rewriteJob)
         kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             pending.forEach { it.join() }
             usageStore.close()
