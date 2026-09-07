@@ -1,81 +1,35 @@
 # Aster Story Mode Progress
 
-Branch: `feature/story-mode`
+Branch: `feature/story-mode`。Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / versionCode 57。
 
-Baseline: `main@35f214d4808f529efad4a7430e488e67701fb754` — Aster 2.3.0 / versionCode 57.
+## 当前保存状态（2026-09-07）
 
-## Current acceptance status (2026-09-06)
+本轮开发清单已提交，最终保存点 `268bf99dd952eca562946b154db4fc4366ad97a6` 已通过 [Android Build #121](https://github.com/adongshaln/Aster/actions/runs/34104526654)。测试、Release 编译、固定签名校验和 APK 上传成功。#115–#119 已全部通过单测、Release 与固定签名 APK 上传。
 
-Code checkpoint `7ba25bd0343962b8ae8d8e3b27ddfe257475d32e` passed Android Build #100, including tests, Release compilation and fixed-signature APK upload. Application remains 2.3.0 / versionCode 57.
+[当前验收矩阵](STORY_MODE_ACCEPTANCE.md) 是状态依据；[原实施计划](STORY_MODE_IMPLEMENTATION_PLAN.md) 保留用于对照。下面历史章节按当时状态记录，不代表当前仍缺同一功能。
 
-[Acceptance and design-gap review](STORY_MODE_ACCEPTANCE.md) is the current status authority; the sections below also retain historical checkpoint notes. [Original implementation plan](STORY_MODE_IMPLEMENTATION_PLAN.md) is preserved for comparison.
+- M0 / M1 / M2a：已完成。
+- M2b：持久任务、事实与候选隔离、版本检查、人物认知/关系/状态、疑似冲突处理、长篇摘要及用量已实现；保守新增/投影替代任意自动更新删除。
+- M3：来源失效、受限撤销/恢复、历史快照另写、关联决定复核及独立设定重新适用已实现；不是通用日志重放引擎。
+- M4：本轮界面、自动回归与签名开发包已收尾；真实 Gemini 与手机验收未执行，正式发布门槛未关闭。
 
-The full first release is **not ready**: structured mutable state/directed relationships/character knowledge, conflict handling, long-story summary coverage and discussion-to-model-rewrite workflows remain incomplete. CI success does not close these product gaps. No real-provider or on-device acceptance is claimed. This review changes documentation only.
+未修改 main、版本、包名或固定签名。普通聊天仍是 SharedPreferences JSON；故事独立 SQLite schema v11，包含 v1–v10 的非破坏性升级测试。服务配置导出不包含故事数据库。
 
-## Milestones
+### 本轮提交和验证
 
-- [x] M0 — repository audit and migration design
-- [x] M1a — story data foundation
-- [x] M1b — story entry, workspaces, archive manual editing shell
-- [x] M2a — story context composition and budget
-- [ ] M2b full design — conservative append-only jobs/proposals are implemented and tested; structured semantic maintenance/conflicts remain
-- [ ] M3 — revision recovery and memory invalidation
-- [ ] M4 — UI polish, full acceptance tests, signed test APK
+| 内容 | GitHub 提交 | CI |
+| --- | --- | --- |
+| 历史模型重写及原请求编辑 | `b095847f2f4106ec0d1effca9f42f7883ef12060` | #115 成功 |
+| 讨论应用、候选编辑确认及来源依赖 | `27ed263f3171433063b2cbd8828aeff8c299672a` | #116 成功 |
+| 超长单条正文分段摘要 | `af2b010027e892db3a5f2d1658a2eb7e990054ab` | #117 成功 |
+| 自由文本设定疑似冲突 | `08c6650a96229def41a247d4bd9450afebdc1823` | #118 成功 |
+| 关联决定复核、独立设定重新适用 | `d1d303ecad5f1518a9a622920508575f6f5153b5` | #119 成功 |
+| 超长最新回复续写预算死锁修复 | `00e3cda3a0c0f3c5d375575c5c2c28e4f3c1d8cd` | #120：219 项中旧提示文案断言失败 1 项 |
+| 冲突提示断言改为含义及双方来源检查 | `268bf99dd952eca562946b154db4fc4366ad97a6` | #121 全部成功 |
 
-## Current facts
+接下来进行真实模型与手机验收；不要将下方旧检查点的“下一步”当成新的开发指令。
 
-- No `AGENTS.md` exists in the repository.
-- Ordinary chats remain in existing SharedPreferences JSON storage and are not migrated into stories.
-- Story persistence uses a separate `aster_story.db` SQLite database with explicit schema versioning and foreign keys.
-- Logical story messages and message revisions are separate; only the active revision can be effective.
-- Complete Prose revisions are memory-eligible; Discussion, interrupted and stopped revisions are not.
-- Story text generation reuses `ApiRepository.streamChat`; no second HTTP stack is added.
-- Story Discussion and Prose have independent drafts, scroll anchors, message histories and generation jobs.
-- Workspace saves use strictly monotonic state versions; stale asynchronous writes are rejected by SQLite persistence.
-- Manual stop removes an empty assistant placeholder but preserves non-empty partial output as `stopped`.
-- Story context has a hard final-request character ceiling. An oversized current input fails before the network request rather than producing an over-budget payload.
-- Pinned confirmed material is mandatory: its section cap is only a planning target. Pinned facts may use additional global budget and fail explicitly if all pinned facts plus the current request cannot fit.
-- Optional confirmed material is ranked by basic character/place relevance using canonical names and aliases attached from active entities.
-- Recent history is selected only as a continuous suffix of complete user/assistant rounds; an oversized newer round blocks older short turns from leapfrogging it.
-- Prose context receives active confirmed material and complete Prose history only. Pending proposals, inference-only memory and Discussion history are excluded.
-- Discussion context may receive pending candidates/inferences, but they are explicitly marked non-authoritative and are never promoted to Prose context by the composer.
-- Manual archive add/update/pin/deactivate uses one SQLite transaction for the record mutation, durable before/after audit entry and `stories.memory_version` increment.
-- Manual no-op update/pin operations do not create a log entry or consume a memory version.
-- Manual deactivation remains only a soft deactivate/hide operation; the audit trail is not a complete undo/replay mechanism.
-- Completed active Prose replies can enqueue durable `organize_prose` jobs. Running jobs are reset to pending when the story subsystem initializes after process interruption.
-- Organizer model output is strict append-only structured data: application-owned IDs are never accepted from the model; automatic confirmed memory is `prose_occurred`, never pinned, and automatic author plans remain pending proposals instead of Prose facts.
-- Organizer jobs snapshot `memoryVersion` before model work and validate it again at commit. A newer manual/automatic memory commit makes the job stale and requeues it against the new version rather than overwriting newer state.
-- Automatic memory additions, change-set audit and `memoryVersion` advancement commit in one SQLite transaction. Pending proposals are isolated from Prose context and are visible only through the Discussion candidate path.
-- The first automatic organizer is conservative and append-only: it does not automatically update, deactivate or replace existing memory records.
-- Existing API profile transfer is not a full app backup and does not include conversations or story archives.
-- There is no current WorkManager/Room/DI framework; persistent organizer jobs resume when the story subsystem initializes, but force-stop background execution is not promised.
-
-## Validation
-
-- M1a commit: `8cd5f76bbaf8768c54ce922ecb5d55ce8ead2639`; Android build #71 passed.
-- M1b stabilization commit: `784e3dcbf696a4168251ecbc6e06f41c4e2447dd`; Android build #80 passed, including unit tests, Release compile and signed APK staging.
-- M2a base commit: `9e9a25249752c27954eec1f791c8a4ecf6a6e40a`; Android build #86 passed.
-- M2a closeout commit: `6c0faef2c1495f1f3d12dff4cc5bd94504bd1f7c`; Android build #88 passed.
-- M2b manual consistency commit: `88e202eac296af3f7bc3343ca6834ef61c77cae4`; Android build #89 passed, including unit tests, Release compile and signed APK staging.
-- M2b automatic organizer adds strict output validation, durable/recoverable jobs, version-stale requeue, append-only memory/proposal commit and organizer regression tests. CI must pass before M3 begins.
-
-## M2b consistency boundary
-
-1. Every real manual add/update/pin/deactivate writes an explicit durable audit row.
-2. Manual record mutation + audit row + `memoryVersion` increment are one SQLite transaction.
-3. Automatic jobs bind to an active complete Prose source revision and snapshot the current `memoryVersion`.
-4. Model output cannot supply trusted IDs or destructive operations; application code creates all record/proposal/change-set IDs.
-5. Automatic commit revalidates the source revision and base version. Stale jobs do not commit; they requeue only while the source revision is still active.
-6. Automatic memory + change set + version advancement commit atomically.
-
-Current `deactivateRecord` is still only a soft deactivation/hide operation. It is **not** a complete undo/revert capability.
-
-## Last saved point
-
-M0 report: `docs/STORY_MODE_M0.md`.
-M1b runtime stabilization: `docs/STORY_MODE_FIX72.md`.
-
-Current next task: close the G1/G2 semantic-memory gaps documented in STORY_MODE_ACCEPTANCE.md, followed by long-story coverage and minimal product workflows. M3a–M3d checkpoint implementations are recorded below; full first-release acceptance is still open. Do not change the stable version yet.
+## 历史检查点（以下限制描述以各节当时为准）
 
 ## Organizer takeover checkpoint
 
@@ -311,3 +265,7 @@ schema v10 持久保存选段到讨论的来源联系，以及确认资料对原
 ### G3f 综合检查修正：超长最新回复（2026-09-07）
 
 最终检查发现潜在预算死锁：如果超长回复必须先变成两轮以前才摘要，它可能已经阻止下一轮生成。现对超过 28,000 字符的单回复允许立即摘要；已实际装入且来源有效的摘要可以替代受保护后缀中的整轮，不强制重新带回其超长原文。未摘要的其他轮次仍完整保护。新增“旧短回复未摘要 + 最新 72,001 字符回复 + 下一轮”回归。
+
+## 最终交付检查点（2026-09-07）
+
+代码 `268bf99dd952eca562946b154db4fc4366ad97a6`；CI #121 全绿。签名 APK 产物 `aster-release-signed`（artifact 10011930146）已上传并经 apksigner 验证。当前验收矩阵、README 和未发布更新记录已同步。main / 2.3.0 / 57 保持原样；真实 Gemini 与手机验收仍未执行。

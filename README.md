@@ -11,6 +11,8 @@
 Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 Android 客户端。它可以将对话与绘图分别路由到不同的 OpenAI 兼容服务，并在统一界面中管理模型、推理、图片、工具调用与历史任务。
 
 > 当前稳定版本：**2.3.0** · `versionCode 57`
+
+> 开发分支 `feature/story-mode`：故事创作支持讨论/正文、自动记忆与摘要、候选确认、模型重写和来源复核。当前交付开发测试包，尚未完成真实 Gemini 与真机验收；功能边界与测试步骤见 [故事模式验收说明](docs/STORY_MODE_ACCEPTANCE.md)。现有服务配置导出不包含故事数据库。
 >
 > 完整历史更新请查看 [CHANGELOG.md](CHANGELOG.md)。
 
