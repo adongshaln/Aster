@@ -291,6 +291,12 @@ class SharedUiInteractionTest {
 
     private fun screenshot(name: String) {
         rule.waitForIdle()
+        // Compose semantics can settle before SurfaceFlinger presents the new frame.
+        // Finish transient ripples and allow the native window to draw before capture.
+        rule.mainClock.advanceTimeBy(500)
+        rule.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        android.os.SystemClock.sleep(350)
         val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         assertNotNull(bitmap)
         val directory = File(rule.activity.getExternalFilesDir(null), "ui-preview").apply { mkdirs() }
