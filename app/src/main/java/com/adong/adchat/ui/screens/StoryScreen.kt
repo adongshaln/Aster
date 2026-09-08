@@ -79,11 +79,10 @@ fun StoryScreen(
             onStoryPicker = { showStoryPicker = true },
             onWorkspace = storyVm::switchWorkspace,
             onArchive = storyVm::openArchive,
-            onCreateStory = onCreateStory
+            onCreateStory = onCreateStory,
+            onHistory = storyVm::openTimelineHistory,
+            historyEnabled = !storyVm.revisionBusy
         )
-        TextButton(onClick = storyVm::openTimelineHistory, modifier = Modifier.align(Alignment.End), enabled = !storyVm.revisionBusy) {
-            Text("历史路线", style = MaterialTheme.typography.labelSmall, color = MutedInk)
-        }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             key(story.id, story.currentTimelineId, storyVm.activeWorkspace) {
                 StoryWorkspaceContent(
@@ -169,30 +168,19 @@ private fun StoryHeader(
     onStoryPicker: () -> Unit,
     onWorkspace: (StoryWorkspace) -> Unit,
     onArchive: () -> Unit,
-    onCreateStory: () -> Unit
+    onCreateStory: () -> Unit,
+    onHistory: () -> Unit,
+    historyEnabled: Boolean
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 5.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AsterIconButton(Icons.Rounded.Menu, "打开侧栏", onOpenDrawer)
-            Column(
-                Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onStoryPicker)
-                    .padding(horizontal = 8.dp, vertical = 6.dp)
-            ) {
-                Text(story.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        profile?.let { "${it.name} · ${story.model}" } ?: "服务已不可用 · 点击档案重新选择",
-                        color = if (profile == null) Danger else MutedInk,
-                        style = MaterialTheme.typography.labelMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    Icon(Icons.Rounded.ExpandMore, null, Modifier.size(15.dp), tint = MutedInk)
-                }
-            }
-            AsterIconButton(Icons.Rounded.FolderOpen, "故事档案", onArchive)
-            AsterIconButton(Icons.Rounded.Add, "新建故事", onCreateStory)
+    var showActions by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        ConversationHeader(
+            title = story.title,
+            model = profile?.let { "${it.name} · ${story.model}" } ?: "选择故事模型",
+            onOpenDrawer = onOpenDrawer, onModelClick = onArchive, modelUnavailable = profile == null
+        ) {
+            AsterIconButton(Icons.Rounded.MoreHoriz, "故事选项", { showActions = true })
+            AsterIconButton(Icons.Rounded.AddComment, "新建故事", onCreateStory)
         }
         AsterSegmentedControl(
             labels = listOf("讨论", "正文"),
@@ -201,6 +189,19 @@ private fun StoryHeader(
             modifier = Modifier.padding(start = 48.dp, end = 48.dp, top = 2.dp, bottom = 4.dp)
         )
     }
+    if (showActions) AdActionSheet(
+        title = "故事选项", subtitle = "管理故事与创作路线",
+        actions = listOf(
+            AdActionOption("archive", "故事档案", "设定、人物与剧情记忆", Icons.Rounded.FolderOpen),
+            AdActionOption("history", "历史路线", "查看与切换创作路线", Icons.Rounded.History, enabled = historyEnabled),
+            AdActionOption("stories", "切换故事", icon = Icons.Rounded.AutoStories)
+        ),
+        onAction = { action ->
+            showActions = false
+            when (action.id) { "archive" -> onArchive(); "history" -> onHistory(); "stories" -> onStoryPicker() }
+        },
+        onDismiss = { showActions = false }
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -248,8 +249,9 @@ private fun StoryWorkspaceContent(
             storyVm.saveScroll(workspace, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, savedState.timelineId)
         }
     }
-    LaunchedEffect(dragging, listState.canScrollForward) {
-        if (dragging) autoFollow = !listState.canScrollForward
+    LaunchedEffect(dragging) {
+        if (dragging) autoFollow = false
+        else if (!listState.canScrollForward) autoFollow = true
     }
     LaunchedEffect(messages.size, messages.lastOrNull()?.revision?.content?.length, loading) {
         if (autoFollow && !dragging && (messages.isNotEmpty() || loading)) {
@@ -418,19 +420,8 @@ private fun StoryWorkspaceContent(
                             if (messageIndex >= 0) {
                                 autoFollow = false
                                 scope.launch {
-                                    // Wait for the expanded detail cards to take their final size,
-                                    // then scroll by the exact amount that fell below the viewport.
-                                    withFrameNanos { }
-                                    withFrameNanos { }
-                                    val layout = listState.layoutInfo
-                                    val item = layout.visibleItemsInfo.firstOrNull { it.index == messageIndex }
-                                    if (item != null) {
-                                        val comfort = with(composerDensity) { 12.dp.toPx() }
-                                        val overflow = item.offset + item.size + comfort - layout.viewportEndOffset
-                                        if (overflow > 0f) listState.animateScrollBy(overflow)
-                                    } else {
-                                        listState.animateScrollToItem(messageIndex)
-                                    }
+                                    listState.revealConversationDetails(messageIndex,
+                                        with(composerDensity) { (composerHeight + 12.dp).toPx() })
                                 }
                             }
                         }

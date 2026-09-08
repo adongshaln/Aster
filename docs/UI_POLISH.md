@@ -33,3 +33,12 @@
 [固定签名测试包](https://github.com/adongshaln/Aster/actions/runs/34168447021/artifacts/10034974680)。版本保持 2.3.0 / 57。
 
 验证边界：测试针对公共控件，不等于所有业务页面或真实服务的端到端验收。真实手机仍需检查系统返回手势/实际输入法、长消息底部、附件选择与导入、横屏和整体审美。截图已经上传到 UI 工作流产物；当前执行环境下载产物返回 HTTP 403，未完成截图人工复核。
+
+
+## Unified conversation refinement — 2026-09-08 (implementation checkpoint)
+
+- Both modes use `ConversationHeader`: stable title/model hierarchy and common action sizing. Ordinary conversation navigation moves into its header menu; story archive, route history and story switching share one menu, removing the standalone history row.
+- Both composers expose **展开草稿** while focused. The shared full-screen editor updates the mode-owned draft live; collapse retains text and selection. Enter inserts newlines, and sending remains explicit. Import/send/stop guards match the compact composer. Image previews and removal remain available.
+- Opening message details pauses following in both modes, cancels an existing scroll and reveals details above the composer. User dragging pauses following; releasing at the bottom or explicitly returning to the bottom resumes it. Ordinary message insertion no longer animates existing items; its action row wraps for large text.
+- Added native regression coverage for editor text/selection persistence, explicit send, and import/stop guards, alongside the six existing interaction checks.
+- Development branch only; no version, signing, database or request-protocol changes. CI and visual verification pending at this checkpoint.

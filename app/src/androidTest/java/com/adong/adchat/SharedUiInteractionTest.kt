@@ -14,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -40,6 +42,54 @@ class SharedUiInteractionTest {
 
     @Test fun ordinaryComposerCollapsesWithoutLosingDraft() = checkKeyboard("chat")
     @Test fun storyComposerCollapsesWithoutLosingDraft() = checkKeyboard("story")
+
+    @Test fun expandedDraftPreservesTextAndSelection() {
+        var draft by mutableStateOf("第一行\n第二行")
+        var sent = ""
+        content {
+            Box(Modifier.fillMaxSize().imePadding().navigationBarsPadding()) {
+                ConversationComposer(draft, emptyList(), false, false, { draft = it }, {}, {},
+                    { sent = draft }, {}, {}, modifier = Modifier.align(Alignment.BottomCenter))
+            }
+        }
+        rule.onNodeWithTag("chat-input").performClick()
+        rule.onNodeWithContentDescription("展开草稿").performClick()
+        val revised = "第一行：补充世界观\n第二行：安排人物出场\n第三行：暂时保留悬念"
+        rule.onNodeWithTag("chat-expanded-input").performTextReplacement(revised)
+        rule.onNodeWithTag("chat-expanded-input").performTextInputSelection(TextRange(3, 8))
+        rule.runOnIdle { assertEquals(revised, draft); assertEquals("", sent) }
+        screenshot("long-draft-editor")
+        rule.onNodeWithContentDescription("收起草稿").performClick()
+        rule.onNodeWithTag("chat-expanded-input").assertDoesNotExist()
+        rule.onNodeWithTag("chat-input").assertTextEquals(revised)
+        rule.onNodeWithTag("chat-input").assert(SemanticsMatcher.expectValue(SemanticsProperties.TextSelectionRange, TextRange(3, 8)))
+        rule.onNodeWithTag("chat-input").performClick()
+        rule.onNodeWithContentDescription("展开草稿").performClick()
+        rule.onNodeWithText("发送").performClick()
+        rule.runOnIdle { assertEquals(revised, sent) }
+        rule.onNodeWithTag("chat-expanded-input").assertDoesNotExist()
+    }
+
+    @Test fun expandedDraftHonorsImportAndStopState() {
+        var draft by mutableStateOf("草稿")
+        var importing by mutableStateOf(false)
+        var loading by mutableStateOf(false)
+        var stops = 0
+        var sends = 0
+        content {
+            ConversationComposer(draft, emptyList(), loading, importing, { draft = it }, {}, {},
+                { sends++ }, { stops++ }, {})
+        }
+        rule.onNodeWithTag("chat-input").performClick()
+        rule.onNodeWithContentDescription("展开草稿").performClick()
+        rule.runOnIdle { importing = true }
+        rule.onNodeWithText("发送").assertIsNotEnabled()
+        rule.runOnIdle { loading = true }
+        rule.onNodeWithText("停止生成").assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(1, stops); assertEquals(0, sends); loading = false; importing = false }
+        rule.onNodeWithText("发送").assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(1, sends) }
+    }
 
     private fun checkKeyboard(mode: String) {
         var draft by mutableStateOf("第一行\n第二行\n第三行")

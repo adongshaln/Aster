@@ -21,6 +21,8 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.*
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -59,6 +61,32 @@ fun ConversationComposer(
     val resolvedFocusRequester = focusRequester ?: remember { FocusRequester() }
     val haptics = LocalHapticFeedback.current
     var isFocused by remember { mutableStateOf(false) }
+    var editorOpen by remember { mutableStateOf(false) }
+    var fieldValue by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    // The mode owns the durable draft; both editors share its text and selection.
+    LaunchedEffect(value) {
+        if (value != fieldValue.text) {
+            fieldValue = TextFieldValue(value, TextRange(
+                fieldValue.selection.start.coerceIn(0, value.length),
+                fieldValue.selection.end.coerceIn(0, value.length)
+            ))
+        }
+    }
+    val edit: (TextFieldValue) -> Unit = { next ->
+        fieldValue = next
+        if (next.text != value) onValueChange(next.text)
+    }
+    if (editorOpen) {
+        ConversationDraftEditor(
+            value = fieldValue, onValueChange = edit,
+            attachments = attachments, attachmentLoading = attachmentLoading,
+            loading = loading, configureRequired = configureRequired,
+            onRemoveImage = onRemoveImage,
+            onDismiss = { editorOpen = false },
+            onSend = { editorOpen = false; onSend() }, onStop = onStop,
+            testTag = testTag
+        )
+    }
     val density = LocalDensity.current
     val ime = WindowInsets.ime
     val imeTarget = WindowInsets.imeAnimationTarget
@@ -115,8 +143,8 @@ fun ConversationComposer(
         ) {
             Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = minimumHeight)) {
                 BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
+                    value = fieldValue,
+                    onValueChange = edit,
                     modifier = Modifier.fillMaxWidth().testTag("$testTag-input").focusRequester(resolvedFocusRequester)
                         .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
                         .heightIn(min = 24.dp, max = 132.dp)
@@ -167,13 +195,18 @@ fun ConversationComposer(
                             Icon(Icons.Rounded.Add, "输入选项", Modifier.size(29.dp), tint = Ink)
                         }
                     }
-                    Spacer(Modifier.weight(1f))
-                    AnimatedVisibility(
-                        visible = isFocused,
-                        enter = fadeIn(tween(150)) + scaleIn(tween(220, easing = FastOutSlowInEasing), initialScale = .92f),
-                        exit = fadeOut(tween(90))
-                    ) {
-                        trailingActions()
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                        AnimatedVisibility(visible = isFocused, enter = fadeIn(tween(150)), exit = fadeOut(tween(90))) {
+                            trailingActions()
+                        }
+                    }
+                    AnimatedVisibility(visible = isFocused, enter = fadeIn(tween(150)), exit = fadeOut(tween(90))) {
+                        IconButton(onClick = {
+                            focus.clearFocus()
+                            editorOpen = true
+                        }, modifier = Modifier.size(46.dp)) {
+                            Icon(Icons.Rounded.OpenInFull, "展开草稿", Modifier.size(21.dp), tint = MutedInk)
+                        }
                     }
                     FilledIconButton(
                         onClick = {

@@ -162,8 +162,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         if (vm.messages.isNotEmpty()) listState.scrollToItem(vm.messages.size)
     }
 
-    LaunchedEffect(userDragging, listState.canScrollForward) {
-        if (userDragging) autoFollow = !listState.canScrollForward
+    LaunchedEffect(userDragging) {
+        if (userDragging) autoFollow = false
+        else if (!listState.canScrollForward) autoFollow = true
     }
 
     LaunchedEffect(vm.messages.size) {
@@ -262,7 +263,13 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                                     })
                                 },
                                 onStreamingTextAdvanced = { streamScrollSignals.tryEmit(Unit) },
-                                modifier = if (message.isStreaming) Modifier else Modifier.animateItem()
+                                onDetailsExpanded = {
+                                    autoFollow = false
+                                    val index = vm.messages.indexOfFirst { it.id == message.id }
+                                    if (index >= 0) scope.launch {
+                                        listState.revealConversationDetails(index, with(density) { (composerHeight + 12.dp).toPx() })
+                                    }
+                                }
                             )
                         }
                         item { Spacer(Modifier.height(4.dp)) }
@@ -326,24 +333,24 @@ private fun ChatHeader(
     onPrevious: () -> Unit,
     onNext: () -> Unit
 ) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        AsterIconButton(Icons.Rounded.Menu, "打开侧栏", onOpenDrawer)
-        Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).clickable(onClick = onSwitchModel)
-            .padding(horizontal = 8.dp, vertical = 7.dp)) {
-            Text(if (vm.messages.isEmpty()) "Aster" else vm.conversations.firstOrNull { it.id == vm.activeConversationId }?.title ?: "对话",
-                style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(vm.chatProfile.chatModel.ifBlank { "选择对话模型" },
-                    modifier = Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelMedium,
-                    color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Icon(Icons.Rounded.ExpandMore, "切换模型", Modifier.size(15.dp), tint = MutedInk)
-            }
-        }
-        if (showNavigation) {
-            QuestionNavigator(previousEnabled, nextEnabled, onPrevious, onNext)
-        }
+    var showActions by remember { mutableStateOf(false) }
+    ConversationHeader(
+        title = if (vm.messages.isEmpty()) "Aster" else vm.conversations.firstOrNull { it.id == vm.activeConversationId }?.title ?: "对话",
+        model = vm.chatProfile.chatModel.ifBlank { "选择对话模型" },
+        onOpenDrawer = onOpenDrawer, onModelClick = onSwitchModel
+    ) {
+        if (showNavigation) AsterIconButton(Icons.Rounded.MoreHoriz, "对话导航", { showActions = true })
         AsterIconButton(Icons.Rounded.AddComment, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
     }
+    if (showActions) AdActionSheet(
+        title = "对话导航", subtitle = "按提问定位，继续阅读",
+        actions = listOf(
+            AdActionOption("previous", "回到上一个提问", icon = Icons.Rounded.KeyboardArrowUp, enabled = previousEnabled),
+            AdActionOption("next", "前往下一个提问", icon = Icons.Rounded.KeyboardArrowDown, enabled = nextEnabled)
+        ),
+        onAction = { showActions = false; if (it.id == "previous") onPrevious() else onNext() },
+        onDismiss = { showActions = false }
+    )
 }
 
 @Composable
@@ -379,6 +386,7 @@ private fun EmptyChat(model: String, onSuggestion: (String) -> Unit, onConfigure
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChatMessageItem(
     message: ChatMessage,
@@ -387,6 +395,7 @@ private fun ChatMessageItem(
     onRegenerate: () -> Unit,
     onSaveFile: (ChatFileAttachment) -> Unit,
     onStreamingTextAdvanced: () -> Unit,
+    onDetailsExpanded: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val user = message.role == "user"
@@ -486,7 +495,7 @@ private fun ChatMessageItem(
                 }
                 AnimatedVisibility(!message.isStreaming && message.content.isNotBlank()) {
                     Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             ConversationCopyAction(message.content)
                             if (message.isError) {
                                 ConversationMessageAction(Icons.Rounded.Refresh, "重试", onRetry)
@@ -499,11 +508,11 @@ private fun ChatMessageItem(
                                 ConversationMessageAction(
                                     Icons.Rounded.MoreHoriz,
                                     if (showDetails) "收起" else "详情",
-                                    { showDetails = !showDetails }
+                                    { showDetails = !showDetails; if (showDetails) onDetailsExpanded() }
                                 )
                             }
                         }
-                        AnimatedVisibility(showDetails) {
+                        if (showDetails) {
                             Column(Modifier.fillMaxWidth().padding(top = 5.dp)) {
                                 if (message.profileName.isNotBlank()) {
                                     Text(
@@ -522,40 +531,6 @@ private fun ChatMessageItem(
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun QuestionNavigator(
-    previousEnabled: Boolean,
-    nextEnabled: Boolean,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit
-) {
-    val haptics = LocalHapticFeedback.current
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        IconButton(
-            onClick = {
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onPrevious()
-            },
-            enabled = previousEnabled,
-            modifier = Modifier.size(48.dp)
-        ) {
-            Icon(Icons.Rounded.KeyboardArrowUp, "回到上一个提问", Modifier.size(22.dp),
-                tint = if (previousEnabled) Accent else MutedInk.copy(alpha = .28f))
-        }
-        IconButton(
-            onClick = {
-                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                onNext()
-            },
-            enabled = nextEnabled,
-            modifier = Modifier.size(48.dp)
-        ) {
-            Icon(Icons.Rounded.KeyboardArrowDown, "前往下一个提问", Modifier.size(22.dp),
-                tint = if (nextEnabled) Accent else MutedInk.copy(alpha = .28f))
         }
     }
 }
@@ -1594,7 +1569,7 @@ private fun ChatComposer(
                             shape = RoundedCornerShape(16.dp)
                         ) {
                             Row(
-                                Modifier.widthIn(max = 174.dp).padding(horizontal = 9.dp, vertical = 8.dp),
+                                Modifier.widthIn(max = 128.dp).padding(horizontal = 9.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
