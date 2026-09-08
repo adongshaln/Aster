@@ -196,7 +196,7 @@ fun ConversationComposer(
                         }
                     }
                     Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                        AnimatedVisibility(visible = isFocused, enter = fadeIn(tween(150)), exit = fadeOut(tween(90))) {
+                        androidx.compose.animation.AnimatedVisibility(visible = isFocused, enter = fadeIn(tween(150)), exit = fadeOut(tween(90))) {
                             trailingActions()
                         }
                     }
