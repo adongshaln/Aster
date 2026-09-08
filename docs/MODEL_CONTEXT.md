@@ -29,3 +29,9 @@ Version, main, package name, signing key and story database schema are unchanged
 - Verified source: `b7b73d28a2e05a739de3ad2bde62aa9c63a129a8`. Android build #164 succeeded (unit tests, Release and fixed signing): https://github.com/adongshaln/Aster/actions/runs/34222235325 .
 - Native UI preview #52 succeeded: https://github.com/adongshaln/Aster/actions/runs/34222235184 . XML: 12 tests, zero failures/errors/skips. Actual quick-picker screenshot reviewed: four presets visible with 512K selected; API/model selection, context persistence and footer actions remain available.
 - Delivered `Aster-build164.apk`, 24,207,777 bytes; SHA-256 `5a56dfc9e79bd6802ea302fae900ec1006c47b322e891dbcd2f35bb2768b71d6`. APK v2 signing certificate matches #163. Development branch only; version 2.3.0 / 57 and main unchanged.
+
+### Selected-model-only follow-up verified
+
+- Source `0a9111abc69b8c2c48c8b79195798d9f89a95793`, Android build #165 succeeded: https://github.com/adongshaln/Aster/actions/runs/34247016531 .
+- Native preview #53 succeeded: https://github.com/adongshaln/Aster/actions/runs/34247016450 . XML: 12 tests, zero failures/errors/skips. Screenshot reviewed: the unselected model has no context row; only the selected model shows its saved capacity and four presets. Save and subsequent model selection checks passed.
+- Delivered `Aster-build165.apk`; SHA-256 `38c035b3b726c154109c9d64b5be9ba961c98046d55389912a0bf88b8c10793e`, 24,207,777 bytes. Signing certificate matches #164. No additional product changes in this verification checkpoint.
