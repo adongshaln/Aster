@@ -234,7 +234,7 @@ fun QuickModelSwitcher(
                                 }
                             }
                         }
-                        if (kind == RouteKind.Chat) ModelContextPresets(selectedProfile.id, model.id,
+                        if (kind == RouteKind.Chat && selected) ModelContextPresets(selectedProfile.id, model.id,
                             selectedProfile.modelContexts[model.id], { vm.setModelContextWindow(selectedProfile.id, model.id, it) })
                         }
                     }
