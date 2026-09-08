@@ -109,3 +109,13 @@ object ModelContextPolicy {
         return inputCost
     }
 }
+
+object ContextWindowPresets {
+    val values = listOf(131072 to "128K", 262144 to "256K", 524288 to "512K", 1048576 to "1M")
+    fun label(tokens: Int): String = values.firstOrNull { it.first == tokens }?.second ?: "$tokens"
+    fun apply(existing: ModelContextLimits?, window: Int): ModelContextLimits {
+        require(values.any { it.first == window })
+        val maximumOutput = window - maxOf(512, window / 20) - 1024
+        return ModelContextLimits(window, minOf(existing?.outputTokens ?: 8192, maximumOutput)).validate()
+    }
+}

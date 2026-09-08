@@ -33,7 +33,7 @@ internal fun ModelContextDialog(model: String, initial: ModelContextLimits?, onD
                     label = { Text("上下文窗口 · Token") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     isError = window.isNotBlank() && parsed.isFailure)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(32768 to "32K", 131072 to "128K", 262144 to "256K", 1048576 to "1M").forEach { (size, title) ->
+                    com.adong.adchat.data.ContextWindowPresets.values.forEach { (size, title) ->
                         SuggestionChip(onClick = { window = size.toString() }, label = { Text(title) })
                     }
                 }

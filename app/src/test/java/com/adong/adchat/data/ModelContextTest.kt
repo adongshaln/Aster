@@ -14,6 +14,15 @@ class ModelContextTest {
     private fun reply(text: String) = ChatMessage(role="assistant", content=text)
     private val limits = ModelContextLimits(4096, 512)
 
+    @Test fun quickPresetsPreserveOutputAndFitSmallerWindows() {
+        assertEquals(listOf(131072,262144,524288,1048576),ContextWindowPresets.values.map { it.first })
+        assertEquals(16384,ContextWindowPresets.apply(ModelContextLimits(1048576,16384),131072).outputTokens)
+        assertEquals(8192,ContextWindowPresets.apply(null,524288).outputTokens)
+        val smaller=ContextWindowPresets.apply(ModelContextLimits(1048576,500000),131072)
+        assertTrue(smaller.inputTokens>=1024)
+        assertEquals(smaller,smaller.validate())
+    }
+
     @Test fun settingsRoundTripAndModelIsolation() {
         val settings = mapOf("gemini-custom" to ModelContextLimits(1048576,8192), "gpt-custom" to ModelContextLimits(131072,16384))
         val restored = ModelContextSettings.decode(JSONObject(ModelContextSettings.encode(settings).toString()))

@@ -68,6 +68,7 @@ fun StoryScreen(
     }
 
     var showStoryPicker by remember { mutableStateOf(false) }
+    var showModelSwitcher by remember(story.id) { mutableStateOf(false) }
     val profile = mainVm.profiles.firstOrNull { it.id == story.profileId }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -79,6 +80,7 @@ fun StoryScreen(
             onStoryPicker = { showStoryPicker = true },
             onWorkspace = storyVm::switchWorkspace,
             onArchive = storyVm::openArchive,
+            onModelClick = { showModelSwitcher = true },
             onCreateStory = onCreateStory,
             onHistory = storyVm::openTimelineHistory,
             historyEnabled = !storyVm.revisionBusy
@@ -128,6 +130,14 @@ fun StoryScreen(
         )
     }
 
+    if (showModelSwitcher) com.adong.adchat.ui.components.QuickModelSwitcher(
+        kind = com.adong.adchat.ui.components.RouteKind.Chat, vm = mainVm,
+        routeProfileId = story.profileId, routeModel = story.model,
+        onSelectChatModel = { profileId, model -> mainVm.profiles.firstOrNull { it.id == profileId }
+            ?.let { storyVm.replaceActiveRoute(it.copy(chatModel = model)) } },
+        modelSelectionEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
+        onDismiss = { showModelSwitcher = false }, onManageApis = onOpenSettings)
+
     if (storyVm.archiveOpen) {
         StoryArchiveSheet(
             story = story,
@@ -148,7 +158,7 @@ fun StoryScreen(
             onDecide = storyVm::decideProposal,
             onRetryMemory = storyVm::retryMemory,
             availableProfiles = mainVm.profiles,
-            onReplaceRoute = storyVm::replaceActiveRoute,
+            onChooseRoute = { storyVm.closeArchive(); showModelSwitcher = true },
             onAutomaticMemory = storyVm::setAutomaticMemoryEnabled,
             onAdd = storyVm::addArchiveRecord,
             onUpdate = storyVm::updateArchiveRecord,
@@ -168,6 +178,7 @@ private fun StoryHeader(
     onStoryPicker: () -> Unit,
     onWorkspace: (StoryWorkspace) -> Unit,
     onArchive: () -> Unit,
+    onModelClick: () -> Unit,
     onCreateStory: () -> Unit,
     onHistory: () -> Unit,
     historyEnabled: Boolean
@@ -177,7 +188,7 @@ private fun StoryHeader(
         ConversationHeader(
             title = story.title,
             model = profile?.let { "${it.name} · ${story.model}" } ?: "选择故事模型",
-            onOpenDrawer = onOpenDrawer, onModelClick = onArchive, modelUnavailable = profile == null
+            onOpenDrawer = onOpenDrawer, onModelClick = onModelClick, modelUnavailable = profile == null
         ) {
             AsterIconButton(Icons.Rounded.MoreHoriz, "故事选项", { showActions = true })
             AsterIconButton(Icons.Rounded.AddComment, "新建故事", onCreateStory)
@@ -802,7 +813,7 @@ private fun StoryArchiveSheet(
     onDecide: (String, Boolean, String?) -> Unit,
     onRetryMemory: () -> Unit,
     availableProfiles: List<ApiProfile>,
-    onReplaceRoute: (ApiProfile) -> Unit,
+    onChooseRoute: () -> Unit,
     onAutomaticMemory: (Boolean) -> Unit,
     onAdd: (StoryMemoryKind, String, Boolean) -> Unit,
     onUpdate: (String, String, Boolean) -> Unit,
@@ -842,7 +853,6 @@ private fun StoryArchiveSheet(
     }
     var editing by remember { mutableStateOf<StoryMemoryRecord?>(null) }
     var adding by remember { mutableStateOf(false) }
-    var showRouteMenu by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Canvas) {
         Column(Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
@@ -955,7 +965,7 @@ private fun StoryArchiveSheet(
                             color = Surface,
                             shape = RoundedCornerShape(18.dp),
                             border = BorderStroke(1.dp, Hairline),
-                            modifier = Modifier.fillMaxWidth().clickable { showRouteMenu = true }
+                            modifier = Modifier.fillMaxWidth().clickable { onChooseRoute() }
                         ) {
                             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
@@ -1010,31 +1020,6 @@ private fun StoryArchiveSheet(
                 }
             }
         }
-    }
-
-    if (showRouteMenu) {
-        AlertDialog(
-            onDismissRequest = { showRouteMenu = false },
-            title = { Text("选择故事模型") },
-            text = {
-                Column {
-                    availableProfiles.forEach { profile ->
-                        Surface(
-                            onClick = { onReplaceRoute(profile); showRouteMenu = false },
-                            color = if (profile.id == story.profileId) AccentSoft else Color.Transparent,
-                            shape = RoundedCornerShape(13.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(profile.name, fontWeight = FontWeight.SemiBold)
-                                Text(profile.chatModel.ifBlank { "未选择模型" }, color = MutedInk, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = { Button(onClick = { showRouteMenu = false }) { Text("关闭") } }
-        )
     }
 
     if (adding) {

@@ -309,6 +309,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persist(); notice = "绘图已切换到 ${imageProfile.name}"
     }
 
+    fun setModelContextWindow(profileId: String, model: String, window: Int) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        val id = model.trim().takeIf { it.isNotEmpty() } ?: return
+        val limits = com.adong.adchat.data.ContextWindowPresets.apply(profile.modelContexts[id], window)
+        if (profile.modelContexts[id] == limits) return
+        updateProfile(profileId) { it.copy(modelContexts = it.modelContexts + (id to limits)) }
+        persist()
+        notice = "${com.adong.adchat.data.ContextWindowPresets.label(window)} 上下文已保存，下一次请求生效"
+    }
+
     fun selectChatModel(profileId: String, model: String) {
         val profile = profiles.firstOrNull { it.id == profileId } ?: return
         val selectedModel = model.trim()

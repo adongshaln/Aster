@@ -20,3 +20,10 @@ Version, main, package name, signing key and story database schema are unchanged
 - Regression tests cover configuration reload and model isolation, legacy fallback, whole-turn trimming, oversized current input/images blocked before network access, story fixed-memory protection and contexts larger than the old character ceiling, tool payload/carry-over costs, and actual Chat/Responses output-limit fields through MockWebServer.
 - Stream recovery starts from the exact initially selected history and refuses an oversized continuation instead of independently dropping its original input. Token estimates remain approximate; no live-provider acceptance or exact tokenizer equivalence is claimed.
 - APK: `Aster-build163.apk`, 24,207,777 bytes. SHA-256: `7940e85668d18cc16374c6c75695eab616c425eb9e0edd7b6f6c311d5dbe5b58`. APK v2 signing certificate matches build #160. Version remains 2.3.0 / 57; main is unchanged.
+
+## Quick picker presets — implementation checkpoint
+
+- Normal and story chat now share QuickModelSwitcher. Story's header model label opens this picker directly; its archive route entry opens the same picker.
+- Each model exposes a context disclosure with 128K / 256K / 512K / 1M presets. Setting a preset saves immediately to that API/model key without selecting the model, changing the conversation route or closing the picker. The stored custom output cap is preserved when valid, clamped only if a smaller window requires it. Unset models receive an 8,192-token output cap on first preset use.
+- The settings editor uses the same four presets and retains precise numeric controls. Shared budgets and signing remain unchanged. Native regression covers persistence and route isolation from the actual shared picker.
+- Verification pending for this checkpoint.

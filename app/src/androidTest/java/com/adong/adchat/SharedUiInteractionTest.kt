@@ -305,6 +305,37 @@ class SharedUiInteractionTest {
         rule.runOnIdle { assertNull(applied);assertEquals(2,changes) }
     }
 
+    @Test fun modelPickerPresetsSaveWithoutChangingRoutesOrClosingSheet() {
+        lateinit var vm: MainViewModel
+        val profile=com.adong.adchat.data.ApiProfile(id="context-picker-test", name="创作 API",baseUrl="https://example.com",
+            chatModel="gemini-a",cachedModels=listOf(com.adong.adchat.data.ApiModel("gemini-a"),com.adong.adchat.data.ApiModel("gemini-b")),
+            modelContexts=mapOf("gemini-b" to com.adong.adchat.data.ModelContextLimits(131072,16384)))
+        var picked=""
+        var dismissed=false
+        rule.runOnUiThread {
+            vm=ViewModelProvider(rule.activity)[MainViewModel::class.java]
+            vm.saveProfile(profile)
+        }
+        content {
+            QuickModelSwitcher(RouteKind.Chat,vm,{dismissed=true},{},routeProfileId=profile.id,routeModel="gemini-b",
+                onSelectChatModel={ id,model -> picked="$id/$model" })
+        }
+        rule.onNodeWithContentDescription("设置 gemini-b 的上下文").performScrollTo().performClick()
+        rule.onNodeWithText("512K").performScrollTo().performClick()
+        rule.onNode(hasText("512K") and SemanticsMatcher.expectValue(SemanticsProperties.Selected,true)).assertExists()
+        rule.runOnIdle {
+            assertFalse(dismissed);assertEquals("",picked)
+            val saved=com.adong.adchat.data.ConfigStore(rule.activity).load().profiles.first { it.id==profile.id }
+            assertEquals(524288,saved.modelContexts["gemini-b"]?.windowTokens)
+            assertEquals(16384,saved.modelContexts["gemini-b"]?.outputTokens)
+            assertNull(saved.modelContexts["gemini-a"])
+            assertEquals("gemini-a",saved.chatModel)
+        }
+        screenshot("quick-context-presets")
+        rule.onNodeWithText("gemini-a").performScrollTo().performClick()
+        rule.runOnIdle { assertEquals("context-picker-test/gemini-a",picked);assertTrue(dismissed) }
+    }
+
     private fun imeVisible() = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
         ?.isVisible(WindowInsetsCompat.Type.ime()) == true
 

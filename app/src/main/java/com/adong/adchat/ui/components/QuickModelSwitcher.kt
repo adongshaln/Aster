@@ -33,10 +33,14 @@ fun QuickModelSwitcher(
     kind: RouteKind,
     vm: MainViewModel,
     onDismiss: () -> Unit,
-    onManageApis: () -> Unit
+    onManageApis: () -> Unit,
+    routeProfileId: String? = null,
+    routeModel: String? = null,
+    onSelectChatModel: ((String, String) -> Unit)? = null,
+    modelSelectionEnabled: Boolean = true
 ) {
     var selectedProfileId by remember {
-        mutableStateOf(when (kind) {
+        mutableStateOf(routeProfileId ?: when (kind) {
             RouteKind.Chat -> vm.chatProfile.id
             RouteKind.Image -> vm.imageProfile.id
             RouteKind.Analysis -> vm.mangaAnalysisProfile.id
@@ -54,12 +58,12 @@ fun QuickModelSwitcher(
         RouteKind.Image -> cached.filter { it.id.isImageLike() }.ifEmpty { cached }
         RouteKind.Analysis -> cached
     }
-    val activeProfileId = when (kind) {
+    val activeProfileId = routeProfileId ?: when (kind) {
         RouteKind.Chat -> vm.chatProfile.id
         RouteKind.Image -> vm.imageProfile.id
         RouteKind.Analysis -> vm.mangaAnalysisProfile.id
     }
-    val activeModel = when (kind) {
+    val activeModel = routeModel ?: when (kind) {
         RouteKind.Chat -> vm.chatProfile.chatModel
         RouteKind.Image -> vm.imageProfile.imageModel
         RouteKind.Analysis -> vm.mangaAnalysisProfile.mangaAnalysisModel
@@ -103,7 +107,7 @@ fun QuickModelSwitcher(
                         RouteKind.Analysis -> "选择漫画辅助模型"
                     }, style = MaterialTheme.typography.titleLarge)
                     Text(when (kind) {
-                        RouteKind.Chat -> "仅应用于当前对话，不影响其他任务"
+                        RouteKind.Chat -> "点模型切换 · 点上下文设置容量"
                         RouteKind.Image -> "先确认 API 路由，再选择模型"
                         RouteKind.Analysis -> "用于理解多页设定并整理逐页译文"
                     }, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
@@ -191,13 +195,15 @@ fun QuickModelSwitcher(
                     }
                 }
             } else {
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 330.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 330.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(models, key = { it.id }) { model ->
                         val selected = selectedProfile.id == activeProfileId && model.id == activeModel
+                        Column {
                         Surface(
+                            enabled = modelSelectionEnabled,
                             onClick = {
                                 when (kind) {
-                                    RouteKind.Chat -> vm.selectChatModel(selectedProfile.id, model.id)
+                                    RouteKind.Chat -> (onSelectChatModel ?: vm::selectChatModel)(selectedProfile.id, model.id)
                                     RouteKind.Image -> vm.selectImageModel(selectedProfile.id, model.id)
                                     RouteKind.Analysis -> vm.selectMangaAnalysisModel(selectedProfile.id, model.id)
                                 }
@@ -227,6 +233,9 @@ fun QuickModelSwitcher(
                                     Icon(Icons.Rounded.ChevronRight, null, tint = MutedInk)
                                 }
                             }
+                        }
+                        if (kind == RouteKind.Chat) ModelContextPresets(selectedProfile.id, model.id,
+                            selectedProfile.modelContexts[model.id], { vm.setModelContextWindow(selectedProfile.id, model.id, it) })
                         }
                     }
                 }
