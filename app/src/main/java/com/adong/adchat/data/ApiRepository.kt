@@ -99,13 +99,14 @@ class ApiRepository {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
         val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled
+        val initialContext = ModelContextPolicy.prepare(systemPrompt, history, profile.contextLimits(model), trimHistory)
+        if (initialContext.omittedTurns > 0) onContextTrim(initialContext.omittedTurns)
 
         suspend fun executeAttempt(
             attemptHistory: List<ChatMessage>,
             deltaSink: suspend (String) -> Unit
         ): ChatCompletionResult {
-            val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory)
-            if (prepared.omittedTurns > 0) onContextTrim(prepared.omittedTurns)
+            val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory = false)
             return if (profile.usesResponses(model)) {
                 streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, onToolActivity, deltaSink)
             } else {
@@ -139,7 +140,7 @@ class ApiRepository {
             onDelta(delta)
         }
         try {
-            val result = executeWithPreDeltaRetry(history, initialSink)
+            val result = executeWithPreDeltaRetry(initialContext.history, initialSink)
             return@withContext result.copy(text = combined.toString().ifBlank { result.text })
         } catch (initialError: Throwable) {
             if (initialError is CancellationException) throw initialError
@@ -151,7 +152,7 @@ class ApiRepository {
         onRecovery(StreamRecoveryEvent(recoveryAttempt, MAX_MID_STREAM_RECOVERY_ATTEMPTS, reconnecting = true))
         delay(MID_STREAM_RECOVERY_DELAY_MS)
         val partial = combined.toString()
-        val resumeHistory = history + listOf(
+        val resumeHistory = initialContext.history + listOf(
             ChatMessage(role = "assistant", content = partial),
             ChatMessage(role = "user", content = STREAM_RESUME_INSTRUCTION)
         )

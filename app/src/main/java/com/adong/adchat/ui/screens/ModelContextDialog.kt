@@ -26,7 +26,7 @@ internal fun ModelContextDialog(model: String, initial: ModelContextLimits?, onD
     }
     AdModalDialog(title = "模型上下文", subtitle = model, onDismiss = onDismiss,
         content = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 410.dp).verticalScroll(rememberScrollState()),
+            Column(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 410.dp).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("窗口包含输入、输出和推理。请按服务商支持的容量填写；设置更大不会扩展模型能力。", style = MaterialTheme.typography.bodySmall, color = MutedInk)
                 OutlinedTextField(window, { window = it }, modifier = Modifier.fillMaxWidth(), singleLine = true,

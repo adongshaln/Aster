@@ -53,6 +53,17 @@ class ModelContextTest {
         assertTrue(runCatching { ModelContextPolicy.applyToRequest(body,limits,true) }.isFailure)
         assertTrue(runCatching { ModelContextPolicy.applyToRequest(JSONObject().put("input",JSONArray()),limits,true,4000) }.isFailure)
     }
+    @Test fun overflowFailsBeforeAnyNetworkRequest() = runBlocking {
+        val server=MockWebServer();server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(400))
+            val profile=ApiProfile(baseUrl=server.url("/").toString(),modelContexts=mapOf("custom" to limits))
+            val failure=runCatching { ApiRepository().streamChat(profile,"custom","",listOf(user("中".repeat(2000))),"test") {} }.exceptionOrNull()
+            assertTrue(failure is IllegalArgumentException)
+            assertEquals(0,server.requestCount)
+        } finally {server.shutdown()}
+    }
+
     @Test fun requestUsesActualModelLimitAndCorrectProtocolField() = runBlocking {
         for (model in listOf("gemini-custom","gpt-custom")) {
             val server=MockWebServer();server.start()

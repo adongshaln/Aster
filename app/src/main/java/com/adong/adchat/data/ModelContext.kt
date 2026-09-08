@@ -64,7 +64,7 @@ object ModelContextPolicy {
         val systemCost = ContextTokenEstimate.text(system).toLong() + REQUEST_OVERHEAD
         fun cost(rows: List<ChatMessage>) = systemCost + rows.sumOf { ContextTokenEstimate.message(it).toLong() }
         if (!trimHistory) {
-            require(cost(stable) <= limits.inputTokens) { "故事必需资料与输入超过模型上下文预算，尚未发送。请提高该模型的上下文长度或精简资料。" }
+            require(cost(stable) <= limits.inputTokens) { "需完整保留的资料与输入超过模型上下文预算，尚未发送。请提高该模型的上下文长度或精简资料。" }
             return PreparedContext(stable, 0)
         }
         // Each user message begins a whole turn. Preserve the latest turn and a continuous suffix.
