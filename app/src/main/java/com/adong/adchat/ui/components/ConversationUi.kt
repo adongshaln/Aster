@@ -78,11 +78,14 @@ fun ConversationComposer(
     }
     if (editorOpen) {
         ConversationDraftEditor(
-            value = fieldValue, onValueChange = edit,
+            value = fieldValue, onValueChange = { if (editorOpen) edit(it) },
             attachments = attachments, attachmentLoading = attachmentLoading,
             loading = loading, configureRequired = configureRequired,
             onRemoveImage = onRemoveImage,
-            onDismiss = { editorOpen = false },
+            onDismiss = { retained ->
+                editorOpen = false
+                fieldValue = retained
+            },
             onSend = { editorOpen = false; onSend() }, onStop = onStop,
             testTag = testTag
         )
@@ -144,7 +147,7 @@ fun ConversationComposer(
             Box(Modifier.fillMaxWidth().defaultMinSize(minHeight = minimumHeight)) {
                 BasicTextField(
                     value = fieldValue,
-                    onValueChange = edit,
+                    onValueChange = { if (!editorOpen) edit(it) },
                     modifier = Modifier.fillMaxWidth().testTag("$testTag-input").focusRequester(resolvedFocusRequester)
                         .padding(start = fieldStart, end = fieldEnd, top = fieldTop, bottom = fieldBottom)
                         .heightIn(min = 24.dp, max = 132.dp)
@@ -202,8 +205,11 @@ fun ConversationComposer(
                     }
                     AnimatedVisibility(visible = isFocused, enter = fadeIn(tween(150)), exit = fadeOut(tween(90))) {
                         IconButton(onClick = {
-                            focus.clearFocus()
+                            // Ignore the compact field's blur callback during the hand-off.
+                            val retained = fieldValue.copy(composition = null)
                             editorOpen = true
+                            focus.clearFocus()
+                            fieldValue = retained
                         }, modifier = Modifier.size(46.dp)) {
                             Icon(Icons.Rounded.OpenInFull, "展开草稿", Modifier.size(21.dp), tint = MutedInk)
                         }

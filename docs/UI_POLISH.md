@@ -42,3 +42,5 @@
 - Opening message details pauses following in both modes, cancels an existing scroll and reveals details above the composer. User dragging pauses following; releasing at the bottom or explicitly returning to the bottom resumes it. Ordinary message insertion no longer animates existing items; its action row wraps for large text.
 - Added native regression coverage for editor text/selection persistence, explicit send, and import/stop guards, alongside the six existing interaction checks.
 - Development branch only; no version, signing, database or request-protocol changes. CI and visual verification pending at this checkpoint.
+
+- Validation follow-up: explicit selection hand-off prevents Compose blur/disposal callbacks from clearing the editor selection. Scroll interruption no longer terminates the ordinary chat streaming collector. Native run #45 exposed the selection bug and a separate Pixel Launcher ANR (visible in its screenshot) that stole IME focus; the runner now stops only that emulator launcher and test setup dismisses only its specific ANR dialog, leaving Aster errors visible.

@@ -5,6 +5,9 @@ if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/feature/story-mode" ]]; then
   set -- com.adong.adchat.SharedUiInteractionTest
 fi
 
+# The emulator launcher can ANR during cold boot and steal focus from IME tests.
+# Stop only the launcher; keep application errors visible and test failures fatal.
+adb shell am force-stop com.google.android.apps.nexuslauncher
 adb shell wm size 1080x2400
 adb shell wm density 480
 adb shell settings put secure show_ime_with_hard_keyboard 1

@@ -2,6 +2,7 @@ package com.adong.adchat
 
 import android.graphics.Bitmap
 import android.view.KeyEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -37,6 +38,14 @@ class SharedUiInteractionTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
     private fun content(block: @Composable () -> Unit) {
+        // Dismiss only the known cold-boot launcher ANR, never an Aster error dialog.
+        val root = InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+        if (root?.packageName?.toString() == "android" &&
+            root.findAccessibilityNodeInfosByText("Pixel Launcher isn't responding").isNotEmpty()) {
+            root.findAccessibilityNodeInfosByText("Close app").firstOrNull()
+                ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
     }
 

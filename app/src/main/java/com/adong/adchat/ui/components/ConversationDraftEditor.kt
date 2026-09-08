@@ -36,12 +36,12 @@ fun ConversationDraftEditor(
     loading: Boolean,
     configureRequired: Boolean,
     onRemoveImage: (String) -> Unit,
-    onDismiss: () -> Unit,
+    onDismiss: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     testTag: String
 ) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(
+    Dialog(onDismissRequest = { onDismiss(value.copy(composition = null)) }, properties = DialogProperties(
         usePlatformDefaultWidth = false, decorFitsSystemWindows = false
     )) {
         val focus = LocalFocusManager.current
@@ -51,7 +51,8 @@ fun ConversationDraftEditor(
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 AsterIconButton(Icons.Rounded.CloseFullscreen, "收起草稿", {
-                    focus.clearFocus(); onDismiss()
+                    // Dismiss with the selection before CoreTextField collapses it on blur.
+                    onDismiss(value.copy(composition = null))
                 })
                 Text("编辑草稿", Modifier.weight(1f).padding(start = 6.dp), style = MaterialTheme.typography.titleMedium)
                 TextButton(onClick = {
