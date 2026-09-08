@@ -445,9 +445,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 val profile=organizerProfile(fresh) ?: error("请先配置故事使用的服务。")
                 val prose=store.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose)
                 val historical=replacementInput!=null || prose.lastOrNull()?.revision?.id!=target.revision.id
-                val context=if(historical) store.historicalRewriteContext(target.message.id,target.revision.id,instruction,replacementInput)
+                val context=if(historical) store.historicalRewriteContext(target.message.id,target.revision.id,instruction,replacementInput,
+                        com.adong.adchat.data.story.StoryContextBudget.forModel(profile, fresh.model))
                     else com.adong.adchat.data.story.StoryRewriteContext.compose(target,instruction,
-                        archiveStore.contextMemorySnapshot(story.id,story.currentTimelineId),prose)
+                        archiveStore.contextMemorySnapshot(story.id,story.currentTimelineId),prose,
+                        budget = com.adong.adchat.data.story.StoryContextBudget.forModel(profile, fresh.model))
                 val created=store.beginRewrite(target.message.id,target.revision.id,fresh.memoryVersion,instruction,profile.name,fresh.model,historical,replacementInput)
                 candidate=created
                 withContext(Dispatchers.Main) { rewriteCandidate=created }
@@ -760,7 +762,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     organizedProseRevisionIds = memorySnapshot.organizedProseRevisionIds,
                     summarySources = memorySnapshot.summarySources,
                     proseMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose),
-                    discussionMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Discussion)
+                    discussionMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Discussion),
+                    budget = com.adong.adchat.data.story.StoryContextBudget.forModel(profile, routeModel)
                 )
                 context.truncationNotice?.let { notice ->
                     withContext(Dispatchers.Main) {
@@ -1132,7 +1135,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         var result: com.adong.adchat.data.ChatCompletionResult? = null
         var state = "failed"
         try {
-            val response = api.streamChat(profile,model,systemPrompt,preparedHistory,cacheKey,onDelta=onDelta)
+            val response = api.streamChat(profile,model,systemPrompt,preparedHistory,cacheKey,trimHistory=false,onDelta=onDelta)
             result = response
             state = if(response.outputComplete) "completed" else "incomplete"
             return response

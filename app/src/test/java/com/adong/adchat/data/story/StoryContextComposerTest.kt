@@ -10,6 +10,23 @@ class StoryContextComposerTest {
     private val storyId = "story-test"
     private val timelineId = "timeline-test"
 
+    @Test fun customWindowReplacesLegacyCharacterCeilingAndProtectsPinnedMemory() {
+        val large = com.adong.adchat.data.ApiProfile(modelContexts=mapOf("custom" to com.adong.adchat.data.ModelContextLimits(131072,8192)))
+        val budget = StoryContextBudget.forModel(large,"custom")
+        val input = message("long",StoryWorkspace.Prose,"user","a".repeat(70000),StoryRevisionState.Complete,1)
+        val result = StoryContextComposer.compose(StoryWorkspace.Prose,"规则",emptyList(),emptyList(),listOf(input),emptyList(),budget)
+        assertEquals(70000,result.history.single().content.length)
+        assertTrue(result.withinHardBudget)
+        assertTrue(budget.estimateTokens)
+        val small = StoryContextBudget.forModel(large.copy(modelContexts=mapOf("custom" to com.adong.adchat.data.ModelContextLimits(4096,512))),"custom")
+        val fixed = memory("fixed","中".repeat(2000),StoryMemoryNature.UserConfirmed).copy(pinned=true)
+        assertTrue(runCatching {
+            StoryContextComposer.compose(StoryWorkspace.Prose,"规则",listOf(fixed),emptyList(),
+                listOf(input.copy(revision=input.revision.copy(content="继续"))),emptyList(),small)
+        }.exceptionOrNull() is StoryContextOverflowException)
+        assertEquals(48000,StoryContextBudget.forModel(large,"unset").maxInputChars)
+    }
+
     @Test
     fun proseGetsConfirmedFactsButNeverDiscussionCandidatesOrInference() {
         val confirmed = memory("confirmed", "王都位于北方。", StoryMemoryNature.UserConfirmed)

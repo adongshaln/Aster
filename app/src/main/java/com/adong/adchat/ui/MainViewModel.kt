@@ -481,6 +481,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("imagePath", profile.imagePath)
                         .put("imageEditPath", profile.imageEditPath)
                         .put("imageApiMode", profile.imageApiMode)
+                        .put("modelContexts", com.adong.adchat.data.ModelContextSettings.encode(profile.modelContexts))
                         .put("chatModel", profile.chatModel)
                         .put("imageModel", profile.imageModel)
                         .put("mangaAnalysisModel", profile.mangaAnalysisModel)
@@ -518,6 +519,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     imagePath = item.optString("imagePath").ifBlank { "/v1/images/generations" },
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
                     imageApiMode = item.optString("imageApiMode").ifBlank { IMAGE_API_MODE_AUTO },
+                    modelContexts = com.adong.adchat.data.ModelContextSettings.decode(item.optJSONObject("modelContexts")),
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),
@@ -634,6 +636,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     systemPrompt = appConfig.systemPrompt,
                     history = requestHistory,
                     cacheKey = "adchat-${activeConversationId ?: profile.id}",
+                    onContextTrim = { count -> withContext(Dispatchers.Main) { notice = "本次已省略最早的 $count 轮对话以适配模型上下文；本地记录仍保留。" } },
                     onRecovery = { event ->
                         automaticRecoveryCount = maxOf(automaticRecoveryCount, event.attempt)
                         withContext(Dispatchers.Main.immediate) {

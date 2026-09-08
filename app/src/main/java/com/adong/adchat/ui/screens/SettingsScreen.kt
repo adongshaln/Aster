@@ -541,6 +541,7 @@ private fun ProfileEditor(
     LaunchedEffect(initial) { draft = initial }
     var keyVisible by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var contextEditor by remember { mutableStateOf(false) }
     val normalizedDraft = draft.normalized()
     val normalizedInitial = initial.normalized()
     val connectionChanged = normalizedDraft.baseUrl != normalizedInitial.baseUrl ||
@@ -559,6 +560,12 @@ private fun ProfileEditor(
         else -> null
     }
 
+    if (contextEditor) ModelContextDialog(draft.chatModel.trim(), draft.modelContexts[draft.chatModel.trim()],
+        onDismiss = { contextEditor = false }, onApply = { limits ->
+            val model = draft.chatModel.trim()
+            draft = draft.copy(modelContexts = if (limits == null) draft.modelContexts - model else draft.modelContexts + (model to limits))
+            contextEditor = false
+        })
     BackHandler { if (draft != initial) confirmDiscard = true else onBack() }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -613,6 +620,13 @@ private fun ProfileEditor(
                     Text(if (draft.chatModel.isGptModel()) "GPT · Responses" else "GPT 自动使用 Responses；其他模型可在高级设置中选择协议",
                         color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("对话模型", draft.chatModel, models.filterNot { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
+                    val limits = draft.modelContexts[draft.chatModel.trim()]
+                    OutlinedButton(onClick = { contextEditor = true }, enabled = draft.chatModel.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Outlined.Tune, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(limits?.let { "上下文 ${it.windowTokens} · 输出 ${it.outputTokens} Token" } ?: "设置此模型的上下文长度")
+                    }
+                    Text("按模型独立保存，普通对话与故事共用。切换上方模型可编辑其他模型。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("绘图模型（可选）", draft.imageModel, models.filter { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
                 }
             }

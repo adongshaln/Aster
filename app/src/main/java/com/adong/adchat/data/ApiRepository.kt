@@ -90,6 +90,8 @@ class ApiRepository {
         systemPrompt: String,
         history: List<ChatMessage>,
         cacheKey: String,
+        trimHistory: Boolean = true,
+        onContextTrim: suspend (Int) -> Unit = {},
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
         onDelta: suspend (String) -> Unit
@@ -102,10 +104,12 @@ class ApiRepository {
             attemptHistory: List<ChatMessage>,
             deltaSink: suspend (String) -> Unit
         ): ChatCompletionResult {
+            val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory)
+            if (prepared.omittedTurns > 0) onContextTrim(prepared.omittedTurns)
             return if (profile.usesResponses(model)) {
-                streamResponses(profile, model, systemPrompt, attemptHistory, cacheKey, onToolActivity, deltaSink)
+                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, onToolActivity, deltaSink)
             } else {
-                streamChatCompletions(profile, model, systemPrompt, attemptHistory, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
+                streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
             }
         }
 
@@ -233,6 +237,7 @@ class ApiRepository {
             if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
             if (toolPolicy.webSearchEnabled) body.put("web_search_options", JSONObject())
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = false, explicitCache = explicitCache)
+            ModelContextPolicy.applyToRequest(body, profile.contextLimits(model), responses = false)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
@@ -395,6 +400,8 @@ class ApiRepository {
             onToolActivity(activity)
         }
 
+        var carriedContextTokens = 0L
+        var lastRequestTokens = 0L
         suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?): ProtocolRoundResult {
             outputComplete = false
             val body = JSONObject().put("model", model).put("input", requestInput).put("stream", true)
@@ -403,6 +410,7 @@ class ApiRepository {
             previousResponseId?.takeIf(String::isNotBlank)?.let { body.put("previous_response_id", it) }
             if (systemPrompt.isNotBlank()) body.put("instructions", systemPrompt)
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = true, explicitCache = false)
+            lastRequestTokens = ModelContextPolicy.applyToRequest(body, profile.contextLimits(model), responses = true, carriedTokens = carriedContextTokens)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.responsesPath))
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
@@ -504,6 +512,8 @@ class ApiRepository {
                 break
             }
             if (round.responseId.isBlank()) throw IllegalStateException("Responses API 未返回 response id，无法提交工具结果")
+            carriedContextTokens = maxOf(lastRequestTokens, round.usage.inputTokens.toLong()) + maxOf(
+                round.usage.outputTokens.toLong(), ContextTokenEstimate.text(round.text).toLong() + round.toolCalls.sumOf { ContextTokenEstimate.text(it.arguments).toLong() + 32 })
             previousResponseId = round.responseId
             requestInput = JSONArray()
             round.toolCalls.forEach { call ->

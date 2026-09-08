@@ -12,10 +12,20 @@ data class StoryContextBudget(
     val pinnedMemoryChars: Int = 12_000,
     val confirmedMemoryChars: Int = 18_000,
     val candidateChars: Int = 6_000,
-    val recentHistoryChars: Int = 20_000
+    val recentHistoryChars: Int = 20_000,
+    val estimateTokens: Boolean = false
 ) {
+    fun textCost(value: String): Int = if (estimateTokens) com.adong.adchat.data.ContextTokenEstimate.text(value) else value.length
+    companion object {
+        fun forModel(profile: com.adong.adchat.data.ApiProfile, model: String): StoryContextBudget {
+            val limits = profile.modelContexts[model]?.validate() ?: return StoryContextBudget()
+            val input = limits.inputTokens - com.adong.adchat.data.ModelContextPolicy.REQUEST_OVERHEAD
+            require(input > 0) { "模型输入预算不足，请提高上下文长度或减少最大输出。" }
+            return StoryContextBudget(input, input / 4, input * 3 / 8, input / 8, input * 5 / 12, true)
+        }
+    }
     init {
-        require(maxInputChars >= 4_000)
+        require(maxInputChars >= 1)
         require(pinnedMemoryChars >= 0)
         require(confirmedMemoryChars >= 0)
         require(candidateChars >= 0)
@@ -124,7 +134,7 @@ object StoryContextComposer {
             .toList()
 
         val currentTurn = eligibleHistory.lastOrNull { it.message.role == "user" }
-        val currentTurnCost = currentTurn?.let(::historyCost) ?: 0
+        val currentTurnCost = currentTurn?.let { historyCost(it, budget) } ?: 0
         val base = buildString {
             append(baseInstruction.trim())
             if (stateView.conflicts.isNotEmpty()) {
@@ -132,7 +142,7 @@ object StoryContextComposer {
                 append(stateView.conflicts.joinToString("\n") { it.description })
             }
         }
-        val baseAndCurrentCost = base.length + currentTurnCost
+        val baseAndCurrentCost = budget.textCost(base) + currentTurnCost
         if (baseAndCurrentCost > budget.maxInputChars) {
             throw StoryContextOverflowException(
                 StoryContextOverflowSection.CurrentInput,
@@ -157,7 +167,7 @@ object StoryContextComposer {
         // Keep a continuous suffix beginning with the oldest unorganized reply; never cut a hole.
         val protectedStart = if (firstUnorganized < 0) completeTurns.size else firstUnorganized
         val protectedTurns = completeTurns.drop(protectedStart)
-        val protectedCost = protectedTurns.sumOf { it.cost }
+        val protectedCost = protectedTurns.sumOf { it.cost(budget) }
 
         val includedMemoryIds = linkedSetOf<String>()
         val includedProposalIds = linkedSetOf<String>()
@@ -175,7 +185,7 @@ object StoryContextComposer {
                 append(pinnedLines.joinToString("\n"))
             }
         }
-        val mandatoryCost = mandatorySystem.length + currentTurnCost
+        val mandatoryCost = budget.textCost(mandatorySystem) + currentTurnCost
         if (mandatoryCost > budget.maxInputChars) {
             throw StoryContextOverflowException(
                 if (mandatorySummaryIds.isEmpty()) StoryContextOverflowSection.PinnedMemory else StoryContextOverflowSection.SummaryMemory,
@@ -205,7 +215,8 @@ object StoryContextComposer {
             items = normalConfirmed,
             sectionCap = budget.confirmedMemoryChars,
             remainingGlobal = remaining,
-            headerCost = CONFIRMED_HEADER.length,
+            headerCost = budget.textCost(CONFIRMED_HEADER),
+            textCost = budget::textCost,
             render = ::renderMemory,
             onIncluded = { includedMemoryIds += it.id },
             output = confirmedLines,
@@ -229,7 +240,8 @@ object StoryContextComposer {
                 items = renderedCandidates,
                 sectionCap = budget.candidateChars,
                 remainingGlobal = remaining,
-                headerCost = CANDIDATE_HEADER.length,
+                headerCost = budget.textCost(CANDIDATE_HEADER),
+                textCost = budget::textCost,
                 output = candidateLines,
                 onMemoryIncluded = { includedMemoryIds += it },
                 onProposalIncluded = { includedProposalIds += it },
@@ -242,7 +254,7 @@ object StoryContextComposer {
         var omittedTurns = 0
         for (index in (0 until protectedStart).reversed()) {
             val turn = completeTurns[index]
-            val cost = turn.cost
+            val cost = turn.cost(budget)
             if (cost <= historyRemaining && cost <= remaining) {
                 selectedTurnsNewestFirst += turn
                 historyRemaining -= cost
@@ -281,7 +293,7 @@ object StoryContextComposer {
             }
         }
 
-        val estimated = systemPrompt.length + history.sumOf(::messageCost)
+        val estimated = budget.textCost(systemPrompt) + history.sumOf { messageCost(it, budget) }
         if (estimated > budget.maxInputChars) {
             throw StoryContextOverflowException(
                 StoryContextOverflowSection.FinalRequest,
@@ -330,10 +342,10 @@ object StoryContextComposer {
             }) 0 else 2
     }
 
-    private fun historyCost(row: StoryMessageWithRevision): Int =
-        row.message.role.length + row.revision.content.length + 16 + row.revision.attachments.size * 4096
+    private fun historyCost(row: StoryMessageWithRevision, budget: StoryContextBudget): Int =
+        row.message.role.length + budget.textCost(row.revision.content) + 16 + row.revision.attachments.size * 4096
 
-    private fun messageCost(message: ChatMessage): Int = message.role.length + message.content.length + 16 + message.attachments.size * 4096
+    private fun messageCost(message: ChatMessage, budget: StoryContextBudget): Int = message.role.length + budget.textCost(message.content) + 16 + message.attachments.size * 4096
 
     private fun completeHistoryTurns(rows: List<StoryMessageWithRevision>): List<HistoryTurn> {
         val turns = mutableListOf<HistoryTurn>()
@@ -361,6 +373,7 @@ object StoryContextComposer {
         sectionCap: Int,
         remainingGlobal: Int,
         headerCost: Int,
+        textCost: (String) -> Int,
         render: (T) -> String,
         onIncluded: (T) -> Unit,
         output: MutableList<String>,
@@ -372,7 +385,7 @@ object StoryContextComposer {
         var hasAny = false
         items.forEach { item ->
             val line = render(item)
-            val lineCost = line.length + if (hasAny) 1 else 0
+            val lineCost = textCost(line) + if (hasAny) 1 else 0
             val globalCost = lineCost + if (hasAny) 0 else headerCost
             if (lineCost <= sectionRemaining && globalCost <= remaining) {
                 output += line
@@ -393,6 +406,7 @@ object StoryContextComposer {
         sectionCap: Int,
         remainingGlobal: Int,
         headerCost: Int,
+        textCost: (String) -> Int,
         output: MutableList<String>,
         onMemoryIncluded: (String) -> Unit,
         onProposalIncluded: (String) -> Unit,
@@ -403,7 +417,7 @@ object StoryContextComposer {
         var omitted = 0
         var hasAny = false
         items.forEach { item ->
-            val lineCost = item.line.length + if (hasAny) 1 else 0
+            val lineCost = textCost(item.line) + if (hasAny) 1 else 0
             val globalCost = lineCost + if (hasAny) 0 else headerCost
             if (lineCost <= sectionRemaining && globalCost <= remaining) {
                 output += item.line
@@ -421,7 +435,7 @@ object StoryContextComposer {
     }
 
     private data class HistoryTurn(val rows: List<StoryMessageWithRevision>) {
-        val cost: Int = rows.sumOf(::historyCost)
+        fun cost(budget: StoryContextBudget): Int = rows.sumOf { historyCost(it, budget) }
     }
 
     private data class CandidateItem(

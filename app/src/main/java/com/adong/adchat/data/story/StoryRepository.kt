@@ -452,11 +452,11 @@ class StoryRepository(context: Context) : AutoCloseable {
         }
     }
 
-    fun historicalRewriteContext(messageId: String, revisionId: String, instruction: String, originalInput: String? = null): StoryContextResult =
+    fun historicalRewriteContext(messageId: String, revisionId: String, instruction: String, originalInput: String? = null, budget: StoryContextBudget = StoryContextBudget()): StoryContextResult =
         helper.readableDatabase.inTransaction { db ->
             val source=queryMessageWithRevision(db,messageId) ?: error("正文不存在")
             val boundary=StoryTimelineHistory.readBoundary(db,messageId,revisionId)
-            StoryHistoricalContext.compose(db,source,boundary,instruction,originalInput)
+            StoryHistoricalContext.compose(db,source,boundary,instruction,originalInput,budget)
         }
 
     fun beginRewrite(messageId: String, revisionId: String, memoryVersion: Long, instruction: String,

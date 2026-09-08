@@ -286,6 +286,25 @@ class SharedUiInteractionTest {
         rule.onNodeWithText("删除对话").assertIsDisplayed()
     }
 
+    @Test fun modelContextEditorValidatesAppliesAndResets() {
+        var applied: com.adong.adchat.data.ModelContextLimits? = null
+        var changes = 0
+        content {
+            com.adong.adchat.ui.screens.ModelContextDialog("gemini-custom",null,{}, { applied=it;changes++ })
+        }
+        rule.onNodeWithText("应用").assertIsNotEnabled()
+        rule.onNodeWithText("128K").performClick()
+        rule.onNodeWithText("应用").assertIsEnabled().performClick()
+        rule.runOnIdle { assertEquals(131072,applied?.windowTokens);assertEquals(8192,applied?.outputTokens) }
+        rule.onNodeWithText("上下文窗口 · Token").performTextReplacement("4096")
+        rule.onNodeWithText("应用").assertIsNotEnabled()
+        rule.onNodeWithText("最大输出 · Token").performTextReplacement("512")
+        rule.onNodeWithText("应用").assertIsEnabled()
+        screenshot("model-context")
+        rule.onNodeWithText("恢复默认").performClick()
+        rule.runOnIdle { assertNull(applied);assertEquals(2,changes) }
+    }
+
     private fun imeVisible() = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
         ?.isVisible(WindowInsetsCompat.Type.ime()) == true
 

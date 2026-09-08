@@ -42,7 +42,8 @@ data class ApiProfile(
     val mangaAnalysisModel: String = "",
     val extraHeaders: String = "",
     val cachedModels: List<ApiModel> = emptyList(),
-    val lastLatencyMs: Long? = null
+    val lastLatencyMs: Long? = null,
+    val modelContexts: Map<String, ModelContextLimits> = emptyMap()
 )
 
 fun ApiProfile.normalized(): ApiProfile = copy(
@@ -168,6 +169,7 @@ class ConfigStore(context: Context) {
                     .put("imagePath", profile.imagePath)
                     .put("imageEditPath", profile.imageEditPath)
                     .put("imageApiMode", profile.imageApiMode)
+                    .put("modelContexts", ModelContextSettings.encode(profile.modelContexts))
                     .put("chatModel", profile.chatModel)
                     .put("imageModel", profile.imageModel)
                     .put("mangaAnalysisModel", profile.mangaAnalysisModel)
@@ -206,6 +208,7 @@ class ConfigStore(context: Context) {
                     imagePath = item.optString("imagePath").ifBlank { "/v1/images/generations" },
                     imageEditPath = item.optString("imageEditPath").ifBlank { "/v1/images/edits" },
                     imageApiMode = item.optString("imageApiMode").ifBlank { IMAGE_API_MODE_AUTO },
+                    modelContexts = ModelContextSettings.decode(item.optJSONObject("modelContexts")),
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),

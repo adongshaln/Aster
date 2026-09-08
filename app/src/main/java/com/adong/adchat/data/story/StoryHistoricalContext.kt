@@ -8,7 +8,7 @@ import org.json.JSONObject
 internal object StoryHistoricalContext {
     private fun JSONArray.rows()=(0 until length()).map(::getJSONObject)
     private fun JSONObject.nullable(key:String)=optString(key).takeUnless { isNull(key) || it.isBlank() }
-    fun compose(db: SQLiteDatabase, source: StoryMessageWithRevision, snapshot: JSONObject, instruction: String, originalInput: String? = null): StoryContextResult {
+    fun compose(db: SQLiteDatabase, source: StoryMessageWithRevision, snapshot: JSONObject, instruction: String, originalInput: String? = null, budget: StoryContextBudget = StoryContextBudget()): StoryContextResult {
         val states=snapshot.getJSONArray("revisions").rows().associate { it.getString("id") to it.getString("state") }
         val history=snapshot.getJSONArray("messages").rows().map { m ->
             val revision=m.getString("active_revision_id")
@@ -49,6 +49,6 @@ internal object StoryHistoricalContext {
         val coverage=snapshot.getJSONArray("completed").rows().map { it.getString("source_revision_id") }.toSet()
         val memory=StoryContextMemorySnapshot(visible,emptyList(),coverage,
             visible.filter { it.summarySourceRevisionIds.isNotEmpty() }.associate { it.id to it.summarySourceRevisionIds.toSet() })
-        return StoryRewriteContext.compose(source,instruction,memory,history,originalInput)
+        return StoryRewriteContext.compose(source,instruction,memory,history,originalInput,budget)
     }
 }
