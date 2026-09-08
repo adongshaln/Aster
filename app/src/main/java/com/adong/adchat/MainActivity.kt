@@ -296,7 +296,7 @@ internal fun AppDrawer(
                 Spacer(Modifier.width(4.dp))
                 AsterWordmark(size = 24)
                 Spacer(Modifier.weight(1f))
-                AsterIconButton(Icons.Rounded.EditSquare, "新建", { showNewActions = true }, enabled = !vm.isChatLoading)
+                AsterIconButton(Icons.Rounded.EditNote, "新建", { showNewActions = true }, enabled = !vm.isChatLoading)
                 AsterIconButton(Icons.Rounded.Close, "关闭侧栏", onClose)
             }
             OutlinedTextField(
