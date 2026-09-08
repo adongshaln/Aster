@@ -4,6 +4,7 @@ on:
   push:
     branches: ["design/**", "feature/story-mode"]
     paths:
+      - "app/src/main/java/com/adong/adchat/MainActivity.kt"
       - "app/src/main/java/com/adong/adchat/ui/**"
       - "app/src/androidTest/**"
       - ".github/workflows/ui-preview.yml"
