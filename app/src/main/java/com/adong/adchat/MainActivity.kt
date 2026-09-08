@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
     }?.trim()?.takeIf { it.isNotBlank() }
 }
 
-private enum class AppPage(val label: String, val icon: ImageVector) {
+internal enum class AppPage(val label: String, val icon: ImageVector) {
     Chat("对话", Icons.Rounded.Forum),
     Story("故事", Icons.Rounded.AutoStories),
     Draw("创作", Icons.Rounded.AutoAwesome),
@@ -253,7 +253,7 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
 }
 
 @Composable
-private fun AppDrawer(
+internal fun AppDrawer(
     vm: MainViewModel,
     currentPage: AppPage,
     onNewChat: () -> Unit,
@@ -287,52 +287,22 @@ private fun AppDrawer(
         drawerContentColor = Ink,
         drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
         windowInsets = WindowInsets(0, 0, 0, 0),
-        modifier = Modifier.widthIn(max = 360.dp).fillMaxHeight()
+        modifier = Modifier.fillMaxWidth(.90f).widthIn(max = 360.dp).fillMaxHeight()
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                AsterMark(Modifier.size(46.dp))
-                AsterWordmark()
+            Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                AsterMark(Modifier.size(32.dp))
+                Spacer(Modifier.width(4.dp))
+                AsterWordmark(size = 24)
                 Spacer(Modifier.weight(1f))
+                AsterIconButton(Icons.Rounded.EditSquare, "新建", { showNewActions = true }, enabled = !vm.isChatLoading)
                 AsterIconButton(Icons.Rounded.Close, "关闭侧栏", onClose)
-            }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                AppPage.entries.filter { it != AppPage.Settings }.forEach { item ->
-                    val selected = currentPage == item
-                    Surface(
-                        onClick = { onNavigate(item) },
-                        modifier = Modifier.weight(1f),
-                        color = if (selected) Night else Surface,
-                        contentColor = if (selected) WarmWhite else MutedInk,
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Column(Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(item.icon, null, Modifier.size(20.dp))
-                            Spacer(Modifier.height(6.dp))
-                            Text(item.label, style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(18.dp))
-            Button(
-                onClick = { showNewActions = true },
-                enabled = !vm.isChatLoading,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = WarmWhite)
-            ) {
-                Icon(Icons.Rounded.Add, null, Modifier.size(20.dp))
-                Spacer(Modifier.width(9.dp))
-                Text(if (vm.isChatLoading) "当前对话正在生成" else "新建")
             }
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium,
                 leadingIcon = { Icon(Icons.Rounded.Search, null, Modifier.size(19.dp)) },
@@ -343,9 +313,34 @@ private fun AppDrawer(
                     focusedContainerColor = Surface,
                     unfocusedContainerColor = Surface,
                     focusedBorderColor = Accent,
-                    unfocusedBorderColor = Hairline
+                    unfocusedBorderColor = Color.Transparent
                 )
             )
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                AppPage.entries.filter { it != AppPage.Settings }.chunked(2).forEach { pair ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        pair.forEach { item ->
+                            val selected = currentPage == item
+                            Surface(onClick = { onNavigate(item) }, modifier = Modifier.weight(1f),
+                                color = if (selected) AccentSoft else Color.Transparent,
+                                contentColor = if (selected) Accent else MutedInk, shape = RoundedCornerShape(12.dp)) {
+                                Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(item.icon, null, Modifier.size(18.dp))
+                                    Text(item.label, Modifier.padding(start = 10.dp), style = MaterialTheme.typography.labelLarge)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), color = Hairline)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(if (query.isBlank()) "对话记录" else "搜索结果", color = Ink, style = MaterialTheme.typography.labelLarge)
+                Text("${visibleConversations.size}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+            }
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
@@ -474,53 +469,29 @@ private fun ConversationRow(
     onDelete: () -> Unit
 ) {
     var showActions by remember { mutableStateOf(false) }
-    val format = remember { SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()) }
-    Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .background(if (selected) AccentSoft else Color.Transparent)
-            .clickable(onClick = onClick).padding(start = 12.dp, end = 5.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Color.White.copy(alpha = .72f) else Canvas),
-            contentAlignment = Alignment.Center
-        ) {
-            if (generating) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(19.dp),
-                    color = Accent,
-                    trackColor = Accent.copy(alpha = .18f),
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Icon(Icons.Rounded.ChatBubbleOutline, null, tint = if (selected) Accent else MutedInk, modifier = Modifier.size(18.dp))
+    val preview = remember(conversation.messages, generating) {
+        if (generating) "正在生成…" else conversation.messages.lastOrNull { it.content.isNotBlank() }
+            ?.content?.take(180)?.replace(Regex("\\s+"), " ")?.trim().orEmpty().ifBlank { "还没有消息" }
+    }
+    Surface(onClick = onClick, color = if (selected) Surface else Color.Transparent,
+        shape = RoundedCornerShape(14.dp),
+        border = if (selected) BorderStroke(1.dp, Hairline) else null,
+        modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(3.dp).height(26.dp).clip(RoundedCornerShape(2.dp))
+                .background(if (selected) Accent else Color.Transparent))
+            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                Text(conversation.title.ifBlank { "未命名对话" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium)
+                Spacer(Modifier.height(4.dp))
+                Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = if (generating) Accent else MutedInk, style = MaterialTheme.typography.labelMedium)
             }
+            if (generating) CircularProgressIndicator(Modifier.padding(horizontal = 4.dp).size(12.dp), color = Accent, strokeWidth = 1.5.dp)
+            AsterIconButton(Icons.Rounded.MoreHoriz, "更多：${conversation.title}", { showActions = true })
         }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                conversation.title,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-            )
-            Text(
-                if (generating) "正在生成 · ${conversation.messages.count { it.role == "user" }} 条提问"
-                else "${conversation.messages.count { it.role == "user" }} 条提问 · ${format.format(Date(conversation.updatedAt))}",
-                color = if (generating) Accent else MutedInk,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = if (generating) FontWeight.SemiBold else FontWeight.Normal
-            )
-        }
-        IconButton(
-            onClick = { showActions = true },
-            colors = IconButtonDefaults.iconButtonColors(
-                containerColor = if (selected) Color.White.copy(alpha = .72f) else Color.Transparent,
-                contentColor = MutedInk
-            ),
-            modifier = Modifier.size(36.dp)
-        ) { Icon(Icons.Rounded.MoreHoriz, "更多", Modifier.size(19.dp)) }
     }
     if (showActions) {
         AdActionSheet(

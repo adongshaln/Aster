@@ -6,5 +6,5 @@ package com.adong.adchat.ui.components
  * turning each paragraph into a large visual block.
  */
 internal const val READING_BODY_FONT_SP = 16f
-internal const val READING_BODY_LINE_SP = 26f
-internal const val READING_BLOCK_GAP_DP = 8
+internal const val READING_BODY_LINE_SP = 28f
+internal const val READING_BLOCK_GAP_DP = 12

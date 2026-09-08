@@ -363,36 +363,24 @@ private fun ChatHeader(
 }
 
 @Composable
-private fun EmptyChat(model: String, onSuggestion: (String) -> Unit, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
-    val suggestions = listOf(
-        Triple(Icons.Rounded.Lightbulb, "理清思路", "帮我把一个复杂问题拆成清晰的行动步骤。"),
-        Triple(Icons.Rounded.EditNote, "一起创作", "我想写一点东西，帮我一起打磨想法。"),
-        Triple(Icons.Rounded.Explore, "发现新知", "我有一个想弄懂的概念，请用直观的例子解释。")
-    )
-    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 24.dp),
-        verticalArrangement = Arrangement.Center) {
-        AsterMark(Modifier.size(78.dp).offset(x = (-14).dp))
-        Spacer(Modifier.height(12.dp))
-        Text("让想法，\n慢慢成形。", style = MaterialTheme.typography.displaySmall)
-        Spacer(Modifier.height(12.dp))
-        Text("从一个问题、一点灵感，\n或任何想聊的事开始。", color = MutedInk, style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.height(30.dp))
-        if (model.isBlank()) {
-            AsterModelRow("准备开始", "连接你的第一个模型", onConfigure, icon = Icons.Rounded.AddLink)
-        } else {
-            suggestions.forEachIndexed { index, (icon, title, prompt) ->
-                Surface(onClick = { onSuggestion(prompt) }, color = Color.Transparent,
-                    shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
-                    Row(Modifier.padding(vertical = 16.dp, horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(icon, null, Modifier.size(21.dp), tint = Accent)
-                        Text(title, Modifier.weight(1f).padding(start = 14.dp), style = MaterialTheme.typography.bodyMedium)
-                        Icon(Icons.Rounded.NorthWest, null, Modifier.size(17.dp), tint = MutedInk)
-                    }
-                }
-                if (index < suggestions.lastIndex) HorizontalDivider(color = Hairline)
+internal fun EmptyChat(model: String, onSuggestion: (String) -> Unit, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
+    ConversationWelcome(
+        title = "把想法，写在这里。",
+        subtitle = "一个问题，一点灵感。\n从你在意的事情开始。",
+        label = "新的对话",
+        starters = if (model.isBlank()) emptyList() else listOf(
+            ConversationStarter("理清思路", "把复杂的事拆开", Icons.Rounded.Lightbulb, "帮我把一个复杂问题拆成清晰的行动步骤。"),
+            ConversationStarter("一起创作", "让文字慢慢成形", Icons.Rounded.EditNote, "我想写一点东西，帮我一起打磨想法。"),
+            ConversationStarter("发现新知", "从好奇开始理解", Icons.Rounded.Explore, "我有一个想弄懂的概念，请用直观的例子解释。"),
+            ConversationStarter("聊聊日常", "留一点空间给自己", Icons.Rounded.Forum, "我想和你聊聊今天发生的事情。")
+        ), onSelect = onSuggestion, modifier = modifier,
+        footer = {
+            if (model.isBlank()) {
+                Spacer(Modifier.height(24.dp))
+                Button(onClick = onConfigure, shape = RoundedCornerShape(16.dp)) { Text("连接第一个模型") }
             }
         }
-    }
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -426,7 +414,7 @@ private fun ChatMessageItem(
             horizontalAlignment = if (user) Alignment.End else Alignment.Start
         ) {
             if (user) {
-                Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
+                Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 8.dp, 22.dp)) {
                     Column(Modifier.padding(7.dp)) {
                         if (message.attachments.isNotEmpty()) {
                             ConversationImages(message.attachments)
@@ -435,7 +423,7 @@ private fun ChatMessageItem(
                             SelectionContainer {
                                 Text(
                                     message.content,
-                                    Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                    Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
                                     style = MaterialTheme.typography.bodyLarge
                                 )
                             }
@@ -444,12 +432,7 @@ private fun ChatMessageItem(
                 }
             } else {
                 if (!waitingForFirstToken) {
-                    Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        AsterMark(Modifier.size(26.dp), tint = if (message.isError) Danger else Accent)
-                        Spacer(Modifier.width(5.dp))
-                        Text("Aster", color = MutedInk, style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Medium)
-                    }
+                    ConversationAuthor(error = message.isError)
                 }
                 if (message.toolActivities.isNotEmpty()) {
                     ToolActivitySummary(message.toolActivities)
@@ -1124,13 +1107,13 @@ private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) 
                     text = inlineMarkdown(block.text),
                     style = when (block.level) {
                         1 -> MaterialTheme.typography.titleLarge.copy(
-                            fontSize = 20.sp,
-                            lineHeight = 28.sp,
+                            fontSize = 23.sp,
+                            lineHeight = 32.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         2 -> MaterialTheme.typography.titleMedium.copy(
-                            fontSize = 17.5.sp,
-                            lineHeight = 25.sp,
+                            fontSize = 20.sp,
+                            lineHeight = 29.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         3 -> bodyStyle.copy(fontWeight = FontWeight.SemiBold, lineHeight = 24.sp)
@@ -1139,11 +1122,12 @@ private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) 
                     color = if (error) Danger else Ink,
                     selectable = !showCursor,
                     showWritingCursor = hasCursor,
-                    modifier = Modifier.padding(top = if (block.level == 1) 8.dp else 3.dp)
+                    modifier = Modifier.padding(top = if (index == 0) 0.dp else 16.dp, bottom = 4.dp)
                 )
                 2 -> MarkdownListRow(block.marker, block.text, error, selectable = !showCursor, showCursor = hasCursor)
                 3 -> Row(
-                    Modifier.fillMaxWidth().height(IntrinsicSize.Min).padding(vertical = 2.dp)
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(AccentSoft.copy(alpha = .45f))
+                        .padding(horizontal = 14.dp, vertical = 12.dp).height(IntrinsicSize.Min)
                 ) {
                     Box(
                         Modifier.width(2.dp).fillMaxHeight().clip(CircleShape)

@@ -52,3 +52,11 @@
 - Native UI preview **#46** succeeded: https://github.com/adongshaln/Aster/actions/runs/34175718103. XML reports **8 tests, 0 failures, 0 errors, 0 skipped**. Exported seven screenshots; visually reviewed the long editor, expanded composer and collapsed composer. Keyboard, footer and selection are visible without the prior emulator launcher dialog.
 - Delivered `Aster-build157.apk`; SHA-256 `a1480640b9c5c075e8985788df1c38397c4a330c100d2e6b6c14412f64cedd61`. Its APK v2 signing certificate matches the previously delivered build #153.
 - This is a development APK with version 2.3.0 / code 57. Main and stable release metadata remain unchanged. Device-specific IME behaviour still benefits from the user's usual phone test.
+
+## Visible home and drawer redesign — 2026-09-08
+
+- Shared `ConversationWelcome` now presents a centered welcome, concise context and a two-column starter grid in ordinary chat, story discussion and prose. Starter actions fill ordinary drafts and append to existing story drafts; discussion remains separate from prose.
+- Drawer hierarchy: compact brand/new controls, search, two-column mode navigation, history groups and settings. Selected conversations use a fine border and accent marker; recent message previews replace repeated timestamps/counts. Rename/delete stay in the common action sheet with a 48 dp menu target.
+- Both message renderers share `ConversationAuthor`. Reading uses 28 sp line height, 12 dp block gaps, stronger section headings and softly inset quotations. User bubble padding also matches across modes.
+- The previous build-157 home and drawer are frozen exclusively in Android test sources for honest before/after screenshots. Added native coverage for starter actions, story prompts, drawer search/navigation and action reachability. Existing eight interaction checks remain enabled.
+- Implementation checkpoint: pending CI and screenshot review. No signing, version, protocol or storage changes.

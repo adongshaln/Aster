@@ -394,7 +394,10 @@ private fun StoryWorkspaceContent(
 
     Box(Modifier.fillMaxSize().imePadding()) {
         if (messages.isEmpty() && !loading) {
-            StoryWorkspaceEmpty(workspace, Modifier.fillMaxSize().padding(bottom = composerHeight))
+            StoryWorkspaceEmpty(workspace, Modifier.fillMaxSize().padding(bottom = composerHeight)) { prompt ->
+                val draft = storyVm.draft(workspace)
+                storyVm.updateDraft(if (draft.isBlank()) prompt else "$draft\n\n$prompt", workspace)
+            }
         } else {
             LazyColumn(
                 state = listState,
@@ -514,14 +517,14 @@ private fun StoryMessageItem(
             horizontalAlignment = if (user) Alignment.End else Alignment.Start
         ) {
             if (user) {
-                Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)) {
+                Surface(color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp, 22.dp, 8.dp, 22.dp)) {
                     Column(Modifier.padding(7.dp)) {
                         if (row.revision.attachments.isNotEmpty()) ConversationImages(row.revision.attachments)
                         if (row.revision.content.isNotBlank()) {
                             SelectionContainer {
                                 Text(
                                     text = storyAnnotatedText(row.revision.content),
-                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = Ink
                                 )
@@ -531,11 +534,7 @@ private fun StoryMessageItem(
                 }
             } else {
                 if (!waitingForFirstToken) {
-                    Row(Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        AsterMark(Modifier.size(26.dp), tint = Accent)
-                        Spacer(Modifier.width(5.dp))
-                        Text("Aster", color = MutedInk, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
-                    }
+                    ConversationAuthor()
                 }
                 if (waitingForFirstToken) {
                     ConversationThinkingIndicator()
@@ -694,25 +693,24 @@ private fun StoryComposer(
 }
 
 @Composable
-private fun StoryWorkspaceEmpty(workspace: StoryWorkspace, modifier: Modifier = Modifier) {
-    Column(
-        modifier.padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.Start,
-        verticalArrangement = Arrangement.Center
-    ) {
-        AsterMark(Modifier.size(64.dp))
-        Spacer(Modifier.height(16.dp))
-        Text(if (workspace == StoryWorkspace.Discussion) "先聊聊这个故事。" else "从这里开始正文。", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(9.dp))
-        Text(
-            if (workspace == StoryWorkspace.Discussion)
-                "设定、人物、文风和剧情计划都可以先讨论。没有明确采用的方案，不会自动变成正式设定。"
-            else
-                "告诉 Aster 剧情方向、对白或人物行动。正文与讨论分开保存，不会把废案混进故事。",
-            color = MutedInk,
-            style = MaterialTheme.typography.bodyLarge
-        )
-    }
+internal fun StoryWorkspaceEmpty(workspace: StoryWorkspace, modifier: Modifier = Modifier, onSelect: (String) -> Unit) {
+    val discussion = workspace == StoryWorkspace.Discussion
+    ConversationWelcome(
+        title = if (discussion) "故事，从想象开始。" else "让故事，继续发生。",
+        subtitle = if (discussion) "聊设定、人物与文风。\n决定采用后，再写进故事。" else "给出剧情方向或人物行动。\n让这一幕从这里展开。",
+        label = if (discussion) "讨论设定" else "创作正文",
+        starters = if (discussion) listOf(
+            ConversationStarter("构建设定", "为故事搭一个世界", Icons.Rounded.Public, "我想先讨论这个故事的世界观，请和我一起完善设定。"),
+            ConversationStarter("打磨人物", "动机、性格与关系", Icons.Rounded.PeopleOutline, "我想讨论一个人物的性格、动机和人物关系，暂时不要开始正文。"),
+            ConversationStarter("寻找文风", "确定叙述的声音", Icons.Rounded.EditNote, "先和我讨论故事的叙述视角、文风和节奏，暂时不要写正文。"),
+            ConversationStarter("梳理走向", "讨论下一幕的可能", Icons.Rounded.Explore, "我想讨论接下来的剧情走向，先比较几种可能，不要把讨论当作已发生的剧情。")
+        ) else listOf(
+            ConversationStarter("写下开场", "从一个场景切入", Icons.Rounded.AutoStories, "请依据已确认的设定写故事开场。我希望这一幕这样展开："),
+            ConversationStarter("推进剧情", "给故事一个方向", Icons.Rounded.NorthEast, "接下来的剧情方向是："),
+            ConversationStarter("人物对话", "让角色开口说话", Icons.Rounded.Forum, "我想创作一段人物对话，参与的人物和情境是："),
+            ConversationStarter("描写场景", "光线、声音与氛围", Icons.Rounded.Landscape, "请描写这个场景，地点、氛围和关键细节是：")
+        ), onSelect = onSelect, modifier = modifier
+    )
 }
 
 @Composable
@@ -722,19 +720,18 @@ private fun StoryEmptyState(onOpenDrawer: () -> Unit, onCreateStory: () -> Unit)
             AsterIconButton(Icons.Rounded.Menu, "打开侧栏", onOpenDrawer)
             Text("故事", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
         }
-        Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 30.dp), verticalArrangement = Arrangement.Center) {
-            AsterMark(Modifier.size(74.dp))
-            Spacer(Modifier.height(18.dp))
-            Text("写一个会记得的故事。", style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(10.dp))
-            Text("先讨论设定，或直接开始正文。Aster 会把两者分开处理。", color = MutedInk, style = MaterialTheme.typography.bodyLarge)
-            Spacer(Modifier.height(28.dp))
-            Button(onClick = onCreateStory, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent)) {
-                Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(7.dp))
-                Text("新建故事")
+        ConversationWelcome(
+            title = "写一个会记得的故事。", subtitle = "从设定开始，陪人物走下去。", label = "故事创作",
+            starters = emptyList(), onSelect = {}, modifier = Modifier.weight(1f),
+            footer = {
+                Spacer(Modifier.height(28.dp))
+                Button(onClick = onCreateStory, shape = RoundedCornerShape(16.dp)) {
+                    Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Text("新建故事")
+                }
             }
-        }
+        )
     }
 }
 

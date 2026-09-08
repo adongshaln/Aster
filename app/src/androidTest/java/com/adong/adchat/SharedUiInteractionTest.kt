@@ -5,6 +5,9 @@ import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +20,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -26,6 +30,15 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.adong.adchat.data.ChatImageAttachment
 import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.theme.AsterTheme
+import com.adong.adchat.ui.theme.Canvas
+import com.adong.adchat.ui.MainViewModel
+import androidx.lifecycle.ViewModelProvider
+import com.adong.adchat.data.Conversation
+import com.adong.adchat.data.ChatMessage
+import com.adong.adchat.data.story.StoryWorkspace
+import com.adong.adchat.ui.screens.EmptyChat
+import com.adong.adchat.ui.screens.StoryWorkspaceEmpty
+import com.adong.adchat.ui.screens.StructuredMessageText
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -199,6 +212,78 @@ class SharedUiInteractionTest {
         rule.runOnIdle { assertEquals(0, switches) }
         rule.onNodeWithText("正文").performClick()
         rule.runOnIdle { assertEquals(1, switches) }
+    }
+
+    @Test fun welcomeCardsAndSharedReadingPreview() {
+        var screen by mutableStateOf(0)
+        var chosen = ""
+        content {
+            Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().navigationBarsPadding()) {
+                ConversationHeader(if (screen == 2) "林间回声" else "Aster", "gemini · 创作伙伴", {}, {}) {}
+                if (screen == 2) AsterSegmentedControl(listOf("讨论", "正文"), 0, {})
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (screen) {
+                        0 -> BaselineEmptyChat("gemini", {}, {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
+                        1 -> EmptyChat("gemini", { chosen = it }, {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
+                        2 -> StoryWorkspaceEmpty(StoryWorkspace.Discussion, Modifier.fillMaxSize().padding(bottom = 82.dp)) { chosen = it }
+                        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+                            .padding(horizontal = 22.dp, vertical = 20.dp).padding(bottom = 82.dp)) {
+                            ConversationAuthor()
+                            StructuredMessageText("# 雨后的森林\n\n晨光穿过树梢，在湿润的石阶上留下细碎的光。远处传来鸟鸣，溪水沿着林间的小路缓缓流过。\n\n## 留给这一幕的细节\n\n- 树叶上尚未落下的雨滴\n- 旧木门轻轻开启的声音\n- 一封还没有拆开的信\n\n> 她停在门前，没有立刻推门。那些想说的话，似乎都被清晨的风留在了身后。\n\n故事可以在这里放慢一点，让人物的犹豫通过动作显露出来。", false, false)
+                        }
+                    }
+                    ConversationComposer("", emptyList(), false, false, {}, {}, {}, {}, {}, {},
+                        modifier = Modifier.align(Alignment.BottomCenter))
+                }
+            }
+        }
+        screenshot("welcome-before")
+        rule.runOnIdle { screen = 1 }
+        rule.onNodeWithText("把想法，写在这里。").assertIsDisplayed()
+        screenshot("welcome-after")
+        rule.onNodeWithText("一起创作").performClick()
+        rule.runOnIdle { assertTrue(chosen.contains("打磨想法")); screen = 2 }
+        rule.onNodeWithText("故事，从想象开始。").assertIsDisplayed()
+        screenshot("story-welcome-after")
+        rule.onNodeWithText("梳理走向").performClick()
+        rule.runOnIdle { assertTrue(chosen.contains("不要把讨论当作已发生的剧情")); screen = 3 }
+        screenshot("reading-after")
+    }
+
+    @Test fun drawerKeepsSearchNavigationAndActionsReachable() {
+        lateinit var vm: MainViewModel
+        val now = System.currentTimeMillis()
+        var redesigned by mutableStateOf(false)
+        var destination: AppPage? = null
+        var selected = ""
+        rule.runOnUiThread {
+            vm = ViewModelProvider(rule.activity)[MainViewModel::class.java]
+            vm.conversations.clear()
+            vm.conversations.addAll(listOf(
+                Conversation(id = "forest", title = "林间回声 · 第一幕", messages = listOf(ChatMessage(role = "assistant", content = "晨光穿过树梢，她在旧木门前停下。")), updatedAt = now),
+                Conversation(id = "notes", title = "晨间笔记", messages = listOf(ChatMessage(role = "user", content = "把今天最重要的三件事整理一下。")), updatedAt = now - 3600000),
+                Conversation(id = "ideas", title = "一个新故事的想法", messages = listOf(ChatMessage(role = "assistant", content = "我们可以先从人物的动机开始。")), updatedAt = now - 86400000),
+                Conversation(id = "reading", title = "最近读到的一句话", messages = listOf(ChatMessage(role = "user", content = "帮我理解这段文字中的比喻。")), updatedAt = now - 172800000)
+            ))
+            vm.selectConversation("forest")
+        }
+        content {
+            if (redesigned) AppDrawer(vm, AppPage.Chat, {}, {}, { selected = it }, { destination = it }, {})
+            else BaselineAppDrawer(vm, AppPage.Chat, {}, {}, {}, {}, {})
+        }
+        screenshot("drawer-before")
+        rule.runOnIdle { redesigned = true }
+        rule.onNodeWithText("对话记录").assertIsDisplayed()
+        screenshot("drawer-after")
+        rule.onNodeWithText("故事").performClick()
+        rule.runOnIdle { assertEquals(AppPage.Story, destination) }
+        rule.onNode(hasSetTextAction()).performTextReplacement("林间")
+        rule.onNodeWithText("晨间笔记").assertDoesNotExist()
+        rule.onNodeWithText("林间回声 · 第一幕").performClick()
+        rule.runOnIdle { assertEquals("forest", selected) }
+        rule.onNodeWithContentDescription("更多：林间回声 · 第一幕").performClick()
+        rule.onNodeWithText("重命名").assertIsDisplayed()
+        rule.onNodeWithText("删除对话").assertIsDisplayed()
     }
 
     private fun imeVisible() = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
