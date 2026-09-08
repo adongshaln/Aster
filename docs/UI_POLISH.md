@@ -44,3 +44,11 @@
 - Development branch only; no version, signing, database or request-protocol changes. CI and visual verification pending at this checkpoint.
 
 - Validation follow-up: explicit selection hand-off prevents Compose blur/disposal callbacks from clearing the editor selection. Scroll interruption no longer terminates the ordinary chat streaming collector. Native run #45 exposed the selection bug and a separate Pixel Launcher ANR (visible in its screenshot) that stole IME focus; the runner now stops only that emulator launcher and test setup dismisses only its specific ANR dialog, leaving Aster errors visible.
+
+### Verified delivery checkpoint
+
+- Source commit: `b7c6a4e10af5794adb01c0dd90ce988cab048c3d` on `feature/story-mode`.
+- Android build **#157** succeeded: https://github.com/adongshaln/Aster/actions/runs/34175718082 (unit tests, Release build, fixed signing).
+- Native UI preview **#46** succeeded: https://github.com/adongshaln/Aster/actions/runs/34175718103. XML reports **8 tests, 0 failures, 0 errors, 0 skipped**. Exported seven screenshots; visually reviewed the long editor, expanded composer and collapsed composer. Keyboard, footer and selection are visible without the prior emulator launcher dialog.
+- Delivered `Aster-build157.apk`; SHA-256 `a1480640b9c5c075e8985788df1c38397c4a330c100d2e6b6c14412f64cedd61`. Its APK v2 signing certificate matches the previously delivered build #153.
+- This is a development APK with version 2.3.0 / code 57. Main and stable release metadata remain unchanged. Device-specific IME behaviour still benefits from the user's usual phone test.
