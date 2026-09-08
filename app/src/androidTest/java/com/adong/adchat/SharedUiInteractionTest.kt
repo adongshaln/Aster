@@ -43,6 +43,7 @@ class SharedUiInteractionTest {
     @Test fun ordinaryComposerCollapsesWithoutLosingDraft() = checkKeyboard("chat")
     @Test fun storyComposerCollapsesWithoutLosingDraft() = checkKeyboard("story")
 
+    @OptIn(ExperimentalTestApi::class)
     @Test fun expandedDraftPreservesTextAndSelection() {
         var draft by mutableStateOf("第一行\n第二行")
         var sent = ""

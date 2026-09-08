@@ -81,6 +81,9 @@ import com.adong.adchat.ui.markdown.containsMarkdownTable
 import com.adong.adchat.ui.markdown.markdownTableToTsv
 import com.adong.adchat.ui.markdown.parseMarkdownTableAt
 import com.adong.adchat.ui.theme.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -176,7 +179,13 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     LaunchedEffect(streamScrollSignals, vm.activeConversationId) {
         streamScrollSignals.collect {
             if (vm.messages.isNotEmpty() && autoFollow && !userDragging && !composerFocused) {
-                listState.animateScrollToItem(vm.messages.size)
+                try {
+                    listState.animateScrollToItem(vm.messages.size)
+                } catch (cancelled: CancellationException) {
+                    // A gesture or detail reveal cancels this scroll, not the signal collector.
+                    // Still propagate cancellation when the conversation itself leaves composition.
+                    currentCoroutineContext().ensureActive()
+                }
             }
         }
     }
