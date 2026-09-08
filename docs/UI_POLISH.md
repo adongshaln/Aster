@@ -60,3 +60,12 @@
 - Both message renderers share `ConversationAuthor`. Reading uses 28 sp line height, 12 dp block gaps, stronger section headings and softly inset quotations. User bubble padding also matches across modes.
 - The previous build-157 home and drawer are frozen exclusively in Android test sources for honest before/after screenshots. Added native coverage for starter actions, story prompts, drawer search/navigation and action reachability. Existing eight interaction checks remain enabled.
 - Implementation checkpoint: pending CI and screenshot review. No signing, version, protocol or storage changes.
+
+### Verified visible-update delivery
+
+- Product source: `8171407c3f9d36c84034faf52f6a10d6b0716daa`; Android build #160 succeeded: https://github.com/adongshaln/Aster/actions/runs/34187263430. Unit tests, Release compilation and fixed signing passed.
+- Follow-up `31f0f777ccb3edd80b00301251fa882f04a8dc17` changes only screenshot timing in Android tests. Android build #161 succeeded; Native UI preview #49 succeeded: https://github.com/adongshaln/Aster/actions/runs/34187839961. XML: **10 tests, 0 failures, 0 errors, 0 skipped**.
+- Visually reviewed the ordinary welcome before/after, new drawer, story discussion welcome and reading layout. The old-drawer screenshot still captured an initial activity frame, so it is excluded from the delivered comparison; do not treat it as a valid baseline. Other reviewed captures show the intended content. Native interactions verify drawer search, mode navigation, rename/delete action availability and both starter flows, alongside existing keyboard/editor/import checks.
+- Delivered `Aster-build160.apk`, 24,191,393 bytes; SHA-256 `10c1685403f5cceeb493f0ff16fce8160ef447a8e34eaecdf017addd610f4827`. APK v2 certificate matches build #157. Size increased by 16,384 bytes.
+- `Aster-ui-comparison.html` contains a home before/after pair plus verified new drawer, discussion and reading screenshots. Baseline home is frozen build-157 code rendered in the same test fixture.
+- Development branch only, still version 2.3.0 / code 57; no main, signing-key, protocol or data migration changes. Physical-device input methods and personal visual preferences remain for user testing.
