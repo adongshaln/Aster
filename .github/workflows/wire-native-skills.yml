@@ -28,3 +28,5 @@ jobs:
           git add -A
           git commit -m "feat(skills): use native Skills API in Responses"
           git push origin HEAD:feature/skills-runtime
+
+# one-shot patch trigger 2
