@@ -430,6 +430,44 @@ class SharedUiInteractionTest {
         rule.onNodeWithContentDescription("保存 HTML 文件").assertIsEnabled()
     }
 
+    @Test fun generatedPdfAndOfficeFilesHaveRealBytesAndSurviveSaving() {
+        val markdown = "# 中文文档验证\n\n| 项目 | 金额 |\n| --- | --- |\n| 木材 | 12.5 |\n\n" +
+            (1..90).joinToString("\n\n") { "第${it}段：这是用于验证自动分页、中文字体以及正文完整性的文档内容。Document paragraph $it." } + "\n\nEND_OF_DOCUMENT"
+        val samples = listOf(
+            Triple("generated-sample.pdf", com.adong.adchat.data.DocumentFiles.PDF, markdown),
+            Triple("generated-sample.docx", com.adong.adchat.data.DocumentFiles.DOCX, markdown),
+            Triple("generated-sample.xlsx", com.adong.adchat.data.DocumentFiles.XLSX, """{"sheets":[{"name":"预算","rows":[["项目","金额"],["木材",12.5],["石材",20],["合计",{"formula":"SUM(B2:B3)"}]]},{"name":"人物","rows":[["姓名","状态"],["爱丽丝","已确认"]]}]}"""),
+            Triple("generated-sample.pptx", com.adong.adchat.data.DocumentFiles.PPTX, """{"slides":[{"title":"故事创作计划","bullets":["建立世界观与人物关系","讨论设定后再推进正文"]},{"title":"下一步行动","bullets":["确认关键剧情","完成第一章"]}]}""")
+        )
+        samples.forEach { (name, mime, source) ->
+            val call = com.adong.adchat.data.PendingToolCall(name, name, com.adong.adchat.data.CREATE_FILE_TOOL,
+                org.json.JSONObject().put("filename", name).put("mime_type", mime).put("content", source).toString())
+            val result = com.adong.adchat.data.executeAppTool(call)
+            assertEquals(result.output, com.adong.adchat.data.TOOL_STATUS_COMPLETED, result.activity.status)
+            val file = requireNotNull(result.generatedFile)
+            val attachment = com.adong.adchat.data.ChatFileAttachment(name = file.name, mimeType = file.mimeType, content = file.content, encoding = file.encoding)
+            val bytes = attachment.bytes()
+            assertEquals(bytes.size, attachment.sizeBytes)
+            if (mime == com.adong.adchat.data.DocumentFiles.PDF) {
+                assertTrue(bytes.copyOfRange(0, 5).decodeToString().startsWith("%PDF-"))
+                val local = File(rule.activity.cacheDir, name).apply { writeBytes(bytes) }
+                android.graphics.pdf.PdfRenderer(android.os.ParcelFileDescriptor.open(local, android.os.ParcelFileDescriptor.MODE_READ_ONLY)).use {
+                    assertTrue("PDF must paginate", it.pageCount >= 3)
+                }
+            } else assertEquals("PK", bytes.copyOfRange(0, 2).decodeToString())
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/aster-ui-preview")
+            }
+            val resolver = rule.activity.contentResolver
+            val uri = requireNotNull(resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values))
+            requireNotNull(resolver.openOutputStream(uri)).use { it.write(bytes) }
+            val saved = requireNotNull(resolver.openInputStream(uri)).use { it.readBytes() }
+            assertArrayEquals(bytes, saved)
+        }
+    }
+
     private fun imeVisible() = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
         ?.isVisible(WindowInsetsCompat.Type.ime()) == true
 

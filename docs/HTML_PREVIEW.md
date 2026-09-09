@@ -2,8 +2,8 @@
 
 普通聊天和故事的讨论/正文工作区复用 `StructuredMessageText` → `HtmlArtifactCard`。
 
-- 完整的 html / htm fenced code block 提供源码、预览、全屏、复制、保存 `.html`。
-- 流式/未闭合代码块仅显示源码，不运行脚本。切换预览才创建 WebView；切回源码、离开卡片和关闭全屏会销毁对应 WebView。全屏期间释放内联预览。
+- 完整的 html / htm fenced code block 默认显示内容预览，提供全屏、复制代码、保存 `.html`。
+- 流式/未闭合代码块显示生成中提示，不外显代码、不运行脚本。完成后自动创建内联 WebView；离开卡片和关闭全屏会销毁对应 WebView。全屏期间释放内联预览。
 - Chat / Responses 的 create_file 白名单增加 `text/html`，保留 UTF-8 原文，现有文件持久化无需 migration。HTML 工具附件使用同一卡片。
 - 故事沿用现有禁止副作用工具的规则，通过 HTML 代码块提供预览与导出；无需开启创建文件工具。
 - 应提示模型输出自包含 HTML：内嵌 CSS/JS、SVG/Canvas/data 图片，不依赖 CDN。旧聊天中的完整 HTML 代码块也可预览。
@@ -14,7 +14,7 @@ Android 参考：https://developer.android.com/reference/android/webkit/WebSetti
 
 验证：ToolProtocol 单测覆盖两种接口白名单与文件内容/文件名；包装单测覆盖 srcdoc 逃逸与尺寸上限；原生 UI 测试通过实际 WebView 验证完成后预览、JS/CSS 交互、父页面/存储/网络隔离及全屏切换。
 
-## 已验证交付：Build 168
+## 历史验证记录：Build 168（旧版手动切换预览）
 
 - 产品提交：`79fadf9c69afb934915b4ecfcaf987460fc0a9c5`（feature/story-mode）。
 - Android Build #168：单元测试、Release 编译、固定签名构建成功，run `34296710923`。
