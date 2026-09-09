@@ -716,7 +716,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         usage = result.usage,
                         citations = result.citations,
                         generatedFiles = result.generatedFiles.map { file ->
-                            ChatFileAttachment(name = file.name, mimeType = file.mimeType, content = file.content)
+                            ChatFileAttachment(name = file.name, mimeType = file.mimeType, content = file.content, encoding = file.encoding)
                         },
                         toolActivities = result.toolActivities
                     )
@@ -818,7 +818,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.IO) {
                     val resolver = getApplication<Application>().contentResolver
                     resolver.openOutputStream(target, "w")?.use { output ->
-                        output.write(file.content.toByteArray(Charsets.UTF_8))
+                        output.write(file.bytes())
                     } ?: throw IllegalStateException("无法打开目标文件")
                 }
             }.onSuccess {

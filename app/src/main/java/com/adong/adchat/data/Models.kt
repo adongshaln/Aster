@@ -342,16 +342,24 @@ data class ChatMessage(
 data class GeneratedFileDraft(
     val name: String,
     val mimeType: String,
-    val content: String
+    val content: String,
+    val encoding: String = "utf-8"
 )
 
 data class ChatFileAttachment(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val mimeType: String,
-    val content: String
+    val content: String,
+    val encoding: String = "utf-8"
 ) {
-    val sizeBytes: Int get() = content.toByteArray(Charsets.UTF_8).size
+    val sizeBytes: Int get() = if (encoding == "base64") content.length / 4 * 3 - content.takeLast(2).count { it == '=' }
+        else content.toByteArray(Charsets.UTF_8).size
+    fun bytes(): ByteArray = when (encoding) {
+        "utf-8" -> content.toByteArray(Charsets.UTF_8)
+        "base64" -> java.util.Base64.getDecoder().decode(content)
+        else -> error("不支持的文件编码")
+    }
 }
 
 data class ChatCitation(

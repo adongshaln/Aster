@@ -209,7 +209,8 @@ class ConversationStore(context: Context) {
                 .put("id", file.id)
                 .put("name", file.name)
                 .put("mimeType", file.mimeType)
-                .put("content", file.content))
+                .put("content", file.content)
+                .put("encoding", file.encoding))
         }
     }
 
@@ -221,7 +222,8 @@ class ConversationStore(context: Context) {
                 id = item.optString("id").ifBlank { java.util.UUID.randomUUID().toString() },
                 name = item.optString("name").ifBlank { "document.txt" },
                 mimeType = item.optString("mimeType").ifBlank { "text/plain" },
-                content = item.optString("content")
+                content = item.optString("content"),
+                encoding = item.optString("encoding", "utf-8")
             ))
         }
     }

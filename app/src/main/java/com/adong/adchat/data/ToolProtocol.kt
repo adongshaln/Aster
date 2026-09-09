@@ -82,15 +82,15 @@ private fun createFileDefinition(responsesApi: Boolean): JSONObject {
                 .put("description", "The user-facing file name, including a supported extension."))
             .put("mime_type", JSONObject()
                 .put("type", "string")
-                .put("enum", JSONArray(listOf("text/markdown", "text/plain", "application/json", "text/csv", "text/html"))))
+                .put("enum", JSONArray(MIME_EXTENSIONS.keys.toList())))
             .put("content", JSONObject()
                 .put("type", "string")
-                .put("description", "The complete UTF-8 text content of the file.")))
+                .put("description", DocumentFiles.CONTENT_HELP)))
         .put("required", JSONArray(listOf("filename", "mime_type", "content")))
         .put("additionalProperties", false)
     val definition = JSONObject()
         .put("name", CREATE_FILE_TOOL)
-        .put("description", "Create a real downloadable text file only when the user explicitly asks for a file or export. Do not use it merely because a normal answer contains Markdown formatting. For HTML pages, use text/html and a complete self-contained document with inline CSS/JavaScript and embedded images; the app previews offline without external resources.")
+        .put("description", "Create a real downloadable file (PDF, DOCX, XLSX, PPTX, HTML or text) only when the user explicitly asks for a file or export. Do not use it merely because a normal answer contains Markdown formatting. For HTML pages, use text/html and a complete self-contained document with inline CSS/JavaScript and embedded images; the app previews offline without external resources.")
         .put("parameters", parameters)
     return if (responsesApi) definition.put("type", "function").put("strict", true) else definition
 }
@@ -225,17 +225,15 @@ internal fun executeAppTool(call: PendingToolCall): ToolExecutionResult {
         val mimeType = arguments.optString("mime_type")
         require(mimeType in MIME_EXTENSIONS) { "不支持的文件类型" }
         val content = arguments.optString("content")
-        val file = GeneratedFileDraft(
-            name = sanitizeFileName(arguments.optString("filename"), mimeType),
-            mimeType = mimeType,
-            content = content
-        )
+        val filename = sanitizeFileName(arguments.optString("filename"), mimeType)
+        val file = if (mimeType in DocumentFiles.extensions) DocumentFiles.create(filename, mimeType, content)
+            else GeneratedFileDraft(name = filename, mimeType = mimeType, content = content)
         ToolExecutionResult(
             output = JSONObject()
                 .put("ok", true)
                 .put("filename", file.name)
                 .put("mime_type", file.mimeType)
-                .put("size_bytes", file.content.toByteArray(Charsets.UTF_8).size)
+                .put("size_bytes", ChatFileAttachment(name = file.name, mimeType = file.mimeType, content = file.content, encoding = file.encoding).sizeBytes)
                 .toString(),
             generatedFile = file,
             activity = ChatToolActivity(call.callId, CREATE_FILE_TOOL, "已创建 ${file.name}", TOOL_STATUS_COMPLETED)
@@ -314,7 +312,7 @@ private val MIME_EXTENSIONS = mapOf(
     "application/json" to "json",
     "text/csv" to "csv",
     "text/html" to "html"
-)
+) + DocumentFiles.extensions
 
 private val ALLOWED_EXTENSIONS = MIME_EXTENSIONS.values.toSet()
 
