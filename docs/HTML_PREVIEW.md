@@ -25,3 +25,8 @@ Android 参考：https://developer.android.com/reference/android/webkit/WebSetti
 - SHA-256：`6a0b9ac158d3eb6768b007a053ea01a4d6a9a561689842698f7bdd21a5df6a95`。
 - 签名证书 SHA-256：`3e4da1d062819d9f1065f85654de71ae5f0ad93aa10c52fc85faad0338a4e3b1`，与 Build 165 一致。
 - main、versionName 2.3.0 / versionCode 57 和原签名配置均未改动。
+
+## 默认预览交付：Build 169
+
+完成后自动显示内联内容，去掉源码/眼睛切换按钮；生成中仅显示状态，源码不外显。保留复制 HTML 代码、下载和全屏。普通聊天和故事模式共用此行为。
+产品提交 cc16910b65a12f36a51b88d3bd53ace330199d5f；Android #169、Native UI #57 均成功，14 项原生测试通过，内联和全屏截图人工核对正常。
