@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import kotlin.coroutines.cancellation.CancellationException
 
-class ApiRepository(private val skillLoader: SkillLoader = GitHubSkillRuntime) {
+class ApiRepository internal constructor(private val skillLoader: SkillLoader = GitHubSkillRuntime) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
