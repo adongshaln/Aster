@@ -125,17 +125,34 @@ class StoryCompletionContractTest {
         try {
             val skillUrl = "https://github.com/example/presentation/tree/main/skills/ppt"
             var loads = 0
-            val repository = ApiRepository(SkillLoader { url ->
-                loads++
-                assertEquals(skillUrl, url)
-                LoadedSkill(
-                    name = "ppt",
-                    sourceUrl = url,
-                    resolvedUrl = "https://raw.githubusercontent.com/example/presentation/main/skills/ppt/SKILL.md",
-                    sha256 = "responses-sha",
-                    content = "# REAL RESPONSES SKILL\nPrefer visual storytelling over bullet walls."
-                )
-            })
+            val repository = ApiRepository(
+                skillLoader = SkillLoader { url ->
+                    loads++
+                    assertEquals(skillUrl, url)
+                    LoadedSkill(
+                        name = "ppt",
+                        sourceUrl = url,
+                        resolvedUrl = "https://raw.githubusercontent.com/example/presentation/main/skills/ppt/SKILL.md",
+                        sha256 = "responses-sha",
+                        content = "# REAL RESPONSES SKILL\nPrefer visual storytelling over bullet walls."
+                    )
+                },
+                skillBundleLoader = SkillBundleLoader { url ->
+                    assertEquals(skillUrl, url)
+                    SkillBundle(
+                        name = "ppt",
+                        sourceUrl = url,
+                        resolvedSkillUrl = "https://raw.githubusercontent.com/example/presentation/main/skills/ppt/SKILL.md",
+                        skillMarkdown = "# bundle only for native capability probe",
+                        sha256 = "bundle-sha",
+                        fileCount = 1,
+                        zipBytes = byteArrayOf(1)
+                    )
+                },
+                nativeSkillUploader = NativeSkillUploader { _, _ ->
+                    throw NativeSkillsUnsupportedException("native Skills intentionally unsupported in fallback contract test")
+                }
+            )
             server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
                 """{"id":"resp-1","status":"completed","output":[{"type":"function_call","id":"item-1","call_id":"skill-call","name":"load_skill","arguments":"{\"url\":\"$skillUrl\"}"}]}"""))
             server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
