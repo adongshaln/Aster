@@ -10,6 +10,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NativeSkillsTest {
+    private fun bundle(sourceUrl: String = "https://github.com/example/slides/tree/main/presentation") = SkillBundle(
+        name = "presentation-design",
+        sourceUrl = sourceUrl,
+        resolvedSkillUrl = "https://raw.githubusercontent.com/example/slides/main/presentation/SKILL.md",
+        skillMarkdown = "# Presentation skill",
+        sha256 = "bundle-sha",
+        fileCount = 2,
+        zipBytes = "real-zip-payload".toByteArray()
+    )
+
     @Test
     fun skillsEndpointIsDerivedNextToResponsesEndpoint() {
         assertEquals(
@@ -24,6 +34,62 @@ class NativeSkillsTest {
             "https://gateway.example/v1/skills",
             NativeSkillsApi.skillsUrl(ApiProfile(baseUrl = "https://ignored.example", responsesPath = "https://gateway.example/v1/responses"))
         )
+    }
+
+    @Test
+    fun nativeUploaderActuallyPostsZipToSkillsEndpointAndUsesReturnedId() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"id":"skill_provider_123","object":"skill","default_version":"4","latest_version":"4","name":"presentation-design","description":"Slides"}"""
+            ))
+            val profile = ApiProfile(
+                baseUrl = server.url("/").toString().trimEnd('/'),
+                responsesPath = "/v1/responses",
+                apiKey = "real-test-key",
+                extraHeaders = "X-Aster-Test: skills"
+            )
+
+            val reference = NativeSkillsApi.upload(profile, bundle())
+            val request = server.takeRequest()
+
+            assertEquals("POST", request.method)
+            assertEquals("/v1/skills", request.path)
+            assertEquals("Bearer real-test-key", request.getHeader("Authorization"))
+            assertEquals("skills", request.getHeader("X-Aster-Test"))
+            assertTrue(request.getHeader("Content-Type").orEmpty().startsWith("multipart/form-data;"))
+            val body = request.body.readUtf8()
+            assertTrue(body.contains("name=\"files\""))
+            assertTrue(body.contains("filename=\"presentation-design.zip\""))
+            assertTrue(body.contains("real-zip-payload"))
+            assertEquals("skill_provider_123", reference.skillId)
+            assertEquals("4", reference.version)
+            assertEquals("presentation-design", reference.name)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun unsupportedSkillsEndpointIsReportedAsUnsupportedInsteadOfPretendingSuccess() {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(404).setHeader("Content-Type", "application/json").setBody(
+                """{"error":{"message":"unknown endpoint"}}"""
+            ))
+            val outcome = runCatching {
+                NativeSkillsApi.upload(
+                    ApiProfile(baseUrl = server.url("/").toString().trimEnd('/'), responsesPath = "/v1/responses"),
+                    bundle()
+                )
+            }
+            assertTrue(outcome.exceptionOrNull() is NativeSkillsUnsupportedException)
+            assertEquals("/v1/skills", server.takeRequest().path)
+        } finally {
+            server.shutdown()
+        }
     }
 
     @Test
@@ -56,20 +122,12 @@ class NativeSkillsTest {
             val bundleLoader = SkillBundleLoader { url ->
                 bundled++
                 assertEquals(sourceUrl, url)
-                SkillBundle(
-                    name = "presentation-design",
-                    sourceUrl = url,
-                    resolvedSkillUrl = "https://raw.githubusercontent.com/example/slides/main/presentation/SKILL.md",
-                    skillMarkdown = "# Presentation skill",
-                    sha256 = "bundle-sha",
-                    fileCount = 2,
-                    zipBytes = byteArrayOf(1, 2, 3)
-                )
+                bundle(url)
             }
-            val uploader = NativeSkillUploader { _, bundle ->
+            val uploader = NativeSkillUploader { _, skillBundle ->
                 uploaded++
-                assertEquals("bundle-sha", bundle.sha256)
-                NativeSkillReference("skill_real_123", "3", bundle.name, bundle.sha256)
+                assertEquals("bundle-sha", skillBundle.sha256)
+                NativeSkillReference("skill_real_123", "3", skillBundle.name, skillBundle.sha256)
             }
             val repository = ApiRepository(
                 skillLoader = SkillLoader { error("function fallback must not run on native success") },
@@ -125,7 +183,7 @@ class NativeSkillsTest {
                     )
                 },
                 skillBundleLoader = SkillBundleLoader { url ->
-                    SkillBundle("fallback-skill", url, url, "# bundle", "zip-sha", 1, byteArrayOf(1))
+                    bundle(url)
                 },
                 nativeSkillUploader = NativeSkillUploader { _, _ ->
                     throw NativeSkillsUnsupportedException("unsupported")
