@@ -80,7 +80,7 @@ internal fun resolveGitHubSkillTarget(
     }
 
     if (host == "raw.githubusercontent.com") {
-        require(segments.size >= 5) { "Raw GitHub Skill 链接缺少仓库、ref 或 SKILL.md 路径" }
+        require(segments.size >= 4) { "Raw GitHub Skill 链接缺少仓库、ref 或 SKILL.md 路径" }
         val owner = segments[0]
         val repository = segments[1]
         val ref = segments[2]
@@ -113,18 +113,21 @@ internal fun resolveGitHubSkillTarget(
     }
 }
 
-internal fun shouldOfferSkillLoader(history: List<ChatMessage>): Boolean {
+internal fun requestedGitHubSkillUrl(history: List<ChatMessage>): String? {
     val latest = history.lastOrNull { it.role == "user" }?.content.orEmpty()
-    if (latest.isBlank()) return false
-    val githubUrls = Regex("https://(?:www\\.)?github\\.com/[^\\s<>()]+|https://raw\\.githubusercontent\\.com/[^\\s<>()]+", RegexOption.IGNORE_CASE)
+    if (latest.isBlank()) return null
+    val urls = Regex("https://(?:www\\.)?github\\.com/[^\\s<>()]+|https://raw\\.githubusercontent\\.com/[^\\s<>()]+", RegexOption.IGNORE_CASE)
         .findAll(latest)
         .map { it.value.trimEnd('.', ',', ';', '，', '。', '；', ')', '）', ']', '】') }
         .toList()
-    if (githubUrls.isEmpty()) return false
+    if (urls.isEmpty()) return null
     val lower = latest.lowercase()
-    return lower.contains("skill") || lower.contains("技能") ||
-        githubUrls.any { it.contains("/SKILL.md", ignoreCase = true) || it.contains("/skills/", ignoreCase = true) }
+    val explicitlyRequested = lower.contains("skill") || lower.contains("技能") ||
+        urls.any { it.contains("/SKILL.md", ignoreCase = true) || it.contains("/skills/", ignoreCase = true) }
+    return urls.firstOrNull().takeIf { explicitlyRequested }
 }
+
+internal fun shouldOfferSkillLoader(history: List<ChatMessage>): Boolean = requestedGitHubSkillUrl(history) != null
 
 internal object GitHubSkillRuntime : SkillLoader {
     private val client = OkHttpClient.Builder()
@@ -158,6 +161,10 @@ internal object GitHubSkillRuntime : SkillLoader {
             )
         }
     }
+
+    internal fun resolve(sourceUrl: String): GitHubSkillTarget = resolveGitHubSkillTarget(sourceUrl, ::defaultBranch)
+
+    internal fun nameFrom(content: String, target: GitHubSkillTarget): String = skillName(content, target)
 
     private fun defaultBranch(owner: String, repository: String): String {
         val url = HttpUrl.Builder()
