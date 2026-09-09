@@ -1,0 +1,27 @@
+name: Finalize skills runtime
+
+on:
+  push:
+    branches: ["feature/skills-runtime"]
+    paths:
+      - ".github/workflows/finalize-skills-runtime.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/skills-runtime
+      - name: Apply hardening
+        run: python tools/finalize_skills_runtime.py
+      - name: Commit final product tree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(skills): harden real Skill loading"
+          git push origin HEAD:feature/skills-runtime
