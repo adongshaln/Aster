@@ -336,6 +336,68 @@ class SharedUiInteractionTest {
         rule.runOnIdle { assertEquals("context-picker-test/gemini-a",picked);assertTrue(dismissed) }
     }
 
+    @Test fun htmlPreviewWaitsForCompletionRunsOfflineAndOpensFullscreen() {
+        var streaming by mutableStateOf(true)
+        val html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+            <style>body{margin:0;background:#d9f0eb;font-family:sans-serif;padding:24px;color:#21483c}button{padding:14px;border:0;border-radius:20px;background:#21483c;color:white}</style></head>
+            <body><h1>灵感花园</h1><p>HTML · CSS · JavaScript</p><button onclick="this.textContent='已点亮 ✨'">点亮灵感</button>
+            <script>addEventListener('message',async()=>{
+              let storageBlocked=false,parentBlocked=false,networkBlocked=false;
+              try{localStorage.setItem('test','x')}catch(e){storageBlocked=true}
+              try{parent.document.body.innerHTML}catch(e){parentBlocked=true}
+              try{await fetch('https://example.com/aster-preview-probe')}catch(e){networkBlocked=true}
+              document.querySelector('button').click();
+              parent.postMessage({rendered:document.querySelector('button').textContent==='已点亮 ✨',storageBlocked,parentBlocked,networkBlocked},'*');
+            });</script></body></html>""".trimIndent()
+        content {
+            Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().padding(16.dp)) {
+                Text("Aster", style=MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(20.dp))
+                StructuredMessageText("```html\n$html\n```", streaming, false)
+            }
+        }
+        rule.onNodeWithContentDescription("预览 HTML").assertIsNotEnabled()
+        rule.runOnIdle { streaming = false }
+        rule.onNodeWithContentDescription("预览 HTML").performClick()
+        fun findWebView(view: android.view.View): android.webkit.WebView? {
+            if (view is android.webkit.WebView) return view
+            if (view is android.view.ViewGroup) for (i in 0 until view.childCount) {
+                findWebView(view.getChildAt(i))?.let { return it }
+            }
+            return null
+        }
+        var web: android.webkit.WebView? = null
+        rule.waitUntil(10_000) {
+            rule.runOnUiThread { web = findWebView(rule.activity.window.decorView) }
+            web != null
+        }
+        fun evaluate(script: String): String {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var result = ""
+            rule.runOnUiThread { web!!.evaluateJavascript(script) { result = it; latch.countDown() } }
+            assertTrue(latch.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            return result
+        }
+        rule.waitUntil(15_000) {
+            evaluate("document.readyState") == "\"complete\""
+        }
+        evaluate("window.addEventListener('message',e=>window.__htmlProbe=e.data)")
+        rule.waitUntil(15_000) {
+            evaluate("document.querySelector('iframe').contentWindow.postMessage('probe','*')")
+            evaluate("JSON.stringify(window.__htmlProbe)").contains("rendered")
+        }
+        val report = org.json.JSONTokener(evaluate("JSON.stringify(window.__htmlProbe)")).nextValue() as String
+        val checks = org.json.JSONObject(report)
+        listOf("rendered", "storageBlocked", "parentBlocked", "networkBlocked").forEach { assertTrue(it, checks.getBoolean(it)) }
+        screenshot("html-inline-preview")
+        rule.onNodeWithContentDescription("全屏预览 HTML").performClick()
+        rule.onNodeWithContentDescription("关闭 HTML 预览").assertExists()
+        screenshot("html-fullscreen-preview")
+        rule.onNodeWithContentDescription("关闭 HTML 预览").performClick()
+        rule.onNodeWithContentDescription("HTML 源码").performClick()
+        rule.onNodeWithContentDescription("保存 HTML 文件").assertIsEnabled()
+    }
+
     private fun imeVisible() = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)
         ?.isVisible(WindowInsetsCompat.Type.ime()) == true
 

@@ -82,7 +82,7 @@ private fun createFileDefinition(responsesApi: Boolean): JSONObject {
                 .put("description", "The user-facing file name, including a supported extension."))
             .put("mime_type", JSONObject()
                 .put("type", "string")
-                .put("enum", JSONArray(listOf("text/markdown", "text/plain", "application/json", "text/csv"))))
+                .put("enum", JSONArray(listOf("text/markdown", "text/plain", "application/json", "text/csv", "text/html"))))
             .put("content", JSONObject()
                 .put("type", "string")
                 .put("description", "The complete UTF-8 text content of the file.")))
@@ -90,7 +90,7 @@ private fun createFileDefinition(responsesApi: Boolean): JSONObject {
         .put("additionalProperties", false)
     val definition = JSONObject()
         .put("name", CREATE_FILE_TOOL)
-        .put("description", "Create a real downloadable text file only when the user explicitly asks for a file or export. Do not use it merely because a normal answer contains Markdown formatting.")
+        .put("description", "Create a real downloadable text file only when the user explicitly asks for a file or export. Do not use it merely because a normal answer contains Markdown formatting. For HTML pages, use text/html and a complete self-contained document with inline CSS/JavaScript and embedded images; the app previews offline without external resources.")
         .put("parameters", parameters)
     return if (responsesApi) definition.put("type", "function").put("strict", true) else definition
 }
@@ -312,7 +312,8 @@ private val MIME_EXTENSIONS = mapOf(
     "text/markdown" to "md",
     "text/plain" to "txt",
     "application/json" to "json",
-    "text/csv" to "csv"
+    "text/csv" to "csv",
+    "text/html" to "html"
 )
 
 private val ALLOWED_EXTENSIONS = MIME_EXTENSIONS.values.toSet()

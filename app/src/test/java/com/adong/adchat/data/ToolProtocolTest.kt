@@ -9,6 +9,22 @@ import org.junit.Test
 
 class ToolProtocolTest {
     @Test
+    fun htmlIsAvailableInBothProtocolsAndKeepsTheOriginalDocument() {
+        val html = "<!doctype html><html><body>中文<script>let x = '<>&';</script></body></html>"
+        val definitions = listOf(buildChatTools(true).getJSONObject(0).getJSONObject("function"),
+            buildResponsesTools(true, false).getJSONObject(0))
+        definitions.forEach { definition ->
+            assertTrue(definition.getJSONObject("parameters").getJSONObject("properties")
+                .getJSONObject("mime_type").getJSONArray("enum").toString().contains("text/html"))
+        }
+        val result = executeAppTool(PendingToolCall("html", "html", CREATE_FILE_TOOL,
+            JSONObject().put("filename", "../预览.txt").put("mime_type", "text/html").put("content", html).toString()))
+        assertEquals("预览.html", result.generatedFile?.name)
+        assertEquals(html, result.generatedFile?.content)
+        assertEquals(TOOL_STATUS_COMPLETED, result.activity.status)
+    }
+
+    @Test
     fun chatSearchTakesPriorityOverCustomFileTool() {
         val policy = resolveChatToolPolicy(webSearchEnabled = true, fileCreationEnabled = true)
 

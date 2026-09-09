@@ -666,7 +666,7 @@ private fun ProfileEditor(
                     )
                     SettingSwitch(
                         title = "创建文件",
-                        subtitle = "允许模型创建可下载的 Markdown、文本、JSON 或 CSV 文件",
+                        subtitle = "允许模型创建可下载的 HTML、Markdown、文本、JSON 或 CSV 文件",
                         checked = draft.fileCreationEnabled,
                         onCheckedChange = { enabled ->
                             draft = draft.copy(

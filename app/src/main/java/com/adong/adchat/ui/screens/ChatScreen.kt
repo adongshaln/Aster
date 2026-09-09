@@ -645,6 +645,10 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
 private fun GeneratedFilesPanel(files: List<ChatFileAttachment>, onSaveFile: (ChatFileAttachment) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         files.forEach { file ->
+            if (file.mimeType.substringBefore(';') == "text/html") {
+                HtmlArtifactCard(code = file.content, filename = file.name)
+                return@forEach
+            }
             Surface(
                 color = Surface,
                 shape = RoundedCornerShape(15.dp),
@@ -952,7 +956,9 @@ internal fun StructuredMessageText(content: String, streaming: Boolean, error: B
                 val lines = raw.trim('\n').lines()
                 val language = lines.firstOrNull()?.takeIf { it.matches(Regex("[A-Za-z0-9_+.#-]{1,20}")) }
                 val code = if (language != null) lines.drop(1).joinToString("\n") else raw.trim('\n')
-                CodeBlock(
+                if (language?.lowercase() in setOf("html", "htm")) {
+                    HtmlArtifactCard(code = code, ready = !streaming && index < parts.lastIndex)
+                } else CodeBlock(
                     language = language,
                     code = if (streaming && index == parts.lastIndex) "$code  ▍" else code,
                     selectable = !streaming
