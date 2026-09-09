@@ -1,0 +1,97 @@
+name: Wire skills runtime
+
+on:
+  push:
+    branches: ["feature/skills-runtime"]
+    paths: [".github/workflows/skills-runtime-patch.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/skills-runtime
+      - name: Patch API repository
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('app/src/main/java/com/adong/adchat/data/ApiRepository.kt')
+          text = path.read_text()
+
+          def rep(old, new, count=1):
+              global text
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'Expected {count} occurrences, found {actual}: {old[:100]!r}')
+              text = text.replace(old, new, count)
+
+          rep('class ApiRepository {', 'class ApiRepository(private val skillLoader: SkillLoader = GitHubSkillRuntime) {')
+          rep(
+              '        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled\n',
+              '        val skillLoadingEnabled = shouldOfferSkillLoader(history)\n        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || skillLoadingEnabled\n'
+          )
+          rep(
+              '                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, onToolActivity, deltaSink)\n',
+              '                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, skillLoadingEnabled, onToolActivity, deltaSink)\n'
+          )
+          rep(
+              '                streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)\n',
+              '                streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, skillLoadingEnabled = skillLoadingEnabled, onToolActivity = onToolActivity, onDelta = deltaSink)\n'
+          )
+          rep(
+              '        explicitCache: Boolean,\n        onToolActivity: suspend (ChatToolActivity) -> Unit,\n',
+              '        explicitCache: Boolean,\n        skillLoadingEnabled: Boolean,\n        onToolActivity: suspend (ChatToolActivity) -> Unit,\n'
+          )
+          rep('        suspend fun executeRound(): ProtocolRoundResult {\n', '        suspend fun executeRound(forceSkill: Boolean): ProtocolRoundResult {\n')
+          rep(
+              '            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled, profile.fileCreationEnabled)\n',
+              '            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled && !skillLoadingEnabled, profile.fileCreationEnabled)\n'
+          )
+          rep(
+              '            val tools = buildChatTools(toolPolicy.fileCreationEnabled)\n            if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")\n',
+              '            val tools = buildChatTools(toolPolicy.fileCreationEnabled, skillLoadingEnabled)\n            if (tools.length() > 0) {\n                body.put("tools", tools)\n                body.put("tool_choice", if (forceSkill)\n                    JSONObject().put("type", "function").put("function", JSONObject().put("name", LOAD_SKILL_TOOL))\n                else "auto")\n            }\n'
+          )
+          rep('            val round = executeRound()\n', '            val round = executeRound(skillLoadingEnabled && roundIndex == 0)\n')
+          rep(
+              '                recordActivity(ChatToolActivity(call.callId, call.name, "正在创建文件", TOOL_STATUS_RUNNING))\n                val execution = executeAppTool(call)\n',
+              '                val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"\n                recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))\n                val execution = executeAppTool(call, skillLoader)\n',
+              count=2
+          )
+          rep(
+              '        cacheKey: String,\n        onToolActivity: suspend (ChatToolActivity) -> Unit,\n        onDelta: suspend (String) -> Unit\n    ): ChatCompletionResult {\n        val initialInput = JSONArray()\n',
+              '        cacheKey: String,\n        skillLoadingEnabled: Boolean,\n        onToolActivity: suspend (ChatToolActivity) -> Unit,\n        onDelta: suspend (String) -> Unit\n    ): ChatCompletionResult {\n        val initialInput = JSONArray()\n'
+          )
+          rep(
+              '        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled)\n',
+              '        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled)\n'
+          )
+          rep(
+              '        suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?): ProtocolRoundResult {\n',
+              '        suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?, forceSkill: Boolean): ProtocolRoundResult {\n'
+          )
+          rep(
+              '            if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")\n            if (profile.fileCreationEnabled) body.put("store", true)\n',
+              '            if (tools.length() > 0) {\n                body.put("tools", tools)\n                body.put("tool_choice", if (forceSkill)\n                    JSONObject().put("type", "function").put("name", LOAD_SKILL_TOOL)\n                else "auto")\n            }\n            if (profile.fileCreationEnabled || skillLoadingEnabled) body.put("store", true)\n'
+          )
+          rep(
+              '            val round = executeRound(requestInput, previousResponseId)\n',
+              '            val round = executeRound(requestInput, previousResponseId, skillLoadingEnabled && toolRound == 0)\n'
+          )
+
+          path.write_text(text)
+          PY
+      - name: Commit implementation
+        shell: bash
+        run: |
+          rm .github/workflows/skills-runtime-patch.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/adong/adchat/data/ApiRepository.kt .github/workflows/skills-runtime-patch.yml
+          git commit -m "feat(skills): execute GitHub skills through model tool calls"
+          git push origin HEAD:feature/skills-runtime
