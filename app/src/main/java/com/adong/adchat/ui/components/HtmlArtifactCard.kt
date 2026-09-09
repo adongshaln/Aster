@@ -21,7 +21,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -48,9 +47,9 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/html")) { uri ->
-        val source = pendingExport
+        val source = pendingExport ?: code
         pendingExport = null
-        if (uri != null && source != null) scope.launch {
+        if (uri != null) scope.launch {
             val result = runCatching { withContext(Dispatchers.IO) {
                 requireNotNull(context.contentResolver.openOutputStream(uri, "w")).use {
                     it.write(source.toByteArray(Charsets.UTF_8))
@@ -123,6 +122,9 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
     var failed by remember(source) { mutableStateOf(false) }
     val view = remember(source) { runCatching {
         WebView(context).apply {
+            layoutParams = android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT)
             settings.apply {
                 javaScriptEnabled = true
                 allowFileAccess = false
@@ -143,6 +145,12 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String?) {
+                    // DOM completion precedes Chromium's first drawable frame.
+                    view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
+                        override fun onComplete(requestId: Long) { view.invalidate() }
+                    })
+                }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
                 override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse =
                     WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
@@ -151,7 +159,6 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
                     return true
                 }
             }
-            loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source), "text/html", "utf-8", null)
         }
     }.getOrNull() }
     DisposableEffect(view, lifecycle) {
@@ -162,11 +169,23 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
         lifecycle.addObserver(observer)
         onDispose {
             lifecycle.removeObserver(observer)
-            view?.stopLoading()
-            view?.destroy()
         }
     }
     if (view == null || failed) Box(modifier, contentAlignment = Alignment.Center) {
         Text("预览不可用，可切换源码或保存文件", color = MutedInk)
-    } else AndroidView(factory = { view }, modifier = modifier.clip(RoundedCornerShape(8.dp)))
+    } else AndroidView(
+        factory = {
+            view.apply {
+                // Load after the native view has received its Compose bounds.
+                post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source), "text/html", "utf-8", null) }
+            }
+        },
+        modifier = modifier,
+        onRelease = {
+            it.stopLoading()
+            it.webViewClient = WebViewClient()
+            it.removeAllViews()
+            it.destroy()
+        }
+    )
 }

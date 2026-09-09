@@ -389,9 +389,29 @@ class SharedUiInteractionTest {
         val report = org.json.JSONTokener(evaluate("JSON.stringify(window.__htmlProbe)")).nextValue() as String
         val checks = org.json.JSONObject(report)
         listOf("rendered", "storageBlocked", "parentBlocked", "networkBlocked").forEach { assertTrue(it, checks.getBoolean(it)) }
+        fun awaitPaintedHtml() {
+            // A running DOM is not proof that WebView has submitted visible pixels.
+            rule.waitUntil(20_000) {
+                val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+                var green = 0
+                if (bitmap != null) {
+                    for (y in 0 until bitmap.height step 12) for (x in 0 until bitmap.width step 12) {
+                        val pixel = bitmap.getPixel(x, y)
+                        if (kotlin.math.abs(android.graphics.Color.red(pixel) - 217) < 5 &&
+                            kotlin.math.abs(android.graphics.Color.green(pixel) - 240) < 5 &&
+                            kotlin.math.abs(android.graphics.Color.blue(pixel) - 235) < 5) green++
+                    }
+                    bitmap.recycle()
+                }
+                green > 100
+            }
+        }
+        android.util.Log.i("HtmlPreviewTest", evaluate("JSON.stringify({width:innerWidth,height:innerHeight,frame:document.querySelector('iframe').getBoundingClientRect().toJSON()})"))
+        awaitPaintedHtml()
         screenshot("html-inline-preview")
         rule.onNodeWithContentDescription("全屏预览 HTML").performClick()
         rule.onNodeWithContentDescription("关闭 HTML 预览").assertExists()
+        awaitPaintedHtml()
         screenshot("html-fullscreen-preview")
         rule.onNodeWithContentDescription("关闭 HTML 预览").performClick()
         rule.onNodeWithContentDescription("HTML 源码").performClick()
