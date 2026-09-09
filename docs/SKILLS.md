@@ -48,3 +48,5 @@ Chat Completions 直接使用这条 function-call 路径；Responses 在原生 S
 ## 自动验证
 
 测试覆盖：GitHub root/tree/blob/raw 解析、非法目标拒绝、真实 function tool 定义、精确 tool result 回传、Chat 与 Responses 两轮 function-call、`/v1/skills` multipart POST、认证/额外 Header、provider skill id/version 解析、shell `skill_reference` 请求结构，以及原生 Skills 不支持时回退到实际 `load_skill` tool round-trip。
+
+当前代码树已移除所有一次性补丁脚本与临时工作流；后续 Android CI 只验证正式实现文件和测试。
