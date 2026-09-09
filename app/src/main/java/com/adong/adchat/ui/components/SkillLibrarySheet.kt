@@ -11,6 +11,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.adong.adchat.data.LoadedSkill
@@ -98,7 +99,7 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
                             Text(skill.description.ifBlank { "此技能未提供简介" }, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall, color = MutedInk)
                         }
-                        if (conversationScope != null) Checkbox(skill.sourceUrl in selected, enabled = !busy && skill.enabled,
+                        if (conversationScope != null) Checkbox(skill.sourceUrl in selected, modifier = Modifier.testTag("skill-select-${skill.name}"), enabled = !busy && skill.enabled,
                             onCheckedChange = { checked ->
                                 val next = if (checked) selected + skill.sourceUrl else selected - skill.sourceUrl
                                 action("此对话的技能选择已保存") { runtime.select(conversationScope, next) }

@@ -84,7 +84,8 @@ object SkillPackages {
 }
 
 /** Immutable request snapshot: later updates/deletions cannot mix versions during a tool loop. */
-internal class SkillSession(private val delegate: SkillLoader, private val available: List<LoadedSkill>) : SkillLoader {
+internal class SkillSession(private val delegate: SkillLoader, private val available: List<LoadedSkill>,
+    private val onLoaded: (LoadedSkill) -> Unit = {}) : SkillLoader {
     private val loaded = linkedMapOf<String, LoadedSkill>()
     override fun listInstalled(): List<LoadedSkill> = available
     override fun load(sourceOrName: String): LoadedSkill {
@@ -95,6 +96,7 @@ internal class SkillSession(private val delegate: SkillLoader, private val avail
             } ?: delegate.load(sourceOrName)
         require(skill.enabled) { "此技能已停用" }
         require(skill.content.length <= SKILL_INSTRUCTION_LIMIT) { "技能说明超过 32,000 字符，请精简后更新" }
+        onLoaded(skill)
         loaded[sourceOrName] = skill
         loaded[skill.sha256] = skill
         return skill

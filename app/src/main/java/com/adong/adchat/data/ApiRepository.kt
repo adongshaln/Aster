@@ -110,9 +110,16 @@ class ApiRepository internal constructor(
         val selected = if (skillsAllowed) skillLoader.selected(cacheKey) else emptyList()
         val available = (selected + installed.filter { it.name == requestedInstalledSkill || it.sourceUrl == requestedSkillUrl }).distinctBy { it.sourceUrl }
         val requestedSkillSelectors = (listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill) + available.map { it.sha256 }).distinct()
-        val requestSkillLoader = SkillSession(skillLoader, available)
+        val requestSkillLoader = SkillSession(skillLoader, available) { loaded ->
+            if (skillLoader is SkillRuntime && (requestedSkillUrl != null || requestedInstalledSkill != null)) {
+                skillLoader.select(cacheKey, skillLoader.selection(cacheKey) + loaded.sourceUrl)
+            }
+        }
         val requireSkillLoad = requestedSkillUrl != null || requestedInstalledSkill != null
         var skillLoadingEnabled = requestedSkillSelectors.isNotEmpty()
+        require(!skillLoadingEnabled || !profile.webSearchEnabled || profile.usesResponses(model)) {
+            "当前 Chat 服务的联网搜索与技能工具不能同时使用，请关闭联网搜索或取消本对话的技能选择。"
+        }
         var nativeSkillReference: NativeSkillReference? = null
         if (preferNativeSkills && requestedSkillUrl != null && profile.usesResponses(model)) {
             onToolActivity(ChatToolActivity("native_skill", LOAD_SKILL_TOOL, "正在从 GitHub 准备原生 Skill", TOOL_STATUS_RUNNING))
@@ -421,6 +428,7 @@ class ApiRepository internal constructor(
                 .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
                 .put("tool_calls", assistantToolCalls))
             round.toolCalls.forEach { call ->
+                currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
                 val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
@@ -633,6 +641,7 @@ class ApiRepository internal constructor(
             previousResponseId = round.responseId
             requestInput = JSONArray()
             round.toolCalls.forEach { call ->
+                currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
                 val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))

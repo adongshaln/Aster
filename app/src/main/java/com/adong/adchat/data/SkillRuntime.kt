@@ -76,9 +76,11 @@ class FileSkillLibrary(context: Context) : SkillLibrary {
     private val directory = File(context.filesDir, "skills").apply { mkdirs() }
     companion object { private val lock = Any() }
     override fun list(): List<LoadedSkill> = synchronized(lock) {
-        directory.listFiles().orEmpty().filter { it.extension == "json" }.mapNotNull { file ->
+        directory.listFiles().orEmpty().filter { it.extension in setOf("json", "bak") }
+            .map { if (it.extension == "bak") File(it.path.removeSuffix(".bak")) else it }.distinctBy { it.path }.mapNotNull { file ->
             runCatching {
-                val bytes = AtomicFile(file).openRead().use { it.readBytes() }
+                val bytes = AtomicFile(file).openRead().use { input ->
+                    require(input.channel.size() <= 16 * 1024 * 1024); input.readBytes() }
                 require(bytes.size <= 16 * 1024 * 1024)
                 val root = JSONObject(bytes.toString(Charsets.UTF_8))
                 val content = root.getString("content")

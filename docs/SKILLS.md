@@ -1,52 +1,56 @@
-# Aster Skills Runtime
+# Aster 技能包与运行边界
 
-当前实现位于 `feature/skills-runtime`，基线为 Aster 2.4.0 / versionCode 58。此文档描述的是实际请求与工具执行边界，不把提示词注入称作 Skill 加载。
+当前开发分支：`feature/skills-runtime`，基线 2.4.0 / versionCode 58。版本与固定签名保持不变。
 
-## 用户入口
+## 本轮方向
 
-用户可以在普通聊天中发送公开 GitHub Skill 链接并明确要求加载/使用 Skill。支持：
+Aster 管理完整技能包，由模型按需读取说明及参考资料，再调用应用现有工具。
+纯写作技能读取说明并指导生成就是有效使用；不以有无脚本或某个特定 API 作为真假技能的区分。
+Chat 和 Responses 默认共用本地技能路径，不再对每个 Responses 技能请求自动探测、上传 `/skills`。
+现有原生上传适配保留为显式 opt-in 的内部接口与协议测试，不作为当前用户默认执行环境。
+本轮不提供 Python / Node / Shell 执行器，也不部署云端沙箱。
 
-- 仓库根链接：`https://github.com/<owner>/<repo>`，要求仓库根存在 `SKILL.md`；Aster 会通过 GitHub API 解析真实默认分支。
-- 文件链接：`https://github.com/<owner>/<repo>/blob/<ref>/.../SKILL.md`。
-- 目录链接：`https://github.com/<owner>/<repo>/tree/<ref>/<skill-directory>`，Aster 读取该目录下的 `SKILL.md`；原生 Skills 路径会把该目录的完整文件集打包。
-- Raw 链接：`https://raw.githubusercontent.com/<owner>/<repo>/<ref>/.../SKILL.md`。
+## 使用入口
 
-仅接受 HTTPS 的 GitHub / raw.githubusercontent.com。当前不读取私有仓库 token，也不允许任意外部主机冒充 Skill。
+- 设置 → 技能：GitHub 安装、ZIP 导入、查看说明与文件、更新、启用/停用、删除。
+- 普通聊天 / 故事讨论 / 正文 → 输入栏加号 → 技能：勾选此会话可用的技能，自动保存。
+- 各普通对话及每个故事的讨论、正文分别保存选择；新普通对话首次发送时转移到真实对话 ID。
+- 勾选后提供名称、简介和版本选择器；模型可以按任务需要读取，也可以不使用无关技能。
+- 明确发送技能链接或点名已安装技能时要求执行加载；读取成功后保留在该会话选择中，下一轮无需再贴链接。
+- GitHub 链接再次用于聊天时复用已安装版本；只有管理页的安装/更新动作主动更新。
+- 自动整理、摘要和历史重写内部请求不自动加载技能，防止源故事文字成为安装或使用技能的指令。
+- Chat 网关的联网搜索与 function tools 不能假定同时支持；同时选择技能与联网时明确提示关闭其中一项，不静默关闭搜索。
 
-## Responses：优先真实 Skills API
+## 文件与版本
 
-对 Responses 路由，Aster 会先解析用户给出的 GitHub Skill，下载指定 Skill 目录并生成受限 ZIP，然后调用当前 API Profile 对应的真实 `POST /v1/skills` 接口。成功响应必须返回服务端签发的 skill id；Aster 随后在 Responses 请求中注册 `shell` 工具，使用 `container_auto.skills[].type = skill_reference`、该 skill id 和版本，并强制首轮使用 shell。
+支持公开 GitHub 根目录、tree 目录、blob/SKILL.md、raw 链接，以及根目录或单一外层目录包含 SKILL.md 的 ZIP。
+GitHub 根链接要求仓库根存在 SKILL.md；多技能仓库应指定具体技能目录。
+不使用用户 API Key 访问 GitHub，不支持私有仓库凭证。包含 `/` 的分支名 URL 仍建议改用提交 SHA 链接。
 
-这与 OpenAI 当前 Skills / Responses beta schema 对齐：`POST /skills` 接受目录文件或单个 ZIP；`container_auto` 支持 `skills`，其中 `skill_reference` 引用由 `/v1/skills` 创建的 skill。
+- 完整保存说明、参考、模板、脚本和其他资源的原始字节；脚本仅作为文件保存，不执行。
+- SHA-256 基于排序后的路径和文件内容计算，不依赖 ZIP 文件顺序及时间戳。
+- 应用私有目录用 AtomicFile 保存；更新解析/校验成功后才替换旧包。调用开始后持有已选包快照，避免同一次调用混入更新后的文件。
+- 旧版仅含 SKILL.md 的安装记录继续可读；主动更新 GitHub 技能后才补齐参考文件。
+- 同名技能可由会话勾选的版本摘要精确区分。删除不会删除聊天内容；正在执行的请求继续使用已取得的版本快照。
+- ZIP 10 MB、解压总量 10 MB、单文件 5 MB、文件数 256、目录项 512、安装数量 32。
+- SKILL.md 最大 32,000 字符；旧版超限说明明确报错。拒绝目录穿越、绝对路径、重复文件、多技能混装和非法 UTF-8 说明。
+- 二进制资源可以保存；当前按需读取工具只返回 UTF-8 文本，不提供二进制附件自动挂载或脚本运行。
 
-Aster 不会在 `/skills` 失败时伪造成功。404 / 405 / 501 及明确的“不支持该 endpoint”响应会被识别为兼容性不支持；认证、限流、服务端错误、非法成功响应等则直接作为失败暴露。
+## 模型调用
 
-## 兼容接口：真实 function-call fallback
+1. 只有本会话选择或用户明确请求的技能可用。名称、简介作为外部元信息，不提升为系统指令。
+2. `load_skill` 返回实际版本的说明、文件列表、来源、摘要、原选择器及当前执行能力。
+3. `read_skill_file` 只读取已加载且授权的技能包路径。每次最多 12,000 字符，返回 next_offset / complete，支持继续读取。
+4. 工具结果进入现有 Chat / Responses 工具循环；最终请求仍经过模型上下文硬预算。最多 8 轮，超预算/轮数明确停止。
+5. `create_file` 仍由用户已有开关控制；技能不能自行开放工具。故事正式资料写入仍由原有确认/事务机制控制，本轮未向技能开放数据库写入工具。
+6. 活动显示实际说明或文件读取的结果，不把“已安装/已读取”称为“脚本已执行”。
 
-不是所有 OpenAI 兼容网关都实现 `/skills` 或 Responses 的 shell / container skills。遇到明确的不支持时，Aster 使用 `load_skill(url)` function tool 回退，而不是把 Skill 文本偷偷拼进 system prompt。
+## 验证
 
-完整调用链：
+新增 ZIP 包解析、路径/大小限制、稳定版本摘要、多行简介、按需分段、版本快照、跨工作区隔离、停用、进程重启、失败更新保留旧包测试。
+MockWebServer 覆盖 Chat 与 Responses 的“目录 → load_skill → read_skill_file → 最终回复”，验证参考全文在读取前没有进入请求、默认没有原生上传，以及内部任务禁用技能。
+共享原生 UI 测试覆盖技能选择持久化、重新打开和正文/讨论隔离。
 
-1. Aster 把 `load_skill` 作为真正的 function tool 注册给模型，并在明确的 Skill 加载请求首轮强制调用；其参数 schema 使用 `enum` 只允许本轮用户明确给出的 GitHub URL，或本轮明确点名的已安装 Skill。
-2. 模型返回 `load_skill` function call。
-3. Aster 通过 HTTPS 实际下载对应 `SKILL.md`，执行大小、UTF-8、目标主机和路径校验，并计算 SHA-256。
-4. Aster 将 `name`、原始 URL、最终 raw URL、SHA-256 和下载到的 **原始 SKILL.md 内容**作为 tool result 返回模型。
-5. 客户端执行工具时还会再次检查同一允许列表，因此即便兼容网关忽略 JSON Schema，模型也不能自行编造另一个 GitHub URL；校验通过后，模型才在下一轮基于 tool result 继续推理。
-
-Chat Completions 直接使用这条 function-call 路径；Responses 在原生 Skills 不可用时使用同一回退路径。
-
-## 可靠性与安全边界
-
-- 单个直接加载的 `SKILL.md` 最大 256 KiB。
-- 原生 GitHub 仓库压缩包最大 16 MiB；选中 Skill 解压内容最大 10 MiB；单文件最大 5 MiB；最多 256 个文件。
-- ZIP 重新打包前拒绝空路径、绝对路径、`.` / `..` 与 NUL，避免目录穿越。
-- 原生 Skill bundle 必须在选中的 Skill 根目录存在唯一 `SKILL.md`；多 Skill 仓库应发送具体 Skill 的 `tree` 目录链接。
-- function fallback 的 tool output 标记 `trust=untrusted_external_instructions`。外部 Skill 内容不能覆盖更高优先级的系统、安全或应用约束。
-- Aster 只有在真实网络读取成功，或真实 `/skills` 上传成功并取得 provider skill id 后，才显示对应成功状态。
-- 开发分支测试使用可注入 loader/uploader 与 MockWebServer 验证协议，不把 mock 成功描述成真实 OpenAI 项目上传成功；最终仍需真实服务和真机验收。
-
-## 自动验证
-
-测试覆盖：GitHub root/tree/blob/raw 解析、非法目标拒绝、真实 function tool 定义、精确 tool result 回传、Chat 与 Responses 两轮 function-call、`/v1/skills` multipart POST、认证/额外 Header、provider skill id/version 解析、shell `skill_reference` 请求结构，以及原生 Skills 不支持时回退到实际 `load_skill` tool round-trip。
-
-当前代码树已移除所有一次性补丁脚本与临时工作流；后续 Android CI 只验证正式实现文件和测试。
+真实 Gemini / 网关调用仍需用户验收，MockWebServer 不代表真实模型一定选择正确技能。
+示例：`examples/skills/story-writing`，包含实际引用的 `references/writing-rules.md`，可用于真机检查。
+服务配置导出不包含技能包；本轮没有技能备份导出或任意旧版本回滚界面。

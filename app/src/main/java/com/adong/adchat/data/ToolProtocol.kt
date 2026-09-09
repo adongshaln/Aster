@@ -304,6 +304,7 @@ internal fun executeAppTool(
                 .put("resolved_url", skill.resolvedUrl)
                 .put("sha256", skill.sha256)
                 .put("content", skill.content)
+                .put("selector", JSONObject(call.arguments).getString("url"))
                 .put("files", JSONArray(skill.files.keys.sorted()))
                 .put("execution", "instructions_and_app_tools_only; no Python or shell executor")
                 .toString(),

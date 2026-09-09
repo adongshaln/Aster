@@ -62,6 +62,33 @@ class SharedUiInteractionTest {
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
     }
 
+    @Test fun sharedSkillSelectionPersistsAndDoesNotLeakIntoOtherWorkspaces() {
+        val context = rule.activity.applicationContext
+        val runtime = com.adong.adchat.data.SkillRuntime.persistent(context)
+        val output = java.io.ByteArrayOutputStream()
+        java.util.zip.ZipOutputStream(output).use { zip ->
+            mapOf("SKILL.md" to "---\nname: native-writing-test\ndescription: 检查人物动机与剧情边界\n---\n读取 references/rules.md", "references/rules.md" to "不让人物知晓未获知的信息").forEach { (path, text) ->
+                zip.putNextEntry(java.util.zip.ZipEntry(path)); zip.write(text.toByteArray()); zip.closeEntry()
+            }
+        }
+        val skill = runtime.installZip(output.toByteArray())
+        try {
+            content { SkillLibrarySheet("native-discussion", {}) }
+            rule.waitUntil(10_000) { rule.onAllNodesWithTag("skill-select-native-writing-test").fetchSemanticsNodes().isNotEmpty() }
+            rule.onNodeWithTag("skill-select-native-writing-test").performScrollTo().performClick()
+            rule.waitUntil(10_000) { runtime.selected("native-discussion").isNotEmpty() }
+            rule.onNodeWithTag("skill-select-native-writing-test").assertIsOn()
+            screenshot("skill-library-selection")
+            assertTrue(runtime.selected("native-prose").isEmpty())
+            content { SkillLibrarySheet("native-discussion", {}) }
+            rule.waitUntil(10_000) { rule.onAllNodesWithTag("skill-select-native-writing-test").fetchSemanticsNodes().isNotEmpty() }
+            rule.onNodeWithTag("skill-select-native-writing-test").performScrollTo().assertIsOn()
+        } finally {
+            runtime.remove(skill.sourceUrl)
+            runtime.select("native-discussion", emptySet())
+        }
+    }
+
     @Test fun ordinaryComposerCollapsesWithoutLosingDraft() = checkKeyboard("chat")
     @Test fun storyComposerCollapsesWithoutLosingDraft() = checkKeyboard("story")
 

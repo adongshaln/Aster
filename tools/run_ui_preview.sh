@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/feature/story-mode" ]]; then
+if [[ $# -eq 0 && ( "${GITHUB_REF:-}" == "refs/heads/feature/story-mode" || "${GITHUB_REF:-}" == "refs/heads/feature/skills-runtime" ) ]]; then
   set -- com.adong.adchat.SharedUiInteractionTest
 fi
 

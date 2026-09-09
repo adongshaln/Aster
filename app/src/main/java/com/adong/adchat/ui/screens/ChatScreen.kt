@@ -1678,7 +1678,7 @@ private fun ChatToolsSheet(
                 webSearchEnabled, onWebSearchToggle)
             ComposerToolToggle(Icons.Rounded.NoteAdd, "创建文件", "将内容整理为可下载的文档",
                 fileCreationEnabled, onFileCreationToggle)
-            if (apiMode != "responses") Text("当前服务的联网搜索与创建文件不能同时开启。",
+            if (apiMode != "responses") Text("当前 Chat 服务的联网搜索不能与创建文件或技能同时使用。",
                 style = MaterialTheme.typography.labelSmall, color = MutedInk)
         }
     }
