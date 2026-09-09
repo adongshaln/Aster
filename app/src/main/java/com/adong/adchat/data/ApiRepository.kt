@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import kotlin.coroutines.cancellation.CancellationException
 
-class ApiRepository {
+class ApiRepository(private val skillLoader: SkillLoader = GitHubSkillRuntime) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -98,7 +98,8 @@ class ApiRepository {
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
-        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled
+        val skillLoadingEnabled = shouldOfferSkillLoader(history)
+        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || skillLoadingEnabled
         val initialContext = ModelContextPolicy.prepare(systemPrompt, history, profile.contextLimits(model), trimHistory)
         if (initialContext.omittedTurns > 0) onContextTrim(initialContext.omittedTurns)
 
@@ -108,9 +109,9 @@ class ApiRepository {
         ): ChatCompletionResult {
             val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory = false)
             return if (profile.usesResponses(model)) {
-                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, onToolActivity, deltaSink)
+                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, skillLoadingEnabled, onToolActivity, deltaSink)
             } else {
-                streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, onToolActivity = onToolActivity, onDelta = deltaSink)
+                streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, skillLoadingEnabled = skillLoadingEnabled, onToolActivity = onToolActivity, onDelta = deltaSink)
             }
         }
 
@@ -197,6 +198,7 @@ class ApiRepository {
         history: List<ChatMessage>,
         cacheKey: String,
         explicitCache: Boolean,
+        skillLoadingEnabled: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -226,16 +228,21 @@ class ApiRepository {
             onToolActivity(activity)
         }
 
-        suspend fun executeRound(): ProtocolRoundResult {
+        suspend fun executeRound(forceSkill: Boolean): ProtocolRoundResult {
             outputComplete = false
-            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled, profile.fileCreationEnabled)
+            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled && !skillLoadingEnabled, profile.fileCreationEnabled)
             val body = JSONObject()
                 .put("model", model)
                 .put("messages", messages)
                 .put("stream", true)
                 .put("stream_options", JSONObject().put("include_usage", true))
-            val tools = buildChatTools(toolPolicy.fileCreationEnabled)
-            if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
+            val tools = buildChatTools(toolPolicy.fileCreationEnabled, skillLoadingEnabled)
+            if (tools.length() > 0) {
+                body.put("tools", tools)
+                body.put("tool_choice", if (forceSkill)
+                    JSONObject().put("type", "function").put("function", JSONObject().put("name", LOAD_SKILL_TOOL))
+                else "auto")
+            }
             if (toolPolicy.webSearchEnabled) body.put("web_search_options", JSONObject())
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = false, explicitCache = explicitCache)
             ModelContextPolicy.applyToRequest(body, profile.contextLimits(model), responses = false)
@@ -314,7 +321,7 @@ class ApiRepository {
         if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
         var completedNormally = false
         for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
-            val round = executeRound()
+            val round = executeRound(skillLoadingEnabled && roundIndex == 0)
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.toolCalls.isEmpty()) {
@@ -333,8 +340,9 @@ class ApiRepository {
                 .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
                 .put("tool_calls", assistantToolCalls))
             round.toolCalls.forEach { call ->
-                recordActivity(ChatToolActivity(call.callId, call.name, "正在创建文件", TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call)
+                val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"
+                recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
+                val execution = executeAppTool(call, skillLoader)
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 messages.put(JSONObject()
@@ -377,6 +385,7 @@ class ApiRepository {
         systemPrompt: String,
         history: List<ChatMessage>,
         cacheKey: String,
+        skillLoadingEnabled: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -394,7 +403,7 @@ class ApiRepository {
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
         val citations = linkedMapOf<String, ChatCitation>()
         val activities = linkedMapOf<String, ChatToolActivity>()
-        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled)
+        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled)
 
         suspend fun recordActivity(activity: ChatToolActivity) {
             activities[activity.id] = activity
@@ -403,11 +412,16 @@ class ApiRepository {
 
         var carriedContextTokens = 0L
         var lastRequestTokens = 0L
-        suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?): ProtocolRoundResult {
+        suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?, forceSkill: Boolean): ProtocolRoundResult {
             outputComplete = false
             val body = JSONObject().put("model", model).put("input", requestInput).put("stream", true)
-            if (tools.length() > 0) body.put("tools", tools).put("tool_choice", "auto")
-            if (profile.fileCreationEnabled) body.put("store", true)
+            if (tools.length() > 0) {
+                body.put("tools", tools)
+                body.put("tool_choice", if (forceSkill)
+                    JSONObject().put("type", "function").put("name", LOAD_SKILL_TOOL)
+                else "auto")
+            }
+            if (profile.fileCreationEnabled || skillLoadingEnabled) body.put("store", true)
             previousResponseId?.takeIf(String::isNotBlank)?.let { body.put("previous_response_id", it) }
             if (systemPrompt.isNotBlank()) body.put("instructions", systemPrompt)
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = true, explicitCache = false)
@@ -504,7 +518,7 @@ class ApiRepository {
         var previousResponseId: String? = null
         var completedNormally = false
         for (toolRound in 0 until MAX_TOOL_ROUNDS) {
-            val round = executeRound(requestInput, previousResponseId)
+            val round = executeRound(requestInput, previousResponseId, skillLoadingEnabled && toolRound == 0)
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.usedWebSearch) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
@@ -518,8 +532,9 @@ class ApiRepository {
             previousResponseId = round.responseId
             requestInput = JSONArray()
             round.toolCalls.forEach { call ->
-                recordActivity(ChatToolActivity(call.callId, call.name, "正在创建文件", TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call)
+                val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"
+                recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
+                val execution = executeAppTool(call, skillLoader)
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 requestInput.put(JSONObject()
