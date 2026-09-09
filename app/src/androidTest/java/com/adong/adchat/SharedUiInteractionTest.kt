@@ -356,9 +356,8 @@ class SharedUiInteractionTest {
                 StructuredMessageText("```html\n$html\n```", streaming, false)
             }
         }
-        rule.onNodeWithContentDescription("预览 HTML").assertIsNotEnabled()
+        rule.onNodeWithContentDescription("全屏预览 HTML").assertIsNotEnabled()
         rule.runOnIdle { streaming = false }
-        rule.onNodeWithContentDescription("预览 HTML").performClick()
         fun findWebView(view: android.view.View): android.webkit.WebView? {
             if (view is android.webkit.WebView) return view
             if (view is android.view.ViewGroup) for (i in 0 until view.childCount) {
@@ -426,7 +425,8 @@ class SharedUiInteractionTest {
         awaitPaintedHtml(fullscreen = true)
         screenshot("html-fullscreen-preview")
         rule.onNodeWithContentDescription("关闭 HTML 预览").performClick()
-        rule.onNodeWithContentDescription("HTML 源码").performClick()
+        rule.onNodeWithContentDescription("复制 HTML 代码").assertExists()
+        rule.onNodeWithText(html).assertDoesNotExist()
         rule.onNodeWithContentDescription("保存 HTML 文件").assertIsEnabled()
     }
 

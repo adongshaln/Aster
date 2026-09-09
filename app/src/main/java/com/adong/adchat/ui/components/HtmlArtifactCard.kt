@@ -8,12 +8,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -22,10 +18,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -43,7 +37,6 @@ import java.io.ByteArrayInputStream
 internal fun HtmlArtifactCard(code: String, filename: String = "document.html", ready: Boolean = true) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var preview by rememberSaveable { mutableStateOf(false) }
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var pendingExport by remember { mutableStateOf<String?>(null) }
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/html")) { uri ->
@@ -63,27 +56,26 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
         border = BorderStroke(1.dp, Hairline), modifier = Modifier.fillMaxWidth()) {
         Column {
             Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { preview = false }) {
-                    Icon(Icons.Rounded.Code, "HTML 源码", tint = if (!preview) Accent else MutedInk)
-                }
-                IconButton(onClick = { preview = true }, enabled = canPreview) {
-                    Icon(Icons.Rounded.Visibility, "预览 HTML", tint = if (preview) Accent else MutedInk)
-                }
+                Icon(Icons.Rounded.WebAsset, null, Modifier.padding(horizontal = 10.dp).size(20.dp), tint = Accent)
                 Text(filename, Modifier.weight(1f), style = MaterialTheme.typography.labelMedium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, color = MutedInk)
                 IconButton(onClick = { fullscreen = true }, enabled = canPreview) {
                     Icon(Icons.Rounded.OpenInFull, "全屏预览 HTML", tint = MutedInk)
                 }
             }
-            if (preview && canPreview && !fullscreen) {
+            if (canPreview && !fullscreen) {
                 HtmlPreview(code, Modifier.fillMaxWidth().height(340.dp))
             } else {
-                SelectionContainer {
-                    Text(code, Modifier.fillMaxWidth().heightIn(max = 240.dp)
-                        .verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(12.dp),
-                        fontFamily = FontFamily.Monospace, fontSize = 12.sp, lineHeight = 18.sp, color = Ink)
+                Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
+                    Text(when {
+                        !ready -> "正在生成 HTML，完成后显示预览…"
+                        fullscreen -> "已在全屏中预览"
+                        else -> "文件较大，请保存后打开"
+                    }, color = MutedInk, style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(20.dp))
                 }
             }
+
             Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(when {
                     !ready -> "正文完成后可预览"
@@ -92,7 +84,7 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
                 }, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MutedInk)
                 IconButton(onClick = {
                     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(filename, code))
-                }) { Icon(Icons.Rounded.ContentCopy, "复制 HTML", tint = MutedInk, modifier = Modifier.size(18.dp)) }
+                }) { Icon(Icons.Rounded.ContentCopy, "复制 HTML 代码", tint = MutedInk, modifier = Modifier.size(18.dp)) }
                 IconButton(onClick = { pendingExport = code; export.launch(filename) }, enabled = ready) {
                     Icon(Icons.Rounded.Download, "保存 HTML 文件", tint = Accent, modifier = Modifier.size(20.dp))
                 }
