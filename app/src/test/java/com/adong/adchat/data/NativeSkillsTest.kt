@@ -208,6 +208,7 @@ class NativeSkillsTest {
             assertEquals("fallback complete", result.text)
             val first = JSONObject(server.takeRequest().body.readUtf8())
             assertEquals(LOAD_SKILL_TOOL, first.getJSONObject("tool_choice").getString("name"))
+            assertTrue(first.getJSONArray("tools").toString().contains(sourceUrl))
             val second = JSONObject(server.takeRequest().body.readUtf8())
             val output = JSONObject(second.getJSONArray("input").getJSONObject(0).getString("output"))
             assertEquals("# ACTUAL FALLBACK SKILL\nUse real loaded instructions.", output.getString("content"))

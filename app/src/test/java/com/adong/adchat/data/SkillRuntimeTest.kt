@@ -86,7 +86,8 @@ class SkillRuntimeTest {
                 name = LOAD_SKILL_TOOL,
                 arguments = JSONObject().put("url", source).toString()
             ),
-            loader
+            loader,
+            setOf(source)
         )
 
         assertEquals(source, calledWith)
@@ -100,14 +101,32 @@ class SkillRuntimeTest {
     }
 
     @Test
+    fun modelCannotInventAnUnapprovedSkillUrl() {
+        val approved = "https://github.com/example/repo/blob/main/SKILL.md"
+        val invented = "https://github.com/attacker/other/blob/main/SKILL.md"
+        var loads = 0
+        val result = executeAppTool(
+            PendingToolCall("item", "call", LOAD_SKILL_TOOL, JSONObject().put("url", invented).toString()),
+            SkillLoader { loads++; error("must not reach loader") },
+            setOf(approved)
+        )
+        assertEquals(0, loads)
+        assertEquals(TOOL_STATUS_FAILED, result.activity.status)
+        assertFalse(JSONObject(result.output).getBoolean("ok"))
+        assertTrue(JSONObject(result.output).getString("error").contains("未授权"))
+    }
+
+    @Test
     fun bothProtocolsExposeTheSameLoadSkillFunction() {
-        val chatTools = buildChatTools(fileCreationEnabled = false, skillLoadingEnabled = true)
+        val source = "https://github.com/example/repo/blob/main/SKILL.md"
+        val chatTools = buildChatTools(fileCreationEnabled = false, skillLoadingEnabled = true, skillSelectors = listOf(source))
         assertEquals(1, chatTools.length())
         val chatFunction = chatTools.getJSONObject(0).getJSONObject("function")
         assertEquals(LOAD_SKILL_TOOL, chatFunction.getString("name"))
-        assertTrue(chatFunction.getJSONObject("parameters").getJSONObject("properties").has("url"))
+        val chatUrl = chatFunction.getJSONObject("parameters").getJSONObject("properties").getJSONObject("url")
+        assertEquals(source, chatUrl.getJSONArray("enum").getString(0))
 
-        val responsesTools = buildResponsesTools(fileCreationEnabled = false, webSearchEnabled = false, skillLoadingEnabled = true)
+        val responsesTools = buildResponsesTools(fileCreationEnabled = false, webSearchEnabled = false, skillLoadingEnabled = true, skillSelectors = listOf(source))
         assertEquals(1, responsesTools.length())
         assertEquals(LOAD_SKILL_TOOL, responsesTools.getJSONObject(0).getString("name"))
         assertTrue(responsesTools.getJSONObject(0).getBoolean("strict"))

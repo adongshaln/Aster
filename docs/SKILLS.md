@@ -27,11 +27,11 @@ Aster 不会在 `/skills` 失败时伪造成功。404 / 405 / 501 及明确的�
 
 完整调用链：
 
-1. Aster 把 `load_skill` 作为真正的 function tool 注册给模型，并在明确的 Skill 加载请求首轮强制调用。
+1. Aster 把 `load_skill` 作为真正的 function tool 注册给模型，并在明确的 Skill 加载请求首轮强制调用；其参数 schema 使用 `enum` 只允许本轮用户明确给出的 GitHub URL，或本轮明确点名的已安装 Skill。
 2. 模型返回 `load_skill` function call。
 3. Aster 通过 HTTPS 实际下载对应 `SKILL.md`，执行大小、UTF-8、目标主机和路径校验，并计算 SHA-256。
 4. Aster 将 `name`、原始 URL、最终 raw URL、SHA-256 和下载到的 **原始 SKILL.md 内容**作为 tool result 返回模型。
-5. 模型在下一轮基于 tool result 继续推理。
+5. 客户端执行工具时还会再次检查同一允许列表，因此即便兼容网关忽略 JSON Schema，模型也不能自行编造另一个 GitHub URL；校验通过后，模型才在下一轮基于 tool result 继续推理。
 
 Chat Completions 直接使用这条 function-call 路径；Responses 在原生 Skills 不可用时使用同一回退路径。
 

@@ -104,7 +104,8 @@ class ApiRepository internal constructor(
         require(model.isNotBlank()) { "Model is required" }
         val requestedSkillUrl = requestedGitHubSkillUrl(history)
         val requestedInstalledSkill = requestedInstalledSkillName(history, skillLoader.listInstalled())
-        var skillLoadingEnabled = requestedSkillUrl != null || requestedInstalledSkill != null
+        val requestedSkillSelectors = listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill)
+        var skillLoadingEnabled = requestedSkillSelectors.isNotEmpty()
         var nativeSkillReference: NativeSkillReference? = null
         if (requestedSkillUrl != null && profile.usesResponses(model)) {
             onToolActivity(ChatToolActivity("native_skill", LOAD_SKILL_TOOL, "正在从 GitHub 准备原生 Skill", TOOL_STATUS_RUNNING))
@@ -146,9 +147,20 @@ class ApiRepository internal constructor(
         ): ChatCompletionResult {
             val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory = false)
             return if (profile.usesResponses(model)) {
-                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, skillLoadingEnabled, nativeSkillReference, onToolActivity, deltaSink)
+                streamResponses(
+                    profile, model, systemPrompt, prepared.history, cacheKey,
+                    skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
+                    nativeSkillReference = nativeSkillReference,
+                    onToolActivity = onToolActivity,
+                    onDelta = deltaSink
+                )
             } else {
-                streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, skillLoadingEnabled = skillLoadingEnabled, onToolActivity = onToolActivity, onDelta = deltaSink)
+                streamChatCompletions(
+                    profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false,
+                    skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
+                    onToolActivity = onToolActivity,
+                    onDelta = deltaSink
+                )
             }
         }
 
@@ -247,10 +259,11 @@ class ApiRepository internal constructor(
         history: List<ChatMessage>,
         cacheKey: String,
         explicitCache: Boolean,
-        skillLoadingEnabled: Boolean,
+        skillSelectors: List<String>,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
+        val skillLoadingEnabled = skillSelectors.isNotEmpty()
         val messages = JSONArray()
         val effectiveSystemPrompt = listOf(systemPrompt, SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty())
             .filter(String::isNotBlank).joinToString("\n\n")
@@ -287,7 +300,7 @@ class ApiRepository internal constructor(
                 .put("messages", messages)
                 .put("stream", true)
                 .put("stream_options", JSONObject().put("include_usage", true))
-            val tools = buildChatTools(toolPolicy.fileCreationEnabled, skillLoadingEnabled)
+            val tools = buildChatTools(toolPolicy.fileCreationEnabled, skillLoadingEnabled, skillSelectors)
             if (tools.length() > 0) {
                 body.put("tools", tools)
                 body.put("tool_choice", if (forceSkill)
@@ -397,7 +410,7 @@ class ApiRepository internal constructor(
             round.toolCalls.forEach { call ->
                 val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call, skillLoader)
+                val execution = executeAppTool(call, skillLoader, skillSelectors.toSet())
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {
@@ -443,11 +456,12 @@ class ApiRepository internal constructor(
         systemPrompt: String,
         history: List<ChatMessage>,
         cacheKey: String,
-        skillLoadingEnabled: Boolean,
+        skillSelectors: List<String>,
         nativeSkillReference: NativeSkillReference?,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
+        val skillLoadingEnabled = skillSelectors.isNotEmpty()
         val initialInput = JSONArray()
         history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }.forEach {
             initialInput.put(JSONObject()
@@ -462,7 +476,7 @@ class ApiRepository internal constructor(
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
         val citations = linkedMapOf<String, ChatCitation>()
         val activities = linkedMapOf<String, ChatToolActivity>()
-        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled).apply {
+        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled, skillSelectors).apply {
             nativeSkillReference?.let { put(nativeSkillShellTool(it)) }
         }
         val effectiveSystemPrompt = listOf(systemPrompt, SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty())
@@ -603,7 +617,7 @@ class ApiRepository internal constructor(
             round.toolCalls.forEach { call ->
                 val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call, skillLoader)
+                val execution = executeAppTool(call, skillLoader, skillSelectors.toSet())
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {

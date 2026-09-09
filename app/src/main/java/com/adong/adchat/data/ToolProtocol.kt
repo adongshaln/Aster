@@ -59,7 +59,8 @@ internal fun resolveChatToolPolicy(
 
 internal fun buildChatTools(
     fileCreationEnabled: Boolean,
-    skillLoadingEnabled: Boolean = false
+    skillLoadingEnabled: Boolean = false,
+    skillSelectors: List<String> = emptyList()
 ): JSONArray = JSONArray().apply {
     if (fileCreationEnabled) {
         put(JSONObject()
@@ -69,18 +70,19 @@ internal fun buildChatTools(
     if (skillLoadingEnabled) {
         put(JSONObject()
             .put("type", "function")
-            .put("function", loadSkillDefinition(responsesApi = false)))
+            .put("function", loadSkillDefinition(responsesApi = false, skillSelectors = skillSelectors)))
     }
 }
 
 internal fun buildResponsesTools(
     fileCreationEnabled: Boolean,
     webSearchEnabled: Boolean,
-    skillLoadingEnabled: Boolean = false
+    skillLoadingEnabled: Boolean = false,
+    skillSelectors: List<String> = emptyList()
 ): JSONArray = JSONArray().apply {
     if (webSearchEnabled) put(JSONObject().put("type", WEB_SEARCH_TOOL))
     if (fileCreationEnabled) put(createFileDefinition(responsesApi = true))
-    if (skillLoadingEnabled) put(loadSkillDefinition(responsesApi = true))
+    if (skillLoadingEnabled) put(loadSkillDefinition(responsesApi = true, skillSelectors = skillSelectors))
 }
 
 private fun createFileDefinition(responsesApi: Boolean): JSONObject {
@@ -105,13 +107,15 @@ private fun createFileDefinition(responsesApi: Boolean): JSONObject {
     return if (responsesApi) definition.put("type", "function").put("strict", true) else definition
 }
 
-private fun loadSkillDefinition(responsesApi: Boolean): JSONObject {
+private fun loadSkillDefinition(responsesApi: Boolean, skillSelectors: List<String>): JSONObject {
+    require(skillSelectors.isNotEmpty()) { "load_skill requires at least one user-approved Skill selector" }
     val parameters = JSONObject()
         .put("type", "object")
         .put("properties", JSONObject()
             .put("url", JSONObject()
                 .put("type", "string")
-                .put("description", "A public GitHub Skill URL to install/refresh, or the exact installed Skill name, SHA-256 or source URL to reuse.")))
+                .put("enum", JSONArray(skillSelectors.distinct()))
+                .put("description", "The exact GitHub Skill URL supplied by the user, or the exact installed Skill selector explicitly requested for this turn.")))
         .put("required", JSONArray(listOf("url")))
         .put("additionalProperties", false)
     val definition = JSONObject()
@@ -241,7 +245,8 @@ internal class ResponsesToolCallAccumulator {
 
 internal fun executeAppTool(
     call: PendingToolCall,
-    skillLoader: SkillLoader = GitHubSkillRuntime
+    skillLoader: SkillLoader = GitHubSkillRuntime,
+    allowedSkillSelectors: Set<String> = emptySet()
 ): ToolExecutionResult = when (call.name) {
     CREATE_FILE_TOOL -> runCatching {
         val arguments = JSONObject(call.arguments)
@@ -271,7 +276,8 @@ internal fun executeAppTool(
     LOAD_SKILL_TOOL -> runCatching {
         val arguments = JSONObject(call.arguments)
         val sourceUrl = arguments.optString("url").trim()
-        require(sourceUrl.isNotBlank()) { "load_skill 缺少 GitHub URL" }
+        require(sourceUrl.isNotBlank()) { "load_skill 缺少 Skill 选择器" }
+        require(sourceUrl in allowedSkillSelectors) { "模型请求了用户本轮未授权的 Skill；Aster 已拒绝加载" }
         val skill = skillLoader.load(sourceUrl)
         ToolExecutionResult(
             output = JSONObject()
