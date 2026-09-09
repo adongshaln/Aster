@@ -3,6 +3,7 @@ package com.adong.adchat.data
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -51,6 +52,7 @@ class StoryCompletionContractTest {
             }
         } finally { server.shutdown() }
     }
+
     @Test fun imageAndImportedDocumentContentReachBothRequestProtocols() = runBlocking {
         val server=MockWebServer();server.start()
         try {
@@ -71,4 +73,94 @@ class StoryCompletionContractTest {
         } finally {server.shutdown()}
     }
 
+    @Test fun chatSkillToolActuallyExecutesAndReturnsExactContentToModel() = runBlocking {
+        val server = MockWebServer(); server.start()
+        try {
+            val skillUrl = "https://github.com/example/presentation/blob/main/SKILL.md"
+            var loads = 0
+            val repository = ApiRepository(SkillLoader { url ->
+                loads++
+                assertEquals(skillUrl, url)
+                LoadedSkill(
+                    name = "presentation-design",
+                    sourceUrl = url,
+                    resolvedUrl = "https://raw.githubusercontent.com/example/presentation/main/SKILL.md",
+                    sha256 = "chat-sha",
+                    content = "# REAL CHAT SKILL\nUse cards, hierarchy and visual rhythm."
+                )
+            })
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"choices":[{"message":{"content":null,"tool_calls":[{"id":"skill-call","type":"function","function":{"name":"load_skill","arguments":"{\"url\":\"$skillUrl\"}"}}]},"finish_reason":"tool_calls"}]}"""))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"choices":[{"message":{"content":"已按真实 Skill 执行"},"finish_reason":"stop"}]}"""))
+
+            val result = repository.streamChat(
+                ApiProfile(baseUrl = server.url("/").toString(), apiKey = "test", chatApiMode = "chat"),
+                "gemini-test",
+                "",
+                listOf(ChatMessage(role = "user", content = "请加载这个 skill：$skillUrl 并按它回答")),
+                "skill-chat"
+            ) {}
+
+            assertEquals(1, loads)
+            assertEquals("已按真实 Skill 执行", result.text)
+            val first = JSONObject(server.takeRequest().body.readUtf8())
+            assertEquals(LOAD_SKILL_TOOL, first.getJSONObject("tool_choice").getJSONObject("function").getString("name"))
+            val toolNames = first.getJSONArray("tools").toString()
+            assertTrue(toolNames.contains(LOAD_SKILL_TOOL))
+            val second = JSONObject(server.takeRequest().body.readUtf8())
+            val messages = second.getJSONArray("messages")
+            val toolMessage = (0 until messages.length())
+                .map { messages.getJSONObject(it) }
+                .first { it.optString("role") == "tool" }
+            val output = JSONObject(toolMessage.getString("content"))
+            assertEquals("# REAL CHAT SKILL\nUse cards, hierarchy and visual rhythm.", output.getString("content"))
+            assertEquals("chat-sha", output.getString("sha256"))
+            assertTrue(result.toolActivities.any { it.name == LOAD_SKILL_TOOL && it.status == TOOL_STATUS_COMPLETED })
+        } finally { server.shutdown() }
+    }
+
+    @Test fun responsesSkillToolActuallyExecutesAndReturnsExactContentToModel() = runBlocking {
+        val server = MockWebServer(); server.start()
+        try {
+            val skillUrl = "https://github.com/example/presentation/tree/main/skills/ppt"
+            var loads = 0
+            val repository = ApiRepository(SkillLoader { url ->
+                loads++
+                assertEquals(skillUrl, url)
+                LoadedSkill(
+                    name = "ppt",
+                    sourceUrl = url,
+                    resolvedUrl = "https://raw.githubusercontent.com/example/presentation/main/skills/ppt/SKILL.md",
+                    sha256 = "responses-sha",
+                    content = "# REAL RESPONSES SKILL\nPrefer visual storytelling over bullet walls."
+                )
+            })
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"id":"resp-1","status":"completed","output":[{"type":"function_call","id":"item-1","call_id":"skill-call","name":"load_skill","arguments":"{\"url\":\"$skillUrl\"}"}]}"""))
+            server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(
+                """{"id":"resp-2","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Responses 已按真实 Skill 执行"}]}]}"""))
+
+            val result = repository.streamChat(
+                ApiProfile(baseUrl = server.url("/").toString(), apiKey = "test", chatApiMode = "responses"),
+                "gpt-test",
+                "",
+                listOf(ChatMessage(role = "user", content = "使用这个 Skill：$skillUrl")),
+                "skill-responses"
+            ) {}
+
+            assertEquals(1, loads)
+            assertEquals("Responses 已按真实 Skill 执行", result.text)
+            val first = JSONObject(server.takeRequest().body.readUtf8())
+            assertEquals(LOAD_SKILL_TOOL, first.getJSONObject("tool_choice").getString("name"))
+            assertTrue(first.getJSONArray("tools").toString().contains(LOAD_SKILL_TOOL))
+            assertTrue(first.getBoolean("store"))
+            val second = JSONObject(server.takeRequest().body.readUtf8())
+            assertEquals("resp-1", second.getString("previous_response_id"))
+            val output = JSONObject(second.getJSONArray("input").getJSONObject(0).getString("output"))
+            assertEquals("# REAL RESPONSES SKILL\nPrefer visual storytelling over bullet walls.", output.getString("content"))
+            assertEquals("responses-sha", output.getString("sha256"))
+            assertTrue(result.toolActivities.any { it.name == LOAD_SKILL_TOOL && it.status == TOOL_STATUS_COMPLETED })
+        } finally { server.shutdown() }
+    }
 }
