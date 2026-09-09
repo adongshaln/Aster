@@ -1,30 +1,134 @@
 package com.adong.adchat.data
 
+import android.content.Context
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.ResponseBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 internal const val LOAD_SKILL_TOOL = "load_skill"
+internal const val LIST_SKILLS_TOOL = "list_skills"
 internal const val MAX_SKILL_BYTES = 256 * 1024
+private const val MAX_INSTALLED_SKILLS = 32
 
 data class LoadedSkill(
     val name: String,
     val sourceUrl: String,
     val resolvedUrl: String,
     val sha256: String,
-    val content: String
+    val content: String,
+    val installedAt: Long = System.currentTimeMillis()
 )
 
 fun interface SkillLoader {
     fun load(sourceUrl: String): LoadedSkill
+}
+
+interface SkillLibrary {
+    fun list(): List<LoadedSkill>
+    fun find(selector: String): LoadedSkill?
+    fun save(skill: LoadedSkill)
+}
+
+class MemorySkillLibrary : SkillLibrary {
+    private val values = linkedMapOf<String, LoadedSkill>()
+
+    @Synchronized override fun list(): List<LoadedSkill> = values.values.sortedBy { it.name.lowercase() }
+
+    @Synchronized override fun find(selector: String): LoadedSkill? = findSkill(values.values.toList(), selector)
+
+    @Synchronized override fun save(skill: LoadedSkill) {
+        values[sourceKey(skill.sourceUrl)] = skill
+    }
+}
+
+/**
+ * Internal app storage for installed skills. A skill survives app restarts and is not re-downloaded
+ * when the model later loads it by installed name. Sending the GitHub URL again deliberately refreshes it.
+ */
+class FileSkillLibrary(context: Context) : SkillLibrary {
+    private val directory = File(context.filesDir, "skills").apply { mkdirs() }
+
+    @Synchronized override fun list(): List<LoadedSkill> = directory.listFiles()
+        .orEmpty()
+        .asSequence()
+        .filter { it.isFile && it.extension == "json" && it.length() <= MAX_SKILL_BYTES * 2L }
+        .mapNotNull { file -> runCatching { decode(file.readText(Charsets.UTF_8)) }.getOrNull() }
+        .sortedBy { it.name.lowercase() }
+        .toList()
+
+    @Synchronized override fun find(selector: String): LoadedSkill? = findSkill(list(), selector)
+
+    @Synchronized override fun save(skill: LoadedSkill) {
+        require(skill.content.toByteArray(Charsets.UTF_8).size <= MAX_SKILL_BYTES) { "SKILL.md 超过 ${MAX_SKILL_BYTES / 1024} KB 限制" }
+        val current = list()
+        val key = sourceKey(skill.sourceUrl)
+        if (current.none { sourceKey(it.sourceUrl) == key }) {
+            require(current.size < MAX_INSTALLED_SKILLS) { "已安装 Skill 达到 $MAX_INSTALLED_SKILLS 个上限，请先移除旧 Skill" }
+        }
+        val target = File(directory, "$key.json")
+        val temporary = File(directory, "$key.tmp")
+        temporary.writeText(encode(skill).toString(), Charsets.UTF_8)
+        if (!temporary.renameTo(target)) {
+            temporary.copyTo(target, overwrite = true)
+            temporary.delete()
+        }
+    }
+
+    private fun encode(skill: LoadedSkill) = JSONObject()
+        .put("name", skill.name)
+        .put("source_url", skill.sourceUrl)
+        .put("resolved_url", skill.resolvedUrl)
+        .put("sha256", skill.sha256)
+        .put("installed_at", skill.installedAt)
+        .put("content", skill.content)
+
+    private fun decode(value: String): LoadedSkill {
+        val root = JSONObject(value)
+        val content = root.getString("content")
+        require(content.toByteArray(Charsets.UTF_8).size <= MAX_SKILL_BYTES)
+        return LoadedSkill(
+            name = root.getString("name"),
+            sourceUrl = root.getString("source_url"),
+            resolvedUrl = root.getString("resolved_url"),
+            sha256 = root.getString("sha256"),
+            installedAt = root.optLong("installed_at").takeIf { it > 0 } ?: 0L,
+            content = content
+        )
+    }
+}
+
+/** Real Aster skill runtime: GitHub URLs perform a network fetch + install, names load local installed bytes. */
+class SkillRuntime(
+    private val library: SkillLibrary,
+    private val remoteLoader: SkillLoader = GitHubSkillRuntime
+) {
+    fun hasInstalledSkills(): Boolean = library.list().isNotEmpty()
+    fun listInstalled(): List<LoadedSkill> = library.list()
+
+    fun load(sourceOrName: String): LoadedSkill {
+        val selector = sourceOrName.trim()
+        require(selector.isNotBlank()) { "Skill 来源不能为空" }
+        return if (isGitHubSkillUrl(selector)) {
+            remoteLoader.load(selector).also(library::save)
+        } else {
+            library.find(selector) ?: throw IllegalArgumentException("未安装 Skill：$selector。请先发送它的 GitHub 链接进行安装。")
+        }
+    }
+
+    companion object {
+        fun inMemory(loader: SkillLoader = GitHubSkillRuntime): SkillRuntime = SkillRuntime(MemorySkillLibrary(), loader)
+        fun persistent(context: Context): SkillRuntime = SkillRuntime(FileSkillLibrary(context.applicationContext), GitHubSkillRuntime)
+    }
 }
 
 internal data class GitHubSkillTarget(
@@ -38,13 +142,11 @@ internal data class GitHubSkillTarget(
 
 /**
  * Resolves a public GitHub link to an actual SKILL.md download target.
- *
  * Supported forms:
  * - https://github.com/owner/repo
  * - https://github.com/owner/repo/blob/<ref>/path/SKILL.md
  * - https://github.com/owner/repo/tree/<ref>/path/to/skill
  * - https://raw.githubusercontent.com/owner/repo/<ref>/path/SKILL.md
- *
  * Repository-root links resolve the repository's real default branch through the GitHub API.
  */
 internal fun resolveGitHubSkillTarget(
@@ -54,6 +156,7 @@ internal fun resolveGitHubSkillTarget(
     val parsed = sourceUrl.trim().toHttpUrlOrNull()
         ?: throw IllegalArgumentException("Skill 链接不是有效 URL")
     require(parsed.scheme == "https") { "Skill 只允许通过 HTTPS 加载" }
+    require(parsed.query == null && parsed.fragment == null) { "Skill 链接不能包含 query 或 fragment" }
     val host = parsed.host.lowercase()
     val segments = parsed.pathSegments.filter { it.isNotBlank() }
 
@@ -61,7 +164,7 @@ internal fun resolveGitHubSkillTarget(
         require(owner.matches(Regex("[A-Za-z0-9_.-]+")) && repository.matches(Regex("[A-Za-z0-9_.-]+"))) {
             "GitHub 仓库地址不合法"
         }
-        require(ref.isNotBlank() && ref.length <= 200) { "GitHub ref 不合法" }
+        require(ref.isNotBlank() && ref.length <= 200 && !ref.contains("..")) { "GitHub ref 不合法" }
         val normalizedPath = path.trim('/').replace("\\", "/")
         require(normalizedPath.split('/').none { it.isBlank() || it == "." || it == ".." }) { "Skill 路径不合法" }
         require(normalizedPath.substringAfterLast('/').equals("SKILL.md", ignoreCase = true)) {
@@ -81,11 +184,7 @@ internal fun resolveGitHubSkillTarget(
 
     if (host == "raw.githubusercontent.com") {
         require(segments.size >= 4) { "Raw GitHub Skill 链接缺少仓库、ref 或 SKILL.md 路径" }
-        val owner = segments[0]
-        val repository = segments[1]
-        val ref = segments[2]
-        val path = segments.drop(3).joinToString("/")
-        return rawTarget(owner, repository, ref, path)
+        return rawTarget(segments[0], segments[1], segments[2], segments.drop(3).joinToString("/"))
     }
 
     require(host == "github.com" || host == "www.github.com") { "仅支持公开 GitHub Skill 链接" }
@@ -106,8 +205,7 @@ internal fun resolveGitHubSkillTarget(
         "tree" -> {
             require(segments.size >= 4) { "GitHub tree 链接缺少 ref" }
             val directory = segments.drop(4).joinToString("/").trim('/')
-            val skillPath = if (directory.isBlank()) "SKILL.md" else "$directory/SKILL.md"
-            rawTarget(owner, repository, segments[3], skillPath)
+            rawTarget(owner, repository, segments[3], if (directory.isBlank()) "SKILL.md" else "$directory/SKILL.md")
         }
         else -> throw IllegalArgumentException("请发送 GitHub 仓库、tree 目录、blob/SKILL.md 或 raw/SKILL.md 链接")
     }
@@ -127,7 +225,10 @@ internal fun requestedGitHubSkillUrl(history: List<ChatMessage>): String? {
     return urls.firstOrNull().takeIf { explicitlyRequested }
 }
 
-internal fun shouldOfferSkillLoader(history: List<ChatMessage>): Boolean = requestedGitHubSkillUrl(history) != null
+internal fun isGitHubSkillUrl(value: String): Boolean {
+    val parsed = value.trim().toHttpUrlOrNull() ?: return false
+    return parsed.scheme == "https" && parsed.host.lowercase() in setOf("github.com", "www.github.com", "raw.githubusercontent.com")
+}
 
 internal object GitHubSkillRuntime : SkillLoader {
     private val client = OkHttpClient.Builder()
@@ -161,10 +262,6 @@ internal object GitHubSkillRuntime : SkillLoader {
             )
         }
     }
-
-    internal fun resolve(sourceUrl: String): GitHubSkillTarget = resolveGitHubSkillTarget(sourceUrl, ::defaultBranch)
-
-    internal fun nameFrom(content: String, target: GitHubSkillTarget): String = skillName(content, target)
 
     private fun defaultBranch(owner: String, repository: String): String {
         val url = HttpUrl.Builder()
@@ -212,10 +309,6 @@ internal object GitHubSkillRuntime : SkillLoader {
         .decode(ByteBuffer.wrap(bytes))
         .toString()
 
-    private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
-        .digest(bytes)
-        .joinToString("") { "%02x".format(it) }
-
     private fun skillName(content: String, target: GitHubSkillTarget): String {
         val normalized = content.replace("\r\n", "\n")
         if (normalized.startsWith("---\n")) {
@@ -226,7 +319,33 @@ internal object GitHubSkillRuntime : SkillLoader {
                     ?.groupValues?.getOrNull(1)?.trim()?.takeIf(String::isNotBlank)?.let { return it.take(120) }
             }
         }
-        val parts = target.path.split('/')
-        return parts.dropLast(1).lastOrNull()?.takeIf { it.isNotBlank() } ?: target.repository
+        return target.path.split('/').dropLast(1).lastOrNull()?.takeIf { it.isNotBlank() } ?: target.repository
     }
 }
+
+private fun findSkill(values: List<LoadedSkill>, selector: String): LoadedSkill? {
+    val key = selector.trim()
+    values.firstOrNull { it.sourceUrl == key || it.resolvedUrl == key || it.sha256.equals(key, ignoreCase = true) }?.let { return it }
+    val byName = values.filter { it.name.equals(key, ignoreCase = true) }
+    require(byName.size <= 1) { "存在多个同名 Skill，请使用 GitHub 来源链接或 SHA-256 精确加载" }
+    return byName.singleOrNull()
+}
+
+private fun sourceKey(value: String): String = sha256(value.trim().toByteArray(Charsets.UTF_8))
+private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+    .digest(bytes)
+    .joinToString("") { "%02x".format(it) }
+
+internal fun installedSkillsJson(skills: List<LoadedSkill>): String = JSONObject()
+    .put("ok", true)
+    .put("skills", JSONArray().apply {
+        skills.forEach { skill ->
+            put(JSONObject()
+                .put("name", skill.name)
+                .put("source_url", skill.sourceUrl)
+                .put("resolved_url", skill.resolvedUrl)
+                .put("sha256", skill.sha256)
+                .put("installed_at", skill.installedAt))
+        }
+    })
+    .toString()
