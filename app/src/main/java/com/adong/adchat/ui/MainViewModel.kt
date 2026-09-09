@@ -60,7 +60,7 @@ data class ConnectionUiState(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val store = ConfigStore(application)
-    private val repository = ApiRepository()
+    private val repository = ApiRepository(skillLoader = SkillRuntime.persistent(application))
     private val conversationStore = ConversationStore(application)
     private val chatSessionStore = ChatSessionStore(application)
     private val artworkStore = ArtworkStore(application)

@@ -13,6 +13,7 @@ import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.ApiRepository
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ConfigStore
+import com.adong.adchat.data.SkillRuntime
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryConflictEntry
 import com.adong.adchat.data.story.StoryChangeEntry
@@ -52,7 +53,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         private set
     private val memoryStore = StoryMemoryStore(application)
     private val configStore = ConfigStore(application)
-    private val api = ApiRepository()
+    private val api = ApiRepository(skillLoader = SkillRuntime.persistent(application))
     private val jobs = linkedMapOf<String, Job>()
     private val organizerJobs = ConcurrentHashMap<String, Job>()
     @Volatile private var stateEpoch = 0L
