@@ -148,7 +148,10 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
                 override fun onPageFinished(view: WebView, url: String?) {
                     // DOM completion precedes Chromium's first drawable frame.
                     view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
-                        override fun onComplete(requestId: Long) { view.invalidate() }
+                        override fun onComplete(requestId: Long) {
+                            view.invalidate()
+                            view.rootView.postInvalidateOnAnimation()
+                        }
                     })
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
@@ -176,8 +179,11 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
     } else AndroidView(
         factory = {
             view.apply {
-                // Load after the native view has received its Compose bounds.
-                post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source), "text/html", "utf-8", null) }
+                // Let the surrounding Compose window submit its first frame before
+                // Chromium starts drawing; otherwise a new dialog's toolbar can stay blank.
+                postOnAnimation {
+                    post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source), "text/html", "utf-8", null) }
+                }
             }
         },
         modifier = modifier,

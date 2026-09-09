@@ -389,11 +389,12 @@ class SharedUiInteractionTest {
         val report = org.json.JSONTokener(evaluate("JSON.stringify(window.__htmlProbe)")).nextValue() as String
         val checks = org.json.JSONObject(report)
         listOf("rendered", "storageBlocked", "parentBlocked", "networkBlocked").forEach { assertTrue(it, checks.getBoolean(it)) }
-        fun awaitPaintedHtml() {
+        fun awaitPaintedHtml(fullscreen: Boolean = false) {
             // A running DOM is not proof that WebView has submitted visible pixels.
             rule.waitUntil(20_000) {
                 val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
                 var green = 0
+                var toolbarInk = 0
                 if (bitmap != null) {
                     for (y in 0 until bitmap.height step 12) for (x in 0 until bitmap.width step 12) {
                         val pixel = bitmap.getPixel(x, y)
@@ -401,9 +402,20 @@ class SharedUiInteractionTest {
                             kotlin.math.abs(android.graphics.Color.green(pixel) - 240) < 5 &&
                             kotlin.math.abs(android.graphics.Color.blue(pixel) - 235) < 5) green++
                     }
+                    if (fullscreen) {
+                        // Check the 56 dp close/title bar below the status bar as well as HTML.
+                        val density = rule.activity.resources.displayMetrics.density
+                        val top = (28 * density).toInt()
+                        val bottom = (72 * density).toInt().coerceAtMost(bitmap.height)
+                        for (y in top until bottom step 2) for (x in 0 until bitmap.width step 2) {
+                            val pixel = bitmap.getPixel(x, y)
+                            if (android.graphics.Color.red(pixel) < 110 && android.graphics.Color.green(pixel) < 110 &&
+                                android.graphics.Color.blue(pixel) < 110) toolbarInk++
+                        }
+                    }
                     bitmap.recycle()
                 }
-                green > 100
+                green > 100 && (!fullscreen || toolbarInk > 100)
             }
         }
         android.util.Log.i("HtmlPreviewTest", evaluate("JSON.stringify({width:innerWidth,height:innerHeight,frame:document.querySelector('iframe').getBoundingClientRect().toJSON()})"))
@@ -411,7 +423,7 @@ class SharedUiInteractionTest {
         screenshot("html-inline-preview")
         rule.onNodeWithContentDescription("全屏预览 HTML").performClick()
         rule.onNodeWithContentDescription("关闭 HTML 预览").assertExists()
-        awaitPaintedHtml()
+        awaitPaintedHtml(fullscreen = true)
         screenshot("html-fullscreen-preview")
         rule.onNodeWithContentDescription("关闭 HTML 预览").performClick()
         rule.onNodeWithContentDescription("HTML 源码").performClick()
