@@ -13,3 +13,15 @@
 Android 参考：https://developer.android.com/reference/android/webkit/WebSettings
 
 验证：ToolProtocol 单测覆盖两种接口白名单与文件内容/文件名；包装单测覆盖 srcdoc 逃逸与尺寸上限；原生 UI 测试通过实际 WebView 验证完成后预览、JS/CSS 交互、父页面/存储/网络隔离及全屏切换。
+
+## 已验证交付：Build 168
+
+- 产品提交：`79fadf9c69afb934915b4ecfcaf987460fc0a9c5`（feature/story-mode）。
+- Android Build #168：单元测试、Release 编译、固定签名构建成功，run `34296710923`。
+- Native UI preview #56：13 tests，0 failures/errors/skipped，run `34296710904`。
+- 人工核对内联与全屏截图，HTML 背景、文本、脚本按钮和顶部关闭栏均正常显示。
+- 原生测试不仅检查 DOM/JavaScript，还检查屏幕上的 HTML 像素及全屏关闭栏文字像素。Build 166/167 的首帧空白问题已修复，不作为交付版本。
+- APK：`Aster-build168.apk`，24,224,161 bytes。
+- SHA-256：`6a0b9ac158d3eb6768b007a053ea01a4d6a9a561689842698f7bdd21a5df6a95`。
+- 签名证书 SHA-256：`3e4da1d062819d9f1065f85654de71ae5f0ad93aa10c52fc85faad0338a4e3b1`，与 Build 165 一致。
+- main、versionName 2.3.0 / versionCode 57 和原签名配置均未改动。
