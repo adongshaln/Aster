@@ -98,10 +98,22 @@ new_try = '''        try {
 rep(old_try, new_try)
 
 rep(
-    '''        skillLoadingEnabled: Boolean,
+    '''    private suspend fun streamResponses(
+        profile: ApiProfile,
+        model: String,
+        systemPrompt: String,
+        history: List<ChatMessage>,
+        cacheKey: String,
+        skillLoadingEnabled: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
 ''',
-    '''        skillLoadingEnabled: Boolean,
+    '''    private suspend fun streamResponses(
+        profile: ApiProfile,
+        model: String,
+        systemPrompt: String,
+        history: List<ChatMessage>,
+        cacheKey: String,
+        skillLoadingEnabled: Boolean,
         nativeSkillReference: NativeSkillReference?,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
 '''
