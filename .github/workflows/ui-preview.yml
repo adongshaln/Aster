@@ -2,7 +2,7 @@ name: Native UI preview
 
 on:
   push:
-    branches: ["design/**", "feature/story-mode"]
+    branches: ["design/**", "feature/story-mode", "feature/skills-runtime"]
     paths:
       - "app/src/main/java/com/adong/adchat/MainActivity.kt"
       - "app/src/main/java/com/adong/adchat/ui/**"

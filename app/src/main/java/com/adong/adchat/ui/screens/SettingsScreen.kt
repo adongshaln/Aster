@@ -149,6 +149,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
                     Text("修改自动保存，仅用于对话。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
             }
+            item { com.adong.adchat.ui.components.SkillPickerEntry(null) }
             item {
                 Text("Aster ${BuildConfig.VERSION_NAME}", Modifier.fillMaxWidth().padding(top = 20.dp),
                     color = MutedInk, style = MaterialTheme.typography.labelMedium,

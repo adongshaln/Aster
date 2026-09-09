@@ -130,6 +130,7 @@ class NativeSkillsTest {
                 NativeSkillReference("skill_real_123", "3", skillBundle.name, skillBundle.sha256)
             }
             val repository = ApiRepository(
+                preferNativeSkills = true,
                 skillLoader = SkillLoader { error("function fallback must not run on native success") },
                 skillBundleLoader = bundleLoader,
                 nativeSkillUploader = uploader
@@ -172,6 +173,7 @@ class NativeSkillsTest {
             val sourceUrl = "https://github.com/example/slides/blob/main/SKILL.md"
             var fallbackLoads = 0
             val repository = ApiRepository(
+                preferNativeSkills = true,
                 skillLoader = SkillLoader { url ->
                     fallbackLoads++
                     LoadedSkill(

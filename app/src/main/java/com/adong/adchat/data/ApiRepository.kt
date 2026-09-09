@@ -32,7 +32,8 @@ import kotlin.coroutines.cancellation.CancellationException
 class ApiRepository internal constructor(
     private val skillLoader: SkillLoader = GitHubSkillRuntime,
     private val skillBundleLoader: SkillBundleLoader = GitHubSkillBundleRuntime,
-    private val nativeSkillUploader: NativeSkillUploader = NativeSkillsApi
+    private val nativeSkillUploader: NativeSkillUploader = NativeSkillsApi,
+    private val preferNativeSkills: Boolean = false
 ) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
@@ -95,6 +96,7 @@ class ApiRepository internal constructor(
         history: List<ChatMessage>,
         cacheKey: String,
         trimHistory: Boolean = true,
+        skillsAllowed: Boolean = true,
         onContextTrim: suspend (Int) -> Unit = {},
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
@@ -102,12 +104,17 @@ class ApiRepository internal constructor(
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
-        val requestedSkillUrl = requestedGitHubSkillUrl(history)
-        val requestedInstalledSkill = requestedInstalledSkillName(history, skillLoader.listInstalled())
-        val requestedSkillSelectors = listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill)
+        val requestedSkillUrl = if (skillsAllowed) requestedGitHubSkillUrl(history) else null
+        val installed = if (skillsAllowed) skillLoader.listInstalled().filter { it.enabled } else emptyList()
+        val requestedInstalledSkill = requestedInstalledSkillName(history, installed)
+        val selected = if (skillsAllowed) skillLoader.selected(cacheKey) else emptyList()
+        val available = (selected + installed.filter { it.name == requestedInstalledSkill || it.sourceUrl == requestedSkillUrl }).distinctBy { it.sourceUrl }
+        val requestedSkillSelectors = (listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill) + available.map { it.sha256 }).distinct()
+        val requestSkillLoader = SkillSession(skillLoader, available)
+        val requireSkillLoad = requestedSkillUrl != null || requestedInstalledSkill != null
         var skillLoadingEnabled = requestedSkillSelectors.isNotEmpty()
         var nativeSkillReference: NativeSkillReference? = null
-        if (requestedSkillUrl != null && profile.usesResponses(model)) {
+        if (preferNativeSkills && requestedSkillUrl != null && profile.usesResponses(model)) {
             onToolActivity(ChatToolActivity("native_skill", LOAD_SKILL_TOOL, "正在从 GitHub 准备原生 Skill", TOOL_STATUS_RUNNING))
             try {
                 val bundle = skillBundleLoader.loadBundle(requestedSkillUrl)
@@ -150,6 +157,7 @@ class ApiRepository internal constructor(
                 streamResponses(
                     profile, model, systemPrompt, prepared.history, cacheKey,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
+                    requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
                     nativeSkillReference = nativeSkillReference,
                     onToolActivity = onToolActivity,
                     onDelta = deltaSink
@@ -158,6 +166,7 @@ class ApiRepository internal constructor(
                 streamChatCompletions(
                     profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
+                    requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
                     onToolActivity = onToolActivity,
                     onDelta = deltaSink
                 )
@@ -260,6 +269,8 @@ class ApiRepository internal constructor(
         cacheKey: String,
         explicitCache: Boolean,
         skillSelectors: List<String>,
+        requestSkillLoader: SkillLoader,
+        requireSkillLoad: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -270,6 +281,8 @@ class ApiRepository internal constructor(
         if (effectiveSystemPrompt.isNotBlank()) {
             messages.put(JSONObject().put("role", "system").put("content", effectiveSystemPrompt))
         }
+        val catalog = skillCatalog(requestSkillLoader.listInstalled())
+        if (catalog.isNotBlank()) messages.put(JSONObject().put("role", "user").put("content", catalog))
         val stableHistory = history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }
         stableHistory.forEachIndexed { index, message ->
             val content: Any = chatCompletionContent(
@@ -385,7 +398,7 @@ class ApiRepository internal constructor(
         if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
         var completedNormally = false
         for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
-            val forceSkill = skillLoadingEnabled && roundIndex == 0
+            val forceSkill = skillLoadingEnabled && requireSkillLoad && roundIndex == 0
             val round = executeRound(forceSkill)
             if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
                 throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
@@ -408,9 +421,10 @@ class ApiRepository internal constructor(
                 .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
                 .put("tool_calls", assistantToolCalls))
             round.toolCalls.forEach { call ->
-                val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"
+                require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
+                val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call, skillLoader, skillSelectors.toSet())
+                val execution = executeAppTool(call, requestSkillLoader, skillSelectors.toSet())
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {
@@ -457,12 +471,16 @@ class ApiRepository internal constructor(
         history: List<ChatMessage>,
         cacheKey: String,
         skillSelectors: List<String>,
+        requestSkillLoader: SkillLoader,
+        requireSkillLoad: Boolean,
         nativeSkillReference: NativeSkillReference?,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
         val skillLoadingEnabled = skillSelectors.isNotEmpty()
         val initialInput = JSONArray()
+        val catalog = skillCatalog(requestSkillLoader.listInstalled())
+        if (catalog.isNotBlank()) initialInput.put(JSONObject().put("role", "user").put("content", catalog))
         history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }.forEach {
             initialInput.put(JSONObject()
                 .put("role", it.role)
@@ -597,7 +615,7 @@ class ApiRepository internal constructor(
         var previousResponseId: String? = null
         var completedNormally = false
         for (toolRound in 0 until MAX_TOOL_ROUNDS) {
-            val forceSkill = skillLoadingEnabled && toolRound == 0
+            val forceSkill = skillLoadingEnabled && requireSkillLoad && toolRound == 0
             val round = executeRound(requestInput, previousResponseId, forceSkill)
             if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
                 throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
@@ -615,9 +633,10 @@ class ApiRepository internal constructor(
             previousResponseId = round.responseId
             requestInput = JSONArray()
             round.toolCalls.forEach { call ->
-                val runningLabel = if (call.name == LOAD_SKILL_TOOL) "正在加载 Skill" else "正在创建文件"
+                require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
+                val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call, skillLoader, skillSelectors.toSet())
+                val execution = executeAppTool(call, requestSkillLoader, skillSelectors.toSet())
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {

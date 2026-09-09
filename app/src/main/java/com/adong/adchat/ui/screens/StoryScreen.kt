@@ -477,6 +477,7 @@ private fun StoryWorkspaceContent(
         )
 
         StoryComposer(
+            skillScope = "aster-story-${storyVm.activeStoryId}-${workspace.dbValue}",
             value = storyVm.draft(workspace),
             attachments = savedState.attachments,
             attachmentBusy = storyVm.attachmentBusy,
@@ -661,6 +662,7 @@ private fun StoryDetailAction(
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun StoryComposer(
+    skillScope: String,
     value: String,
     attachments: List<com.adong.adchat.data.ChatImageAttachment>,
     attachmentBusy: Boolean,
@@ -699,6 +701,7 @@ private fun StoryComposer(
                 ConversationSheetAction(Icons.Rounded.AttachFile, "文件", !loading && !attachmentBusy,
                     { showAttachments = false; onPickDocument() }, Modifier.weight(1f), "文本 / DOCX / PDF")
             }
+            SkillPickerEntry(skillScope, enabled = !loading && !attachmentBusy)
         }
     }
 }

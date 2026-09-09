@@ -1618,6 +1618,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val wasNewConversation = activeConversationId == null
         val id = activeConversationId ?: UUID.randomUUID().toString().also { activeConversationId = it }
         if (wasNewConversation) {
+            val skills = SkillRuntime.persistent(getApplication())
+            skills.select("adchat-$id", skills.selection("adchat-new"))
+            skills.select("adchat-new", emptySet())
+        }
+        if (wasNewConversation) {
             lastActiveChatKey = id
             chatDrafts.remove(ChatSessionStore.NEW_CONVERSATION_KEY)
             scheduleSessionSave(immediate = true)

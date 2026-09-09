@@ -297,6 +297,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .navigationBarsPadding()
             ) {
                 ChatComposer(
+                    skillScope = "adchat-${vm.activeConversationId ?: "new"}",
                     focusRequester = composerFocusRequester,
                     value = vm.chatInput,
                     attachments = vm.chatAttachments,
@@ -1525,6 +1526,7 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatComposer(
+    skillScope: String,
     focusRequester: FocusRequester,
     value: String,
     attachments: List<ChatImageAttachment>,
@@ -1586,6 +1588,7 @@ private fun ChatComposer(
     )
     if (showToolsSheet) {
         ChatToolsSheet(
+            skillScope = skillScope,
             profileName = profileName,
             model = model,
             apiMode = apiMode,
@@ -1639,6 +1642,7 @@ private fun ChatComposer(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ChatToolsSheet(
+    skillScope: String,
     profileName: String,
     model: String,
     apiMode: String,
@@ -1667,6 +1671,7 @@ private fun ChatToolsSheet(
             ConversationSheetAction(Icons.Rounded.Hub, "模型", true, onModelClick, Modifier.weight(1f), "切换本轮使用的模型")
             ConversationSheetAction(Icons.Rounded.Psychology, "思考", true, onReasoningClick, Modifier.weight(1f), "调整回答的思考强度")
         }
+        SkillPickerEntry(skillScope, enabled = canPickDocuments)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("工具", style = MaterialTheme.typography.labelLarge, color = MutedInk)
             ComposerToolToggle(Icons.Rounded.TravelExplore, "联网搜索", "回答时参考网页信息",

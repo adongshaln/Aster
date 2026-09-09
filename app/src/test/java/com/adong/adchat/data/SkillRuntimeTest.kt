@@ -120,14 +120,14 @@ class SkillRuntimeTest {
     fun bothProtocolsExposeTheSameLoadSkillFunction() {
         val source = "https://github.com/example/repo/blob/main/SKILL.md"
         val chatTools = buildChatTools(fileCreationEnabled = false, skillLoadingEnabled = true, skillSelectors = listOf(source))
-        assertEquals(1, chatTools.length())
+        assertEquals(2, chatTools.length())
         val chatFunction = chatTools.getJSONObject(0).getJSONObject("function")
         assertEquals(LOAD_SKILL_TOOL, chatFunction.getString("name"))
         val chatUrl = chatFunction.getJSONObject("parameters").getJSONObject("properties").getJSONObject("url")
         assertEquals(source, chatUrl.getJSONArray("enum").getString(0))
 
         val responsesTools = buildResponsesTools(fileCreationEnabled = false, webSearchEnabled = false, skillLoadingEnabled = true, skillSelectors = listOf(source))
-        assertEquals(1, responsesTools.length())
+        assertEquals(2, responsesTools.length())
         assertEquals(LOAD_SKILL_TOOL, responsesTools.getJSONObject(0).getString("name"))
         assertTrue(responsesTools.getJSONObject(0).getBoolean("strict"))
     }

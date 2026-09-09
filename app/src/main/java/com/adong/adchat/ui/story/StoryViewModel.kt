@@ -1136,7 +1136,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         var result: com.adong.adchat.data.ChatCompletionResult? = null
         var state = "failed"
         try {
-            val response = api.streamChat(profile,model,systemPrompt,preparedHistory,cacheKey,trimHistory=false,onDelta=onDelta)
+            val response = api.streamChat(profile,model,systemPrompt,preparedHistory,cacheKey,trimHistory=false,skillsAllowed=category in setOf("prose", "discussion") && cacheKey.startsWith("aster-story-"),onDelta=onDelta)
             result = response
             state = if(response.outputComplete) "completed" else "incomplete"
             return response
