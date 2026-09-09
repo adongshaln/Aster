@@ -29,7 +29,11 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 import kotlin.coroutines.cancellation.CancellationException
 
-class ApiRepository internal constructor(private val skillLoader: SkillLoader = GitHubSkillRuntime) {
+class ApiRepository internal constructor(
+    private val skillLoader: SkillLoader = GitHubSkillRuntime,
+    private val skillBundleLoader: SkillBundleLoader = GitHubSkillBundleRuntime,
+    private val nativeSkillUploader: NativeSkillUploader = NativeSkillsApi
+) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -98,8 +102,40 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
-        val skillLoadingEnabled = shouldOfferSkillLoader(history)
-        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || skillLoadingEnabled
+        val requestedSkillUrl = requestedGitHubSkillUrl(history)
+        var skillLoadingEnabled = requestedSkillUrl != null
+        var nativeSkillReference: NativeSkillReference? = null
+        if (requestedSkillUrl != null && profile.usesResponses(model)) {
+            onToolActivity(ChatToolActivity("native_skill", LOAD_SKILL_TOOL, "正在从 GitHub 准备原生 Skill", TOOL_STATUS_RUNNING))
+            try {
+                val bundle = skillBundleLoader.loadBundle(requestedSkillUrl)
+                nativeSkillReference = nativeSkillUploader.upload(profile, bundle)
+                skillLoadingEnabled = false
+                onToolActivity(ChatToolActivity(
+                    "native_skill",
+                    LOAD_SKILL_TOOL,
+                    "已通过原生 Skills API 加载：${nativeSkillReference?.name ?: bundle.name}",
+                    TOOL_STATUS_COMPLETED
+                ))
+            } catch (unsupported: NativeSkillsUnsupportedException) {
+                skillLoadingEnabled = true
+                onToolActivity(ChatToolActivity(
+                    "native_skill",
+                    LOAD_SKILL_TOOL,
+                    "当前服务不支持原生 Skills，改用 GitHub 兼容加载",
+                    TOOL_STATUS_COMPLETED
+                ))
+            } catch (error: Throwable) {
+                onToolActivity(ChatToolActivity(
+                    "native_skill",
+                    LOAD_SKILL_TOOL,
+                    error.message ?: "原生 Skill 加载失败",
+                    TOOL_STATUS_FAILED
+                ))
+                throw error
+            }
+        }
+        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || requestedSkillUrl != null
         val initialContext = ModelContextPolicy.prepare(systemPrompt, history, profile.contextLimits(model), trimHistory)
         if (initialContext.omittedTurns > 0) onContextTrim(initialContext.omittedTurns)
 
@@ -109,7 +145,7 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
         ): ChatCompletionResult {
             val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory = false)
             return if (profile.usesResponses(model)) {
-                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, skillLoadingEnabled, onToolActivity, deltaSink)
+                streamResponses(profile, model, systemPrompt, prepared.history, cacheKey, skillLoadingEnabled, nativeSkillReference, onToolActivity, deltaSink)
             } else {
                 streamChatCompletions(profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false, skillLoadingEnabled = skillLoadingEnabled, onToolActivity = onToolActivity, onDelta = deltaSink)
             }
@@ -146,6 +182,18 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
         } catch (initialError: Throwable) {
             if (initialError is CancellationException) throw initialError
             currentCoroutineContext().ensureActive()
+            if (combined.isEmpty() && nativeSkillReference != null && initialError.isNativeSkillCompatibilityFailure()) {
+                onToolActivity(ChatToolActivity(
+                    "native_skill",
+                    LOAD_SKILL_TOOL,
+                    "当前模型不支持原生 Skill 环境，改用 GitHub 兼容加载",
+                    TOOL_STATUS_COMPLETED
+                ))
+                nativeSkillReference = null
+                skillLoadingEnabled = true
+                val fallback = executeWithPreDeltaRetry(initialContext.history, initialSink)
+                return@withContext fallback.copy(text = combined.toString().ifBlank { fallback.text })
+            }
             if (combined.isEmpty() || toolsActive || !profile.autoResumeStream || !initialError.isRetryableStreamFailure()) throw initialError
         }
 
@@ -386,6 +434,7 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
         history: List<ChatMessage>,
         cacheKey: String,
         skillLoadingEnabled: Boolean,
+        nativeSkillReference: NativeSkillReference?,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -403,7 +452,9 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
         val citations = linkedMapOf<String, ChatCitation>()
         val activities = linkedMapOf<String, ChatToolActivity>()
-        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled)
+        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled).apply {
+            nativeSkillReference?.let { put(nativeSkillShellTool(it)) }
+        }
 
         suspend fun recordActivity(activity: ChatToolActivity) {
             activities[activity.id] = activity
@@ -417,11 +468,13 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
             val body = JSONObject().put("model", model).put("input", requestInput).put("stream", true)
             if (tools.length() > 0) {
                 body.put("tools", tools)
-                body.put("tool_choice", if (forceSkill)
-                    JSONObject().put("type", "function").put("name", LOAD_SKILL_TOOL)
-                else "auto")
+                body.put("tool_choice", when {
+                    nativeSkillReference != null && previousResponseId == null -> JSONObject().put("type", "shell")
+                    forceSkill -> JSONObject().put("type", "function").put("name", LOAD_SKILL_TOOL)
+                    else -> "auto"
+                })
             }
-            if (profile.fileCreationEnabled || skillLoadingEnabled) body.put("store", true)
+            if (profile.fileCreationEnabled || skillLoadingEnabled || nativeSkillReference != null) body.put("store", true)
             previousResponseId?.takeIf(String::isNotBlank)?.let { body.put("previous_response_id", it) }
             if (systemPrompt.isNotBlank()) body.put("instructions", systemPrompt)
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = true, explicitCache = false)
@@ -631,6 +684,16 @@ class ApiRepository internal constructor(private val skillLoader: SkillLoader = 
                 body.put("prompt_cache_options", JSONObject().put("mode", "explicit").put("ttl", "30m"))
             }
         }
+    }
+
+    private fun Throwable.isNativeSkillCompatibilityFailure(): Boolean {
+        val value = generateSequence(this) { it.cause }.joinToString(" ") { it.message.orEmpty() }.lowercase()
+        if (!(value.contains("skill") || value.contains("shell") || value.contains("container"))) return false
+        return listOf(
+            "unsupported", "not supported", "does not support", "unknown tool",
+            "invalid tool", "not available", "not allowed", "unrecognized",
+            "unsupported parameter", "invalid_request_error"
+        ).any(value::contains)
     }
 
     private fun Throwable.isCacheCompatibilityError(): Boolean {
