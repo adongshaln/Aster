@@ -17,7 +17,20 @@ jobs:
           ref: feature/skills-runtime
           fetch-depth: 0
       - name: Apply runtime patch
-        run: python scripts/finalize_skills_runtime.py
+        run: |
+          python scripts/finalize_skills_runtime.py
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/adong/adchat/data/SkillRuntime.kt')
+          s = p.read_text()
+          if 'internal fun shouldOfferSkillLoader' not in s:
+              anchor = 'internal fun requestedInstalledSkillName('
+              helper = 'internal fun shouldOfferSkillLoader(history: List<ChatMessage>): Boolean = requestedGitHubSkillUrl(history) != null\n\n'
+              if anchor not in s:
+                  raise SystemExit('missing installed skill helper anchor')
+              s = s.replace(anchor, helper + anchor, 1)
+              p.write_text(s)
+          PY
       - name: Remove one-off patch files
         run: rm -f scripts/finalize_skills_runtime.py .github/workflows/skills-runtime-finalize.yml
       - name: Test and assemble release
