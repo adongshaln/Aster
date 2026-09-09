@@ -108,7 +108,7 @@ class ApiRepository internal constructor(
         val installed = if (skillsAllowed) skillLoader.listInstalled().filter { it.enabled } else emptyList()
         val requestedInstalledSkill = requestedInstalledSkillName(history, installed)
         val selected = if (skillsAllowed) skillLoader.selected(cacheKey) else emptyList()
-        val available = (selected + installed.filter { it.name == requestedInstalledSkill || it.sourceUrl == requestedSkillUrl }).distinctBy { it.sourceUrl }
+        val available = (selected + installed.filter { it.name == requestedInstalledSkill || it.sourceUrl == requestedSkillUrl }.map { skillLoader.load(it.sourceUrl) }).distinctBy { it.sourceUrl }
         val requestedSkillSelectors = (listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill) + available.map { it.sha256 }).distinct()
         val requestSkillLoader = SkillSession(skillLoader, available) { loaded ->
             if (skillLoader is SkillRuntime && (requestedSkillUrl != null || requestedInstalledSkill != null)) {

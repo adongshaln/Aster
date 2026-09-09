@@ -77,36 +77,62 @@ class FileSkillLibrary(context: Context) : SkillLibrary {
     companion object { private val lock = Any() }
     override fun list(): List<LoadedSkill> = synchronized(lock) {
         directory.listFiles().orEmpty().filter { it.extension in setOf("json", "bak") }
-            .map { if (it.extension == "bak") File(it.path.removeSuffix(".bak")) else it }.distinctBy { it.path }.mapNotNull { file ->
-            runCatching {
-                val bytes = AtomicFile(file).openRead().use { input ->
-                    require(input.channel.size() <= 16 * 1024 * 1024); input.readBytes() }
-                require(bytes.size <= 16 * 1024 * 1024)
-                val root = JSONObject(bytes.toString(Charsets.UTF_8))
-                val content = root.getString("content")
-                require(content.toByteArray().size <= MAX_SKILL_BYTES)
-                val files = root.optJSONObject("files")
-                val map = files?.keys()?.asSequence()?.associateWith { files.getString(it) }.orEmpty()
-                map.keys.forEach(SkillPackages::validatePath)
-                if (map.isNotEmpty()) require(SkillPackages.packageHash(map) == root.getString("sha256"))
-                LoadedSkill(root.getString("name"), root.getString("source_url"), root.getString("resolved_url"),
-                    root.getString("sha256"), content, root.optLong("installed_at"),
-                    root.optString("description", SkillPackages.metadata(content, "description")).take(600), map,
-                    root.optBoolean("enabled", true))
-            }.getOrNull()
-        }.sortedBy { it.name.lowercase() }
+            .map { if (it.extension == "bak") File(it.path.removeSuffix(".bak")) else it }.distinctBy { it.path }
+            .mapNotNull { read(it, includeFiles = false) }.sortedBy { it.name.lowercase() }
     }
-    override fun find(selector: String): LoadedSkill? = synchronized(lock) { findSkill(list(), selector) }
+    private fun read(file: File, includeFiles: Boolean): LoadedSkill? = runCatching {
+        val bytes = AtomicFile(file).openRead().use { input ->
+            require(input.channel.size() <= 16 * 1024 * 1024); input.readBytes()
+        }
+        val root = JSONObject(bytes.toString(Charsets.UTF_8))
+        val content = root.getString("content")
+        require(content.toByteArray().size <= MAX_SKILL_BYTES)
+        var files = root.optJSONObject("files")
+        if (includeFiles && root.has("payload_sha")) {
+            val hash = root.getString("payload_sha")
+            require(hash.matches(Regex("[a-f0-9]{64}")))
+            val payload = AtomicFile(File(directory, "payloads/$hash.json")).openRead().use { input ->
+                require(input.channel.size() <= 16 * 1024 * 1024); input.readBytes().toString(Charsets.UTF_8)
+            }
+            files = JSONObject(payload)
+        }
+        val fileObject = files
+        val map = fileObject?.keys()?.asSequence()?.associateWith { fileObject.getString(it) }.orEmpty()
+        map.keys.forEach(SkillPackages::validatePath)
+        if (map.isNotEmpty() && (includeFiles || !root.has("payload_sha"))) require(SkillPackages.packageHash(map) == root.getString("sha256"))
+        LoadedSkill(root.getString("name"), root.getString("source_url"), root.getString("resolved_url"),
+            root.getString("sha256"), content, root.optLong("installed_at"),
+            root.optString("description", SkillPackages.metadata(content, "description")).take(600),
+            if (includeFiles) map else map.mapValues { "" }, root.optBoolean("enabled", true))
+    }.getOrNull()
+    override fun find(selector: String): LoadedSkill? = synchronized(lock) {
+        findSkill(list(), selector)?.let { read(File(directory, sourceKey(it.sourceUrl) + ".json"), includeFiles = true) }
+    }
     override fun save(skill: LoadedSkill) = synchronized(lock) {
         require(skill.content.toByteArray().size <= MAX_SKILL_BYTES)
         require(list().any { it.sourceUrl == skill.sourceUrl } || list().size < MAX_INSTALLED_SKILLS) { "技能数量已达 32 个上限" }
         val json = JSONObject().put("name", skill.name).put("source_url", skill.sourceUrl)
             .put("resolved_url", skill.resolvedUrl).put("sha256", skill.sha256).put("content", skill.content)
             .put("installed_at", skill.installedAt).put("description", skill.description)
-            .put("enabled", skill.enabled).put("files", JSONObject(skill.files)).toString()
-        write(File(directory, sourceKey(skill.sourceUrl) + ".json"), json)
+            .put("enabled", skill.enabled).put("files", JSONObject(skill.files))
+        val oldHash = list().firstOrNull { it.sourceUrl == skill.sourceUrl }?.sha256
+        if (skill.files.isNotEmpty()) {
+            require(SkillPackages.packageHash(skill.files) == skill.sha256) { "技能文件摘要不匹配" }
+            write(File(directory, "payloads/${skill.sha256}.json"), JSONObject(skill.files).toString())
+            json.put("files", JSONObject(skill.files.mapValues { "" })).put("payload_sha", skill.sha256)
+        }
+        write(File(directory, sourceKey(skill.sourceUrl) + ".json"), json.toString())
+        if (oldHash != null && oldHash != skill.sha256) cleanupPayload(oldHash)
     }
-    override fun remove(source: String) = synchronized(lock) { AtomicFile(File(directory, sourceKey(source) + ".json")).delete() }
+    override fun remove(source: String) = synchronized(lock) {
+        val oldHash = list().firstOrNull { it.sourceUrl == source }?.sha256
+        AtomicFile(File(directory, sourceKey(source) + ".json")).delete()
+        if (oldHash != null) cleanupPayload(oldHash)
+    }
+    private fun cleanupPayload(hash: String) {
+        if (hash.matches(Regex("[a-f0-9]{64}")) && list().none { it.sha256 == hash })
+            AtomicFile(File(directory, "payloads/$hash.json")).delete()
+    }
     override fun selection(scope: String): Set<String> = synchronized(lock) {
         val file = File(directory, "selections/" + sourceKey(scope) + ".json")
         runCatching { val array = JSONArray(AtomicFile(file).openRead().use { it.readBytes().toString(Charsets.UTF_8) })
@@ -134,9 +160,13 @@ class SkillRuntime(
     fun hasInstalledSkills(): Boolean = library.list().isNotEmpty()
     override fun listInstalled(): List<LoadedSkill> = library.list()
 
-    override fun selected(scope: String): List<LoadedSkill> = library.list().filter { it.enabled && it.sourceUrl in library.selection(scope) }
+    override fun selected(scope: String): List<LoadedSkill> = library.list()
+        .filter { it.enabled && it.sourceUrl in library.selection(scope) }.mapNotNull { library.find(it.sourceUrl) }
     fun selection(scope: String): Set<String> = library.selection(scope)
-    fun select(scope: String, sources: Set<String>) = library.select(scope, sources)
+    fun select(scope: String, sources: Set<String>) {
+        require(sources.size <= 4) { "每个对话最多选择 4 个技能，请先取消其他技能" }
+        library.select(scope, sources)
+    }
     fun remove(source: String) = library.remove(source)
     fun enable(source: String, enabled: Boolean) { library.find(source)?.let { library.save(it.copy(enabled = enabled)) } }
     fun installZip(bytes: ByteArray): LoadedSkill = SkillPackages.importZip(bytes).also(library::save)

@@ -17,6 +17,8 @@ class SkillPackagePersistenceTest {
         store.save(skill); store.select("chat-one", setOf(skill.sourceUrl))
         val restarted = SkillRuntime(FileSkillLibrary(context))
         assertEquals(skill.files, restarted.load(skill.sha256).files)
+        assertTrue(restarted.listInstalled().single().files.values.all { it.isEmpty() })
+        assertEquals(skill.files.keys, restarted.listInstalled().single().files.keys)
         assertEquals(skill.sha256, restarted.selected("chat-one").single().sha256)
         assertTrue(restarted.selected("chat-two").isEmpty())
         restarted.enable(skill.sourceUrl, false)

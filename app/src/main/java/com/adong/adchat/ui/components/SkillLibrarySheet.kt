@@ -76,7 +76,7 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
         }
     }
     AsterOptionsSheet("技能", if (conversationScope == null) "管理你的写作方法、参考资料与工作流程" else
-        "勾选后，模型可按任务需要读取；选择会自动保存", onDismiss, Icons.Rounded.AutoAwesome) {
+        "最多选 4 个，模型按需读取；选择自动保存", onDismiss, Icons.Rounded.AutoAwesome) {
         OutlinedTextField(source, { source = it }, Modifier.fillMaxWidth(), enabled = !busy,
             label = { Text("GitHub 技能链接") }, placeholder = { Text("粘贴包含 SKILL.md 的目录链接") },
             shape = RoundedCornerShape(16.dp), maxLines = 3)
