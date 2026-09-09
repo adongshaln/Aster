@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 internal const val LOAD_SKILL_TOOL = "load_skill"
 internal const val MAX_SKILL_BYTES = 256 * 1024
 
-internal data class LoadedSkill(
+data class LoadedSkill(
     val name: String,
     val sourceUrl: String,
     val resolvedUrl: String,
@@ -23,7 +23,7 @@ internal data class LoadedSkill(
     val content: String
 )
 
-internal fun interface SkillLoader {
+fun interface SkillLoader {
     fun load(sourceUrl: String): LoadedSkill
 }
 
