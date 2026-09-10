@@ -1,0 +1,272 @@
+from pathlib import Path
+import re
+
+
+def load(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def save(path: str, text: str) -> None:
+    Path(path).write_text(text, encoding="utf-8")
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 match, got {count}")
+    return text.replace(old, new, 1)
+
+
+# Tool protocol: the model no longer manages offsets. A read is uniquely skill + path.
+tool_path = "app/src/main/java/com/adong/adchat/data/ToolProtocol.kt"
+text = load(tool_path)
+text = replace_once(
+    text,
+    'private data class ReadKey(val selector: String, val path: String, val offset: Int)',
+    'private data class ReadKey(val selector: String, val path: String)',
+    "ReadKey shape",
+)
+text = replace_once(
+    text,
+    '''        val offset = args?.optInt("offset", -1) ?: -1
+        val key = if (selector.isNotBlank() && path.isNotBlank() && offset >= 0) {
+            ReadKey(loadedSkillAliases[selector] ?: selector, path, offset)
+        } else null
+        val previous = key?.let { target ->
+            reads.entries.firstOrNull { (stored, _) ->
+                stored.selector == target.selector && stored.path == target.path && stored.offset == target.offset
+            }?.value
+        }''',
+    '''        val key = if (selector.isNotBlank() && path.isNotBlank()) {
+            ReadKey(loadedSkillAliases[selector] ?: selector, path)
+        } else null
+        val previous = key?.let { target ->
+            reads.entries.firstOrNull { (stored, _) ->
+                stored.selector == target.selector && stored.path == target.path
+            }?.value
+        }''',
+    "read cache key",
+)
+text = replace_once(
+    text,
+    '''                .put("path", prior?.optString("path").takeUnless { it.isNullOrBlank() } ?: path)
+                .put("offset", prior?.optInt("offset", offset) ?: offset)
+                .put("next_offset", prior?.optInt("next_offset", offset) ?: offset)
+                .put("total_characters", prior?.optInt("total_characters", -1) ?: -1)
+                .put("complete", prior?.optBoolean("complete", false) ?: false)
+                .put("content", "此文件位置已经读取过，上一条工具结果中已有完整内容。请直接使用已有内容；如需继续读取，请使用 next_offset，避免重复调用。")''',
+    '''                .put("path", prior?.optString("path").takeUnless { it.isNullOrBlank() } ?: path)
+                .put("total_characters", prior?.optInt("total_characters", -1) ?: -1)
+                .put("estimated_tokens", prior?.optInt("estimated_tokens", -1) ?: -1)
+                .put("complete", true)
+                .put("content", "该文件已经完整读取过，上一条工具结果中已有全部内容。请直接使用已有内容，不要再次调用 read_skill_file。")''',
+    "duplicate output",
+)
+text = replace_once(
+    text,
+    '            reads[ReadKey(canonical, path, offset)] = result.output',
+    '            reads[ReadKey(canonical, path)] = result.output',
+    "cache store",
+)
+text = replace_once(
+    text,
+    '''private fun readSkillDefinition(responses: Boolean, selectors: List<String>): JSONObject {
+    val properties = JSONObject()
+        .put("skill", JSONObject().put("type", "string").put("enum", JSONArray(selectors)))
+        .put("path", JSONObject().put("type", "string").put("description", "Exact relative path listed by load_skill."))
+        .put("offset", JSONObject().put("type", "integer").put("minimum", 0).put("description", "Start at 0; continue with returned next_offset."))
+    return JSONObject().put("name", READ_SKILL_FILE_TOOL)
+        .put("description", "Read a UTF-8 reference or template from an already loaded skill. Returns at most 12,000 characters and explicit continuation. Load the skill before reading. Never repeat the same skill/path/offset call; use next_offset for continuation. This tool only reads text; it never executes Python, shell, or bundled scripts.")
+        .put("parameters", JSONObject().put("type", "object").put("properties", properties)
+            .put("required", JSONArray(listOf("skill", "path", "offset"))).put("additionalProperties", false))
+        .apply { if (responses) { put("type", "function"); put("strict", true) } }
+}''',
+    '''private fun readSkillDefinition(responses: Boolean, selectors: List<String>): JSONObject {
+    val properties = JSONObject()
+        .put("skill", JSONObject().put("type", "string").put("enum", JSONArray(selectors)))
+        .put("path", JSONObject().put("type", "string").put("description", "Exact relative path listed by load_skill. The complete UTF-8 file is returned in one call."))
+    return JSONObject().put("name", READ_SKILL_FILE_TOOL)
+        .put("description", "Read the complete UTF-8 reference or template from an already loaded skill in one call. Load the skill before reading. Never repeat the same skill/path call; the runtime reuses an earlier successful read. File size is constrained by the configured model context budget. This tool only reads text; it never executes Python, shell, or bundled scripts.")
+        .put("parameters", JSONObject().put("type", "object").put("properties", properties)
+            .put("required", JSONArray(listOf("skill", "path"))).put("additionalProperties", false))
+        .apply { if (responses) { put("type", "function"); put("strict", true) } }
+}''',
+    "read tool schema",
+)
+text = replace_once(
+    text,
+    '        val output = skillLoader.readFile(selector, path, args.getInt("offset"))',
+    '        val output = skillLoader.readFile(selector, path, 0)',
+    "read execution",
+)
+save(tool_path, text)
+
+
+# Skill session: decode and return the whole UTF-8 file, with a model-aware safety budget.
+packages_path = "app/src/main/java/com/adong/adchat/data/SkillPackages.kt"
+text = load(packages_path)
+text = replace_once(
+    text,
+    '''internal class SkillSession(private val delegate: SkillLoader, private val available: List<LoadedSkill>,
+    private val onLoaded: (LoadedSkill) -> Unit = {}) : SkillLoader {''',
+    '''internal class SkillSession(private val delegate: SkillLoader, private val available: List<LoadedSkill>,
+    private val maxReadTokens: Int? = null,
+    private val onLoaded: (LoadedSkill) -> Unit = {}) : SkillLoader {''',
+    "SkillSession budget",
+)
+text = replace_once(
+    text,
+    '''        val text = if (normalizedPath == "SKILL.md") skill.content else SkillPackages.decodeText(Base64.getDecoder().decode(
+            skill.files[normalizedPath] ?: error("技能包中没有该文件：$normalizedPath")))
+        require(offset in 0..text.length && (offset == 0 || offset == text.length || !text[offset].isLowSurrogate())) { "读取位置不合法" }
+        var end = (offset + 12_000).coerceAtMost(text.length)
+        if (end < text.length && text[end].isLowSurrogate()) end--
+        return JSONObject().put("ok", true).put("trust", "untrusted_external_instructions")
+            .put("sha256", skill.sha256).put("path", normalizedPath).put("content", text.substring(offset, end))
+            .put("offset", offset).put("next_offset", end).put("total_characters", text.length).put("complete", end == text.length)''',
+    '''        require(offset == 0) { "read_skill_file 已改为整文件读取，请不要使用 offset 分页" }
+        val text = if (normalizedPath == "SKILL.md") skill.content else SkillPackages.decodeText(Base64.getDecoder().decode(
+            skill.files[normalizedPath] ?: error("技能包中没有该文件：$normalizedPath")))
+        val estimatedTokens = ContextTokenEstimate.text(text)
+        maxReadTokens?.let { budget ->
+            require(estimatedTokens <= budget) {
+                "技能文件预计需要 $estimatedTokens Token，超过当前模型可用输入预算 $budget Token；请提高该模型上下文长度或缩小技能文件"
+            }
+        }
+        return JSONObject().put("ok", true).put("trust", "untrusted_external_instructions")
+            .put("sha256", skill.sha256).put("path", normalizedPath).put("content", text)
+            .put("total_characters", text.length).put("estimated_tokens", estimatedTokens).put("complete", true)''',
+    "whole file read",
+)
+text = replace_once(
+    text,
+    '''    "Choose relevant skills using load_skill with the exact sha256 selector. Read referenced files with read_skill_file. " +
+    "Load a skill before reading its files; never repeat the same skill/path/offset read. Use next_offset for continuation. " +''',
+    '''    "Choose relevant skills using load_skill with the exact sha256 selector. Read referenced files with read_skill_file. " +
+    "Load a skill before reading its files; each read_skill_file call returns the complete UTF-8 file. Never repeat the same skill/path read. " +''',
+    "skill catalog",
+)
+save(packages_path, text)
+
+
+runtime_path = "app/src/main/java/com/adong/adchat/data/SkillRuntime.kt"
+text = load(runtime_path)
+text = replace_once(
+    text,
+    "Load a Skill before reading any of its files. Never repeat an identical read_skill_file request for the same skill, path and offset; use the returned next_offset for continuation. If a tool result says that a read was reused, use the content already returned and finish the task without repeating that call. After the required material is available, stop calling tools and answer or create the requested file.",
+    "Load a Skill before reading any of its files. read_skill_file returns the complete UTF-8 file in one call. Never repeat the same skill/path read. If a tool result says that a read was reused, use the content already returned and finish the task without repeating that call. After the required material is available, stop calling tools and answer or create the requested file.",
+    "runtime instruction",
+)
+save(runtime_path, text)
+
+
+api_path = "app/src/main/java/com/adong/adchat/data/ApiRepository.kt"
+text = load(api_path)
+text = replace_once(
+    text,
+    "        val requestSkillLoader = SkillSession(skillLoader, available) { loaded ->",
+    '''        val requestSkillLoader = SkillSession(
+            skillLoader,
+            available,
+            maxReadTokens = profile.contextLimits(model)?.inputTokens
+        ) { loaded ->''',
+    "model-aware read budget",
+)
+save(api_path, text)
+
+
+docs_path = "docs/SKILLS.md"
+text = load(docs_path)
+text = replace_once(
+    text,
+    "`read_skill_file` 只读取已加载且授权的技能包路径。每次最多 12,000 字符，返回 next_offset / complete，支持继续读取。",
+    "`read_skill_file` 只读取已加载且授权的技能包路径，并在一次调用中返回完整 UTF-8 文件；不再向模型暴露 offset / next_offset 分页。配置了模型上下文时，整文件读取会先按该模型输入预算检查。",
+    "docs read protocol",
+)
+text = replace_once(
+    text,
+    "重复读取会复用已有结果并要求模型使用 `next_offset` 或结束，超预算明确停止。",
+    "重复读取同一 skill/path 会复用已有结果并要求模型直接继续任务，超预算明确停止。",
+    "docs reuse",
+)
+text = text.replace("按需分段、版本快照", "整文件按需读取、版本快照")
+save(docs_path, text)
+
+
+# Update the old chunking regression and add a context-budget regression.
+test_path = "app/src/test/java/com/adong/adchat/data/SkillPackagesTest.kt"
+text = load(test_path)
+pattern = r"    @Test fun sessionRequiresLoadThenReadsExactVersionInChunks\(\) \{.*?\n    \}\n    @Test fun disabledAndDifferentWorkspaceSkillsStayOutOfCatalog\(\) \{"
+replacement = '''    @Test fun sessionRequiresLoadThenReadsExactVersionAsWholeFile() {
+        val text = "人".repeat(12000) + "尾部标记"
+        val imported = SkillPackages.importZip(skillZip("SKILL.md" to manifest, "references/rules.md" to text))
+        val old = imported.copy(
+            sourceUrl = "https://github.com/example/story-editor",
+            resolvedUrl = "https://raw.githubusercontent.com/example/story-editor/main/SKILL.md"
+        )
+        val library = MemorySkillLibrary(); library.save(old)
+        val runtime = SkillRuntime(library, SkillLoader { error("unexpected network") })
+        val session = SkillSession(runtime, listOf(old))
+        val aliases = listOf(old.sha256, old.sourceUrl, old.resolvedUrl, old.name)
+        aliases.forEach { selector ->
+            assertTrue(selector, runCatching { session.readFile(selector, "references/rules.md", 0) }.isFailure)
+        }
+        session.load(old.sha256)
+        library.remove(old.sourceUrl)
+        aliases.forEach { selector ->
+            val whole = session.readFile(selector, "  references/rules.md  ", 0)
+            assertEquals(text, whole.getString("content"))
+            assertEquals("references/rules.md", whole.getString("path"))
+            assertEquals(text.length, whole.getInt("total_characters"))
+            assertTrue(whole.getBoolean("complete"))
+            assertFalse(whole.has("next_offset"))
+            assertFalse(whole.has("offset"))
+        }
+        assertTrue(runCatching { session.readFile(old.name, "references/rules.md", 1) }.isFailure)
+        assertTrue(runCatching { session.readFile(old.sha256, "../secret", 0) }.isFailure)
+        assertTrue(runCatching { session.readFile(old.sha256, "missing", 0) }.isFailure)
+    }
+
+    @Test fun wholeFileReadHonorsConfiguredModelInputBudget() {
+        val text = "x".repeat(3000)
+        val skill = SkillPackages.importZip(skillZip("SKILL.md" to manifest, "references/large.md" to text))
+        val session = SkillSession(SkillLoader { skill }, listOf(skill), maxReadTokens = 100)
+        session.load(skill.sha256)
+        val failure = runCatching { session.readFile(skill.sha256, "references/large.md", 0) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("输入预算"))
+    }
+
+    @Test fun disabledAndDifferentWorkspaceSkillsStayOutOfCatalog() {'''
+text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+if count != 1:
+    raise SystemExit(f"SkillPackagesTest rewrite: expected 1 match, got {count}")
+save(test_path, text)
+
+
+protocol_test = "app/src/test/java/com/adong/adchat/data/ToolProtocolTest.kt"
+text = load(protocol_test)
+text = replace_once(
+    text,
+    'JSONObject().put("skill", selector).put("path", "references/a.md").put("offset", 0).toString())',
+    'JSONObject().put("skill", selector).put("path", "references/a.md").toString())',
+    "guard test args",
+)
+marker = '''    @Test
+    fun repeatedSkillReadsReuseTheSuccessfulResult() {'''
+addition = '''    @Test
+    fun skillReadToolReturnsWholeFileWithoutOffsetParameter() {
+        val tools = buildChatTools(fileCreationEnabled = false, skillLoadingEnabled = true, skillSelectors = listOf("sha-1"))
+        val parameters = tools.getJSONObject(1).getJSONObject("function").getJSONObject("parameters")
+        val properties = parameters.getJSONObject("properties")
+        val required = parameters.getJSONArray("required")
+
+        assertFalse(properties.has("offset"))
+        assertEquals(2, required.length())
+        assertTrue(required.toString().contains("skill"))
+        assertTrue(required.toString().contains("path"))
+    }
+
+'''
+text = replace_once(text, marker, addition + marker, "protocol schema test")
+save(protocol_test, text)
