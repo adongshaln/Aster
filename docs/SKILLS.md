@@ -54,3 +54,21 @@ MockWebServer 覆盖 Chat 与 Responses 的“目录 → load_skill → read_ski
 真实 Gemini / 网关调用仍需用户验收，MockWebServer 不代表真实模型一定选择正确技能。
 示例：`examples/skills/story-writing`，包含实际引用的 `references/writing-rules.md`，可用于真机检查。
 服务配置导出不包含技能包；本轮没有技能备份导出或任意旧版本回滚界面。
+
+## 2026-09-10 选择状态与原生验证修复
+
+代码提交：`1d3ec23`（`feature/skills-runtime`）。
+
+- 删除技能时清理普通聊天、故事讨论、正文等已保存选择，释放选择名额；重新安装不会自动恢复旧选择。
+- 对旧版本遗留的已删除技能选择进行过滤，避免不可见条目占用名额。
+- 已停用但仍被选中的技能允许取消勾选；未选中的停用技能仍不能新增选择。
+- 技能页首次读取时显示加载状态；选择控件按来源区分，支持同名技能。
+- 原生测试先关闭弹窗再重开，避免弹窗持有焦点时等待 Activity 获得焦点而超时；覆盖重新打开、选择保存、跨工作区隔离和停用后取消选择。
+- 新增持久化回归：删除后跨工作区清理、重启后名额释放、重新安装不恢复旧选择、兼容历史失效选择。
+
+验证结果：
+
+- [Android build #220](https://github.com/adongshaln/Aster/actions/runs/34421070256)：`testDebugUnitTest assembleRelease` 通过，生成签名 APK。
+- [Native UI preview #62](https://github.com/adongshaln/Aster/actions/runs/34421070244)：模拟器交互测试通过。
+- APK 签名证书 SHA-256 与 Build #218 一致：`3e4da1d062819d9f1065f85654de71ae5f0ad93aa10c52fc85faad0338a4e3b1`。
+- 本轮没有进行真实 Gemini / Responses 网关调用或用户真机验收；这些仍属于后续验收，不能由模拟测试替代。
