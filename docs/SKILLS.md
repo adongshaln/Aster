@@ -73,3 +73,12 @@ MockWebServer 覆盖 Chat 与 Responses 的“目录 → load_skill → read_ski
 - [Native UI preview #62](https://github.com/adongshaln/Aster/actions/runs/34421070244)：模拟器交互测试通过。
 - APK 签名证书 SHA-256 与 Build #218 一致：`3e4da1d062819d9f1065f85654de71ae5f0ad93aa10c52fc85faad0338a4e3b1`。
 - 本轮没有进行真实 Gemini / Responses 网关调用或用户真机验收；这些仍属于后续验收，不能由模拟测试替代。
+
+## 2026-09-10 纯本地 Skill 执行边界
+
+代码提交：`08940e0`（`feature/skills-runtime`）。
+
+- Skill Runtime 明确声明无 Shell、Bash/sh、Python、Node.js、npm/npx、PowerShell/cmd、依赖安装、浏览器自动化或技能脚本执行器。
+- `load_skill` 的工具结果显式返回 `can_execute_skill_code=false`、不支持的执行类型、是否包含可执行资源，以及必须向用户披露执行限制的提示。
+- 当 Skill 依赖上述执行能力时，模型必须明确告诉用户 Aster 当前无法执行对应步骤，不得声称已经运行、验证、渲染、导出、安装或完成；仍可继续完成真实可用的读取/应用工具部分并明确区分。
+- 回归测试覆盖该强制披露规则及工具能力元数据；迁移阶段 `git diff --check` 与 `testDebugUnitTest` 已通过。
