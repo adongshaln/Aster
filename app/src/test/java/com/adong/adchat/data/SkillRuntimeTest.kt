@@ -124,6 +124,9 @@ class SkillRuntimeTest {
         assertEquals("presentation-design", output.getString("name"))
         assertEquals("0123456789abcdef", output.getString("sha256"))
         assertEquals("---\nname: presentation-design\n---\n# Exact skill body\nDo the real work.", output.getString("content"))
+        assertFalse(output.getBoolean("can_execute_skill_code"))
+        assertTrue(output.getJSONArray("unsupported_execution").toString().contains("node"))
+        assertTrue(output.getString("execution_notice").contains("explicitly tell the user"))
     }
 
     @Test
@@ -140,6 +143,15 @@ class SkillRuntimeTest {
         assertEquals(TOOL_STATUS_FAILED, result.activity.status)
         assertFalse(JSONObject(result.output).getBoolean("ok"))
         assertTrue(JSONObject(result.output).getString("error").contains("未授权"))
+    }
+
+    @Test
+    fun runtimeRequiresExplicitDisclosureForUnsupportedSkillExecution() {
+        val instruction = SKILL_RUNTIME_INSTRUCTION.lowercase()
+        assertTrue(instruction.contains("must explicitly tell the user"))
+        assertTrue(instruction.contains("node.js"))
+        assertTrue(instruction.contains("python"))
+        assertTrue(instruction.contains("never say or imply"))
     }
 
     @Test
