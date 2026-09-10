@@ -136,7 +136,7 @@ object StoryContextComposer {
         val currentTurn = eligibleHistory.lastOrNull { it.message.role == "user" }
         val currentTurnCost = currentTurn?.let { historyCost(it, budget) } ?: 0
         val base = buildString {
-            append(baseInstruction.trim())
+            append(storyWorkspaceSystemInstruction(workspace, baseInstruction).trim())
             if (stateView.conflicts.isNotEmpty()) {
                 append("\n[以下资料尚有冲突，仅供讨论，不得选一方当作既定事实]\n")
                 append(stateView.conflicts.joinToString("\n") { it.description })
