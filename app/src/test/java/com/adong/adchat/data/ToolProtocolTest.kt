@@ -130,12 +130,25 @@ class ToolProtocolTest {
     }
 
     @Test
+    fun skillReadToolReturnsWholeFileWithoutOffsetParameter() {
+        val tools = buildChatTools(fileCreationEnabled = false, skillLoadingEnabled = true, skillSelectors = listOf("sha-1"))
+        val parameters = tools.getJSONObject(1).getJSONObject("function").getJSONObject("parameters")
+        val properties = parameters.getJSONObject("properties")
+        val required = parameters.getJSONArray("required")
+
+        assertFalse(properties.has("offset"))
+        assertEquals(2, required.length())
+        assertTrue(required.toString().contains("skill"))
+        assertTrue(required.toString().contains("path"))
+    }
+
+    @Test
     fun repeatedSkillReadsReuseTheSuccessfulResult() {
         val guard = SkillToolReuseGuard()
         val selector = "sha-1"
         val loader = SkillLoader { LoadedSkill("demo", "https://github.com/demo", "https://raw.example/demo", selector, "instructions", files = mapOf("references/a.md" to java.util.Base64.getEncoder().encodeToString("资料".toByteArray()))) }
         val call = PendingToolCall("read", "read-1", READ_SKILL_FILE_TOOL,
-            JSONObject().put("skill", selector).put("path", "references/a.md").put("offset", 0).toString())
+            JSONObject().put("skill", selector).put("path", "references/a.md").toString())
         val loaded = SkillSession(loader, listOf(loader.load(selector)))
         loaded.load(selector)
         guard.beginRound()

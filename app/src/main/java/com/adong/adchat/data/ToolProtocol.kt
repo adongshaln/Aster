@@ -38,7 +38,7 @@ internal fun orderToolCalls(calls: List<PendingToolCall>): List<PendingToolCall>
  * tools on its next turn.
  */
 internal class SkillToolReuseGuard {
-    private data class ReadKey(val selector: String, val path: String, val offset: Int)
+    private data class ReadKey(val selector: String, val path: String)
 
     private val reads = linkedMapOf<ReadKey, String>()
     private val loadedSkillAliases = linkedMapOf<String, String>()
@@ -68,13 +68,12 @@ internal class SkillToolReuseGuard {
         val args = runCatching { JSONObject(call.arguments) }.getOrNull()
         val selector = args?.optString("skill")?.trim().orEmpty()
         val path = args?.optString("path")?.trim().orEmpty()
-        val offset = args?.optInt("offset", -1) ?: -1
-        val key = if (selector.isNotBlank() && path.isNotBlank() && offset >= 0) {
-            ReadKey(loadedSkillAliases[selector] ?: selector, path, offset)
+        val key = if (selector.isNotBlank() && path.isNotBlank()) {
+            ReadKey(loadedSkillAliases[selector] ?: selector, path)
         } else null
         val previous = key?.let { target ->
             reads.entries.firstOrNull { (stored, _) ->
-                stored.selector == target.selector && stored.path == target.path && stored.offset == target.offset
+                stored.selector == target.selector && stored.path == target.path
             }?.value
         }
         if (previous != null) {
@@ -86,11 +85,10 @@ internal class SkillToolReuseGuard {
                 .put("trust", "untrusted_external_instructions")
                 .put("sha256", prior?.optString("sha256").orEmpty())
                 .put("path", prior?.optString("path").takeUnless { it.isNullOrBlank() } ?: path)
-                .put("offset", prior?.optInt("offset", offset) ?: offset)
-                .put("next_offset", prior?.optInt("next_offset", offset) ?: offset)
                 .put("total_characters", prior?.optInt("total_characters", -1) ?: -1)
-                .put("complete", prior?.optBoolean("complete", false) ?: false)
-                .put("content", "此文件位置已经读取过，上一条工具结果中已有完整内容。请直接使用已有内容；如需继续读取，请使用 next_offset，避免重复调用。")
+                .put("estimated_tokens", prior?.optInt("estimated_tokens", -1) ?: -1)
+                .put("complete", true)
+                .put("content", "该文件已经完整读取过，上一条工具结果中已有全部内容。请直接使用已有内容，不要再次调用 read_skill_file。")
             return ToolExecutionResult(
                 output.toString(),
                 activity = ChatToolActivity(call.callId, call.name, "已复用技能资料：$path", TOOL_STATUS_COMPLETED)
@@ -102,7 +100,7 @@ internal class SkillToolReuseGuard {
         if (success && key != null) {
             val output = runCatching { JSONObject(result.output) }.getOrNull()
             val canonical = output?.optString("sha256")?.trim().takeUnless { it.isNullOrBlank() } ?: key.selector
-            reads[ReadKey(canonical, path, offset)] = result.output
+            reads[ReadKey(canonical, path)] = result.output
         }
         return result
     }
@@ -239,12 +237,11 @@ private fun loadSkillDefinition(responsesApi: Boolean, skillSelectors: List<Stri
 private fun readSkillDefinition(responses: Boolean, selectors: List<String>): JSONObject {
     val properties = JSONObject()
         .put("skill", JSONObject().put("type", "string").put("enum", JSONArray(selectors)))
-        .put("path", JSONObject().put("type", "string").put("description", "Exact relative path listed by load_skill."))
-        .put("offset", JSONObject().put("type", "integer").put("minimum", 0).put("description", "Start at 0; continue with returned next_offset."))
+        .put("path", JSONObject().put("type", "string").put("description", "Exact relative path listed by load_skill. The complete UTF-8 file is returned in one call."))
     return JSONObject().put("name", READ_SKILL_FILE_TOOL)
-        .put("description", "Read a UTF-8 reference or template from an already loaded skill. Returns at most 12,000 characters and explicit continuation. Load the skill before reading. Never repeat the same skill/path/offset call; use next_offset for continuation. This tool only reads text; it never executes Python, shell, or bundled scripts.")
+        .put("description", "Read the complete UTF-8 reference or template from an already loaded skill in one call. Load the skill before reading. Never repeat the same skill/path call; the runtime reuses an earlier successful read. File size is constrained by the configured model context budget. This tool only reads text; it never executes Python, shell, or bundled scripts.")
         .put("parameters", JSONObject().put("type", "object").put("properties", properties)
-            .put("required", JSONArray(listOf("skill", "path", "offset"))).put("additionalProperties", false))
+            .put("required", JSONArray(listOf("skill", "path"))).put("additionalProperties", false))
         .apply { if (responses) { put("type", "function"); put("strict", true) } }
 }
 
@@ -429,7 +426,7 @@ internal fun executeAppTool(
         val selector = args.getString("skill").trim()
         require(selector in allowedSkillSelectors) { "未授权读取此技能" }
         val path = args.getString("path").trim()
-        val output = skillLoader.readFile(selector, path, args.getInt("offset"))
+        val output = skillLoader.readFile(selector, path, 0)
         ToolExecutionResult(output.toString(), activity = ChatToolActivity(call.callId, call.name,
             "已读取技能资料：$path", TOOL_STATUS_COMPLETED))
     }.getOrElse { error ->

@@ -32,7 +32,7 @@ class SkillPackagesTest {
         assertTrue(runCatching { SkillPackages.importZip(skillZip("SKILL.md" to "x".repeat(32_001))) }.isFailure)
         assertTrue(runCatching { SkillPackages.importZip(skillZip("SKILL.md" to manifest, "bomb.txt" to "x".repeat(5 * 1024 * 1024 + 1))) }.isFailure)
     }
-    @Test fun sessionRequiresLoadThenReadsExactVersionInChunks() {
+    @Test fun sessionRequiresLoadThenReadsExactVersionAsWholeFile() {
         val text = "人".repeat(12000) + "尾部标记"
         val imported = SkillPackages.importZip(skillZip("SKILL.md" to manifest, "references/rules.md" to text))
         val old = imported.copy(
@@ -49,16 +49,29 @@ class SkillPackagesTest {
         session.load(old.sha256)
         library.remove(old.sourceUrl)
         aliases.forEach { selector ->
-            val first = session.readFile(selector, "  references/rules.md  ", 0)
-            assertEquals(text.take(12000), first.getString("content"))
-            assertEquals("references/rules.md", first.getString("path"))
-            assertFalse(first.getBoolean("complete"))
+            val whole = session.readFile(selector, "  references/rules.md  ", 0)
+            assertEquals(text, whole.getString("content"))
+            assertEquals("references/rules.md", whole.getString("path"))
+            assertEquals(text.length, whole.getInt("total_characters"))
+            assertTrue(whole.getBoolean("complete"))
+            assertFalse(whole.has("next_offset"))
+            assertFalse(whole.has("offset"))
         }
-        val first = session.readFile(old.name, "references/rules.md", 0)
-        assertEquals("尾部标记", session.readFile(old.resolvedUrl, "references/rules.md", first.getInt("next_offset")).getString("content"))
+        assertTrue(runCatching { session.readFile(old.name, "references/rules.md", 1) }.isFailure)
         assertTrue(runCatching { session.readFile(old.sha256, "../secret", 0) }.isFailure)
         assertTrue(runCatching { session.readFile(old.sha256, "missing", 0) }.isFailure)
     }
+
+    @Test fun wholeFileReadHonorsConfiguredModelInputBudget() {
+        val text = "x".repeat(3000)
+        val skill = SkillPackages.importZip(skillZip("SKILL.md" to manifest, "references/large.md" to text))
+        val session = SkillSession(SkillLoader { skill }, listOf(skill), maxReadTokens = 100)
+        session.load(skill.sha256)
+        val failure = runCatching { session.readFile(skill.sha256, "references/large.md", 0) }.exceptionOrNull()
+        assertNotNull(failure)
+        assertTrue(failure!!.message.orEmpty().contains("输入预算"))
+    }
+
     @Test fun disabledAndDifferentWorkspaceSkillsStayOutOfCatalog() {
         val library = MemorySkillLibrary()
         val skill = SkillPackages.importZip(skillZip("SKILL.md" to manifest))

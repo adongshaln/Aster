@@ -40,10 +40,6 @@ jobs:
         with:
           cache-read-only: false
 
-      - name: Apply staged whole-file Skill migration
-        if: hashFiles('.github/apply-skill-full-read.py') != ''
-        run: python3 .github/apply-skill-full-read.py
-
       - name: Configure release signing when secrets are available
         id: signing
         shell: bash
@@ -155,18 +151,3 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && steps.signing.outputs.available != 'true'
         run: |
           echo "::warning::A signed GitHub Release was not created because Aster signing secrets are missing."
-
-      - name: Commit whole-file Skill migration
-        if: hashFiles('.github/apply-skill-full-read.py') != ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f .github/apply-skill-full-read.py .github/workflows/apply-skill-full-read.yml
-          git show HEAD^:.github/workflows/android-build.yml > .github/workflows/android-build.yml
-          git diff --check
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "fix: read skill files in one pass"
-          git push origin HEAD:feature/skills-runtime

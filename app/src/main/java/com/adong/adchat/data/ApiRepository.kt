@@ -112,7 +112,11 @@ class ApiRepository internal constructor(
         val requestedSkillSelectors = (listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill) + available.flatMap {
             listOf(it.sha256, it.sourceUrl, it.resolvedUrl, it.name)
         }).map(String::trim).filter(String::isNotBlank).distinct()
-        val requestSkillLoader = SkillSession(skillLoader, available) { loaded ->
+        val requestSkillLoader = SkillSession(
+            skillLoader,
+            available,
+            maxReadTokens = profile.contextLimits(model)?.inputTokens
+        ) { loaded ->
             if (skillLoader is SkillRuntime && (requestedSkillUrl != null || requestedInstalledSkill != null)) {
                 skillLoader.select(cacheKey, skillLoader.selection(cacheKey) + loaded.sourceUrl)
             }
