@@ -21,7 +21,7 @@ class SkillPackageProtocolTest {
                     JSONObject().put("id", "resp-$index").put("status", "completed").put("output", JSONArray().put(JSONObject().put("type", "function_call").put("id", "item-$index").put("call_id", "call-$index").put("name", name).put("arguments", args.toString()))).toString()
                 else JSONObject().put("choices", JSONArray().put(JSONObject().put("finish_reason", "tool_calls").put("message", JSONObject().put("tool_calls", JSONArray().put(JSONObject().put("id", "call-$index").put("type", "function").put("function", JSONObject().put("name", name).put("arguments", args.toString()))))))).toString()
                 val load = JSONObject().put("url", skill.sha256)
-                val read = JSONObject().put("skill", skill.sha256).put("path", "references/rules.md").put("offset", 0)
+                val read = JSONObject().put("skill", skill.sha256).put("path", "references/rules.md")
                 val done = if (responses) """{"id":"resp-3","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"完成"}]}]}""" else """{"choices":[{"finish_reason":"stop","message":{"content":"完成"}}]}"""
                 listOf(tool(LOAD_SKILL_TOOL, load, 1), tool(READ_SKILL_FILE_TOOL, read, 2), done).forEach { server.enqueue(MockResponse().setHeader("Content-Type", "application/json").setBody(it)) }
                 val result = repo.streamChat(ApiProfile(baseUrl = server.url("/").toString(), apiKey = "test", chatApiMode = if (responses) "responses" else "chat"),

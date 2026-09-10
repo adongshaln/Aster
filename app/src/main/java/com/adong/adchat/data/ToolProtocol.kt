@@ -409,7 +409,7 @@ internal fun executeAppTool(
                 .put("sha256", skill.sha256)
                 .put("content", skill.content)
                 .put("selector", JSONObject(call.arguments).getString("url"))
-                .put("files", JSONArray(skill.files.keys.sorted()))
+                .put("files", JSONArray(skill.filePaths.sorted()))
                 .put("execution", "instructions_and_app_tools_only; no Python or shell executor")
                 .toString(),
             activity = ChatToolActivity(call.callId, LOAD_SKILL_TOOL, "已加载 Skill：${skill.name}", TOOL_STATUS_COMPLETED)

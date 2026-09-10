@@ -48,6 +48,32 @@ class SkillRuntimeTest {
     }
 
     @Test
+    fun repositoryRootDiscoversExactlyOneNestedSkillWithoutDownloadingArchive() {
+        val files = listOf(
+            GitHubTreeFile("README.md", "1", 10),
+            GitHubTreeFile("skills/dashi-ppt/SKILL.md", "2", 20),
+            GitHubTreeFile("skills/dashi-ppt/references/themes.md", "3", 30),
+            GitHubTreeFile("other.bin", "4", 40)
+        )
+        val selected = selectGitHubSkillPath("SKILL.md", allowUniqueDiscovery = true, files)
+        assertEquals("skills/dashi-ppt/SKILL.md", selected)
+        assertEquals(
+            listOf("SKILL.md", "references/themes.md"),
+            relativeGitHubSkillFiles(selected, files).map { it.path }
+        )
+    }
+
+    @Test
+    fun repositoryRootWithMultipleSkillsRequiresSpecificTreeDirectory() {
+        val files = listOf(
+            GitHubTreeFile("skills/a/SKILL.md", "1", 10),
+            GitHubTreeFile("skills/b/SKILL.md", "2", 10)
+        )
+        val error = runCatching { selectGitHubSkillPath("SKILL.md", true, files) }.exceptionOrNull()
+        assertTrue(error?.message.orEmpty().contains("多个 Skill"))
+    }
+
+    @Test
     fun nonGitHubAndNonSkillTargetsAreRejected() {
         assertTrue(runCatching {
             resolveGitHubSkillTarget("https://example.com/SKILL.md") { _, _ -> "main" }

@@ -117,8 +117,12 @@ internal class SkillSession(private val delegate: SkillLoader, private val avail
         val normalizedPath = path.trim()
         SkillPackages.validatePath(normalizedPath)
         require(offset == 0) { "read_skill_file 已改为整文件读取，请不要使用 offset 分页" }
-        val text = if (normalizedPath == "SKILL.md") skill.content else SkillPackages.decodeText(Base64.getDecoder().decode(
-            skill.files[normalizedPath] ?: error("技能包中没有该文件：$normalizedPath")))
+        val text = when {
+            normalizedPath == "SKILL.md" -> skill.content
+            skill.files.containsKey(normalizedPath) -> SkillPackages.decodeText(Base64.getDecoder().decode(skill.files.getValue(normalizedPath)))
+            normalizedPath in skill.remoteFiles -> GitHubSkillRuntime.readRemoteFile(skill, normalizedPath)
+            else -> error("技能包中没有该文件：$normalizedPath")
+        }
         val estimatedTokens = ContextTokenEstimate.text(text)
         maxReadTokens?.let { budget ->
             require(estimatedTokens <= budget) {

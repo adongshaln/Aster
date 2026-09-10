@@ -53,6 +53,24 @@ class SkillPackagePersistenceTest {
         restarted.remove(skill.sourceUrl)
         assertTrue(FileSkillLibrary(context).list().isEmpty())
     }
+    @Test fun remoteManifestSurvivesRestartWithoutRepositoryArchivePayload() {
+        val context = RuntimeEnvironment.getApplication()
+        val source = "https://github.com/example/huge-skill"
+        val skill = LoadedSkill(
+            name = "huge-skill",
+            sourceUrl = source,
+            resolvedUrl = "https://raw.githubusercontent.com/example/huge-skill/0123456789012345678901234567890123456789/skills/huge/SKILL.md",
+            sha256 = "a".repeat(64),
+            content = "---\nname: huge-skill\n---\nRead references/a.md",
+            remoteFiles = setOf("SKILL.md", "references/a.md", "project/assets/template.html")
+        )
+        FileSkillLibrary(context).save(skill)
+        val restarted = FileSkillLibrary(context)
+        assertEquals(skill.remoteFiles, restarted.list().single().remoteFiles)
+        assertTrue(restarted.list().single().files.isEmpty())
+        assertEquals(skill.remoteFiles, restarted.find(source)!!.remoteFiles)
+    }
+
     @Test fun invalidUpdateKeepsExistingPackageAndLegacyTextRemainsReadable() {
         val context = RuntimeEnvironment.getApplication()
         val library = FileSkillLibrary(context)
