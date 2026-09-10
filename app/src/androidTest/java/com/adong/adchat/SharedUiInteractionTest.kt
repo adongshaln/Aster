@@ -73,8 +73,16 @@ class SharedUiInteractionTest {
         }
         val skill = runtime.installZip(output.toByteArray())
         try {
+            assertEquals("Imported manifest name", "native-writing-test", skill.name)
+            assertTrue("Installed package must be visible to a newly opened library",
+                com.adong.adchat.data.SkillRuntime.persistent(context).listInstalled().any { it.sourceUrl == skill.sourceUrl })
             content { SkillLibrarySheet("native-discussion", {}) }
-            rule.waitUntil(10_000) { rule.onAllNodesWithTag("skill-select-native-writing-test").fetchSemanticsNodes().isNotEmpty() }
+            try {
+                rule.waitUntil(10_000) { rule.onAllNodesWithTag("skill-select-native-writing-test").fetchSemanticsNodes().isNotEmpty() }
+            } catch (error: Throwable) {
+                screenshot("skill-library-missing-selection")
+                throw AssertionError(rule.onRoot(useUnmergedTree = true).printToString(), error)
+            }
             rule.onNodeWithTag("skill-select-native-writing-test").performScrollTo().performClick()
             rule.waitUntil(10_000) { runtime.selected("native-discussion").isNotEmpty() }
             rule.onNodeWithTag("skill-select-native-writing-test").assertIsOn()
