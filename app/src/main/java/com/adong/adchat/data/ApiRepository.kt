@@ -109,7 +109,9 @@ class ApiRepository internal constructor(
         val requestedInstalledSkill = requestedInstalledSkillName(history, installed)
         val selected = if (skillsAllowed) skillLoader.selected(cacheKey) else emptyList()
         val available = (selected + installed.filter { it.name == requestedInstalledSkill || it.sourceUrl == requestedSkillUrl }.map { skillLoader.load(it.sourceUrl) }).distinctBy { it.sourceUrl }
-        val requestedSkillSelectors = (listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill) + available.map { it.sha256 }).distinct()
+        val requestedSkillSelectors = (listOfNotNull(requestedSkillUrl ?: requestedInstalledSkill) + available.flatMap {
+            listOf(it.sha256, it.sourceUrl, it.resolvedUrl, it.name)
+        }).map(String::trim).filter(String::isNotBlank).distinct()
         val requestSkillLoader = SkillSession(skillLoader, available) { loaded ->
             if (skillLoader is SkillRuntime && (requestedSkillUrl != null || requestedInstalledSkill != null)) {
                 skillLoader.select(cacheKey, skillLoader.selection(cacheKey) + loaded.sourceUrl)
@@ -312,7 +314,7 @@ class ApiRepository internal constructor(
             onToolActivity(activity)
         }
 
-        suspend fun executeRound(forceSkill: Boolean): ProtocolRoundResult {
+        suspend fun executeRound(forceSkill: Boolean, forceNoTools: Boolean): ProtocolRoundResult {
             outputComplete = false
             val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled && !skillLoadingEnabled, profile.fileCreationEnabled)
             val body = JSONObject()
@@ -323,9 +325,11 @@ class ApiRepository internal constructor(
             val tools = buildChatTools(toolPolicy.fileCreationEnabled, skillLoadingEnabled, skillSelectors)
             if (tools.length() > 0) {
                 body.put("tools", tools)
-                body.put("tool_choice", if (forceSkill)
-                    JSONObject().put("type", "function").put("function", JSONObject().put("name", LOAD_SKILL_TOOL))
-                else "auto")
+                body.put("tool_choice", when {
+                    forceSkill -> JSONObject().put("type", "function").put("function", JSONObject().put("name", LOAD_SKILL_TOOL))
+                    forceNoTools -> "none"
+                    else -> "auto"
+                })
             }
             if (toolPolicy.webSearchEnabled) body.put("web_search_options", JSONObject())
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = false, explicitCache = explicitCache)
@@ -404,9 +408,15 @@ class ApiRepository internal constructor(
 
         if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
         var completedNormally = false
+        var forceNoToolsNextRound = false
+        var executedToolCalls = 0
+        val skillToolReuseGuard = SkillToolReuseGuard()
         for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
+            skillToolReuseGuard.beginRound()
             val forceSkill = skillLoadingEnabled && requireSkillLoad && roundIndex == 0
-            val round = executeRound(forceSkill)
+            val forceNoTools = forceNoToolsNextRound
+            forceNoToolsNextRound = false
+            val round = executeRound(forceSkill, forceNoTools)
             if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
                 throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
             }
@@ -416,8 +426,13 @@ class ApiRepository internal constructor(
                 completedNormally = true
                 break
             }
+            val orderedToolCalls = orderToolCalls(round.toolCalls)
+            executedToolCalls += orderedToolCalls.size
+            if (executedToolCalls > MAX_TOOL_CALLS) {
+                throw IllegalStateException("工具调用已达到安全上限（${MAX_TOOL_CALLS} 次），请重试或减少需要读取的资料")
+            }
             val assistantToolCalls = JSONArray()
-            round.toolCalls.forEach { call ->
+            orderedToolCalls.forEach { call ->
                 assistantToolCalls.put(JSONObject()
                     .put("id", call.callId)
                     .put("type", "function")
@@ -427,12 +442,12 @@ class ApiRepository internal constructor(
                 .put("role", "assistant")
                 .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
                 .put("tool_calls", assistantToolCalls))
-            round.toolCalls.forEach { call ->
+            orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
                 val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call, requestSkillLoader, skillSelectors.toSet())
+                val execution = skillToolReuseGuard.execute(call, requestSkillLoader, skillSelectors.toSet())
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {
@@ -443,8 +458,11 @@ class ApiRepository internal constructor(
                     .put("tool_call_id", call.callId)
                     .put("content", execution.output))
             }
+            forceNoToolsNextRound = skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
-        if (!completedNormally) throw IllegalStateException("工具调用轮次超过上限")
+        if (!completedNormally) {
+            throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
+        }
         if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
         val duration = elapsedMs(started)
         val finalUsage = usage.copy(
@@ -515,7 +533,12 @@ class ApiRepository internal constructor(
 
         var carriedContextTokens = 0L
         var lastRequestTokens = 0L
-        suspend fun executeRound(requestInput: JSONArray, previousResponseId: String?, forceSkill: Boolean): ProtocolRoundResult {
+        suspend fun executeRound(
+            requestInput: JSONArray,
+            previousResponseId: String?,
+            forceSkill: Boolean,
+            forceNoTools: Boolean
+        ): ProtocolRoundResult {
             outputComplete = false
             val body = JSONObject().put("model", model).put("input", requestInput).put("stream", true)
             if (tools.length() > 0) {
@@ -523,6 +546,7 @@ class ApiRepository internal constructor(
                 body.put("tool_choice", when {
                     nativeSkillReference != null && previousResponseId == null -> JSONObject().put("type", "shell")
                     forceSkill -> JSONObject().put("type", "function").put("name", LOAD_SKILL_TOOL)
+                    forceNoTools -> "none"
                     else -> "auto"
                 })
             }
@@ -622,9 +646,15 @@ class ApiRepository internal constructor(
         var requestInput = initialInput
         var previousResponseId: String? = null
         var completedNormally = false
+        var forceNoToolsNextRound = false
+        var executedToolCalls = 0
+        val skillToolReuseGuard = SkillToolReuseGuard()
         for (toolRound in 0 until MAX_TOOL_ROUNDS) {
+            skillToolReuseGuard.beginRound()
             val forceSkill = skillLoadingEnabled && requireSkillLoad && toolRound == 0
-            val round = executeRound(requestInput, previousResponseId, forceSkill)
+            val forceNoTools = forceNoToolsNextRound
+            forceNoToolsNextRound = false
+            val round = executeRound(requestInput, previousResponseId, forceSkill, forceNoTools)
             if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
                 throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
             }
@@ -635,17 +665,22 @@ class ApiRepository internal constructor(
                 completedNormally = true
                 break
             }
+            val orderedToolCalls = orderToolCalls(round.toolCalls)
+            executedToolCalls += orderedToolCalls.size
+            if (executedToolCalls > MAX_TOOL_CALLS) {
+                throw IllegalStateException("工具调用已达到安全上限（${MAX_TOOL_CALLS} 次），请重试或减少需要读取的资料")
+            }
             if (round.responseId.isBlank()) throw IllegalStateException("Responses API 未返回 response id，无法提交工具结果")
             carriedContextTokens = maxOf(lastRequestTokens, round.usage.inputTokens.toLong()) + maxOf(
-                round.usage.outputTokens.toLong(), ContextTokenEstimate.text(round.text).toLong() + round.toolCalls.sumOf { ContextTokenEstimate.text(it.arguments).toLong() + 32 })
+                round.usage.outputTokens.toLong(), ContextTokenEstimate.text(round.text).toLong() + orderedToolCalls.sumOf { ContextTokenEstimate.text(it.arguments).toLong() + 32 })
             previousResponseId = round.responseId
             requestInput = JSONArray()
-            round.toolCalls.forEach { call ->
+            orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
                 val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = executeAppTool(call, requestSkillLoader, skillSelectors.toSet())
+                val execution = skillToolReuseGuard.execute(call, requestSkillLoader, skillSelectors.toSet())
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {
@@ -656,8 +691,11 @@ class ApiRepository internal constructor(
                     .put("call_id", call.callId)
                     .put("output", execution.output))
             }
+            forceNoToolsNextRound = skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
-        if (!completedNormally) throw IllegalStateException("工具调用轮次超过上限")
+        if (!completedNormally) {
+            throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
+        }
         if (profile.webSearchEnabled && activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
             recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "本次回复未调用网络搜索", TOOL_STATUS_COMPLETED))
         }

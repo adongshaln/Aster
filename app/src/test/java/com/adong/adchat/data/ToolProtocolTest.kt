@@ -117,4 +117,34 @@ class ToolProtocolTest {
         assertEquals(1, citations.size)
         assertEquals("A2", citations.single().title)
     }
+
+    @Test
+    fun skillLoadsAreExecutedBeforeReadsInTheSameModelBatch() {
+        val calls = listOf(
+            PendingToolCall("read", "read", READ_SKILL_FILE_TOOL, "{}"),
+            PendingToolCall("load", "load", LOAD_SKILL_TOOL, "{}"),
+            PendingToolCall("file", "file", CREATE_FILE_TOOL, "{}")
+        )
+
+        assertEquals(listOf(LOAD_SKILL_TOOL, READ_SKILL_FILE_TOOL, CREATE_FILE_TOOL), orderToolCalls(calls).map { it.name })
+    }
+
+    @Test
+    fun repeatedSkillReadsReuseTheSuccessfulResult() {
+        val guard = SkillToolReuseGuard()
+        val selector = "sha-1"
+        val loader = SkillLoader { LoadedSkill("demo", "https://github.com/demo", "https://raw.example/demo", selector, "instructions", files = mapOf("references/a.md" to java.util.Base64.getEncoder().encodeToString("资料".toByteArray()))) }
+        val call = PendingToolCall("read", "read-1", READ_SKILL_FILE_TOOL,
+            JSONObject().put("skill", selector).put("path", "references/a.md").put("offset", 0).toString())
+        val loaded = SkillSession(loader, listOf(loader.load(selector)))
+        loaded.load(selector)
+        guard.beginRound()
+        val first = guard.execute(call, loaded, setOf(selector))
+        guard.beginRound()
+        val second = guard.execute(call.copy(callId = "read-2"), loaded, setOf(selector))
+
+        assertTrue(JSONObject(first.output).getBoolean("ok"))
+        assertTrue(JSONObject(second.output).getBoolean("reused"))
+        assertTrue(guard.shouldForceNoToolsNextRound())
+    }
 }

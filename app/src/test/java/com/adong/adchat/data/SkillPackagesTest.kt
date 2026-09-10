@@ -34,16 +34,28 @@ class SkillPackagesTest {
     }
     @Test fun sessionRequiresLoadThenReadsExactVersionInChunks() {
         val text = "人".repeat(12000) + "尾部标记"
-        val old = SkillPackages.importZip(skillZip("SKILL.md" to manifest, "references/rules.md" to text))
+        val imported = SkillPackages.importZip(skillZip("SKILL.md" to manifest, "references/rules.md" to text))
+        val old = imported.copy(
+            sourceUrl = "https://github.com/example/story-editor",
+            resolvedUrl = "https://raw.githubusercontent.com/example/story-editor/main/SKILL.md"
+        )
         val library = MemorySkillLibrary(); library.save(old)
         val runtime = SkillRuntime(library, SkillLoader { error("unexpected network") })
         val session = SkillSession(runtime, listOf(old))
-        assertTrue(runCatching { session.readFile(old.sha256, "references/rules.md", 0) }.isFailure)
+        val aliases = listOf(old.sha256, old.sourceUrl, old.resolvedUrl, old.name)
+        aliases.forEach { selector ->
+            assertTrue(selector, runCatching { session.readFile(selector, "references/rules.md", 0) }.isFailure)
+        }
         session.load(old.sha256)
         library.remove(old.sourceUrl)
-        val first = session.readFile(old.sha256, "references/rules.md", 0)
-        assertEquals(text.take(12000), first.getString("content")); assertFalse(first.getBoolean("complete"))
-        assertEquals("尾部标记", session.readFile(old.sha256, "references/rules.md", first.getInt("next_offset")).getString("content"))
+        aliases.forEach { selector ->
+            val first = session.readFile(selector, "  references/rules.md  ", 0)
+            assertEquals(text.take(12000), first.getString("content"))
+            assertEquals("references/rules.md", first.getString("path"))
+            assertFalse(first.getBoolean("complete"))
+        }
+        val first = session.readFile(old.name, "references/rules.md", 0)
+        assertEquals("尾部标记", session.readFile(old.resolvedUrl, "references/rules.md", first.getInt("next_offset")).getString("content"))
         assertTrue(runCatching { session.readFile(old.sha256, "../secret", 0) }.isFailure)
         assertTrue(runCatching { session.readFile(old.sha256, "missing", 0) }.isFailure)
     }
