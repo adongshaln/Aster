@@ -54,9 +54,12 @@ interface SkillLibrary {
 
 class MemorySkillLibrary : SkillLibrary {
     private val selections = mutableMapOf<String, Set<String>>()
-    override fun remove(source: String) { values.remove(sourceKey(source)) }
-    override fun selection(scope: String) = selections[scope].orEmpty()
-    override fun select(scope: String, sources: Set<String>) { selections[scope] = sources }
+    @Synchronized override fun remove(source: String) {
+        selections.replaceAll { _, sources -> sources - source }
+        values.remove(sourceKey(source))
+    }
+    @Synchronized override fun selection(scope: String) = selections[scope].orEmpty()
+    @Synchronized override fun select(scope: String, sources: Set<String>) { selections[scope] = sources }
     private val values = linkedMapOf<String, LoadedSkill>()
 
     @Synchronized override fun list(): List<LoadedSkill> = values.values.sortedBy { it.name.lowercase() }
@@ -126,6 +129,14 @@ class FileSkillLibrary(context: Context) : SkillLibrary {
     }
     override fun remove(source: String) = synchronized(lock) {
         val oldHash = list().firstOrNull { it.sourceUrl == source }?.sha256
+        // Clear saved choices before deleting the package so reinstalling never silently reselects it.
+        File(directory, "selections").listFiles().orEmpty()
+            .filter { it.extension in setOf("json", "bak") }
+            .map { if (it.extension == "bak") File(it.path.removeSuffix(".bak")) else it }
+            .distinctBy { it.path }.forEach { file ->
+                val sources = readSelection(file)
+                if (source in sources) write(file, JSONArray((sources - source).toList()).toString())
+            }
         AtomicFile(File(directory, sourceKey(source) + ".json")).delete()
         if (oldHash != null) cleanupPayload(oldHash)
     }
@@ -134,10 +145,11 @@ class FileSkillLibrary(context: Context) : SkillLibrary {
             AtomicFile(File(directory, "payloads/$hash.json")).delete()
     }
     override fun selection(scope: String): Set<String> = synchronized(lock) {
-        val file = File(directory, "selections/" + sourceKey(scope) + ".json")
+        readSelection(File(directory, "selections/" + sourceKey(scope) + ".json"))
+    }
+    private fun readSelection(file: File): Set<String> =
         runCatching { val array = JSONArray(AtomicFile(file).openRead().use { it.readBytes().toString(Charsets.UTF_8) })
             (0 until array.length()).map { array.getString(it) }.toSet() }.getOrDefault(emptySet())
-    }
     override fun select(scope: String, sources: Set<String>) = synchronized(lock) {
         require(sources.size <= MAX_INSTALLED_SKILLS)
         write(File(directory, "selections/" + sourceKey(scope) + ".json"), JSONArray(sources.toList()).toString())
@@ -163,6 +175,7 @@ class SkillRuntime(
     override fun selected(scope: String): List<LoadedSkill> = library.list()
         .filter { it.enabled && it.sourceUrl in library.selection(scope) }.mapNotNull { library.find(it.sourceUrl) }
     fun selection(scope: String): Set<String> = library.selection(scope)
+        .intersect(library.list().map { it.sourceUrl }.toSet())
     fun select(scope: String, sources: Set<String>) {
         require(sources.size <= 4) { "每个对话最多选择 4 个技能，请先取消其他技能" }
         library.select(scope, sources)

@@ -41,7 +41,7 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
     var skills by remember { mutableStateOf<List<LoadedSkill>>(emptyList()) }
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     var source by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(true) }
     var notice by remember { mutableStateOf<String?>(null) }
     var detail by remember { mutableStateOf<String?>(null) }
     var deleting by remember { mutableStateOf<LoadedSkill?>(null) }
@@ -59,7 +59,12 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
             finally { busy = false }
         }
     }
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(Unit) {
+        try { reload() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (error: Exception) { notice = error.message ?: "技能列表加载失败，请重新打开" }
+        finally { busy = false }
+    }
     val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) action("技能已安装；可在输入选项中选择使用") {
             val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
@@ -99,7 +104,7 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
                             Text(skill.description.ifBlank { "此技能未提供简介" }, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall, color = MutedInk)
                         }
-                        if (conversationScope != null) Checkbox(skill.sourceUrl in selected, modifier = Modifier.testTag("skill-select-${skill.name}"), enabled = !busy && skill.enabled,
+                        if (conversationScope != null) Checkbox(skill.sourceUrl in selected, modifier = Modifier.testTag("skill-select-${skill.sourceUrl}"), enabled = !busy && (skill.enabled || skill.sourceUrl in selected),
                             onCheckedChange = { checked ->
                                 val next = if (checked) selected + skill.sourceUrl else selected - skill.sourceUrl
                                 action("此对话的技能选择已保存") { runtime.select(conversationScope, next) }

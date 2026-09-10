@@ -72,28 +72,44 @@ class SharedUiInteractionTest {
             }
         }
         val skill = runtime.installZip(output.toByteArray())
+        val tag = "skill-select-${skill.sourceUrl}"
+        var open by mutableStateOf(true)
+        fun awaitSelection() {
+            rule.waitUntil(10_000) { rule.onAllNodesWithTag(tag).fetchSemanticsNodes().isNotEmpty() }
+            rule.waitUntil(10_000) {
+                rule.onAllNodes(hasTestTag(tag) and isEnabled()).fetchSemanticsNodes().isNotEmpty()
+            }
+        }
         try {
+            runtime.select("native-discussion", emptySet())
+            runtime.select("native-prose", emptySet())
             assertEquals("Imported manifest name", "native-writing-test", skill.name)
             assertTrue("Installed package must be visible to a newly opened library",
                 com.adong.adchat.data.SkillRuntime.persistent(context).listInstalled().any { it.sourceUrl == skill.sourceUrl })
-            content { SkillLibrarySheet("native-discussion", {}) }
-            try {
-                rule.waitUntil(10_000) { rule.onAllNodesWithTag("skill-select-native-writing-test").fetchSemanticsNodes().isNotEmpty() }
-            } catch (error: Throwable) {
-                screenshot("skill-library-missing-selection")
-                throw AssertionError(rule.onRoot(useUnmergedTree = true).printToString(), error)
-            }
-            rule.onNodeWithTag("skill-select-native-writing-test").performScrollTo().performClick()
+            content { if (open) SkillLibrarySheet("native-discussion", { open = false }) }
+            awaitSelection()
+            rule.onNodeWithTag(tag).performScrollTo().performClick()
             rule.waitUntil(10_000) { runtime.selected("native-discussion").isNotEmpty() }
-            rule.onNodeWithTag("skill-select-native-writing-test").assertIsOn()
+            rule.onNodeWithTag(tag).assertIsOn()
             screenshot("skill-library-selection")
             assertTrue(runtime.selected("native-prose").isEmpty())
-            content { SkillLibrarySheet("native-discussion", {}) }
-            rule.waitUntil(10_000) { rule.onAllNodesWithTag("skill-select-native-writing-test").fetchSemanticsNodes().isNotEmpty() }
-            rule.onNodeWithTag("skill-select-native-writing-test").performScrollTo().assertIsOn()
+            // Dismiss the modal first: it owns focus while open, so replacing Activity content
+            // through content() would wait forever for the underlying Activity to regain focus.
+            rule.onNodeWithContentDescription("关闭").performScrollTo().performClick()
+            rule.onNodeWithTag(tag).assertDoesNotExist()
+            rule.runOnIdle { open = true }
+            awaitSelection()
+            rule.onNodeWithTag(tag).performScrollTo().assertIsOn()
+            rule.onNodeWithText("停用", substring = false).performScrollTo().performClick()
+            rule.waitUntil(10_000) { runtime.selected("native-discussion").isEmpty() }
+            awaitSelection()
+            rule.onNodeWithTag(tag).assertIsOn().performScrollTo().performClick()
+            rule.waitUntil(10_000) { runtime.selection("native-discussion").isEmpty() }
+            rule.onNodeWithTag(tag).assertIsOff()
         } finally {
             runtime.remove(skill.sourceUrl)
             runtime.select("native-discussion", emptySet())
+            runtime.select("native-prose", emptySet())
         }
     }
 
