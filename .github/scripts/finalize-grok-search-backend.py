@@ -34,15 +34,12 @@ class DelegatedSearchIntegrationTest {
         val server = MockWebServer()
         server.start()
         try {
-            // 1) The original Chat model asks Aster to search.
             server.enqueue(sse("""
                 data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-search","function":{"name":"search_web","arguments":"{\"query\":\"latest Aster test fact\",\"source\":\"web\"}"}}]},"finish_reason":"tool_calls"}]}
 
                 data: [DONE]
 
             """.trimIndent()))
-
-            // 2) The configured Grok/Responses backend actually performs server-side web search.
             server.enqueue(MockResponse()
                 .setHeader("Content-Type", "application/json")
                 .setBody("""
@@ -56,9 +53,7 @@ class DelegatedSearchIntegrationTest {
                           "action":{
                             "type":"search",
                             "query":"latest Aster test fact",
-                            "sources":[
-                              {"title":"Primary source","url":"https://example.com/primary"}
-                            ]
+                            "sources":[{"title":"Primary source","url":"https://example.com/primary"}]
                           }
                         },
                         {
@@ -78,8 +73,6 @@ class DelegatedSearchIntegrationTest {
                       "usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18}
                     }
                 """.trimIndent()))
-
-            // 3) The original Chat model receives the tool result and remains the final-answer model.
             server.enqueue(sse("""
                 data: {"choices":[{"delta":{"content":"根据联网资料，答案是 42。"},"finish_reason":null}]}
 
@@ -113,7 +106,7 @@ class DelegatedSearchIntegrationTest {
             assertEquals("根据联网资料，答案是 42。", result.text)
             assertTrue(result.citations.any { it.url == "https://example.com/primary" })
             assertTrue(result.toolActivities.any {
-                it.tool == DELEGATED_WEB_SEARCH_TOOL && it.status == TOOL_STATUS_COMPLETED
+                it.name == DELEGATED_WEB_SEARCH_TOOL && it.status == TOOL_STATUS_COMPLETED
             })
             assertFalse(result.toolActivities.any { it.id == "web_search" })
 
