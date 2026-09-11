@@ -27,8 +27,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Apply settings UI migration
-        run: python .github/scripts/apply-grok-search-ui.py
+      - name: Finalize delegated search behavior
+        run: python .github/scripts/finalize-grok-search-backend.py
       - name: Check patch
         run: git diff --check
       - name: Run unit tests
@@ -37,6 +37,6 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java
-          git commit -m 'feat: add delegated search settings'
+          git add app/src/main/java app/src/test/java
+          git commit -m 'test: validate delegated search end to end'
           git push origin HEAD:feature/grok-search-backend-implementation
