@@ -40,3 +40,4 @@ jobs:
           git add app/src/main/java app/src/test/java
           git commit -m 'test: validate delegated search end to end'
           git push origin HEAD:feature/grok-search-backend-implementation
+# rerun: corrected ChatToolActivity assertion
