@@ -40,6 +40,7 @@ data class ApiProfile(
     val chatModel: String = "",
     val imageModel: String = "",
     val mangaAnalysisModel: String = "",
+    val searchModel: String = "",
     val extraHeaders: String = "",
     val cachedModels: List<ApiModel> = emptyList(),
     val lastLatencyMs: Long? = null,
@@ -62,6 +63,7 @@ fun ApiProfile.normalized(): ApiProfile = copy(
     chatModel = chatModel.trim(),
     imageModel = imageModel.trim(),
     mangaAnalysisModel = mangaAnalysisModel.trim(),
+    searchModel = searchModel.trim(),
     extraHeaders = extraHeaders.lineSequence().map(String::trim).filter(String::isNotBlank).joinToString("\n")
 )
 
@@ -85,11 +87,14 @@ data class AppConfig(
     val activeChatProfileId: String,
     val activeImageProfileId: String,
     val activeMangaAnalysisProfileId: String = activeChatProfileId,
+    val activeSearchProfileId: String = activeChatProfileId,
+    val allowXSearch: Boolean = false,
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
     fun mangaAnalysisProfile(): ApiProfile = profiles.firstOrNull { it.id == activeMangaAnalysisProfileId } ?: chatProfile()
+    fun searchProfile(): ApiProfile = profiles.firstOrNull { it.id == activeSearchProfileId } ?: chatProfile()
 }
 
 class ConfigStore(context: Context) {
@@ -140,6 +145,8 @@ class ConfigStore(context: Context) {
             activeChatProfileId = profile.id,
             activeImageProfileId = profile.id,
             activeMangaAnalysisProfileId = profile.id,
+            activeSearchProfileId = profile.id,
+            allowXSearch = false,
             systemPrompt = migrateSystemPrompt(prefs.getString("systemPrompt", null) ?: DEFAULT_SYSTEM_PROMPT)
         ).also(::save)
     }
@@ -148,6 +155,8 @@ class ConfigStore(context: Context) {
         .put("activeChatProfileId", config.activeChatProfileId)
         .put("activeImageProfileId", config.activeImageProfileId)
         .put("activeMangaAnalysisProfileId", config.activeMangaAnalysisProfileId)
+        .put("activeSearchProfileId", config.activeSearchProfileId)
+        .put("allowXSearch", config.allowXSearch)
         .put("systemPrompt", config.systemPrompt)
         .put("profiles", JSONArray().apply {
             config.profiles.forEach { profile ->
@@ -173,6 +182,7 @@ class ConfigStore(context: Context) {
                     .put("chatModel", profile.chatModel)
                     .put("imageModel", profile.imageModel)
                     .put("mangaAnalysisModel", profile.mangaAnalysisModel)
+                    .put("searchModel", profile.searchModel)
                     .put("extraHeaders", profile.extraHeaders)
                     .put("lastLatencyMs", profile.lastLatencyMs)
                     .put("cachedModels", JSONArray().apply {
@@ -212,6 +222,7 @@ class ConfigStore(context: Context) {
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),
+                    searchModel = item.optString("searchModel"),
                     extraHeaders = item.optString("extraHeaders"),
                     cachedModels = decodeModels(item.optJSONArray("cachedModels")),
                     lastLatencyMs = item.optLong("lastLatencyMs").takeIf { item.has("lastLatencyMs") && !item.isNull("lastLatencyMs") }
@@ -226,6 +237,11 @@ class ConfigStore(context: Context) {
                 .takeIf { id -> profiles.any { it.id == id } }
                 ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
                 ?: profiles.first().id,
+            activeSearchProfileId = root.optString("activeSearchProfileId")
+                .takeIf { id -> profiles.any { it.id == id } }
+                ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
+                ?: profiles.first().id,
+            allowXSearch = root.optBoolean("allowXSearch", false),
             systemPrompt = migrateSystemPrompt(root.optString("systemPrompt").ifBlank { DEFAULT_SYSTEM_PROMPT })
         )
     }

@@ -97,6 +97,7 @@ class ApiRepository internal constructor(
         cacheKey: String,
         trimHistory: Boolean = true,
         skillsAllowed: Boolean = true,
+        searchBackend: SearchBackendConfig? = null,
         onContextTrim: suspend (Int) -> Unit = {},
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
@@ -123,8 +124,9 @@ class ApiRepository internal constructor(
         }
         val requireSkillLoad = requestedSkillUrl != null || requestedInstalledSkill != null
         var skillLoadingEnabled = requestedSkillSelectors.isNotEmpty()
-        require(!skillLoadingEnabled || !profile.webSearchEnabled || profile.usesResponses(model)) {
-            "当前 Chat 服务的联网搜索与技能工具不能同时使用，请关闭联网搜索或取消本对话的技能选择。"
+        val delegatedSearchEnabled = profile.webSearchEnabled && !profile.usesResponses(model) && searchBackend != null
+        require(!skillLoadingEnabled || !profile.webSearchEnabled || profile.usesResponses(model) || delegatedSearchEnabled) {
+            "当前 Chat 服务的原生联网搜索与技能工具不能同时使用；请配置 Aster 联网搜索后端，或关闭联网搜索/Skill。"
         }
         var nativeSkillReference: NativeSkillReference? = null
         if (preferNativeSkills && requestedSkillUrl != null && profile.usesResponses(model)) {
@@ -180,6 +182,7 @@ class ApiRepository internal constructor(
                     profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
+                    searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
                     onToolActivity = onToolActivity,
                     onDelta = deltaSink
                 )
@@ -284,10 +287,12 @@ class ApiRepository internal constructor(
         skillSelectors: List<String>,
         requestSkillLoader: SkillLoader,
         requireSkillLoad: Boolean,
+        searchBackend: SearchBackendConfig?,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
         val skillLoadingEnabled = skillSelectors.isNotEmpty()
+        val delegatedSearchEnabled = profile.webSearchEnabled && searchBackend != null
         val messages = JSONArray()
         val effectiveSystemPrompt = listOf(systemPrompt, SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty())
             .filter(String::isNotBlank).joinToString("\n\n")
@@ -320,13 +325,19 @@ class ApiRepository internal constructor(
 
         suspend fun executeRound(forceSkill: Boolean, forceNoTools: Boolean): ProtocolRoundResult {
             outputComplete = false
-            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled && !skillLoadingEnabled, profile.fileCreationEnabled)
+            val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled && !skillLoadingEnabled && !delegatedSearchEnabled, profile.fileCreationEnabled)
             val body = JSONObject()
                 .put("model", model)
                 .put("messages", messages)
                 .put("stream", true)
                 .put("stream_options", JSONObject().put("include_usage", true))
-            val tools = buildChatTools(toolPolicy.fileCreationEnabled, skillLoadingEnabled, skillSelectors)
+            val tools = buildChatTools(
+                toolPolicy.fileCreationEnabled,
+                skillLoadingEnabled,
+                skillSelectors,
+                delegatedSearchEnabled = delegatedSearchEnabled,
+                allowXSearch = searchBackend?.allowXSearch == true
+            )
             if (tools.length() > 0) {
                 body.put("tools", tools)
                 body.put("tool_choice", when {
@@ -414,6 +425,8 @@ class ApiRepository internal constructor(
         var completedNormally = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
+        var delegatedSearchCalls = 0
+        val delegatedSearchCache = linkedMapOf<String, DelegatedSearchResult>()
         val skillToolReuseGuard = SkillToolReuseGuard()
         for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
             skillToolReuseGuard.beginRound()
@@ -446,12 +459,47 @@ class ApiRepository internal constructor(
                 .put("role", "assistant")
                 .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
                 .put("tool_calls", assistantToolCalls))
+            var usedDelegatedSearchThisRound = false
             orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
-                val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
-                recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
-                val execution = skillToolReuseGuard.execute(call, requestSkillLoader, skillSelectors.toSet())
+                val execution = if (call.name == DELEGATED_WEB_SEARCH_TOOL) {
+                    usedDelegatedSearchThisRound = true
+                    val backend = searchBackend ?: throw IllegalStateException("联网搜索后端尚未配置")
+                    val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
+                    val query = args.optString("query").trim()
+                    val source = args.optString("source").ifBlank { "web" }.lowercase()
+                    val cacheKey = source + "\n" + query.lowercase().replace(Regex("\\s+"), " ")
+                    val cached = delegatedSearchCache[cacheKey]
+                    val search = when {
+                        query.isBlank() -> DelegatedSearchResult(
+                            JSONObject().put("ok", false).put("error", "search_query_empty").toString(),
+                            emptyList(), ChatToolActivity(call.callId, call.name, "搜索查询为空", TOOL_STATUS_FAILED)
+                        )
+                        cached != null -> cached.copy(
+                            output = delegatedSearchToolOutput(query, source, backend.model, JSONObject(cached.output).optString("research"), cached.citations, reused = true),
+                            activity = ChatToolActivity(call.callId, call.name, "已复用联网搜索结果", TOOL_STATUS_COMPLETED)
+                        )
+                        delegatedSearchCalls >= MAX_DELEGATED_SEARCH_CALLS -> DelegatedSearchResult(
+                            JSONObject().put("ok", false).put("error", "search_call_limit_reached").put("limit", MAX_DELEGATED_SEARCH_CALLS).toString(),
+                            emptyList(), ChatToolActivity(call.callId, call.name, "联网搜索已达到本轮上限", TOOL_STATUS_FAILED)
+                        )
+                        else -> {
+                            delegatedSearchCalls += 1
+                            recordActivity(ChatToolActivity(call.callId, call.name, "正在通过 ${backend.model} 搜索", TOOL_STATUS_RUNNING))
+                            executeDelegatedSearch(backend, call.callId, query, source)
+                        }
+                    }
+                    if (cached == null && runCatching { JSONObject(search.output).optBoolean("ok") }.getOrDefault(false)) {
+                        delegatedSearchCache[cacheKey] = search
+                    }
+                    search.citations.forEach { citations[it.url] = it }
+                    ToolExecutionResult(search.output, activity = search.activity)
+                } else {
+                    val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
+                    recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
+                    skillToolReuseGuard.execute(call, requestSkillLoader, skillSelectors.toSet())
+                }
                 execution.generatedFile?.let(generatedFiles::add)
                 recordActivity(execution.activity)
                 if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {
@@ -462,7 +510,7 @@ class ApiRepository internal constructor(
                     .put("tool_call_id", call.callId)
                     .put("content", execution.output))
             }
-            forceNoToolsNextRound = skillToolReuseGuard.shouldForceNoToolsNextRound()
+            forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
         if (!completedNormally) {
             throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
@@ -721,6 +769,59 @@ class ApiRepository internal constructor(
             generatedFiles = generatedFiles,
             toolActivities = activities.values.toList(),
             outputComplete = outputComplete
+        )
+    }
+
+    private suspend fun executeDelegatedSearch(
+        backend: SearchBackendConfig,
+        callId: String,
+        query: String,
+        source: String
+    ): DelegatedSearchResult = runCatching {
+        validateProfile(backend.profile)
+        require(backend.model.isNotBlank()) { "联网搜索模型不能为空" }
+        val normalizedSource = when (source.lowercase()) {
+            "x" -> {
+                require(backend.allowXSearch) { "当前未启用 X Search" }
+                "x"
+            }
+            else -> "web"
+        }
+        val toolType = if (normalizedSource == "x") "x_search" else "web_search"
+        val input = """You are Aster's retrieval worker, not the final-answer assistant. Use the required server-side search tool to research the query below. Return concise factual research notes. Preserve important dates, names, versions, numbers, disagreements, and uncertainty. Prefer primary/official sources where available. Do not assume access to the user's full conversation.
+
+SEARCH QUERY:
+$query"""
+        val body = JSONObject()
+            .put("model", backend.model)
+            .put("input", input)
+            .put("tools", JSONArray().put(JSONObject().put("type", toolType)))
+        if (normalizedSource == "web") {
+            body.put("include", JSONArray().put("web_search_call.action.sources"))
+        }
+        val request = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, backend.profile.responsesPath))
+            .post(body.toString().toRequestBody(jsonMedia))
+            .build()
+        val raw = executeTextCall(client.newCall(request))
+        val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("联网搜索后端返回的不是有效 JSON") }
+        val research = parseResponsesText(root)
+        val sources = parseServerSideSearchSources(root)
+        DelegatedSearchResult(
+            output = delegatedSearchToolOutput(query, normalizedSource, backend.model, research, sources),
+            citations = sources,
+            activity = ChatToolActivity(callId, DELEGATED_WEB_SEARCH_TOOL,
+                if (sources.isEmpty()) "已通过 ${backend.model} 完成搜索" else "已通过 ${backend.model} 搜索 · ${sources.size} 个来源",
+                TOOL_STATUS_COMPLETED)
+        )
+    }.getOrElse { error ->
+        DelegatedSearchResult(
+            output = JSONObject()
+                .put("ok", false)
+                .put("error", "search_backend_unavailable")
+                .put("message", error.message ?: "联网搜索失败")
+                .toString(),
+            citations = emptyList(),
+            activity = ChatToolActivity(callId, DELEGATED_WEB_SEARCH_TOOL, error.message ?: "联网搜索失败", TOOL_STATUS_FAILED)
         )
     }
 
