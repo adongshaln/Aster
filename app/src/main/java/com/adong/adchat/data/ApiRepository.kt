@@ -421,7 +421,7 @@ class ApiRepository internal constructor(
             return ProtocolRoundResult(roundText.toString(), roundUsage, calls, roundCitations.values.toList())
         }
 
-        if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
+        if (profile.webSearchEnabled && !delegatedSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
         var completedNormally = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
@@ -515,7 +515,7 @@ class ApiRepository internal constructor(
         if (!completedNormally) {
             throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
         }
-        if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+        if (profile.webSearchEnabled && !delegatedSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
         val duration = elapsedMs(started)
         val finalUsage = usage.copy(
             timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
