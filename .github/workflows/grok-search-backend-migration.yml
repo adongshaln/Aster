@@ -27,7 +27,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Relax ordered first-match migration anchors
+      - name: Prepare ordered migration anchors
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -38,6 +38,16 @@ jobs:
           PY
       - name: Apply migration
         run: python .github/scripts/apply-grok-search-backend.py
+      - name: Normalize Kotlin regex escape
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/adong/adchat/data/ApiRepository.kt')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('Regex("\\s+")', 'Regex("\\\\s+")')
+          p.write_text(s, encoding='utf-8')
+          PY
+          nl -ba app/src/main/java/com/adong/adchat/data/ApiRepository.kt | sed -n '468,476p'
       - name: Check patch
         run: git diff --check
       - name: Run unit tests
