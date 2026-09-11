@@ -377,10 +377,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatWebSearchEnabled(enabled: Boolean) {
         val profile = chatProfile
+        val delegated = !profile.usesResponses() && searchBackendConfig() != null
         updateProfile(profile.id) {
             it.copy(
                 webSearchEnabled = enabled,
-                fileCreationEnabled = if (enabled && !profile.usesResponses()) false else it.fileCreationEnabled
+                fileCreationEnabled = if (enabled && !profile.usesResponses() && !delegated) false else it.fileCreationEnabled
             )
         }
         persist()
@@ -388,10 +389,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatFileCreationEnabled(enabled: Boolean) {
         val profile = chatProfile
+        val delegated = !profile.usesResponses() && searchBackendConfig() != null
         updateProfile(profile.id) {
             it.copy(
                 fileCreationEnabled = enabled,
-                webSearchEnabled = if (enabled && !profile.usesResponses()) false else it.webSearchEnabled
+                webSearchEnabled = if (enabled && !profile.usesResponses() && !delegated) false else it.webSearchEnabled
             )
         }
         persist()
