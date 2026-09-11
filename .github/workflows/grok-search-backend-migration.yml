@@ -1,0 +1,42 @@
+name: Apply delegated search backend
+
+on:
+  push:
+    paths:
+      - '.github/workflows/grok-search-backend-migration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/grok-search-backend-implementation
+          fetch-depth: 0
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply migration
+        run: python .github/scripts/apply-grok-search-backend.py
+      - name: Check patch
+        run: git diff --check
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java app/src/test/java docs/DELEGATED_SEARCH.md
+          git commit -m 'feat: add delegated Grok search backend'
+          git push origin HEAD:feature/grok-search-backend-implementation
