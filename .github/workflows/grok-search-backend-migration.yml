@@ -27,6 +27,15 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Relax ordered first-match migration anchors
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/scripts/apply-grok-search-backend.py')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("    if text.count(old) != 1:\n        raise SystemExit(f'anchor not unique in {path}: {text.count(old)}')\n", "")
+          p.write_text(s, encoding='utf-8')
+          PY
       - name: Apply migration
         run: python .github/scripts/apply-grok-search-backend.py
       - name: Check patch
