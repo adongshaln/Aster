@@ -66,6 +66,30 @@ class SharedUiInteractionTest {
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
     }
 
+    @Test fun builtinRegexProseRendersAndSurvivesUpdates() {
+        val store = com.adong.adchat.data.TavernPresetStore(rule.activity)
+        val active = requireNotNull(store.list().firstOrNull { it.builtIn })
+        var prose by mutableStateOf("<konatan_planning~>正在规划。</konatan_planning~>\n正文开始。<konatan_chat>你好。</konatan_chat>")
+        content {
+            val display = remember(prose) {
+                com.adong.adchat.data.TavernPresetRuntime.display(active, prose, "assistant", 0, true)
+            }
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                StructuredMessageText(display.structuredText(), false, false, false)
+            }
+        }
+        rule.waitForIdle()
+        repeat(3) { index ->
+            rule.runOnIdle {
+                prose = "<konatan_planning~>下一段规划。</konatan_planning~>\n" +
+                    "长篇正文第${index}段。".repeat(500) + "<konatan_chat>更新后的气泡。</konatan_chat>"
+            }
+            rule.waitForIdle()
+        }
+        rule.runOnIdle { prose = "普通正文。" }
+        rule.onNodeWithText("普通正文。").assertExists()
+    }
+
     @Test fun sharedSkillSelectionPersistsAndDoesNotLeakIntoOtherWorkspaces() {
         val context = rule.activity.applicationContext
         val runtime = com.adong.adchat.data.SkillRuntime.persistent(context)
