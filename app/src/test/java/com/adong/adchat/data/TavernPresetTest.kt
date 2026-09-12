@@ -77,6 +77,26 @@ class TavernPresetTest {
     }
 
     @Test
+    fun optionalPresetMacrosDoNotLeakAsRawPlaceholders() {
+        val root = JSONObject(samplePreset())
+        root.getJSONArray("prompts").put(
+            prompt("optional-macros", "optional macros", "system", "{{date}}|{{time}}|{{trim}}|{{random::唯一选项}}", enabled = true)
+        )
+        root.getJSONArray("prompt_order").getJSONObject(0).getJSONArray("order")
+            .put(JSONObject().put("identifier", "optional-macros").put("enabled", true))
+        val prepared = TavernPresetRuntime.prepare(
+            TavernPresetParser.parse(root.toString(), "test", "Sample.json", false),
+            "ASTER BASE",
+            emptyList(),
+            random = Random(7)
+        )
+
+        val content = prepared.history.first { it.role == "system" }.content
+        assertFalse(content.contains("{{"))
+        assertTrue(content.endsWith("||唯一选项"))
+    }
+
+    @Test
     fun promptAndRegexChoicesUseFileDefaultsPersistAndReset() {
         val context = RuntimeEnvironment.getApplication()
         val store = TavernPresetStore(context)

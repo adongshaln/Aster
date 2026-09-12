@@ -456,7 +456,7 @@ private enum class TavernConfigurationFilter { All, Enabled, Disabled, Modified 
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun TavernPresetConfigurationSheet(
+internal fun TavernPresetConfigurationSheet(
     configuration: TavernPresetConfiguration,
     regexEnabled: Boolean,
     busy: Boolean,

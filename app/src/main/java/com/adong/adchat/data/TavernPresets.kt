@@ -7,7 +7,9 @@ import org.json.JSONObject
 import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
+import java.text.DateFormat
 import java.util.Base64
+import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import java.util.zip.GZIPInputStream
@@ -760,7 +762,11 @@ private class TavernMacroProcessor(
             return variables[trimmed.substringAfter("::").trim()].orEmpty()
         }
         if (trimmed.startsWith("random::", true)) {
-            val values = trimmed.substringAfter("::").split("::")
+            val payload = trimmed.substringAfter("::")
+            val values = payload.split("::").let { choices ->
+                if (choices.size == 1 && ',' in payload) payload.split(',').map(String::trim) else choices
+            }.filter(String::isNotEmpty)
+            if (values.isEmpty()) return ""
             return values[random.nextInt(values.size)]
         }
         if (trimmed.startsWith("roll ", true)) {
@@ -774,6 +780,9 @@ private class TavernMacroProcessor(
             "char" -> characterName
             "lastusermessage" -> lastUserMessage
             "lastcharmessage", "lastassistantmessage" -> lastAssistantMessage
+            "time" -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
+            "date" -> DateFormat.getDateInstance(DateFormat.SHORT).format(Date())
+            "trim" -> ""
             else -> original
         }
     }

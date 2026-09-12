@@ -35,10 +35,14 @@ import com.adong.adchat.ui.MainViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.adong.adchat.data.Conversation
 import com.adong.adchat.data.ChatMessage
+import com.adong.adchat.data.TavernPresetConfiguration
+import com.adong.adchat.data.TavernPromptSetting
+import com.adong.adchat.data.TavernRegexSetting
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.screens.EmptyChat
 import com.adong.adchat.ui.screens.StoryWorkspaceEmpty
 import com.adong.adchat.ui.screens.StructuredMessageText
+import com.adong.adchat.ui.screens.TavernPresetConfigurationSheet
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -115,6 +119,56 @@ class SharedUiInteractionTest {
 
     @Test fun ordinaryComposerCollapsesWithoutLosingDraft() = checkKeyboard("chat")
     @Test fun storyComposerCollapsesWithoutLosingDraft() = checkKeyboard("story")
+
+    @Test fun tavernPresetConfigurationExposesDefaultsAndChoices() {
+        var promptChanged = false
+        var configuration by mutableStateOf(
+            TavernPresetConfiguration(
+                id = "preview",
+                name = "泉此方周年预设",
+                builtIn = true,
+                prompts = listOf(
+                    TavernPromptSetting("base", "基础规则", "system", "保持人物设定。", false, true, true),
+                    TavernPromptSetting("style", "可选文风", "system", "采用轻快叙事。", false, false, false)
+                ),
+                regexScripts = listOf(
+                    TavernRegexSetting(0, "card", "回复卡片", "/<card>(.*?)<\\/card>/g", "$1", setOf(2), false, true, null, 1, true, true)
+                ),
+                helperScriptCount = 1
+            )
+        )
+        content {
+            TavernPresetConfigurationSheet(
+                configuration = configuration,
+                regexEnabled = true,
+                busy = false,
+                error = null,
+                onPromptEnabled = { id, enabled ->
+                    promptChanged = id == "style" && enabled
+                    configuration = configuration.copy(prompts = configuration.prompts.map {
+                        if (it.identifier == id) it.copy(enabled = enabled) else it
+                    })
+                },
+                onRegexScriptEnabled = { _, _ -> },
+                onRegexEnabled = {},
+                onReset = {},
+                onBack = {},
+                onDismiss = {}
+            )
+        }
+        rule.onNodeWithText("提示词 2").assertIsDisplayed()
+        rule.onNodeWithText("基础规则").assertIsDisplayed()
+        rule.onNodeWithText("可选文风").assertIsDisplayed()
+        rule.onNodeWithText("已停用").performClick()
+        rule.onNodeWithText("基础规则").assertDoesNotExist()
+        rule.onAllNodes(isToggleable()).onFirst().performClick()
+        rule.runOnIdle { assertTrue(promptChanged) }
+        rule.onNodeWithText("正则 1").performClick()
+        rule.onNodeWithText("回复卡片").assertIsDisplayed().performClick()
+        rule.onNodeWithText("查找表达式").assertIsDisplayed()
+        rule.onNodeWithText("关闭").performClick()
+        screenshot("tavern-preset-configuration")
+    }
 
     @OptIn(ExperimentalTestApi::class)
     @Test fun expandedDraftPreservesTextAndSelection() {

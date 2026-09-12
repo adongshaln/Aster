@@ -10,7 +10,7 @@ Aster 的故事正文工作区支持 SillyTavern / 酒馆 JSON 预设。入口�
 - 用户选择按预设分别持久化；更新单项不会改写原始 JSON，切换预设后仍保留各自配置
 - 按 `prompt_order` 与各条目的启用状态组装提示
 - 保留 system / developer / user / assistant 角色顺序，并在 `chatHistory` 标记处插入 Aster 故事上下文
-- 展开 `setvar`、`getvar`、`random`、`roll`、`user`、`char`、`lastUserMessage` 与 `lastCharMessage`
+- 展开 `setvar`、`getvar`、`random`、`roll`、`user`、`char`、`lastUserMessage`、`lastCharMessage`、`date`、`time` 与 `trim`
 - 映射 `temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed` 与 `openai_max_tokens`
 - Regex 支持角色范围、Min / Max Depth、`g/i/m/s/u` 标志、捕获组、`{{match}}`、Trim Out，以及 Alter Outgoing Prompt / Alter Chat Display 语义
 - 请求正则只修改发给模型的临时副本；显示正则只修改当前渲染，不改写故事数据库
