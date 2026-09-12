@@ -799,8 +799,10 @@ private fun ProfileEditor(
                         Text("对话协议", style = MaterialTheme.typography.labelLarge)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             ImageProtocolOption("Chat Completions", !draft.usesResponses(), Modifier.weight(1f)) {
-                                draft = draft.copy(chatApiMode = "chat",
-                                    fileCreationEnabled = if (draft.webSearchEnabled) false else draft.fileCreationEnabled)
+                                draft = draft.copy(
+                                    chatApiMode = "chat",
+                                    fileCreationEnabled = if (draft.webSearchEnabled && !searchBackendConfigured) false else draft.fileCreationEnabled
+                                )
                             }
                             ImageProtocolOption("Responses", draft.usesResponses(), Modifier.weight(1f)) {
                                 draft = draft.copy(chatApiMode = "responses")
