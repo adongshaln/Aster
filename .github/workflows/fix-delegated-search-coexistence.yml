@@ -23,7 +23,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Apply fix
+      - name: Apply focused coexistence fix
         run: python .github/scripts/fix-delegated-search-coexistence.py
       - name: Check patch
         run: git diff --check
