@@ -1,0 +1,37 @@
+name: Temporary Aster v2.5.0 release trigger
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  dispatch-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure v2.5.0 points to the verified commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: e425e395b4b796482b6192639e91b496f332b058
+        run: |
+          set -euo pipefail
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v2.5.0" >/dev/null 2>&1; then
+            echo "v2.5.0 already exists"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/v2.5.0" \
+              -f sha="${TARGET_SHA}"
+          fi
+
+      - name: Start the tagged Android build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run android-build.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref v2.5.0
