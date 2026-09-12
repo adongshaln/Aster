@@ -1,6 +1,6 @@
 # Delegated Search Backend
 
-Release baseline: Aster 2.4.1 / versionCode 59.
+Release baseline: Aster 2.5.0 / versionCode 60.
 
 Aster can delegate real-time search for Chat Completions models to a separately selected Responses model. The current implementation is designed for Grok-compatible gateways verified to support `web_search` and `x_search`.
 
