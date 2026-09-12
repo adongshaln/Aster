@@ -181,6 +181,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return if (route.model == profile.chatModel) profile else profile.copy(chatModel = route.model)
         }
     val imageProfile: ApiProfile get() = appConfig.imageProfile()
+    val searchProfile: ApiProfile get() = appConfig.searchProfile()
+    val allowXSearch: Boolean get() = appConfig.allowXSearch
+    private fun searchBackendConfig(): SearchBackendConfig? {
+        val profile = appConfig.searchProfile()
+        val model = profile.searchModel.trim()
+        return model.takeIf(String::isNotBlank)?.let { SearchBackendConfig(profile, it, appConfig.allowXSearch) }
+    }
     val mangaAnalysisProfile: ApiProfile
         get() {
             val profile = appConfig.mangaAnalysisProfile()
@@ -278,7 +285,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             profiles = remaining,
             activeChatProfileId = if (appConfig.activeChatProfileId == profileId) fallbackProfile.id else appConfig.activeChatProfileId,
             activeImageProfileId = if (appConfig.activeImageProfileId == profileId) fallbackProfile.id else appConfig.activeImageProfileId,
-            activeMangaAnalysisProfileId = if (appConfig.activeMangaAnalysisProfileId == profileId) fallbackProfile.id else appConfig.activeMangaAnalysisProfileId
+            activeMangaAnalysisProfileId = if (appConfig.activeMangaAnalysisProfileId == profileId) fallbackProfile.id else appConfig.activeMangaAnalysisProfileId,
+            activeSearchProfileId = if (appConfig.activeSearchProfileId == profileId) fallbackProfile.id else appConfig.activeSearchProfileId
         )
         if (affectedConversationIds.isNotEmpty()) {
             conversations.indices.forEach { index ->
@@ -307,6 +315,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (profiles.none { it.id == profileId }) return
         appConfig = appConfig.copy(activeImageProfileId = profileId)
         persist(); notice = "绘图已切换到 ${imageProfile.name}"
+    }
+
+    fun selectSearchProfile(profileId: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        appConfig = appConfig.copy(activeSearchProfileId = profileId)
+        persist(); notice = "联网搜索后端已切换到 ${profile.name}"
+    }
+
+    fun selectSearchModel(profileId: String, model: String) {
+        val selected = model.trim()
+        if (selected.isBlank()) return
+        updateProfile(profileId) { it.copy(searchModel = selected) }
+        appConfig = appConfig.copy(activeSearchProfileId = profileId)
+        persist(); notice = "联网搜索模型已设置为 $selected"
+    }
+
+    fun setAllowXSearch(enabled: Boolean) {
+        appConfig = appConfig.copy(allowXSearch = enabled)
+        persist(); notice = if (enabled) "已允许联网后端使用 X Search" else "已关闭 X Search"
     }
 
     fun setModelContextWindow(profileId: String, model: String, window: Int) {
@@ -350,10 +377,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatWebSearchEnabled(enabled: Boolean) {
         val profile = chatProfile
+        val delegated = !profile.usesResponses() && searchBackendConfig() != null
         updateProfile(profile.id) {
             it.copy(
                 webSearchEnabled = enabled,
-                fileCreationEnabled = if (enabled && !profile.usesResponses()) false else it.fileCreationEnabled
+                fileCreationEnabled = if (enabled && !profile.usesResponses() && !delegated) false else it.fileCreationEnabled
             )
         }
         persist()
@@ -361,10 +389,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatFileCreationEnabled(enabled: Boolean) {
         val profile = chatProfile
+        val delegated = !profile.usesResponses() && searchBackendConfig() != null
         updateProfile(profile.id) {
             it.copy(
                 fileCreationEnabled = enabled,
-                webSearchEnabled = if (enabled && !profile.usesResponses()) false else it.webSearchEnabled
+                webSearchEnabled = if (enabled && !profile.usesResponses() && !delegated) false else it.webSearchEnabled
             )
         }
         persist()
@@ -466,6 +495,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         testProfile(chatProfile)
         if (imageProfile.id != chatProfile.id) testProfile(imageProfile)
         if (mangaAnalysisProfile.id != chatProfile.id && mangaAnalysisProfile.id != imageProfile.id) testProfile(mangaAnalysisProfile)
+        if (searchProfile.searchModel.isNotBlank() && searchProfile.id !in setOf(chatProfile.id, imageProfile.id, mangaAnalysisProfile.id)) testProfile(searchProfile)
     }
 
     fun exportProfiles(includeApiKeys: Boolean): String {
@@ -495,6 +525,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("chatModel", profile.chatModel)
                         .put("imageModel", profile.imageModel)
                         .put("mangaAnalysisModel", profile.mangaAnalysisModel)
+                        .put("searchModel", profile.searchModel)
                         .put("extraHeaders", profile.extraHeaders)
                     )
                 }
@@ -533,6 +564,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     chatModel = item.optString("chatModel"),
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),
+                    searchModel = item.optString("searchModel"),
                     extraHeaders = item.optString("extraHeaders")
                 ))
             }
@@ -646,6 +678,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     systemPrompt = appConfig.systemPrompt,
                     history = requestHistory,
                     cacheKey = "adchat-${activeConversationId ?: profile.id}",
+                    searchBackend = searchBackendConfig(),
                     onContextTrim = { count -> withContext(Dispatchers.Main) { notice = "本次已省略最早的 $count 轮对话以适配模型上下文；本地记录仍保留。" } },
                     onRecovery = { event ->
                         automaticRecoveryCount = maxOf(automaticRecoveryCount, event.attempt)

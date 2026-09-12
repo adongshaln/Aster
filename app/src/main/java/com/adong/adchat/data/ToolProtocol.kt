@@ -165,7 +165,9 @@ internal fun resolveChatToolPolicy(
 internal fun buildChatTools(
     fileCreationEnabled: Boolean,
     skillLoadingEnabled: Boolean = false,
-    skillSelectors: List<String> = emptyList()
+    skillSelectors: List<String> = emptyList(),
+    delegatedSearchEnabled: Boolean = false,
+    allowXSearch: Boolean = false
 ): JSONArray = JSONArray().apply {
     if (fileCreationEnabled) {
         put(JSONObject()
@@ -177,6 +179,9 @@ internal fun buildChatTools(
             .put("type", "function")
             .put("function", loadSkillDefinition(responsesApi = false, skillSelectors = skillSelectors)))
         put(JSONObject().put("type", "function").put("function", readSkillDefinition(false, skillSelectors)))
+    }
+    if (delegatedSearchEnabled) {
+        put(JSONObject().put("type", "function").put("function", delegatedSearchDefinition(allowXSearch)))
     }
 }
 
