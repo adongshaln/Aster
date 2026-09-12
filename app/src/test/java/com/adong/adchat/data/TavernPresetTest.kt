@@ -83,6 +83,24 @@ class TavernPresetTest {
     }
 
     @Test
+    fun oversizedCaptureExpansionKeepsOriginalAndContinuesFollowingRules() {
+        val base = TavernPresetParser.parse(samplePreset(), "test", "Sample.json", false)
+        val expansion = base.regexScripts.first().copy(
+            name = "oversized", findRegex = "/([\\s\\S]+)/", replaceString = "$1".repeat(2_000),
+            disabled = false, placement = setOf(2), markdownOnly = true, promptOnly = false,
+            minDepth = null, maxDepth = null
+        )
+        val following = expansion.copy(name = "following", findRegex = "/END$/", replaceString = "DONE")
+        val source = "正文".repeat(32_000) + "END"
+        val output = TavernPresetRuntime.display(
+            base.copy(regexScripts = listOf(expansion, following)), source, "assistant", 0, true
+        )
+        assertEquals(source.removeSuffix("END") + "DONE", output.text)
+        assertEquals(listOf("oversized"), output.skippedScripts)
+        assertEquals(1, output.appliedScripts)
+    }
+
+    @Test
     fun optionalPresetMacrosDoNotLeakAsRawPlaceholders() {
         val root = JSONObject(samplePreset())
         root.getJSONArray("prompts").put(

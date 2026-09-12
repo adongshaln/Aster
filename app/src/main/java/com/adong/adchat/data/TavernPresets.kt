@@ -603,7 +603,7 @@ internal object TavernRegexEngine {
     }
 
     private fun expandReplacement(template: String, match: MatchResult, trimmedMatch: String, input: String): String {
-        val output = StringBuilder(template.length + trimmedMatch.length)
+        val output = StringBuilder(template.length.coerceAtMost(MAX_REGEX_OUTPUT_CHARS))
         var index = 0
         while (index < template.length) {
             when {
@@ -632,6 +632,9 @@ internal object TavernRegexEngine {
                 }
                 else -> output.append(template[index++])
             }
+            // Check while expanding captures: a template can repeat a large $1 many times.
+            // Waiting until the complete replacement is built can exhaust the app heap first.
+            require(output.length <= MAX_REGEX_OUTPUT_CHARS) { "正则替换结果过大" }
         }
         return output.toString()
     }

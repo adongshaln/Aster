@@ -239,16 +239,19 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun tavernDisplay(
+    suspend fun tavernDisplay(
         content: String,
         role: String,
         depth: Int,
         workspace: StoryWorkspace
     ): TavernRegexOutput {
         val preset = activeTavernPreset
+        val regexEnabled = tavernRegexEnabled
         return if (workspace != StoryWorkspace.Prose || preset == null) {
             TavernRegexOutput(content, 0, emptyList())
-        } else TavernPresetRuntime.display(preset, content, role, depth, tavernRegexEnabled)
+        } else withContext(Dispatchers.Default) {
+            TavernPresetRuntime.display(preset, content, role, depth, regexEnabled)
+        }
     }
 
     private suspend fun refreshTavernPresetState() {

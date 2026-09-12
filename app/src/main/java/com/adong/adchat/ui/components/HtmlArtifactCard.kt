@@ -116,8 +116,9 @@ internal fun HtmlArtifactCard(
 private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolean) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var failed by remember(source, allowScripts) { mutableStateOf(false) }
-    val view = remember(source, allowScripts) { runCatching {
+    var failed by remember(context, allowScripts) { mutableStateOf(false) }
+    val session = remember(context, allowScripts) { HtmlPreviewSession() }
+    val view = remember(context, allowScripts) { runCatching {
         WebView(context).apply {
             layoutParams = android.view.ViewGroup.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
@@ -143,9 +144,11 @@ private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolea
             webChromeClient = WebChromeClient()
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String?) {
+                    if (session.released || session.rendererGone) return
                     // DOM completion precedes Chromium's first drawable frame.
                     view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
                         override fun onComplete(requestId: Long) {
+                            if (session.released || session.rendererGone) return
                             view.invalidate()
                             view.rootView.postInvalidateOnAnimation()
                         }
@@ -155,6 +158,7 @@ private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolea
                 override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse =
                     WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
                 override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                    session.rendererGone = true
                     failed = true
                     return true
                 }
@@ -163,8 +167,10 @@ private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolea
     }.getOrNull() }
     DisposableEffect(view, lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) view?.onResume()
-            if (event == Lifecycle.Event.ON_PAUSE) view?.onPause()
+            if (!session.released && !session.rendererGone) {
+                if (event == Lifecycle.Event.ON_RESUME) view?.onResume()
+                if (event == Lifecycle.Event.ON_PAUSE) view?.onPause()
+            }
         }
         lifecycle.addObserver(observer)
         onDispose {
@@ -173,22 +179,38 @@ private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolea
     }
     if (view == null || failed) Box(modifier, contentAlignment = Alignment.Center) {
         Text("预览不可用，可切换源码或保存文件", color = MutedInk)
-    } else AndroidView(
-        factory = {
-            view.apply {
-                // Let the surrounding Compose window submit its first frame before
-                // Chromium starts drawing; otherwise a new dialog's toolbar can stay blank.
-                postOnAnimation {
-                    post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source, allowScripts), "text/html", "utf-8", null) }
+    } else key(view) {
+        AndroidView(
+        factory = { view },
+        update = { webView ->
+            if (session.source != source && !session.released && !session.rendererGone) {
+                session.source = source
+                // Ignore queued work if this view was released or a newer source replaced it.
+                webView.postOnAnimation {
+                    webView.post {
+                        if (!session.released && !session.rendererGone && session.source == source) {
+                            runCatching {
+                                webView.loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source, allowScripts), "text/html", "utf-8", null)
+                            }.onFailure { failed = true }
+                        }
+                    }
                 }
             }
         },
         modifier = modifier,
         onRelease = {
-            it.stopLoading()
+            session.released = true
+            if (!session.rendererGone) it.stopLoading()
             it.webViewClient = WebViewClient()
             it.removeAllViews()
             it.destroy()
         }
     )
+    }
+}
+
+private class HtmlPreviewSession {
+    var source: String? = null
+    var released = false
+    var rendererGone = false
 }

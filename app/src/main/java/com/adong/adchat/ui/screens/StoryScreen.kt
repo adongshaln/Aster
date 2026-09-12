@@ -1011,23 +1011,30 @@ private fun StoryWorkspaceContent(
                     val pending = if (assistant && workspace == StoryWorkspace.Discussion) {
                         storyVm.archiveProposals.count { it.sourceRevisionId == row.revision.id }
                     } else 0
-                    val display = remember(
+                    val display = key(
                         row.revision.id,
                         row.revision.content,
                         row.revision.state,
                         storyVm.activeTavernPresetId,
+                        storyVm.activeTavernPresetConfiguration,
                         storyVm.tavernRegexEnabled,
+                        workspace,
                         index,
                         messages.size
                     ) {
-                        if (row.revision.state == StoryRevisionState.Streaming) {
-                            com.adong.adchat.data.TavernRegexOutput(row.revision.content, 0, emptyList())
-                        } else storyVm.tavernDisplay(
-                            content = row.revision.content,
-                            role = row.message.role,
-                            depth = messages.lastIndex - index,
-                            workspace = workspace
-                        )
+                        val result by produceState(
+                            initialValue = com.adong.adchat.data.TavernRegexOutput(row.revision.content, 0, emptyList())
+                        ) {
+                            if (row.revision.state != StoryRevisionState.Streaming) {
+                                value = storyVm.tavernDisplay(
+                                    content = row.revision.content,
+                                    role = row.message.role,
+                                    depth = messages.lastIndex - index,
+                                    workspace = workspace
+                                )
+                            }
+                        }
+                        result
                     }
                     StoryMessageItem(
                         row = row,
