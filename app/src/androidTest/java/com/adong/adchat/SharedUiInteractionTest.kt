@@ -90,6 +90,24 @@ class SharedUiInteractionTest {
         rule.onNodeWithText("普通正文。").assertExists()
     }
 
+    @Test fun tavernMacrosCompileAndExpandOnAndroid() {
+        val base = com.adong.adchat.data.TavernPresetStore(rule.activity).list().first { it.builtIn }
+        val prompt = base.prompts.first().copy(identifier = "macro-probe", role = "system", marker = false,
+            content = "{{user}}/{{setvar::tone::温柔}}{{getvar::tone}}")
+        val preset = base.copy(prompts = listOf(prompt),
+            promptOrder = listOf(com.adong.adchat.data.TavernPromptOrderEntry("macro-probe", true)),
+            assistantPrefill = "")
+        val prepared = com.adong.adchat.data.TavernPresetRuntime.prepare(preset, "BASE", emptyList(), regexEnabled = false)
+        assertEquals("用户/温柔", prepared.history.single().content)
+        val script = base.regexScripts.first().copy(findRegex = "/{{user}}/g", replaceString = "作者",
+            substituteRegex = 2, trimStrings = emptyList(), disabled = false, placement = setOf(2),
+            markdownOnly = true, promptOnly = false, minDepth = null, maxDepth = null)
+        val displayed = com.adong.adchat.data.TavernPresetRuntime.display(
+            base.copy(regexScripts = listOf(script)), "用户说话", "assistant", 0, true)
+        assertEquals("作者说话", displayed.text)
+        assertTrue(displayed.skippedScripts.isEmpty())
+    }
+
     @Test fun sharedSkillSelectionPersistsAndDoesNotLeakIntoOtherWorkspaces() {
         val context = rule.activity.applicationContext
         val runtime = com.adong.adchat.data.SkillRuntime.persistent(context)

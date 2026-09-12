@@ -647,7 +647,8 @@ internal object TavernRegexEngine {
         }
     }
 
-    private val SIMPLE_MACRO = Regex("\\{\\{([A-Za-z][A-Za-z0-9_]*)}}")
+    // Android uses ICU, which requires literal closing braces to be escaped too.
+    private val SIMPLE_MACRO = Regex("\\{\\{([A-Za-z][A-Za-z0-9_]*)\\}\\}")
     private const val MAX_REGEX_OUTPUT_CHARS = 2_000_000
 }
 
@@ -791,7 +792,7 @@ private class TavernMacroProcessor(
     }
 
     private companion object {
-        val MACRO = Regex("\\{\\{([\\s\\S]*?)}}")
+        val MACRO = Regex("\\{\\{([\\s\\S]*?)\\}\\}")
         val DICE = Regex("(\\d*)d(\\d+)", RegexOption.IGNORE_CASE)
         const val MAX_MACRO_PASSES = 8
     }

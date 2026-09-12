@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+# This hotfix exercises the native ICU engine and the affected HTML lifecycle.
+# Keep unrelated historical settings/keyboard scenarios out of this regression run.
+if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/design/regex-crash-hotfix" ]]; then
+  set -- 'com.adong.adchat.SharedUiInteractionTest#builtinRegexProseRendersAndSurvivesUpdates,com.adong.adchat.SharedUiInteractionTest#tavernMacrosCompileAndExpandOnAndroid,com.adong.adchat.SharedUiInteractionTest#htmlPreviewWaitsForCompletionRunsOfflineAndOpensFullscreen'
+fi
+
 if [[ $# -eq 0 && ( "${GITHUB_REF:-}" == "refs/heads/feature/story-mode" || "${GITHUB_REF:-}" == "refs/heads/feature/skills-runtime" || "${GITHUB_REF:-}" == "refs/heads/feature/tavern-presets" ) ]]; then
   set -- com.adong.adchat.SharedUiInteractionTest
 fi
