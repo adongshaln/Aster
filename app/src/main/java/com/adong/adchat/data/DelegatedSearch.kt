@@ -58,6 +58,16 @@ internal fun parseServerSideSearchSources(root: JSONObject): List<ChatCitation> 
     return result.values.toList()
 }
 
+internal fun responseUsedDelegatedSearch(root: JSONObject, source: String): Boolean {
+    val expectedType = if (source.lowercase() == "x") "x_search_call" else "web_search_call"
+    val response = root.optJSONObject("response") ?: root
+    val output = response.optJSONArray("output") ?: return false
+    for (index in 0 until output.length()) {
+        if (output.optJSONObject(index)?.optString("type") == expectedType) return true
+    }
+    return false
+}
+
 internal fun delegatedSearchToolOutput(
     query: String,
     source: String,

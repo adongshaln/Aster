@@ -58,5 +58,17 @@ class DelegatedSearchTest {
         assertTrue(DELEGATED_WEB_SEARCH_TOOL in names)
     }
 
+    @Test
+    fun confirmsActualServerSideSearchCallBeforeReportingSuccess() {
+        val web = JSONObject().put("output", JSONArray().put(JSONObject().put("type", "web_search_call")))
+        val x = JSONObject().put("output", JSONArray().put(JSONObject().put("type", "x_search_call")))
+        val textOnly = JSONObject().put("output", JSONArray().put(JSONObject().put("type", "message")))
+
+        assertTrue(responseUsedDelegatedSearch(web, "web"))
+        assertFalse(responseUsedDelegatedSearch(web, "x"))
+        assertTrue(responseUsedDelegatedSearch(x, "x"))
+        assertFalse(responseUsedDelegatedSearch(textOnly, "web"))
+    }
+
     private fun JSONArray.toStringList(): List<String> = (0 until length()).map(::getString)
 }

@@ -804,6 +804,9 @@ $query"""
             .build()
         val raw = executeTextCall(client.newCall(request))
         val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("联网搜索后端返回的不是有效 JSON") }
+        require(responseUsedDelegatedSearch(root, normalizedSource)) {
+            "联网搜索后端返回了响应，但未实际执行 ${if (normalizedSource == "x") "X Search" else "Web Search"}"
+        }
         val research = parseResponsesText(root)
         val sources = parseServerSideSearchSources(root)
         DelegatedSearchResult(
