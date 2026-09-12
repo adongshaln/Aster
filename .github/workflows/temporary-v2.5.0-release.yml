@@ -1,0 +1,29 @@
+name: Temporary Aster v2.5.0 release trigger
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  tag-release:
+    if: github.event.head_commit.message == 'ci: trigger Aster v2.5.0 release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create v2.5.0 tag on the verified commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          test "${TARGET_SHA}" != "0000000000000000000000000000000000000000"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v2.5.0" >/dev/null 2>&1; then
+            echo "v2.5.0 already exists"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/v2.5.0" \
+              -f sha="${TARGET_SHA}"
+          fi
