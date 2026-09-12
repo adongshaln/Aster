@@ -77,6 +77,12 @@ jobs:
       - name: Test and assemble release
         run: ./gradlew --no-daemon --stacktrace testDebugUnitTest assembleRelease
 
+      - name: Print unit-test failures
+        if: failure()
+        shell: bash
+        run: |
+          find app/build/test-results/testDebugUnitTest -name '*.xml' -type f -print -exec sed -n '/<failure/,/<\/failure>/p' {} \; || true
+
       - name: Read app version
         id: version
         shell: bash

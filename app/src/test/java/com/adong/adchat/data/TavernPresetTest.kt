@@ -18,8 +18,12 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class TavernPresetTest {
     @Before
+    fun setUpStoredPresets() = clearStoredPresets()
+
     @After
-    fun clearStoredPresets() {
+    fun tearDownStoredPresets() = clearStoredPresets()
+
+    private fun clearStoredPresets() {
         val context = RuntimeEnvironment.getApplication()
         context.getSharedPreferences("aster_tavern_presets", 0).edit().clear().commit()
         File(context.filesDir, "tavern_presets").deleteRecursively()
