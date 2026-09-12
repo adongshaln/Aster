@@ -97,6 +97,7 @@ class ApiRepository internal constructor(
         cacheKey: String,
         trimHistory: Boolean = true,
         skillsAllowed: Boolean = true,
+        generationOptions: ChatGenerationOptions = ChatGenerationOptions(),
         searchBackend: SearchBackendConfig? = null,
         onContextTrim: suspend (Int) -> Unit = {},
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
@@ -105,6 +106,7 @@ class ApiRepository internal constructor(
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
         require(model.isNotBlank()) { "Model is required" }
+        val requestGenerationOptions = generationOptions.normalized()
         val requestedSkillUrl = if (skillsAllowed) requestedGitHubSkillUrl(history) else null
         val installed = if (skillsAllowed) skillLoader.listInstalled().filter { it.enabled } else emptyList()
         val requestedInstalledSkill = requestedInstalledSkillName(history, installed)
@@ -174,6 +176,7 @@ class ApiRepository internal constructor(
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
                     nativeSkillReference = nativeSkillReference,
+                    generationOptions = requestGenerationOptions,
                     onToolActivity = onToolActivity,
                     onDelta = deltaSink
                 )
@@ -183,6 +186,7 @@ class ApiRepository internal constructor(
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
                     searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
+                    generationOptions = requestGenerationOptions,
                     onToolActivity = onToolActivity,
                     onDelta = deltaSink
                 )
@@ -288,6 +292,7 @@ class ApiRepository internal constructor(
         requestSkillLoader: SkillLoader,
         requireSkillLoad: Boolean,
         searchBackend: SearchBackendConfig?,
+        generationOptions: ChatGenerationOptions,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -349,6 +354,7 @@ class ApiRepository internal constructor(
             if (toolPolicy.webSearchEnabled) body.put("web_search_options", JSONObject())
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = false, explicitCache = explicitCache)
             ModelContextPolicy.applyToRequest(body, profile.contextLimits(model), responses = false)
+            applyGenerationOptions(body, generationOptions, responsesApi = false, model = model)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
@@ -552,6 +558,7 @@ class ApiRepository internal constructor(
         requestSkillLoader: SkillLoader,
         requireSkillLoad: Boolean,
         nativeSkillReference: NativeSkillReference?,
+        generationOptions: ChatGenerationOptions,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -607,6 +614,7 @@ class ApiRepository internal constructor(
             if (effectiveSystemPrompt.isNotBlank()) body.put("instructions", effectiveSystemPrompt)
             applyGptOptimizations(body, profile, model, cacheKey, responsesApi = true, explicitCache = false)
             lastRequestTokens = ModelContextPolicy.applyToRequest(body, profile.contextLimits(model), responses = true, carriedTokens = carriedContextTokens)
+            applyGenerationOptions(body, generationOptions, responsesApi = true, model = model)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.responsesPath))
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
@@ -890,6 +898,31 @@ $query"""
             if (explicitCache && !responsesApi) {
                 body.put("prompt_cache_options", JSONObject().put("mode", "explicit").put("ttl", "30m"))
             }
+        }
+    }
+
+    /** Apply the portable part of a Tavern generation preset without overriding Aster's context safety cap. */
+    private fun applyGenerationOptions(
+        body: JSONObject,
+        source: ChatGenerationOptions,
+        responsesApi: Boolean,
+        model: String
+    ) {
+        val options = source.normalized()
+        // GPT reasoning models reject sampling controls on several Responses-compatible gateways.
+        if (!responsesApi || !model.isGpt56Family()) {
+            options.temperature?.let { body.put("temperature", it) }
+            options.topP?.let { body.put("top_p", it) }
+        }
+        if (!responsesApi) {
+            options.frequencyPenalty?.let { body.put("frequency_penalty", it) }
+            options.presencePenalty?.let { body.put("presence_penalty", it) }
+            options.seed?.let { body.put("seed", it) }
+        }
+        options.maxOutputTokens?.let { requested ->
+            val key = if (responsesApi) "max_output_tokens" else "max_tokens"
+            val contextMaximum = body.optInt(key, 0).takeIf { body.has(key) && it > 0 }
+            body.put(key, contextMaximum?.let { minOf(it, requested) } ?: requested)
         }
     }
 

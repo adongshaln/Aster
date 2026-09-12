@@ -19,4 +19,11 @@ class HtmlPreviewDocumentTest {
     fun oversizedDocumentDoesNotInstantiateAPreview() {
         HtmlPreviewDocument.wrap("x".repeat(HtmlPreviewDocument.MAX_PREVIEW_CHARS + 1))
     }
+
+    @Test fun importedPresetHtmlCannotRunScripts() {
+        val wrapped = HtmlPreviewDocument.wrap("<script>alert(1)</script>", allowScripts = false)
+        assertTrue(wrapped.contains("sandbox=\"\""))
+        assertTrue(wrapped.contains("script-src 'none'"))
+        assertFalse(wrapped.contains("sandbox=\"allow-scripts\""))
+    }
 }

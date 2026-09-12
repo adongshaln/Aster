@@ -15,6 +15,7 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
@@ -37,6 +39,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.adong.adchat.data.ApiProfile
+import com.adong.adchat.data.TavernPresetConfiguration
+import com.adong.adchat.data.TavernPromptSetting
+import com.adong.adchat.data.TavernPresetSummary
+import com.adong.adchat.data.TavernRegexSetting
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryChangeEntry
 import com.adong.adchat.data.story.StoryMemoryKind
@@ -69,6 +75,11 @@ fun StoryScreen(
 
     var showStoryPicker by remember { mutableStateOf(false) }
     var showModelSwitcher by remember(story.id) { mutableStateOf(false) }
+    var showTavernPresets by remember { mutableStateOf(false) }
+    var showTavernPresetEditor by remember { mutableStateOf(false) }
+    val tavernPresetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) storyVm.importTavernPreset(uri)
+    }
     val profile = mainVm.profiles.firstOrNull { it.id == story.profileId }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -83,6 +94,8 @@ fun StoryScreen(
             onModelClick = { showModelSwitcher = true },
             onCreateStory = onCreateStory,
             onHistory = storyVm::openTimelineHistory,
+            tavernPresetName = storyVm.activeTavernPresetName,
+            onTavernPresets = { showTavernPresets = true },
             historyEnabled = !storyVm.revisionBusy
         )
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -138,6 +151,47 @@ fun StoryScreen(
         modelSelectionEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
         onDismiss = { showModelSwitcher = false }, onManageApis = onOpenSettings)
 
+    if (showTavernPresets) {
+        TavernPresetSheet(
+            presets = storyVm.tavernPresets,
+            activeId = storyVm.activeTavernPresetId,
+            regexEnabled = storyVm.tavernRegexEnabled,
+            busy = storyVm.tavernPresetBusy || storyVm.revisionBusy || StoryWorkspace.entries.any { storyVm.isLoading(it) },
+            error = storyVm.tavernPresetError,
+            onSelect = storyVm::selectTavernPreset,
+            onRegexEnabled = storyVm::setTavernRegexEnabled,
+            onImport = {
+                tavernPresetPicker.launch(arrayOf("application/json", "text/json", "text/plain", "application/octet-stream"))
+            },
+            onDelete = storyVm::deleteTavernPreset,
+            onConfigure = {
+                showTavernPresets = false
+                showTavernPresetEditor = true
+            },
+            onDismiss = { showTavernPresets = false }
+        )
+    }
+
+    if (showTavernPresetEditor) {
+        storyVm.activeTavernPresetConfiguration?.let { configuration ->
+            TavernPresetConfigurationSheet(
+                configuration = configuration,
+                regexEnabled = storyVm.tavernRegexEnabled,
+                busy = storyVm.tavernPresetBusy || storyVm.revisionBusy || StoryWorkspace.entries.any { storyVm.isLoading(it) },
+                error = storyVm.tavernPresetError,
+                onPromptEnabled = storyVm::setTavernPromptEnabled,
+                onRegexScriptEnabled = storyVm::setTavernRegexScriptEnabled,
+                onRegexEnabled = storyVm::setTavernRegexEnabled,
+                onReset = storyVm::resetTavernPresetConfiguration,
+                onBack = {
+                    showTavernPresetEditor = false
+                    showTavernPresets = true
+                },
+                onDismiss = { showTavernPresetEditor = false }
+            )
+        }
+    }
+
     if (storyVm.archiveOpen) {
         StoryArchiveSheet(
             story = story,
@@ -181,6 +235,8 @@ private fun StoryHeader(
     onModelClick: () -> Unit,
     onCreateStory: () -> Unit,
     onHistory: () -> Unit,
+    tavernPresetName: String,
+    onTavernPresets: () -> Unit,
     historyEnabled: Boolean
 ) {
     var showActions by remember { mutableStateOf(false) }
@@ -204,16 +260,547 @@ private fun StoryHeader(
         title = "故事选项", subtitle = "管理故事与创作路线",
         actions = listOf(
             AdActionOption("archive", "故事档案", "设定、人物与剧情记忆", Icons.Rounded.FolderOpen),
+            AdActionOption("preset", "酒馆预设", "正文 · $tavernPresetName", Icons.Rounded.Tune),
             AdActionOption("history", "历史路线", "查看与切换创作路线", Icons.Rounded.History, enabled = historyEnabled),
             AdActionOption("stories", "切换故事", icon = Icons.Rounded.AutoStories)
         ),
         onAction = { action ->
             showActions = false
-            when (action.id) { "archive" -> onArchive(); "history" -> onHistory(); "stories" -> onStoryPicker() }
+            when (action.id) {
+                "archive" -> onArchive()
+                "preset" -> onTavernPresets()
+                "history" -> onHistory()
+                "stories" -> onStoryPicker()
+            }
         },
         onDismiss = { showActions = false }
     )
 }
+
+@Composable
+private fun TavernPresetSheet(
+    presets: List<TavernPresetSummary>,
+    activeId: String?,
+    regexEnabled: Boolean,
+    busy: Boolean,
+    error: String?,
+    onSelect: (String?) -> Unit,
+    onRegexEnabled: (Boolean) -> Unit,
+    onImport: () -> Unit,
+    onDelete: (String) -> Unit,
+    onConfigure: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var deleteCandidate by remember { mutableStateOf<TavernPresetSummary?>(null) }
+    AsterOptionsSheet(
+        title = "酒馆预设",
+        subtitle = "用于故事正文的提示词、参数与正则",
+        headerIcon = Icons.Rounded.Tune,
+        onDismiss = onDismiss
+    ) {
+        TavernPresetRow(
+            title = "不使用预设",
+            subtitle = "仅使用 Aster 的故事规则与档案",
+            selected = activeId == null,
+            builtIn = false,
+            enabled = !busy,
+            onClick = { onSelect(null) }
+        )
+        presets.forEach { preset ->
+            TavernPresetRow(
+                title = preset.name,
+                subtitle = "${preset.enabledPromptCount}/${preset.promptCount} 条提示 · ${preset.enabledRegexCount}/${preset.regexCount} 条正则",
+                selected = preset.id == activeId,
+                builtIn = preset.builtIn,
+                enabled = !busy,
+                onClick = { onSelect(preset.id) },
+                onDelete = if (preset.builtIn) null else { { deleteCandidate = preset } }
+            )
+        }
+        val active = presets.firstOrNull { it.id == activeId }
+        if (active != null) {
+            Surface(
+                onClick = onConfigure,
+                enabled = !busy,
+                color = Surface,
+                contentColor = Ink,
+                border = BorderStroke(1.dp, Hairline),
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(AccentSoft),
+                        contentAlignment = Alignment.Center
+                    ) { Icon(Icons.Rounded.Tune, null, Modifier.size(20.dp), tint = Accent) }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("配置提示词与正则", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "逐项选择 ${active.enabledPromptCount}/${active.promptCount} 条提示与 ${active.enabledRegexCount}/${active.regexCount} 条正则",
+                            color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Icon(Icons.Rounded.ChevronRight, null, tint = MutedInk)
+                }
+            }
+        }
+        AdToggleCard(
+            title = "执行预设正则",
+            subtitle = "请求前清理上下文，回复显示时执行美化；不会改写数据库原文",
+            checked = regexEnabled,
+            onCheckedChange = onRegexEnabled,
+            enabled = !busy,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        if ((active?.helperScriptCount ?: 0) > 0) {
+            Surface(color = Color(0xFFFFF1D8), shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) {
+                    Icon(Icons.Rounded.Security, null, Modifier.size(19.dp), tint = MutedInk)
+                    Spacer(Modifier.width(9.dp))
+                    Text(
+                        "预设中的 ${active?.helperScriptCount} 个 Tavern Helper 脚本已随文件保留，但不会执行第三方 JavaScript。正则生成的 HTML 会关闭脚本与网络后预览。",
+                        color = MutedInk,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+        error?.let {
+            Surface(color = DangerSoft, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(it, Modifier.padding(12.dp), color = Danger, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        Button(
+            onClick = onImport,
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            else Icon(Icons.Rounded.FileUpload, null, Modifier.size(19.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (busy) "正在处理…" else "导入酒馆 JSON 预设")
+        }
+        Text(
+            "兼容 prompt_order、角色顺序、setvar/getvar、random、roll、lastUserMessage，以及酒馆正则的角色、深度、全局标志和显示/请求范围。",
+            color = MutedInk,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+    deleteCandidate?.let { preset ->
+        AdConfirmDialog(
+            title = "删除 ${preset.name}？",
+            message = "将删除这台设备上导入的预设文件，故事正文不会被删除。",
+            confirmLabel = "删除",
+            dismissLabel = "取消",
+            icon = Icons.Rounded.DeleteOutline,
+            destructive = true,
+            onConfirm = { onDelete(preset.id); deleteCandidate = null },
+            onDismiss = { deleteCandidate = null }
+        )
+    }
+}
+
+@Composable
+private fun TavernPresetRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    builtIn: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    onDelete: (() -> Unit)? = null
+) {
+    Surface(
+        selected = selected,
+        onClick = onClick,
+        enabled = enabled,
+        color = if (selected) AccentSoft else Surface,
+        contentColor = Ink,
+        border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .4f) else Hairline),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(start = 14.dp, end = 5.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
+                    .background(if (selected) Color.White.copy(alpha = .7f) else Canvas),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(if (selected) Icons.Rounded.Check else Icons.Rounded.Description, null, Modifier.size(19.dp), tint = if (selected) Accent else MutedInk)
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (builtIn) {
+                        Spacer(Modifier.width(7.dp))
+                        Text("内置", color = Accent, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Text(subtitle, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            onDelete?.let { delete ->
+                IconButton(onClick = delete, enabled = enabled) {
+                    Icon(Icons.Rounded.DeleteOutline, "删除预设", Modifier.size(19.dp), tint = Danger)
+                }
+            }
+        }
+    }
+}
+
+private enum class TavernConfigurationSection { Prompts, Regex }
+private enum class TavernConfigurationFilter { All, Enabled, Disabled, Modified }
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun TavernPresetConfigurationSheet(
+    configuration: TavernPresetConfiguration,
+    regexEnabled: Boolean,
+    busy: Boolean,
+    error: String?,
+    onPromptEnabled: (String, Boolean) -> Unit,
+    onRegexScriptEnabled: (Int, Boolean) -> Unit,
+    onRegexEnabled: (Boolean) -> Unit,
+    onReset: () -> Unit,
+    onBack: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var section by remember(configuration.id) { mutableStateOf(TavernConfigurationSection.Prompts) }
+    var filter by remember(configuration.id, section) { mutableStateOf(TavernConfigurationFilter.All) }
+    var query by remember(configuration.id, section) { mutableStateOf("") }
+    var inspectedPrompt by remember { mutableStateOf<TavernPromptSetting?>(null) }
+    var inspectedRegex by remember { mutableStateOf<TavernRegexSetting?>(null) }
+    var confirmReset by remember { mutableStateOf(false) }
+    val needle = query.trim()
+    val visiblePrompts = remember(configuration.prompts, needle, filter) {
+        configuration.prompts.filter { prompt ->
+            (needle.isBlank() || prompt.name.contains(needle, ignoreCase = true) ||
+                prompt.identifier.contains(needle, ignoreCase = true) || prompt.content.contains(needle, ignoreCase = true)) &&
+                filter.matches(prompt.enabled, prompt.modified)
+        }
+    }
+    val visibleRegex = remember(configuration.regexScripts, needle, filter) {
+        configuration.regexScripts.filter { script ->
+            (needle.isBlank() || script.name.contains(needle, ignoreCase = true) ||
+                script.findRegex.contains(needle, ignoreCase = true)) &&
+                filter.matches(script.enabled, script.modified)
+        }
+    }
+    val maximumHeight = LocalConfiguration.current.screenHeightDp.dp * .93f
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = Canvas,
+        dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
+    ) {
+        Column(
+            Modifier.fillMaxWidth().height(maximumHeight).padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onBack,
+                    colors = IconButtonDefaults.iconButtonColors(containerColor = Surface, contentColor = MutedInk)
+                ) { Icon(Icons.Rounded.ArrowBack, "返回预设列表") }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(configuration.name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("提示词与正则配置", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    colors = IconButtonDefaults.iconButtonColors(containerColor = Surface, contentColor = MutedInk)
+                ) { Icon(Icons.Rounded.Close, "关闭") }
+            }
+
+            Surface(color = Surface, shape = RoundedCornerShape(17.dp), border = BorderStroke(1.dp, Hairline)) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "提示词 ${configuration.enabledPromptCount}/${configuration.prompts.size} · 正则 ${configuration.enabledRegexCount}/${configuration.regexScripts.size}",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            if (configuration.modifiedCount == 0) "正在使用文件内的默认启用与停用状态"
+                            else "已修改 ${configuration.modifiedCount} 项；未修改项仍跟随文件默认值",
+                            color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (configuration.modifiedCount > 0) TextButton(onClick = { confirmReset = true }, enabled = !busy) {
+                        Icon(Icons.Rounded.Restore, null, Modifier.size(17.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("恢复默认")
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = section == TavernConfigurationSection.Prompts,
+                    onClick = { section = TavernConfigurationSection.Prompts },
+                    label = { Text("提示词 ${configuration.prompts.size}") },
+                    leadingIcon = { Icon(Icons.Rounded.Notes, null, Modifier.size(17.dp)) }
+                )
+                FilterChip(
+                    selected = section == TavernConfigurationSection.Regex,
+                    onClick = { section = TavernConfigurationSection.Regex },
+                    label = { Text("正则 ${configuration.regexScripts.size}") },
+                    leadingIcon = { Icon(Icons.Rounded.Code, null, Modifier.size(17.dp)) }
+                )
+            }
+
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                trailingIcon = if (query.isBlank()) null else {{
+                    IconButton(onClick = { query = "" }) { Icon(Icons.Rounded.Close, "清空搜索") }
+                }},
+                placeholder = { Text(if (section == TavernConfigurationSection.Prompts) "搜索提示词名称或内容" else "搜索正则名称或表达式") },
+                shape = RoundedCornerShape(15.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                listOf(
+                    TavernConfigurationFilter.All to "全部",
+                    TavernConfigurationFilter.Enabled to "已启用",
+                    TavernConfigurationFilter.Disabled to "已停用",
+                    TavernConfigurationFilter.Modified to "已修改"
+                ).forEach { (value, label) ->
+                    FilterChip(selected = filter == value, onClick = { filter = value }, label = { Text(label) })
+                }
+            }
+
+            error?.let {
+                Surface(color = DangerSoft, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    Text(it, Modifier.padding(11.dp), color = Danger, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+
+            LazyColumn(
+                Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                if (section == TavernConfigurationSection.Regex) {
+                    item(key = "regex-master") {
+                        AdToggleCard(
+                            title = "执行预设正则",
+                            subtitle = if (regexEnabled) "总开关已开启；下方逐条状态会生效" else "总开关已关闭；逐条选择会保留但暂不执行",
+                            checked = regexEnabled,
+                            onCheckedChange = onRegexEnabled,
+                            enabled = !busy
+                        )
+                    }
+                }
+                if (section == TavernConfigurationSection.Prompts) {
+                    items(visiblePrompts, key = { it.identifier }) { prompt ->
+                        TavernPromptSettingRow(
+                            setting = prompt,
+                            enabled = !busy,
+                            onInspect = { inspectedPrompt = prompt },
+                            onEnabled = { onPromptEnabled(prompt.identifier, it) }
+                        )
+                    }
+                    if (visiblePrompts.isEmpty()) item { TavernConfigurationEmptyState() }
+                } else {
+                    items(visibleRegex, key = { "${it.index}:${it.id}" }) { script ->
+                        TavernRegexSettingRow(
+                            setting = script,
+                            enabled = !busy,
+                            onInspect = { inspectedRegex = script },
+                            onEnabled = { onRegexScriptEnabled(script.index, it) }
+                        )
+                    }
+                    if (visibleRegex.isEmpty()) item { TavernConfigurationEmptyState() }
+                }
+            }
+        }
+    }
+
+    inspectedPrompt?.let { prompt ->
+        TavernTextPreviewDialog(
+            title = prompt.name,
+            meta = "${prompt.role.uppercase()} · ${if (prompt.defaultEnabled) "默认启用" else "默认停用"}${if (prompt.modified) " · 已修改" else ""}",
+            sections = listOf("提示词内容" to prompt.content),
+            onDismiss = { inspectedPrompt = null }
+        )
+    }
+    inspectedRegex?.let { script ->
+        TavernTextPreviewDialog(
+            title = script.name,
+            meta = "${script.scopeLabel()} · ${if (script.defaultEnabled) "默认启用" else "默认停用"}${if (script.modified) " · 已修改" else ""}",
+            sections = listOf("查找表达式" to script.findRegex, "替换内容" to script.replaceString),
+            onDismiss = { inspectedRegex = null }
+        )
+    }
+    if (confirmReset) {
+        AdConfirmDialog(
+            title = "恢复预设默认？",
+            message = "提示词和正则的逐项选择将恢复为 JSON 文件中定义的启用与停用状态。全局正则开关不受影响。",
+            confirmLabel = "恢复默认",
+            dismissLabel = "取消",
+            icon = Icons.Rounded.Restore,
+            onConfirm = { onReset(); confirmReset = false },
+            onDismiss = { confirmReset = false }
+        )
+    }
+}
+
+@Composable
+private fun TavernPromptSettingRow(
+    setting: TavernPromptSetting,
+    enabled: Boolean,
+    onInspect: () -> Unit,
+    onEnabled: (Boolean) -> Unit
+) {
+    TavernSettingRow(
+        title = setting.name,
+        subtitle = buildString {
+            append(setting.role.uppercase())
+            if (setting.marker) append(" · 占位标记")
+            append(if (setting.defaultEnabled) " · 默认启用" else " · 默认停用")
+            if (setting.modified) append(" · 已修改")
+        },
+        checked = setting.enabled,
+        defaultEnabled = setting.defaultEnabled,
+        enabled = enabled,
+        onInspect = onInspect,
+        onEnabled = onEnabled
+    )
+}
+
+@Composable
+private fun TavernRegexSettingRow(
+    setting: TavernRegexSetting,
+    enabled: Boolean,
+    onInspect: () -> Unit,
+    onEnabled: (Boolean) -> Unit
+) {
+    TavernSettingRow(
+        title = setting.name,
+        subtitle = "${setting.scopeLabel()}${setting.depthLabel()} · ${if (setting.defaultEnabled) "默认启用" else "默认停用"}${if (setting.modified) " · 已修改" else ""}",
+        checked = setting.enabled,
+        defaultEnabled = setting.defaultEnabled,
+        enabled = enabled,
+        onInspect = onInspect,
+        onEnabled = onEnabled
+    )
+}
+
+@Composable
+private fun TavernSettingRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    defaultEnabled: Boolean,
+    enabled: Boolean,
+    onInspect: () -> Unit,
+    onEnabled: (Boolean) -> Unit
+) {
+    Surface(
+        color = if (checked != defaultEnabled) AccentSoft.copy(alpha = .52f) else Surface,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, if (checked != defaultEnabled) Accent.copy(alpha = .3f) else Hairline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.clickable(enabled = enabled, onClick = onInspect).padding(start = 14.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Ink, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            }
+            Spacer(Modifier.width(9.dp))
+            Switch(checked = checked, onCheckedChange = onEnabled, enabled = enabled)
+        }
+    }
+}
+
+@Composable
+private fun TavernConfigurationEmptyState() {
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 36.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(Icons.Rounded.SearchOff, null, tint = MutedInk)
+        Spacer(Modifier.height(8.dp))
+        Text("没有符合条件的项目", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun TavernTextPreviewDialog(
+    title: String,
+    meta: String,
+    sections: List<Pair<String, String>>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(meta, color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            }
+        },
+        text = {
+            Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                sections.forEach { (label, value) ->
+                    Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                    SelectionContainer {
+                        Text(
+                            value.take(MAX_TAVERN_PREVIEW_CHARS).ifBlank { "（空）" },
+                            color = Ink,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (value.length > MAX_TAVERN_PREVIEW_CHARS) {
+                        Text("内容较长，此处仅预览前 $MAX_TAVERN_PREVIEW_CHARS 个字符。发送请求时仍使用完整内容。", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
+    )
+}
+
+private fun TavernConfigurationFilter.matches(enabled: Boolean, modified: Boolean): Boolean = when (this) {
+    TavernConfigurationFilter.All -> true
+    TavernConfigurationFilter.Enabled -> enabled
+    TavernConfigurationFilter.Disabled -> !enabled
+    TavernConfigurationFilter.Modified -> modified
+}
+
+private fun TavernRegexSetting.scopeLabel(): String = when {
+    promptOnly && !markdownOnly -> "发送给模型"
+    markdownOnly && !promptOnly -> "仅显示"
+    else -> "请求与显示"
+}
+
+private fun TavernRegexSetting.depthLabel(): String {
+    val roles = buildList {
+        if (1 in placement) add("用户")
+        if (2 in placement) add("助手")
+    }.joinToString("/").ifBlank { "无角色" }
+    val depth = when {
+        minDepth != null && minDepth >= 0 && maxDepth != null && maxDepth >= 0 -> " · 深度 $minDepth–$maxDepth"
+        minDepth != null && minDepth >= 0 -> " · 深度 ≥$minDepth"
+        maxDepth != null && maxDepth >= 0 -> " · 深度 ≤$maxDepth"
+        else -> ""
+    }
+    return " · $roles$depth"
+}
+
+private const val MAX_TAVERN_PREVIEW_CHARS = 40_000
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -250,6 +837,9 @@ private fun StoryWorkspaceContent(
         it.message.role == "assistant" && it.revision.state == StoryRevisionState.Streaming
     } == true
     val hasStandaloneThinking = loading && !lastIsStreamingAssistant
+    val retryableMessageId = messages.lastOrNull()?.takeIf {
+        it.message.role == "assistant" && it.revision.state == StoryRevisionState.Interrupted
+    }?.message?.id
     // Match ordinary chat: always keep a real trailing LazyColumn item that can be
     // anchored during IME animation. Scrolling to lastIndex only aligns the message
     // itself and does not keep the conversation bottom attached to the composer.
@@ -416,16 +1006,39 @@ private fun StoryWorkspaceContent(
                 contentPadding = PaddingValues(start = 22.dp, end = 22.dp, top = 18.dp, bottom = composerHeight + 20.dp),
                 verticalArrangement = Arrangement.spacedBy(30.dp)
             ) {
-                items(messages, key = { it.message.id }) { row ->
+                itemsIndexed(messages, key = { _, row -> row.message.id }) { index, row ->
                     val assistant = row.message.role == "assistant"
                     val pending = if (assistant && workspace == StoryWorkspace.Discussion) {
                         storyVm.archiveProposals.count { it.sourceRevisionId == row.revision.id }
                     } else 0
+                    val display = remember(
+                        row.revision.id,
+                        row.revision.content,
+                        row.revision.state,
+                        storyVm.activeTavernPresetId,
+                        storyVm.tavernRegexEnabled,
+                        index,
+                        messages.size
+                    ) {
+                        if (row.revision.state == StoryRevisionState.Streaming) {
+                            com.adong.adchat.data.TavernRegexOutput(row.revision.content, 0, emptyList())
+                        } else storyVm.tavernDisplay(
+                            content = row.revision.content,
+                            role = row.message.role,
+                            depth = messages.lastIndex - index,
+                            workspace = workspace
+                        )
+                    }
                     StoryMessageItem(
                         row = row,
+                        displayContent = display.structuredText(),
+                        regexHtml = display.containsHtml,
                         workspace = workspace,
                         pendingCount = pending,
                         actionsEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
+                        regenerateEnabled = row.message.id == retryableMessageId && profile != null &&
+                            !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
+                        onRegenerate = { profile?.let { storyVm.regenerateInterrupted(it, row) } },
                         onOpenDiscussionAction = { storyVm.openDiscussionAction(row) },
                         onOpenPendingCandidates = storyVm::openPendingCandidates,
                         onOpenRevision = { storyVm.openRevisionEditor(row) },
@@ -503,9 +1116,13 @@ private fun StoryWorkspaceContent(
 @Composable
 private fun StoryMessageItem(
     row: StoryMessageWithRevision,
+    displayContent: String,
+    regexHtml: Boolean,
     workspace: StoryWorkspace,
     pendingCount: Int,
     actionsEnabled: Boolean,
+    regenerateEnabled: Boolean,
+    onRegenerate: () -> Unit,
     onOpenDiscussionAction: () -> Unit,
     onOpenPendingCandidates: () -> Unit,
     onOpenRevision: () -> Unit,
@@ -535,7 +1152,7 @@ private fun StoryMessageItem(
                         if (row.revision.content.isNotBlank()) {
                             SelectionContainer {
                                 Text(
-                                    text = storyAnnotatedText(row.revision.content),
+                                    text = storyAnnotatedText(displayContent),
                                     modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = Ink
@@ -552,9 +1169,10 @@ private fun StoryMessageItem(
                     ConversationThinkingIndicator()
                 } else {
                     StructuredMessageText(
-                        content = row.revision.content,
+                        content = displayContent,
                         streaming = row.revision.state == StoryRevisionState.Streaming,
-                        error = false
+                        error = false,
+                        htmlScriptsAllowed = !regexHtml
                     )
                 }
                 if (row.revision.state in setOf(StoryRevisionState.Interrupted, StoryRevisionState.Stopped)) {
@@ -571,10 +1189,18 @@ private fun StoryMessageItem(
                         )
                     }
                 }
-                if (row.revision.state != StoryRevisionState.Streaming && row.revision.content.isNotBlank()) {
+                if (row.revision.state != StoryRevisionState.Streaming &&
+                    (row.revision.content.isNotBlank() || regenerateEnabled)) {
                     Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            ConversationCopyAction(row.revision.content)
+                            if (row.revision.content.isNotBlank()) ConversationCopyAction(row.revision.content)
+                            if (row.revision.state == StoryRevisionState.Interrupted && regenerateEnabled) {
+                                ConversationMessageAction(
+                                    icon = Icons.Rounded.Refresh,
+                                    label = "重新生成",
+                                    onClick = onRegenerate
+                                )
+                            }
                             if (hasDetails) {
                                 ConversationMessageAction(
                                     icon = Icons.Rounded.MoreHoriz,

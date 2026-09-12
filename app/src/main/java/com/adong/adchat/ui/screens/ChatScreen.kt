@@ -948,7 +948,12 @@ private fun StreamingProseText(content: String, error: Boolean) {
 }
 
 @Composable
-internal fun StructuredMessageText(content: String, streaming: Boolean, error: Boolean) {
+internal fun StructuredMessageText(
+    content: String,
+    streaming: Boolean,
+    error: Boolean,
+    htmlScriptsAllowed: Boolean = true
+) {
     val parts = remember(content) { content.split("```") }
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         parts.forEachIndexed { index, raw ->
@@ -958,7 +963,11 @@ internal fun StructuredMessageText(content: String, streaming: Boolean, error: B
                 val language = lines.firstOrNull()?.takeIf { it.matches(Regex("[A-Za-z0-9_+.#-]{1,20}")) }
                 val code = if (language != null) lines.drop(1).joinToString("\n") else raw.trim('\n')
                 if (language?.lowercase() in setOf("html", "htm")) {
-                    HtmlArtifactCard(code = code, ready = !streaming && index < parts.lastIndex)
+                    HtmlArtifactCard(
+                        code = code,
+                        ready = !streaming && index < parts.lastIndex,
+                        allowScripts = htmlScriptsAllowed
+                    )
                 } else CodeBlock(
                     language = language,
                     code = if (streaming && index == parts.lastIndex) "$code  ▍" else code,

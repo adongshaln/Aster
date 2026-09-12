@@ -154,6 +154,7 @@ fun AdToggleCard(
     subtitle: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier,
     dark: Boolean = false,
     warning: Boolean = false
@@ -185,6 +186,7 @@ fun AdToggleCard(
     Surface(
         modifier = modifier.fillMaxWidth(),
         onClick = { onCheckedChange(!checked) },
+        enabled = enabled,
         color = container,
         contentColor = titleColor,
         border = if (checked && !dark) BorderStroke(1.dp, Color(0xFFFFB9A7)) else null,
@@ -211,4 +213,3 @@ fun AdToggleCard(
         }
     }
 }
-

@@ -326,6 +326,89 @@ class StoryRepository(context: Context) : AutoCloseable {
         updated
     }
 
+    /**
+     * Starts a fresh generation revision for the latest interrupted assistant message.
+     * The failed revision remains in history, while the original user turn is reused.
+     */
+    fun restartInterruptedRevision(
+        messageId: String,
+        expectedRevisionId: String,
+        profileName: String,
+        model: String
+    ): StoryMessageWithRevision = helper.writableDatabase.inTransaction { db ->
+        val current = queryMessageWithRevision(db, messageId) ?: error("这条回复已不存在")
+        require(current.revision.id == expectedRevisionId) { "回复版本已变化，请重新打开后重试" }
+        require(current.message.role == "assistant") { "只能重新生成模型回复" }
+        require(current.revision.state == StoryRevisionState.Interrupted) { "只能重新生成失败或未完整结束的回复" }
+        val activeTimeline = db.rawQuery(
+            "SELECT 1 FROM ${StorySchema.STORIES} WHERE id = ? AND current_timeline_id = ? LIMIT 1",
+            arrayOf(current.message.storyId, current.message.timelineId)
+        ).use { it.moveToFirst() }
+        require(activeTimeline) { "故事时间线已变化" }
+        val blocked = db.rawQuery(
+            """
+            SELECT 1
+            FROM ${StorySchema.MESSAGES} m
+            JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+            WHERE m.story_id = ? AND m.timeline_id = ?
+              AND ((m.workspace = ? AND m.sequence_no > ?) OR r.state = 'streaming')
+            LIMIT 1
+            """.trimIndent(),
+            arrayOf(
+                current.message.storyId,
+                current.message.timelineId,
+                current.message.workspace.dbValue,
+                current.message.sequence.toString()
+            )
+        ).use { it.moveToFirst() }
+        require(!blocked) { "已有后续内容或正在生成，不能重新生成这条回复" }
+        val hasUserTurn = db.rawQuery(
+            """
+            SELECT 1
+            FROM ${StorySchema.MESSAGES} m
+            JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+            WHERE m.story_id = ? AND m.timeline_id = ? AND m.workspace = ?
+              AND m.role = 'user' AND m.sequence_no < ?
+              AND r.state = 'complete' AND length(trim(r.content)) > 0
+            ORDER BY m.sequence_no DESC
+            LIMIT 1
+            """.trimIndent(),
+            arrayOf(
+                current.message.storyId,
+                current.message.timelineId,
+                current.message.workspace.dbValue,
+                current.message.sequence.toString()
+            )
+        ).use { it.moveToFirst() }
+        require(hasUserTurn) { "找不到这条回复对应的用户输入" }
+
+        val now = System.currentTimeMillis()
+        val revision = StoryMessageRevision(
+            id = newRevisionId(),
+            messageId = current.message.id,
+            storyId = current.message.storyId,
+            timelineId = current.message.timelineId,
+            workspace = current.message.workspace,
+            content = "",
+            state = StoryRevisionState.Streaming,
+            profileName = profileName,
+            model = model,
+            createdAt = now,
+            completedAt = null
+        )
+        insertRevision(db, revision)
+        check(
+            db.update(
+                StorySchema.MESSAGES,
+                ContentValues().apply { put("active_revision_id", revision.id) },
+                "id = ? AND active_revision_id = ?",
+                arrayOf(current.message.id, current.revision.id)
+            ) == 1
+        ) { "回复版本已变化，请重试" }
+        touchStory(db, current.message.storyId, now)
+        StoryMessageWithRevision(current.message.copy(activeRevisionId = revision.id), revision)
+    }
+
     fun deleteMessage(messageId: String): Boolean = helper.writableDatabase.inTransaction { db ->
         val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
         // Only disposable empty generation placeholders may be physically removed.

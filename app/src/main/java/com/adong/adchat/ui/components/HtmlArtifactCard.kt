@@ -34,7 +34,12 @@ import java.io.ByteArrayInputStream
 
 /** Used by fenced HTML in both workspaces and by create_file attachments. */
 @Composable
-internal fun HtmlArtifactCard(code: String, filename: String = "document.html", ready: Boolean = true) {
+internal fun HtmlArtifactCard(
+    code: String,
+    filename: String = "document.html",
+    ready: Boolean = true,
+    allowScripts: Boolean = true
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var fullscreen by rememberSaveable { mutableStateOf(false) }
@@ -64,7 +69,7 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
                 }
             }
             if (canPreview && !fullscreen) {
-                HtmlPreview(code, Modifier.fillMaxWidth().height(340.dp))
+                HtmlPreview(code, Modifier.fillMaxWidth().height(340.dp), allowScripts)
             } else {
                 Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
                     Text(when {
@@ -80,7 +85,7 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
                 Text(when {
                     !ready -> "正文完成后可预览"
                     !canPreview -> "文件较大，请保存后打开"
-                    else -> "离线预览 · 支持内嵌脚本"
+                    else -> if (allowScripts) "离线预览 · 支持内嵌脚本" else "安全预览 · 已禁用脚本和网络"
                 }, Modifier.weight(1f), style = MaterialTheme.typography.labelSmall, color = MutedInk)
                 IconButton(onClick = {
                     context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(filename, code))
@@ -100,7 +105,7 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
                     Text(filename, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("预览", Modifier.padding(16.dp), color = MutedInk)
                 }
-                HtmlPreview(code, Modifier.fillMaxWidth().weight(1f))
+                HtmlPreview(code, Modifier.fillMaxWidth().weight(1f), allowScripts)
             }
         }
     }
@@ -108,17 +113,17 @@ internal fun HtmlArtifactCard(code: String, filename: String = "document.html", 
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun HtmlPreview(source: String, modifier: Modifier) {
+private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolean) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var failed by remember(source) { mutableStateOf(false) }
-    val view = remember(source) { runCatching {
+    var failed by remember(source, allowScripts) { mutableStateOf(false) }
+    val view = remember(source, allowScripts) { runCatching {
         WebView(context).apply {
             layoutParams = android.view.ViewGroup.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT)
             settings.apply {
-                javaScriptEnabled = true
+                javaScriptEnabled = allowScripts
                 allowFileAccess = false
                 allowContentAccess = false
                 @Suppress("DEPRECATION")
@@ -174,7 +179,7 @@ private fun HtmlPreview(source: String, modifier: Modifier) {
                 // Let the surrounding Compose window submit its first frame before
                 // Chromium starts drawing; otherwise a new dialog's toolbar can stay blank.
                 postOnAnimation {
-                    post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source), "text/html", "utf-8", null) }
+                    post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source, allowScripts), "text/html", "utf-8", null) }
                 }
             }
         },

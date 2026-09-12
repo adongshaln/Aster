@@ -4,14 +4,16 @@ package com.adong.adchat.ui.components
 internal object HtmlPreviewDocument {
     const val MAX_PREVIEW_CHARS = 1_000_000
 
-    fun wrap(source: String): String {
+    fun wrap(source: String, allowScripts: Boolean = true): String {
         require(source.length <= MAX_PREVIEW_CHARS)
         val escaped = source.replace("&", "&amp;").replace("\"", "&quot;")
             .replace("<", "&lt;").replace(">", "&gt;")
+        val scriptPolicy = if (allowScripts) "script-src 'unsafe-inline' 'unsafe-eval';" else "script-src 'none';"
+        val sandboxPolicy = if (allowScripts) "allow-scripts" else ""
         return """<!doctype html><html><head><meta charset="utf-8">
             <meta name="viewport" content="width=device-width,initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src about:; object-src 'none'; base-uri 'none'; form-action 'none'">
+            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; $scriptPolicy style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src 'none'; frame-src about:; object-src 'none'; base-uri 'none'; form-action 'none'">
             <style>html,body{margin:0;height:100%;background:white}iframe{border:0;width:100%;height:100%;display:block}</style>
-            </head><body><iframe title="HTML preview" sandbox="allow-scripts" srcdoc="$escaped"></iframe></body></html>""".trimIndent()
+            </head><body><iframe title="HTML preview" sandbox="$sandboxPolicy" srcdoc="$escaped"></iframe></body></html>""".trimIndent()
     }
 }

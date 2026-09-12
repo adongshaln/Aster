@@ -1,7 +1,9 @@
 package com.adong.adchat.ui.story
 
 import android.app.Application
+import android.net.Uri
 import android.os.SystemClock
+import android.provider.OpenableColumns
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -14,6 +16,13 @@ import com.adong.adchat.data.ApiRepository
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ConfigStore
 import com.adong.adchat.data.SkillRuntime
+import com.adong.adchat.data.TavernPreset
+import com.adong.adchat.data.TavernPresetConfiguration
+import com.adong.adchat.data.TavernPresetRuntime
+import com.adong.adchat.data.TavernPresetStore
+import com.adong.adchat.data.TavernPresetSummary
+import com.adong.adchat.data.TavernRegexOutput
+import com.adong.adchat.data.summary
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryConflictEntry
 import com.adong.adchat.data.story.StoryChangeEntry
@@ -54,6 +63,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val memoryStore = StoryMemoryStore(application)
     private val configStore = ConfigStore(application)
     private val api = ApiRepository(skillLoader = SkillRuntime.persistent(application))
+    private val tavernPresetStore = TavernPresetStore(application)
     private val jobs = linkedMapOf<String, Job>()
     private val organizerJobs = ConcurrentHashMap<String, Job>()
     @Volatile private var stateEpoch = 0L
@@ -78,6 +88,18 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val workspaceStates = mutableStateMapOf<StoryWorkspace, StoryWorkspaceState>()
     private val loadingKeys = mutableStateMapOf<String, Boolean>()
     private val errors = mutableStateMapOf<StoryWorkspace, String>()
+    val tavernPresets = mutableStateListOf<TavernPresetSummary>()
+    var activeTavernPresetId by mutableStateOf<String?>(null)
+        private set
+    var tavernRegexEnabled by mutableStateOf(true)
+        private set
+    var tavernPresetBusy by mutableStateOf(false)
+        private set
+    var tavernPresetError by mutableStateOf<String?>(null)
+        private set
+    var activeTavernPresetConfiguration by mutableStateOf<TavernPresetConfiguration?>(null)
+        private set
+    @Volatile private var activeTavernPreset: TavernPreset? = null
 
     var activeStoryId by mutableStateOf<String?>(null)
         private set
@@ -88,6 +110,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
+            refreshTavernPresetState()
             store.recoverInterruptedGenerations()
             store.recoverRewrites()
             memoryStore.recoverRunningJobs()
@@ -122,6 +145,130 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     fun error(workspace: StoryWorkspace = activeWorkspace): String? = errors[workspace]
     fun clearError(workspace: StoryWorkspace = activeWorkspace) { errors.remove(workspace) }
+
+    val activeTavernPresetName: String
+        get() = tavernPresets.firstOrNull { it.id == activeTavernPresetId }?.name ?: "未使用预设"
+
+    fun selectTavernPreset(id: String?) {
+        if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
+        tavernPresetBusy = true
+        tavernPresetError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                tavernPresetStore.select(id)
+                refreshTavernPresetState()
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { tavernPresetError = error.message ?: "切换酒馆预设失败" }
+            }
+            withContext(Dispatchers.Main) { tavernPresetBusy = false }
+        }
+    }
+
+    fun setTavernRegexEnabled(enabled: Boolean) {
+        tavernRegexEnabled = enabled
+        tavernPresetStore.setRegexEnabled(enabled)
+    }
+
+    fun setTavernPromptEnabled(identifier: String, enabled: Boolean) {
+        mutateTavernConfiguration("更新提示词模块失败") { presetId ->
+            tavernPresetStore.setPromptEnabled(presetId, identifier, enabled)
+        }
+    }
+
+    fun setTavernRegexScriptEnabled(index: Int, enabled: Boolean) {
+        mutateTavernConfiguration("更新正则脚本失败") { presetId ->
+            tavernPresetStore.setRegexScriptEnabled(presetId, index, enabled)
+        }
+    }
+
+    fun resetTavernPresetConfiguration() {
+        mutateTavernConfiguration("恢复预设默认失败") { presetId ->
+            tavernPresetStore.resetConfiguration(presetId)
+        }
+    }
+
+    private fun mutateTavernConfiguration(errorMessage: String, mutation: (String) -> Unit) {
+        val presetId = activeTavernPresetId ?: return
+        if (tavernPresetBusy || StoryWorkspace.entries.any { isLoading(it) }) return
+        tavernPresetBusy = true
+        tavernPresetError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                mutation(presetId)
+                refreshTavernPresetState()
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { tavernPresetError = error.message ?: errorMessage }
+            }
+            withContext(Dispatchers.Main) { tavernPresetBusy = false }
+        }
+    }
+
+    fun importTavernPreset(uri: Uri) {
+        if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
+        tavernPresetBusy = true
+        tavernPresetError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val resolver = getApplication<Application>().contentResolver
+                val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }.orEmpty().ifBlank { "导入的酒馆预设.json" }
+                val input = requireNotNull(resolver.openInputStream(uri)) { "无法读取所选文件" }
+                val imported = tavernPresetStore.importPreset(input, displayName)
+                tavernPresetStore.select(imported.id)
+                refreshTavernPresetState()
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { tavernPresetError = error.message ?: "导入酒馆预设失败" }
+            }
+            withContext(Dispatchers.Main) { tavernPresetBusy = false }
+        }
+    }
+
+    fun deleteTavernPreset(id: String) {
+        if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
+        tavernPresetBusy = true
+        tavernPresetError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                check(tavernPresetStore.delete(id)) { "预设文件已不存在" }
+                refreshTavernPresetState()
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { tavernPresetError = error.message ?: "删除酒馆预设失败" }
+            }
+            withContext(Dispatchers.Main) { tavernPresetBusy = false }
+        }
+    }
+
+    fun tavernDisplay(
+        content: String,
+        role: String,
+        depth: Int,
+        workspace: StoryWorkspace
+    ): TavernRegexOutput {
+        val preset = activeTavernPreset
+        return if (workspace != StoryWorkspace.Prose || preset == null) {
+            TavernRegexOutput(content, 0, emptyList())
+        } else TavernPresetRuntime.display(preset, content, role, depth, tavernRegexEnabled)
+    }
+
+    private suspend fun refreshTavernPresetState() {
+        val available = tavernPresetStore.list()
+        var selected = runCatching(tavernPresetStore::active).getOrNull()
+        if (selected == null && tavernPresetStore.activeId() != null) {
+            tavernPresetStore.select(TavernPresetStore.BUILT_IN_ID)
+            selected = runCatching(tavernPresetStore::active).getOrNull()
+        }
+        val regex = tavernPresetStore.regexEnabled()
+        val configuration = selected?.id?.let(tavernPresetStore::configuration)
+        activeTavernPreset = selected
+        withContext(Dispatchers.Main) {
+            tavernPresets.clear()
+            tavernPresets.addAll(available.map { it.summary() })
+            activeTavernPresetId = selected?.id
+            activeTavernPresetConfiguration = configuration
+            tavernRegexEnabled = regex
+        }
+    }
 
     fun createStory(title: String, profile: ApiProfile, onCreated: (Story) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -696,10 +843,31 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun send(profile: ApiProfile, workspace: StoryWorkspace = activeWorkspace) {
+        launchGeneration(profile, workspace, retryTarget = null)
+    }
+
+    fun regenerateInterrupted(profile: ApiProfile, target: StoryMessageWithRevision) {
+        launchGeneration(profile, target.message.workspace, retryTarget = target)
+    }
+
+    private fun launchGeneration(
+        profile: ApiProfile,
+        workspace: StoryWorkspace,
+        retryTarget: StoryMessageWithRevision?
+    ) {
         val story = activeStory ?: return
-        val attachments = workspaceState(workspace).attachments.toList()
-        val input = draft(workspace).trim().ifBlank { if(attachments.isNotEmpty()) "请参考所附图片，按当前工作区处理。" else "" }
-        if (input.isBlank() || revisionBusy || attachmentBusy) return
+        val retrying = retryTarget != null
+        if (retryTarget != null && (
+                retryTarget.message.storyId != story.id ||
+                    retryTarget.message.timelineId != story.currentTimelineId ||
+                    retryTarget.message.workspace != workspace ||
+                    retryTarget.message.role != "assistant" ||
+                    retryTarget.revision.state != StoryRevisionState.Interrupted
+                )) return
+        val attachments = if (retrying) emptyList() else workspaceState(workspace).attachments.toList()
+        val input = if (retrying) "" else draft(workspace).trim()
+            .ifBlank { if (attachments.isNotEmpty()) "请参考所附图片，按当前工作区处理。" else "" }
+        if ((!retrying && input.isBlank()) || revisionBusy || attachmentBusy) return
         val key = jobKey(story.id, workspace)
         if (loadingKeys[key] == true) return
         if (profile.id != story.profileId) {
@@ -712,7 +880,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        updateDraft("", workspace, emptyList())
+        if (!retrying) updateDraft("", workspace, emptyList())
         errors.remove(workspace)
         loadingKeys[key] = true
         stopRequested.remove(key)
@@ -722,7 +890,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val streamed = StringBuilder()
             var lastPersistAt = 0L
             try {
-                val userMessage=store.appendMessage(
+                val userMessage = if (!retrying) store.appendMessage(
                     storyId = story.id,
                     timelineId = story.currentTimelineId,
                     workspace = workspace,
@@ -730,19 +898,28 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     content = input,
                     attachments = attachments,
                     state = StoryRevisionState.Complete
-                )
-                val pendingDecisions = if(workspace==StoryWorkspace.Discussion) archiveStore.listPendingProposals(story.id,story.currentTimelineId) else emptyList()
-                if(workspace==StoryWorkspace.Discussion && (com.adong.adchat.data.story.StoryExplicitDecision.isExplicit(input) ||
+                ) else null
+                val pendingDecisions = if (!retrying && workspace == StoryWorkspace.Discussion) {
+                    archiveStore.listPendingProposals(story.id, story.currentTimelineId)
+                } else emptyList()
+                if(!retrying && workspace==StoryWorkspace.Discussion && (com.adong.adchat.data.story.StoryExplicitDecision.isExplicit(input) ||
                     com.adong.adchat.data.story.StoryExplicitDecision.needsClarification(input,pendingDecisions))) {
                     val proposal=com.adong.adchat.data.story.StoryExplicitDecision.match(input,pendingDecisions)
                     val accepted=proposal!=null && archiveStore.decideProposal(story.id,story.currentTimelineId,proposal.id,true,
-                        decisionRevisionId=userMessage.revision.id)
+                        decisionRevisionId=requireNotNull(userMessage).revision.id)
                     store.appendMessage(story.id,story.currentTimelineId,workspace,"assistant",
                         if(accepted) "已采用这一项候选；可在档案变更中撤销。" else "没有找到唯一对应的待定候选。请逐字引用候选内容，或到档案选择具体条目。")
                     refreshWorkspaceIfVisible(story.id,workspace);refreshArchive(story.id,story.currentTimelineId);refreshStory(story.id)
                     return@launch
                 }
-                assistant = store.appendMessage(
+                assistant = retryTarget?.let { target ->
+                    store.restartInterruptedRevision(
+                        messageId = target.message.id,
+                        expectedRevisionId = target.revision.id,
+                        profileName = profile.name,
+                        model = routeModel
+                    )
+                } ?: store.appendMessage(
                     storyId = story.id,
                     timelineId = story.currentTimelineId,
                     workspace = workspace,
@@ -772,13 +949,24 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
+                val preset = activeTavernPreset.takeIf { workspace == StoryWorkspace.Prose }
+                val prepared = preset?.let {
+                    TavernPresetRuntime.prepare(
+                        preset = it,
+                        baseSystemPrompt = context.systemPrompt,
+                        history = context.history,
+                        regexEnabled = tavernRegexEnabled
+                    )
+                }
+
                 val result = trackedChat(
                     storyId = story.id, timelineId = story.currentTimelineId, category = workspace.dbValue, sourceId = assistant?.revision?.id,
                     profile = profile,
                     model = routeModel,
-                    systemPrompt = context.systemPrompt,
-                    history = context.history,
-                    cacheKey = "aster-story-${story.id}-${workspace.dbValue}"
+                    systemPrompt = prepared?.systemPrompt ?: context.systemPrompt,
+                    history = prepared?.history ?: context.history,
+                    cacheKey = "aster-story-${story.id}-${workspace.dbValue}",
+                    generationOptions = prepared?.generationOptions ?: com.adong.adchat.data.ChatGenerationOptions()
                 ) { delta ->
                     streamed.append(delta)
                     val now = SystemClock.elapsedRealtime()
@@ -843,6 +1031,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                         withContext(Dispatchers.Main) {
                             if (activeStoryId == story.id) errors[workspace] = "回复中断，已保留当前内容。"
                         }
+                    }
+                    else -> withContext(Dispatchers.Main) {
+                        if (activeStoryId == story.id) errors[workspace] = friendlyStoryError(error)
                     }
                 }
             } finally {
@@ -1128,7 +1319,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun trackedChat(
         storyId: String, timelineId: String, category: String, sourceId: String?,
-        profile: ApiProfile, model: String, systemPrompt: String, history: List<ChatMessage>, cacheKey: String,
+        profile: ApiProfile, model: String, systemPrompt: String, history: List<ChatMessage>,
+        cacheKey: String,
+        generationOptions: com.adong.adchat.data.ChatGenerationOptions = com.adong.adchat.data.ChatGenerationOptions(),
         onDelta: suspend (String) -> Unit
     ): com.adong.adchat.data.ChatCompletionResult {
         val preparedHistory = com.adong.adchat.data.story.StoryImages.hydrate(getApplication(),storyId,history)
@@ -1136,7 +1329,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         var result: com.adong.adchat.data.ChatCompletionResult? = null
         var state = "failed"
         try {
-            val response = api.streamChat(profile,model,systemPrompt,preparedHistory,cacheKey,trimHistory=false,skillsAllowed=category in setOf("prose", "discussion") && cacheKey.startsWith("aster-story-"),onDelta=onDelta)
+            val response = api.streamChat(
+                profile, model, systemPrompt, preparedHistory, cacheKey,
+                trimHistory = false,
+                skillsAllowed = category in setOf("prose", "discussion") && cacheKey.startsWith("aster-story-"),
+                generationOptions = generationOptions,
+                onDelta = onDelta
+            )
             result = response
             state = if(response.outputComplete) "completed" else "incomplete"
             return response
