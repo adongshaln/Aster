@@ -10,7 +10,7 @@
 
 Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 Android 客户端。它可以将对话与绘图分别路由到不同的 OpenAI 兼容服务，并在统一界面中管理模型、推理、图片、工具调用、故事资料与历史任务。
 
-> 当前稳定版本：**2.4.0** · `versionCode 58`
+> 当前稳定版本：**2.4.1** · `versionCode 59`
 >
 > 完整历史更新请查看 [CHANGELOG.md](CHANGELOG.md)。
 
@@ -45,10 +45,20 @@ Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 
 - 设置页支持精确数值编辑、恢复默认以及配置导入 / 导出
 - 上下文估算只用于客户端预算，不会根据模型名称猜测提供商真实容量
 
+### 技能包
+
+- 可从公开 GitHub 地址安装或从 ZIP 导入完整 Skill，并在设置中查看、更新、启用、停用与删除
+- 普通聊天、故事讨论和故事正文分别选择本工作区可用的 Skill，每个工作区最多 4 个
+- Chat Completions 与 Responses 均支持模型按需加载 Skill 说明及 UTF-8 参考文件
+- GitHub Skill 保存固定提交的文件清单，较大仓库按需下载文件；重复读取会复用已有结果
+- 单次用户请求最多进行 16 轮、48 次工具调用，防止错误模型行为形成无限循环
+- 当前本地运行时不执行 Python、Node、Shell 或 Skill 内脚本；超出能力时会明确说明
+
 ### 对话工具与文件
 
 - Responses API 支持原生 `web_search`
 - Chat Completions 可兼容支持 `web_search_options` 与函数调用的第三方网关
+- Chat 模型可将 Web / X 搜索委托给单独配置的 Responses 兼容搜索模型，并把结果交回原模型完成最终回答
 - `create_file` 支持 Markdown、文本、JSON、CSV、HTML、PDF、DOCX、XLSX 与 PPTX
 - PDF / Office 由客户端生成真实二进制文件，并随会话持久保存和导出
 - 完整 HTML 默认直接显示内容预览，不在卡片主体暴露源码；保留复制代码、保存与全屏
@@ -127,6 +137,8 @@ Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 
 
 2.4 将此前独立开发的故事模式、共享聊天 UI、按模型上下文预算、HTML 内容预览以及 PDF / Office 文件生成整合为正式版本。
 
+2.4.1 加入可独立配置的委托 Web / X 搜索，让 Chat 模型能够借助 Grok 兼容 Responses 网关获得实时资料，同时继续与 Skill 和文件工具共存。
+
 当前体验重点包括：
 
 - 普通聊天和故事模式采用同一套核心聊天组件，减少视觉与交互割裂
@@ -136,11 +148,13 @@ Aster（原 ADChat）是一个使用 Kotlin 与 Jetpack Compose 构建的原生 
 - HTML 生成完成后直接显示内容预览，同时保留复制源码、保存和全屏
 - 客户端可生成真实 PDF、DOCX、XLSX、PPTX，并作为二进制附件持久化
 - 故事模式提供自动记忆、人物关系、时间线、冲突复核、历史路线和长篇摘要能力
+- 支持安装完整 Skill 包，由模型按需读取说明和参考资料，并对重复读取与失控工具循环进行保护
+- Chat 模型可委托独立搜索模型执行 Web / X Search，原对话模型仍负责最终回答并保留来源引用
 - `『术语』` 使用暖棕色强调，适合世界观名词、专有设定与重要概念
 - 底部阅读区域继续使用稳定渲染路径，不重新引入设备表现不一致的实时毛玻璃
 - 保留原应用 ID、配置兼容与固定签名更新链路
 
-更详细的 2.4.0 变更见 [CHANGELOG.md](CHANGELOG.md#240--2026-09-09)。
+更详细的 2.4.1 变更见 [CHANGELOG.md](CHANGELOG.md#241--2026-09-12)。
 
 ## 技术栈
 

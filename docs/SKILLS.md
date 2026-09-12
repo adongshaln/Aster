@@ -1,6 +1,6 @@
 # Aster 技能包与运行边界
 
-当前开发分支：`feature/skills-runtime`，基线 2.4.0 / versionCode 58。版本与固定签名保持不变。
+技能包运行时已随 Aster 2.4.0 合入 `main`；当前发布基线为 2.4.1 / versionCode 59，并继续使用原固定签名。
 
 ## 本轮方向
 
