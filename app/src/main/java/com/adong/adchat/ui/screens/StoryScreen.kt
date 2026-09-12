@@ -159,7 +159,7 @@ fun StoryScreen(
             busy = storyVm.tavernPresetBusy || storyVm.revisionBusy || StoryWorkspace.entries.any { storyVm.isLoading(it) },
             error = storyVm.tavernPresetError,
             onSelect = storyVm::selectTavernPreset,
-            onRegexEnabled = storyVm::setTavernRegexEnabled,
+            onRegexEnabled = storyVm::updateTavernRegexEnabled,
             onImport = {
                 tavernPresetPicker.launch(arrayOf("application/json", "text/json", "text/plain", "application/octet-stream"))
             },
@@ -181,7 +181,7 @@ fun StoryScreen(
                 error = storyVm.tavernPresetError,
                 onPromptEnabled = storyVm::setTavernPromptEnabled,
                 onRegexScriptEnabled = storyVm::setTavernRegexScriptEnabled,
-                onRegexEnabled = storyVm::setTavernRegexEnabled,
+                onRegexEnabled = storyVm::updateTavernRegexEnabled,
                 onReset = storyVm::resetTavernPresetConfiguration,
                 onBack = {
                     showTavernPresetEditor = false

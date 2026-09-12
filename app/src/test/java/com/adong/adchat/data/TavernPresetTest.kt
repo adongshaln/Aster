@@ -87,18 +87,21 @@ class TavernPresetTest {
         assertEquals(3, defaults.enabledPromptCount)
         assertEquals(2, defaults.enabledRegexCount)
         assertFalse(defaults.prompts.first { it.identifier == "disabled" }.defaultEnabled)
+        assertFalse(defaults.prompts.first { it.identifier == "outside-order" }.defaultEnabled)
         assertEquals(0, defaults.modifiedCount)
 
         store.setPromptEnabled(imported.id, "disabled", true)
+        store.setPromptEnabled(imported.id, "outside-order", true)
         store.setRegexScriptEnabled(imported.id, 0, false)
 
         val restoredStore = TavernPresetStore(context)
         val configured = restoredStore.activeConfiguration()!!
         assertTrue(configured.prompts.first { it.identifier == "disabled" }.enabled)
+        assertTrue(configured.prompts.first { it.identifier == "outside-order" }.enabled)
         assertFalse(configured.regexScripts[0].enabled)
-        assertEquals(2, configured.modifiedCount)
+        assertEquals(3, configured.modifiedCount)
         val active = restoredStore.active()!!
-        assertEquals(4, active.enabledPromptCount)
+        assertEquals(5, active.enabledPromptCount)
         assertEquals(1, active.enabledRegexCount)
         val prepared = TavernPresetRuntime.prepare(
             preset = active,
@@ -107,6 +110,7 @@ class TavernPresetTest {
             random = Random(7)
         )
         assertTrue(prepared.history.any { it.content == "不能出现" })
+        assertTrue(prepared.history.any { it.content == "顺序外候选" })
         assertTrue(prepared.history.any { it.content == "old secret" })
 
         restoredStore.resetConfiguration(imported.id)
@@ -132,12 +136,13 @@ class TavernPresetTest {
     private fun samplePreset(): String {
         val prompts = JSONArray()
             .put(prompt("init", "init", "system", "{{setvar::tone::温柔}}", enabled = true))
-            .put(prompt("history", "history", "system", "", enabled = true, marker = true))
+            .put(prompt("chatHistory", "history", "system", "", enabled = true, marker = true))
             .put(prompt("tail", "tail", "user", "{{getvar::tone}}|{{lastUserMessage}}|{{roll 1d1}}|{{random::x::x}}", enabled = true))
             .put(prompt("disabled", "disabled", "system", "不能出现", enabled = true))
+            .put(prompt("outside-order", "outside-order", "system", "顺序外候选", enabled = true))
         val order = JSONArray()
             .put(JSONObject().put("identifier", "init").put("enabled", true))
-            .put(JSONObject().put("identifier", "history").put("enabled", true))
+            .put(JSONObject().put("identifier", "chatHistory").put("enabled", true))
             .put(JSONObject().put("identifier", "tail").put("enabled", true))
             .put(JSONObject().put("identifier", "disabled").put("enabled", false))
         val regex = JSONArray()

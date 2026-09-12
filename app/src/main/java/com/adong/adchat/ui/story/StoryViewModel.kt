@@ -164,7 +164,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setTavernRegexEnabled(enabled: Boolean) {
+    fun updateTavernRegexEnabled(enabled: Boolean) {
         tavernRegexEnabled = enabled
         tavernPresetStore.setRegexEnabled(enabled)
     }
