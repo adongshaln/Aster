@@ -8,6 +8,7 @@ Aster 的故事正文工作区支持 SillyTavern / 酒馆 JSON 预设。入口�
 - 内置 `Izumi 1th Anniv1`
 - 配置页完整列出提示词与 Regex，明确标注每一项的文件默认状态，并支持名称 / 内容搜索、启用状态筛选、逐项开关、内容查看与恢复默认
 - 用户选择按预设分别持久化；更新单项不会改写原始 JSON，切换预设后仍保留各自配置
+- 点击普通提示词条目可全文编辑并保存，修改会用于后续模型请求；编辑不会自动启用条目。支持恢复单项原始内容，或恢复整个预设的默认内容和开关。上下文占位标记只读。
 - 按 `prompt_order` 与各条目的启用状态组装提示
 - 保留 system / developer / user / assistant 角色顺序，并在 `chatHistory` 标记处插入 Aster 故事上下文
 - 展开 `setvar`、`getvar`、`random`、`roll`、`user`、`char`、`lastUserMessage`、`lastCharMessage`、`date`、`time` 与 `trim`

@@ -66,6 +66,38 @@ class SharedUiInteractionTest {
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
     }
 
+    @Test fun tavernPromptContentCanBeSavedDiscardedAndRestored() {
+        val store = com.adong.adchat.data.TavernPresetStore(rule.activity)
+        val raw = """{"prompts":[{"identifier":"custom","name":"自定义写作要求","role":"system","content":"写作长度为700字。","enabled":true}],"prompt_order":[{"order":[{"identifier":"custom","enabled":true}]}]}"""
+        val preset = store.importPreset(raw.byteInputStream(), "Native editor.json")
+        var config by mutableStateOf(store.configuration(preset.id)!!)
+        val edited = "写作长度为1000字。\n保持第一人称，不代替用户做决定。"
+        try {
+            content {
+                TavernPresetConfigurationSheet(config, true, false, null,
+                    onPromptEnabled = { id, enabled -> store.setPromptEnabled(preset.id, id, enabled); config = store.configuration(preset.id)!! },
+                    onPromptContent = { id, text -> store.setPromptContent(preset.id, id, text); config = store.configuration(preset.id)!! },
+                    onRegexScriptEnabled = { _, _ -> }, onRegexEnabled = {}, onReset = {}, onBack = {}, onDismiss = {})
+            }
+            rule.onNodeWithText("自定义写作要求").performClick()
+            rule.onNodeWithTag("tavern-prompt-content").performClick().performTextReplacement(edited)
+            screenshot("tavern-prompt-content-editor")
+            rule.onNodeWithText("保存", substring = false).performClick()
+            rule.onNodeWithTag("tavern-prompt-content").assertDoesNotExist()
+            rule.runOnIdle { assertEquals(edited, store.configuration(preset.id)!!.prompts.single().content) }
+            rule.onNodeWithText("自定义写作要求").performClick()
+            rule.onNodeWithTag("tavern-prompt-content").assertTextContains(edited)
+            rule.onNodeWithTag("tavern-prompt-content").performTextReplacement("不保存这一段")
+            rule.onNodeWithContentDescription("关闭条目编辑").performClick()
+            rule.onNodeWithText("放弃修改", substring = false).performClick()
+            rule.runOnIdle { assertEquals(edited, store.configuration(preset.id)!!.prompts.single().content) }
+            rule.onNodeWithText("自定义写作要求").performClick()
+            rule.onNodeWithText("恢复原始内容").performClick()
+            rule.onNodeWithText("保存", substring = false).performClick()
+            rule.runOnIdle { assertFalse(store.configuration(preset.id)!!.prompts.single().contentModified) }
+        } finally { store.delete(preset.id) }
+    }
+
     @Test fun storyProseUsesNativeSectionsAndRetainsPlanning() {
         val preset = com.adong.adchat.data.TavernPresetStore(rule.activity).list().first { it.builtIn }
         val raw = "<konatan_planning~>核对人物关系与地点</konatan_planning~>\n她推开了城门。\n<details><summary>摘要</summary>主角抵达新城</details>"
@@ -218,6 +250,7 @@ class SharedUiInteractionTest {
                     })
                 },
                 onRegexScriptEnabled = { _, _ -> },
+                onPromptContent = { _, _ -> },
                 onRegexEnabled = {},
                 onReset = {},
                 onBack = {},

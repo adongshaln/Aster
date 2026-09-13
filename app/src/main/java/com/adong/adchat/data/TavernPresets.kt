@@ -15,6 +15,12 @@ import java.util.regex.Pattern
 import java.util.zip.GZIPInputStream
 import kotlin.random.Random
 
+const val MAX_TAVERN_PROMPT_CHARS = 500_000
+internal val TAVERN_CONTEXT_MARKER_IDS = setOf(
+    "personaDescription", "charDescription", "worldInfoBefore", "charPersonality",
+    "scenario", "worldInfoAfter", "dialogueExamples", "enhanceDefinitions", "chatHistory", "jailbreak"
+)
+
 data class TavernPrompt(
     val identifier: String,
     val name: String,
@@ -78,9 +84,11 @@ data class TavernPromptSetting(
     val content: String,
     val marker: Boolean,
     val enabled: Boolean,
-    val defaultEnabled: Boolean
+    val defaultEnabled: Boolean,
+    val defaultContent: String = content
 ) {
-    val modified: Boolean get() = enabled != defaultEnabled
+    val contentModified: Boolean get() = content != defaultContent
+    val modified: Boolean get() = enabled != defaultEnabled || contentModified
 }
 
 data class TavernRegexSetting(
@@ -116,7 +124,6 @@ data class TavernPresetConfiguration(
 internal object TavernPresetParser {
     private const val MAX_PROMPTS = 2_000
     private const val MAX_REGEX_SCRIPTS = 512
-    private const val MAX_PROMPT_CHARS = 500_000
     private const val MAX_REGEX_FIELD_CHARS = 1_000_000
 
     fun parse(raw: String, id: String, fallbackName: String, builtIn: Boolean): TavernPreset {
@@ -129,7 +136,7 @@ internal object TavernPresetParser {
                 val identifier = item.optString("identifier").trim()
                 if (identifier.isBlank()) continue
                 val content = item.optString("content")
-                require(content.length <= MAX_PROMPT_CHARS) { "提示词 ${item.optString("name", identifier)} 过大" }
+                require(content.length <= MAX_TAVERN_PROMPT_CHARS) { "提示词 ${item.optString("name", identifier)} 过大" }
                 add(
                     TavernPrompt(
                         identifier = identifier,
@@ -285,10 +292,11 @@ class TavernPresetStore(context: Context) {
                 identifier = identifier,
                 name = prompt.name,
                 role = prompt.role,
-                content = prompt.content,
-                marker = prompt.marker,
+                content = overrides.promptContent[identifier] ?: prompt.content,
+                marker = prompt.marker || identifier in TAVERN_CONTEXT_MARKER_IDS,
                 enabled = overrides.promptEnabled[identifier] ?: defaultEnabled,
-                defaultEnabled = defaultEnabled
+                defaultEnabled = defaultEnabled,
+                defaultContent = prompt.content
             )
         }
         val regexScripts = preset.regexScripts.mapIndexed { index, script ->
@@ -342,6 +350,18 @@ class TavernPresetStore(context: Context) {
     }
 
     @Synchronized
+    fun setPromptContent(presetId: String, identifier: String, content: String) {
+        val preset = requireNotNull(rawPreset(presetId)) { "酒馆预设已不存在" }
+        val prompt = requireNotNull(preset.prompts.firstOrNull { it.identifier == identifier }) { "提示词模块已不存在" }
+        require(!prompt.marker && identifier !in TAVERN_CONTEXT_MARKER_IDS) { "此条目是上下文占位标记，不能编辑为普通提示词" }
+        require(content.length <= MAX_TAVERN_PROMPT_CHARS) { "条目内容超过 $MAX_TAVERN_PROMPT_CHARS 个字符" }
+        val configuration = readConfiguration(presetId)
+        if (content == prompt.content) configuration.promptContent.remove(identifier)
+        else configuration.promptContent[identifier] = content
+        writeConfiguration(presetId, configuration)
+    }
+
+    @Synchronized
     fun setRegexScriptEnabled(presetId: String, index: Int, enabled: Boolean) {
         val preset = requireNotNull(rawPreset(presetId)) { "酒馆预设已不存在" }
         val script = preset.regexScripts.getOrNull(index) ?: throw IllegalArgumentException("正则脚本已不存在")
@@ -351,6 +371,7 @@ class TavernPresetStore(context: Context) {
         writeConfiguration(presetId, configuration)
     }
 
+    @Synchronized
     fun resetConfiguration(presetId: String) {
         requireNotNull(rawPreset(presetId)) { "酒馆预设已不存在" }
         prefs.edit().remove(configurationKey(presetId)).apply()
@@ -395,7 +416,8 @@ class TavernPresetStore(context: Context) {
     private fun applyConfiguration(preset: TavernPreset): TavernPreset {
         val configuration = readConfiguration(preset.id)
         val prompts = preset.prompts.map { prompt ->
-            configuration.promptEnabled[prompt.identifier]?.let { prompt.copy(enabled = it) } ?: prompt
+            prompt.copy(enabled = configuration.promptEnabled[prompt.identifier] ?: prompt.enabled,
+                content = configuration.promptContent[prompt.identifier] ?: prompt.content)
         }
         val order = if (preset.promptOrder.isEmpty()) emptyList() else buildList {
             preset.promptOrder.forEach { entry ->
@@ -416,7 +438,8 @@ class TavernPresetStore(context: Context) {
 
     private data class StoredConfiguration(
         val promptEnabled: MutableMap<String, Boolean> = linkedMapOf(),
-        val regexEnabled: MutableMap<Int, Boolean> = linkedMapOf()
+        val regexEnabled: MutableMap<Int, Boolean> = linkedMapOf(),
+        val promptContent: MutableMap<String, String> = linkedMapOf()
     )
 
     private fun readConfiguration(presetId: String): StoredConfiguration {
@@ -429,18 +452,22 @@ class TavernPresetStore(context: Context) {
             promptObject.keys().forEach { key -> prompts[key] = promptObject.optBoolean(key) }
             val regex = linkedMapOf<Int, Boolean>()
             regexObject.keys().forEach { key -> key.toIntOrNull()?.let { regex[it] = regexObject.optBoolean(key) } }
-            StoredConfiguration(prompts, regex)
+            val contentObject = root.optJSONObject("prompt_content") ?: JSONObject()
+            val contents = linkedMapOf<String, String>()
+            contentObject.keys().forEach { key -> (contentObject.opt(key) as? String)?.let { contents[key] = it } }
+            StoredConfiguration(prompts, regex, contents)
         }.getOrDefault(StoredConfiguration())
     }
 
     private fun writeConfiguration(presetId: String, configuration: StoredConfiguration) {
-        if (configuration.promptEnabled.isEmpty() && configuration.regexEnabled.isEmpty()) {
+        if (configuration.promptEnabled.isEmpty() && configuration.regexEnabled.isEmpty() && configuration.promptContent.isEmpty()) {
             prefs.edit().remove(configurationKey(presetId)).apply()
             return
         }
         val prompts = JSONObject().apply { configuration.promptEnabled.forEach { (key, value) -> put(key, value) } }
         val regex = JSONObject().apply { configuration.regexEnabled.forEach { (key, value) -> put(key.toString(), value) } }
-        val value = JSONObject().put("prompts", prompts).put("regex", regex).toString()
+        val contents = JSONObject().apply { configuration.promptContent.forEach { (key, value) -> put(key, value) } }
+        val value = JSONObject().put("prompts", prompts).put("regex", regex).put("prompt_content", contents).toString()
         prefs.edit().putString(configurationKey(presetId), value).apply()
     }
 
@@ -659,10 +686,7 @@ data class TavernPreparedRequest(
 )
 
 object TavernPresetRuntime {
-    private val markerIds = setOf(
-        "personaDescription", "charDescription", "worldInfoBefore", "charPersonality",
-        "scenario", "worldInfoAfter", "dialogueExamples", "enhanceDefinitions", "chatHistory", "jailbreak"
-    )
+    private val markerIds = TAVERN_CONTEXT_MARKER_IDS
 
     fun prepare(
         preset: TavernPreset,

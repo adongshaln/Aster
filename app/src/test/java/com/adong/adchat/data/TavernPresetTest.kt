@@ -19,6 +19,51 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class TavernPresetTest {
+    @Test fun promptContentPersistsAndChangesActualRequestWithoutChangingDefaults() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = TavernPresetStore(context)
+        val preset = store.importPreset(ByteArrayInputStream(samplePreset().toByteArray()), "Editable.json")
+        val edited = "  {{setvar::tone::冷静}}\n\n"
+        store.setPromptContent(preset.id, "init", edited)
+        store.setPromptContent(preset.id, "disabled", "用户自己的要求")
+        store.select(preset.id)
+        val reopened = TavernPresetStore(context)
+        val config = reopened.activeConfiguration()!!
+        assertEquals(edited, config.prompts.first { it.identifier == "init" }.content)
+        assertTrue(config.prompts.first { it.identifier == "init" }.contentModified)
+        assertFalse(config.prompts.first { it.identifier == "disabled" }.enabled)
+        assertEquals(2, config.modifiedCount)
+        val request = TavernPresetRuntime.prepare(reopened.active()!!, "BASE", listOf(ChatMessage(role = "user", content = "继续")))
+        assertTrue(request.history.any { it.content == "冷静|继续|1|x" })
+        assertFalse(request.history.any { it.content == "用户自己的要求" })
+        reopened.setPromptEnabled(preset.id, "disabled", true)
+        assertTrue(TavernPresetRuntime.prepare(reopened.active()!!, "BASE", emptyList()).history.any { it.content == "用户自己的要求" })
+        val defaultContent = config.prompts.first { it.identifier == "init" }.defaultContent
+        reopened.setPromptContent(preset.id, "init", defaultContent)
+        assertFalse(reopened.activeConfiguration()!!.prompts.first { it.identifier == "init" }.contentModified)
+        assertTrue(reopened.activeConfiguration()!!.prompts.first { it.identifier == "disabled" }.contentModified)
+        reopened.resetConfiguration(preset.id)
+        assertEquals(0, reopened.activeConfiguration()!!.modifiedCount)
+        assertEquals("不能出现", reopened.activeConfiguration()!!.prompts.first { it.identifier == "disabled" }.content)
+    }
+
+    @Test fun builtinContentSupportsEmptyAndLongEditsAndIsIsolatedFromImports() {
+        val store = TavernPresetStore(RuntimeEnvironment.getApplication())
+        val id = TavernPresetStore.BUILT_IN_ID
+        val prompt = store.configuration(id)!!.prompts.first { !it.marker && it.enabled }
+        val longText = "长文本与换行\n".repeat(4000)
+        store.setPromptContent(id, prompt.identifier, longText)
+        assertEquals(longText, TavernPresetStore(RuntimeEnvironment.getApplication()).active()!!.prompts.first { it.identifier == prompt.identifier }.content)
+        val imported = store.importPreset(ByteArrayInputStream(samplePreset().toByteArray()), "Other.json")
+        assertEquals(0, store.configuration(imported.id)!!.modifiedCount)
+        store.setPromptContent(id, prompt.identifier, "")
+        assertEquals("", store.configuration(id)!!.prompts.first { it.identifier == prompt.identifier }.content)
+        assertTrue(store.configuration(id)!!.prompts.first { it.identifier == prompt.identifier }.contentModified)
+        assertTrue(runCatching { store.setPromptContent(id, "chatHistory", "不能变成普通提示") }.isFailure)
+        assertTrue(runCatching { store.setPromptContent(id, prompt.identifier, "x".repeat(MAX_TAVERN_PROMPT_CHARS + 1)) }.isFailure)
+        assertEquals("", store.configuration(id)!!.prompts.first { it.identifier == prompt.identifier }.content)
+    }
+
     @Test fun builtinNativeProseKeepsPlanningAcrossRegexCleanupAndDepth() {
         val preset = TavernPresetStore(RuntimeEnvironment.getApplication()).list().first { it.builtIn }
         val raw = "<konatan_planning~>核对设定</konatan_planning~>\n正文保留\n<details><summary>摘要</summary>到达城门</details>"

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/design/tavern-content-editor" ]]; then
+  set -- 'com.adong.adchat.SharedUiInteractionTest#tavernPromptContentCanBeSavedDiscardedAndRestored,com.adong.adchat.SharedUiInteractionTest#tavernPresetConfigurationExposesDefaultsAndChoices'
+fi
+
 if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/design/story-native-prose" ]]; then
   set -- 'com.adong.adchat.SharedUiInteractionTest#storyProseUsesNativeSectionsAndRetainsPlanning,com.adong.adchat.SharedUiInteractionTest#tavernMacrosCompileAndExpandOnAndroid'
 fi

@@ -180,6 +180,7 @@ fun StoryScreen(
                 busy = storyVm.tavernPresetBusy || storyVm.revisionBusy || StoryWorkspace.entries.any { storyVm.isLoading(it) },
                 error = storyVm.tavernPresetError,
                 onPromptEnabled = storyVm::setTavernPromptEnabled,
+                onPromptContent = storyVm::setTavernPromptContent,
                 onRegexScriptEnabled = storyVm::setTavernRegexScriptEnabled,
                 onRegexEnabled = storyVm::updateTavernRegexEnabled,
                 onReset = storyVm::resetTavernPresetConfiguration,
@@ -462,6 +463,7 @@ internal fun TavernPresetConfigurationSheet(
     busy: Boolean,
     error: String?,
     onPromptEnabled: (String, Boolean) -> Unit,
+    onPromptContent: (String, String) -> Unit,
     onRegexScriptEnabled: (Int, Boolean) -> Unit,
     onRegexEnabled: (Boolean) -> Unit,
     onReset: () -> Unit,
@@ -471,7 +473,7 @@ internal fun TavernPresetConfigurationSheet(
     var section by remember(configuration.id) { mutableStateOf(TavernConfigurationSection.Prompts) }
     var filter by remember(configuration.id, section) { mutableStateOf(TavernConfigurationFilter.All) }
     var query by remember(configuration.id, section) { mutableStateOf("") }
-    var inspectedPrompt by remember { mutableStateOf<TavernPromptSetting?>(null) }
+    var inspectedPrompt by remember(configuration.id) { mutableStateOf<TavernPromptSetting?>(null) }
     var inspectedRegex by remember { mutableStateOf<TavernRegexSetting?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     val needle = query.trim()
@@ -625,11 +627,15 @@ internal fun TavernPresetConfigurationSheet(
         }
     }
 
-    inspectedPrompt?.let { prompt ->
-        TavernTextPreviewDialog(
+    inspectedPrompt?.let { selected ->
+        val prompt = configuration.prompts.firstOrNull { it.identifier == selected.identifier } ?: return@let
+        if (!prompt.marker) key(configuration.id, prompt.identifier) {
+            com.adong.adchat.ui.components.TavernPromptEditor(prompt, busy, error,
+                onSave = { onPromptContent(prompt.identifier, it) }, onDismiss = { inspectedPrompt = null })
+        } else TavernTextPreviewDialog(
             title = prompt.name,
             meta = "${prompt.role.uppercase()} · ${if (prompt.defaultEnabled) "默认启用" else "默认停用"}${if (prompt.modified) " · 已修改" else ""}",
-            sections = listOf("提示词内容" to prompt.content),
+            sections = listOf("上下文占位标记" to "此项由对话历史或上下文资料填充，不作为普通提示词编辑。", "提示词内容" to prompt.content),
             onDismiss = { inspectedPrompt = null }
         )
     }
@@ -644,7 +650,7 @@ internal fun TavernPresetConfigurationSheet(
     if (confirmReset) {
         AdConfirmDialog(
             title = "恢复预设默认？",
-            message = "提示词和正则的逐项选择将恢复为 JSON 文件中定义的启用与停用状态。全局正则开关不受影响。",
+            message = "提示词内容、提示词和正则的逐项选择将恢复为文件默认值，已保存的内容修改也会被清除。全局正则开关不受影响。",
             confirmLabel = "恢复默认",
             dismissLabel = "取消",
             icon = Icons.Rounded.Restore,
@@ -668,6 +674,7 @@ private fun TavernPromptSettingRow(
             if (setting.marker) append(" · 占位标记")
             append(if (setting.defaultEnabled) " · 默认启用" else " · 默认停用")
             if (setting.modified) append(" · 已修改")
+            if (setting.contentModified) append(" · 内容已修改")
         },
         checked = setting.enabled,
         defaultEnabled = setting.defaultEnabled,

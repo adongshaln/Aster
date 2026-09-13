@@ -175,6 +175,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setTavernPromptContent(identifier: String, content: String) {
+        mutateTavernConfiguration("保存提示词内容失败") { presetId ->
+            tavernPresetStore.setPromptContent(presetId, identifier, content)
+        }
+    }
+
     fun setTavernRegexScriptEnabled(index: Int, enabled: Boolean) {
         mutateTavernConfiguration("更新正则脚本失败") { presetId ->
             tavernPresetStore.setRegexScriptEnabled(presetId, index, enabled)
