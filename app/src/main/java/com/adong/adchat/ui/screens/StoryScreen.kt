@@ -1008,6 +1008,15 @@ private fun StoryWorkspaceContent(
             ) {
                 itemsIndexed(messages, key = { _, row -> row.message.id }) { index, row ->
                     val assistant = row.message.role == "assistant"
+                    val nativeProse = assistant && workspace == StoryWorkspace.Prose
+                    val prose by produceState<com.adong.adchat.data.story.StoryProsePresentation?>(
+                        null, row.revision.id, row.revision.content, row.revision.state,
+                        storyVm.activeTavernPresetId, storyVm.activeTavernPresetConfiguration,
+                        storyVm.tavernRegexEnabled, workspace, index, messages.size
+                    ) {
+                        value = if (nativeProse) storyVm.prosePresentation(row.revision.content,
+                            row.message.role, messages.lastIndex - index, row.revision.state == StoryRevisionState.Streaming) else null
+                    }
                     val pending = if (assistant && workspace == StoryWorkspace.Discussion) {
                         storyVm.archiveProposals.count { it.sourceRevisionId == row.revision.id }
                     } else 0
@@ -1025,7 +1034,7 @@ private fun StoryWorkspaceContent(
                         val result by produceState(
                             initialValue = com.adong.adchat.data.TavernRegexOutput(row.revision.content, 0, emptyList())
                         ) {
-                            if (row.revision.state != StoryRevisionState.Streaming) {
+                            if (!nativeProse && row.revision.state != StoryRevisionState.Streaming) {
                                 value = storyVm.tavernDisplay(
                                     content = row.revision.content,
                                     role = row.message.role,
@@ -1040,6 +1049,7 @@ private fun StoryWorkspaceContent(
                         row = row,
                         displayContent = display.structuredText(),
                         regexHtml = display.containsHtml,
+                        prose = if (nativeProse) prose ?: com.adong.adchat.data.story.StoryProsePresentation() else null,
                         workspace = workspace,
                         pendingCount = pending,
                         actionsEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
@@ -1125,6 +1135,7 @@ private fun StoryMessageItem(
     row: StoryMessageWithRevision,
     displayContent: String,
     regexHtml: Boolean,
+    prose: com.adong.adchat.data.story.StoryProsePresentation?,
     workspace: StoryWorkspace,
     pendingCount: Int,
     actionsEnabled: Boolean,
@@ -1174,6 +1185,8 @@ private fun StoryMessageItem(
                 }
                 if (waitingForFirstToken) {
                     ConversationThinkingIndicator()
+                } else if (prose != null) {
+                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming)
                 } else {
                     StructuredMessageText(
                         content = displayContent,

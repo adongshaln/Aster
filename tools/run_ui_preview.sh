@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/design/story-native-prose" ]]; then
+  set -- 'com.adong.adchat.SharedUiInteractionTest#storyProseUsesNativeSectionsAndRetainsPlanning,com.adong.adchat.SharedUiInteractionTest#tavernMacrosCompileAndExpandOnAndroid'
+fi
+
 # This hotfix exercises the native ICU engine and the affected HTML lifecycle.
 # Keep unrelated historical settings/keyboard scenarios out of this regression run.
 if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/design/regex-crash-hotfix" ]]; then

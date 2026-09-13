@@ -66,6 +66,30 @@ class SharedUiInteractionTest {
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
     }
 
+    @Test fun storyProseUsesNativeSectionsAndRetainsPlanning() {
+        val preset = com.adong.adchat.data.TavernPresetStore(rule.activity).list().first { it.builtIn }
+        val raw = "<konatan_planning~>核对人物关系与地点</konatan_planning~>\n她推开了城门。\n<details><summary>摘要</summary>主角抵达新城</details>"
+        val display = com.adong.adchat.data.story.StoryProsePresenter.present(raw, preset, "assistant", 0, true, false)
+        content {
+            Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().padding(20.dp).verticalScroll(rememberScrollState())) {
+                Text("故事正文", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(16.dp))
+                StoryProseContent(display, false)
+            }
+        }
+        rule.onNodeWithText("预设思考").performClick()
+        rule.onNodeWithText("核对人物关系与地点").assertExists()
+        rule.onNodeWithText("剧情摘要").performClick()
+        rule.onNodeWithText("主角抵达新城").assertExists()
+        rule.onNodeWithText("她推开了城门。").assertExists()
+        fun hasWebView(view: android.view.View): Boolean = view is android.webkit.WebView ||
+            (view is android.view.ViewGroup && (0 until view.childCount).any { hasWebView(view.getChildAt(it)) })
+        rule.runOnUiThread { assertFalse(hasWebView(rule.activity.window.decorView)) }
+        screenshot("story-native-prose")
+        rule.onNodeWithText("预设思考").performClick()
+        rule.onNodeWithText("核对人物关系与地点").assertDoesNotExist()
+    }
+
     @Test fun builtinRegexProseRendersAndSurvivesUpdates() {
         val store = com.adong.adchat.data.TavernPresetStore(rule.activity)
         val active = requireNotNull(store.list().firstOrNull { it.builtIn })

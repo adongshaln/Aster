@@ -19,6 +19,16 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
 class TavernPresetTest {
+    @Test fun builtinNativeProseKeepsPlanningAcrossRegexCleanupAndDepth() {
+        val preset = TavernPresetStore(RuntimeEnvironment.getApplication()).list().first { it.builtIn }
+        val raw = "<konatan_planning~>核对设定</konatan_planning~>\n正文保留\n<details><summary>摘要</summary>到达城门</details>"
+        for (depth in listOf(0, 3, 12)) for (enabled in listOf(true, false)) {
+            val view = com.adong.adchat.data.story.StoryProsePresenter.present(raw, preset, "assistant", depth, enabled, false)
+            assertEquals("核对设定", view.planning)
+            assertTrue(view.blocks.any { "正文保留" in it.text })
+            assertTrue(view.blocks.any { "到达城门" in it.text })
+        }
+    }
     @Before
     fun setUpStoredPresets() = clearStoredPresets()
 
