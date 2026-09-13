@@ -22,6 +22,14 @@ import com.adong.adchat.ui.theme.*
 @Composable
 internal fun StoryProseContent(presentation: StoryProsePresentation, streaming: Boolean, raw: String? = null) {
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        if (presentation.thinking.isNotBlank()) {
+            StoryProseSection(
+                title = if (presentation.thinkingIncomplete) "思考文本 · ${if (streaming) "接收中" else "未完整结束"}" else "思考文本",
+                text = presentation.thinking,
+                note = "回复中 think / thinking 标签内的文本，可能包含分析或试写",
+                initiallyExpanded = streaming
+            )
+        }
         if (presentation.planning.isNotBlank()) {
             StoryProseSection(
                 title = if (presentation.planningIncomplete) "预设思考 · ${if (streaming) "接收中" else "未完整结束"}" else "预设思考",

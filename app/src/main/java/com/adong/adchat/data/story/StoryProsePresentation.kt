@@ -15,44 +15,30 @@ data class StoryProsePresentation(
     val planningIncomplete: Boolean = false,
     val blocks: List<StoryProseBlock> = emptyList(),
     val skippedScripts: List<String> = emptyList(),
-    val showPlanningStatus: Boolean = false
+    val showPlanningStatus: Boolean = false,
+    val thinking: String = "",
+    val thinkingIncomplete: Boolean = false
 )
 
 /** Presentation only: never writes cleaned text back to message history or request context. */
 object StoryProsePresenter {
-    private val planningTag = Regex("<(/?)(konatan_planning~|think|thinking)\\s*>", RegexOption.IGNORE_CASE)
     private val fence = Regex("```[^\\n]*\\n[\\s\\S]*?(?:```|$)")
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
-        val codeRanges = fence.findAll(raw).map { it.range }.toList()
-        val tags = planningTag.findAll(raw).filter { tag -> codeRanges.none { tag.range.first in it } }.toList()
-        val body = StringBuilder()
-        val planning = mutableListOf<String>()
-        var cursor = 0
-        var incomplete = false
-        if (role == "assistant") for (tag in tags) {
-            if (tag.range.first < cursor) continue
-            if (tag.groupValues[1].isEmpty()) {
-                body.append(raw.substring(cursor, tag.range.first))
-                val end = tags.firstOrNull { it.range.first > tag.range.first && it.groupValues[1] == "/" &&
-                    it.groupValues[2].equals(tag.groupValues[2], ignoreCase = true) }
-                planning += raw.substring(tag.range.last + 1, end?.range?.first ?: raw.length)
-                cursor = end?.range?.last?.plus(1) ?: raw.length
-                incomplete = incomplete || end == null
-            } else if (cursor == 0 && tag.groupValues[2].equals("konatan_planning~", true)) {
-                // An assistant prefill may contain the opening tag, outside the returned text.
-                planning += raw.substring(0, tag.range.first)
-                cursor = tag.range.last + 1
-            }
-        }
-        body.append(raw.substring(cursor))
+        val split = if (role == "assistant") StoryThoughtParser.split(raw) else StoryThoughtSplit(raw, emptyList(), emptyList())
         val output = if (preset != null && !streaming) {
-            TavernPresetRuntime.display(preset, body.toString(), role, depth, regexEnabled)
-        } else TavernRegexOutput(body.toString(), 0, emptyList())
-        return StoryProsePresentation(planning.joinToString("\n\n").trim(), incomplete,
-            nativeBlocks(output.text), output.skippedScripts, preset != null || planning.isNotEmpty())
+            TavernPresetRuntime.display(preset, split.body, role, depth, regexEnabled)
+        } else TavernRegexOutput(split.body, 0, emptyList())
+        return StoryProsePresentation(
+            planning = split.planning.joinToString("\n\n") { it.text },
+            planningIncomplete = split.planning.any { it.incomplete },
+            blocks = nativeBlocks(output.text), skippedScripts = output.skippedScripts,
+            showPlanningStatus = preset != null || split.planning.isNotEmpty(),
+            thinking = split.thinking.joinToString("\n\n") { it.text },
+            thinkingIncomplete = split.thinking.any { it.incomplete }
+        )
     }
 
     /** HTML is parsed as data. No WebView, JavaScript, CSS, or external resource loading. */
