@@ -74,7 +74,7 @@ class SharedUiInteractionTest {
             Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().padding(20.dp).verticalScroll(rememberScrollState())) {
                 Text("故事正文", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(16.dp))
-                StoryProseContent(display, false)
+                StoryProseContent(display, false, raw)
             }
         }
         rule.onNodeWithText("预设思考").performClick()
@@ -88,6 +88,8 @@ class SharedUiInteractionTest {
         screenshot("story-native-prose")
         rule.onNodeWithText("预设思考").performClick()
         rule.onNodeWithText("核对人物关系与地点").assertDoesNotExist()
+        rule.onNodeWithText("原始回复").performScrollTo().performClick()
+        rule.onNodeWithText(raw).assertExists()
     }
 
     @Test fun builtinRegexProseRendersAndSurvivesUpdates() {

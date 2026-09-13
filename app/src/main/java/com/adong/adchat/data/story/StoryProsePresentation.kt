@@ -14,7 +14,8 @@ data class StoryProsePresentation(
     val planning: String = "",
     val planningIncomplete: Boolean = false,
     val blocks: List<StoryProseBlock> = emptyList(),
-    val skippedScripts: List<String> = emptyList()
+    val skippedScripts: List<String> = emptyList(),
+    val showPlanningStatus: Boolean = false
 )
 
 /** Presentation only: never writes cleaned text back to message history or request context. */
@@ -51,7 +52,7 @@ object StoryProsePresenter {
             TavernPresetRuntime.display(preset, body.toString(), role, depth, regexEnabled)
         } else TavernRegexOutput(body.toString(), 0, emptyList())
         return StoryProsePresentation(planning.joinToString("\n\n").trim(), incomplete,
-            nativeBlocks(output.text), output.skippedScripts)
+            nativeBlocks(output.text), output.skippedScripts, preset != null || planning.isNotEmpty())
     }
 
     /** HTML is parsed as data. No WebView, JavaScript, CSS, or external resource loading. */

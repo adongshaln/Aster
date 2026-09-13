@@ -1186,7 +1186,7 @@ private fun StoryMessageItem(
                 if (waitingForFirstToken) {
                     ConversationThinkingIndicator()
                 } else if (prose != null) {
-                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming)
+                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming, row.revision.content)
                 } else {
                     StructuredMessageText(
                         content = displayContent,
