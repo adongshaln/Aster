@@ -14,6 +14,8 @@ Aster 的故事正文工作区支持 SillyTavern / 酒馆 JSON 预设。入口�
 - 映射 `temperature`、`top_p`、`frequency_penalty`、`presence_penalty`、`seed` 与 `openai_max_tokens`
 - Regex 支持角色范围、Min / Max Depth、`g/i/m/s/u` 标志、捕获组、`{{match}}`、Trim Out，以及 Alter Outgoing Prompt / Alter Chat Display 语义
 - 请求正则只修改发给模型的临时副本；显示正则只修改当前渲染，不改写故事数据库
+- 故事正文使用原生阅读布局；摘要、事件、补充对话可在同一页面内展开，无需 HTML 预览窗口
+- 显示正则清理前提取正文中的 `konatan_planning~`、`think`、`thinking` 片段，保留流式与未完整结束状态；原始回复可直接展开核对
 
 `prompt_order` 是提示词是否进入请求的权威默认值。文件中存在、但没有出现在 `prompt_order` 的提示词默认视为停用；用户手动启用后会追加到有效顺序末尾。Regex 的逐条开关与全局 Regex 开关相互独立：关闭全局开关不会丢失逐条选择。
 
@@ -21,7 +23,9 @@ Aster 的故事正文工作区支持 SillyTavern / 酒馆 JSON 预设。入口�
 
 预设是用户选择的创作配置，不能覆盖 Aster 的故事工作区隔离、正式资料、工具和安全规则。
 
-Regex 替换生成的 HTML 会在禁用 JavaScript、网络、文件、表单和父页面访问的离线沙箱中预览。预设内的 Tavern Helper / STscript 内容会原样保留在导入文件或内置资源中，但 Aster 不执行这些第三方脚本，也不会把“已保存脚本”误报为“已运行脚本”。
+故事正文将 Regex 生成的 HTML 作为数据解析为原生文本和折叠区，不运行 WebView、CSS 或 JavaScript，也不加载外部资源。普通聊天、讨论区与生成文件仍保留原有的离线 HTML 预览。预设内的 Tavern Helper / STscript 内容会原样保留在导入文件或内置资源中，但 Aster 不执行这些第三方脚本，也不会把“已保存脚本”误报为“已运行脚本”。
+
+「预设思考」仅展示模型在回复正文中实际返回的文本，不代表可以读取供应商隐藏的内部推理。没有识别到这些片段时，界面明确说明；不能据此断言模型没有思考。思考片段会独立保留，不再被正文显示正则隐藏；请求侧正则和原始消息不受影响。
 
 ## 当前差异
 
