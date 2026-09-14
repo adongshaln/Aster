@@ -1,0 +1,42 @@
+name: Fix story thought scroll jump
+
+on:
+  push:
+    branches:
+      - fix/story-thought-scroll-jump
+    paths:
+      - '.github/workflows/fix-story-thought-scroll-jump.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/story-thought-scroll-jump
+          fetch-depth: 0
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply stable prose layout patch
+        run: python .github/scripts/fix-story-thought-scroll-jump.py
+      - name: Check diff
+        run: git diff --check
+      - name: Run prose cache and presentation tests
+        run: ./gradlew --no-daemon testDebugUnitTest --tests 'com.adong.adchat.data.story.StoryProsePresentationCacheTest' --tests 'com.adong.adchat.data.StoryProsePresentationTest' --tests 'com.adong.adchat.data.StoryThoughtParserTest'
+      - name: Run complete unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Commit product fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java app/src/test/java
+          git commit -m 'fix: stabilize story thought cards while scrolling'
+          git push origin HEAD:fix/story-thought-scroll-jump
