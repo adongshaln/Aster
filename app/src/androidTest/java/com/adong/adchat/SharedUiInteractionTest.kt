@@ -105,22 +105,21 @@ class SharedUiInteractionTest {
             Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().padding(20.dp).verticalScroll(rememberScrollState())) {
                 Text("故事正文", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(16.dp))
-                StoryProseContent(display, false, raw)
+                StoryProseContent(display, false)
             }
         }
         rule.onNodeWithText("最终正文").assertIsDisplayed()
         rule.onNodeWithText("思考文本").performClick()
         rule.onNodeWithText("分析\n```\n试写").assertIsDisplayed()
         rule.onNodeWithText("最终规划").assertDoesNotExist()
-        rule.onNodeWithText("预设思考").performClick()
+        rule.onNodeWithText("思考过程").performClick()
         rule.onNodeWithText("最终规划").assertIsDisplayed()
         screenshot("story-thought-sections")
         rule.onNodeWithText("思考文本").performClick()
         rule.onNodeWithText("分析\n```\n试写").assertDoesNotExist()
         rule.onNodeWithText("最终规划").assertIsDisplayed()
         rule.onNodeWithText("最终正文").assertIsDisplayed()
-        rule.onNodeWithText("原始回复").performScrollTo().performClick()
-        rule.onNodeWithText(raw).assertExists()
+        rule.onNodeWithText("原始回复").assertDoesNotExist()
     }
 
     @Test fun storyProseUsesNativeSectionsAndRetainsPlanning() {
@@ -131,10 +130,10 @@ class SharedUiInteractionTest {
             Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().padding(20.dp).verticalScroll(rememberScrollState())) {
                 Text("故事正文", style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(16.dp))
-                StoryProseContent(display, false, raw)
+                StoryProseContent(display, false)
             }
         }
-        rule.onNodeWithText("预设思考").performClick()
+        rule.onNodeWithText("思考过程").performClick()
         rule.onNodeWithText("核对人物关系与地点").assertExists()
         rule.onNodeWithText("剧情摘要").performClick()
         rule.onNodeWithText("主角抵达新城").assertExists()
@@ -143,10 +142,31 @@ class SharedUiInteractionTest {
             (view is android.view.ViewGroup && (0 until view.childCount).any { hasWebView(view.getChildAt(it)) })
         rule.runOnUiThread { assertFalse(hasWebView(rule.activity.window.decorView)) }
         screenshot("story-native-prose")
-        rule.onNodeWithText("预设思考").performClick()
+        rule.onNodeWithText("思考过程").performClick()
         rule.onNodeWithText("核对人物关系与地点").assertDoesNotExist()
-        rule.onNodeWithText("原始回复").performScrollTo().performClick()
-        rule.onNodeWithText(raw).assertExists()
+        rule.onNodeWithText("原始回复").assertDoesNotExist()
+    }
+
+    @Test fun storyThoughtCollapsesWhenStreamingBodyStarts() {
+        var raw by mutableStateOf("<konatan_planning~>正在规划")
+        content {
+            val display = remember(raw) {
+                com.adong.adchat.data.story.StoryProsePresenter.present(raw, null, "assistant", 0, false, true)
+            }
+            Column(Modifier.fillMaxSize().background(Canvas).statusBarsPadding().padding(20.dp).verticalScroll(rememberScrollState())) {
+                StoryProseContent(display, true)
+            }
+        }
+        rule.onNodeWithText("正在规划").assertIsDisplayed()
+        rule.runOnIdle {
+            raw = "<konatan_planning~>规划完成</konatan_planning~>正文已经开始。"
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("正文已经开始。").assertIsDisplayed()
+        rule.onNodeWithText("规划完成").assertDoesNotExist()
+        rule.onNodeWithText("思考过程").performClick()
+        rule.onNodeWithText("规划完成").assertIsDisplayed()
+        rule.onNodeWithText("原始回复").assertDoesNotExist()
     }
 
     @Test fun builtinRegexProseRendersAndSurvivesUpdates() {

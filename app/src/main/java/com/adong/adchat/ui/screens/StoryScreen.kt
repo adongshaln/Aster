@@ -1193,7 +1193,7 @@ private fun StoryMessageItem(
                 if (waitingForFirstToken) {
                     ConversationThinkingIndicator()
                 } else if (prose != null) {
-                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming, row.revision.content)
+                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming)
                 } else {
                     StructuredMessageText(
                         content = displayContent,

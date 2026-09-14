@@ -20,25 +20,30 @@ import com.adong.adchat.ui.theme.*
 
 /** Story prose has a native reading surface, independent of document artifact previews. */
 @Composable
-internal fun StoryProseContent(presentation: StoryProsePresentation, streaming: Boolean, raw: String? = null) {
+internal fun StoryProseContent(presentation: StoryProsePresentation, streaming: Boolean) {
+    val bodyStarted = presentation.blocks.any { it.text.isNotBlank() }
+    val thoughtsInitiallyExpanded = streaming && !bodyStarted
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (presentation.thinking.isNotBlank()) {
             StoryProseSection(
                 title = if (presentation.thinkingIncomplete) "思考文本 · ${if (streaming) "接收中" else "未完整结束"}" else "思考文本",
                 text = presentation.thinking,
                 note = "回复中 think / thinking 标签内的文本，可能包含分析或试写",
-                initiallyExpanded = streaming
+                initiallyExpanded = thoughtsInitiallyExpanded,
+                collapseWhen = bodyStarted
             )
         }
         if (presentation.planning.isNotBlank()) {
             StoryProseSection(
-                title = if (presentation.planningIncomplete) "预设思考 · ${if (streaming) "接收中" else "未完整结束"}" else "预设思考",
+                title = if (presentation.planningIncomplete) "思考过程 · ${if (streaming) "接收中" else "未完整结束"}" else "思考过程",
                 text = presentation.planning,
-                note = "从原始回复保留，不受显示正则隐藏影响",
-                initiallyExpanded = streaming
+                note = "由当前预设要求模型输出的规划内容",
+                initiallyExpanded = thoughtsInitiallyExpanded,
+                collapseWhen = bodyStarted
             )
         } else if (presentation.showPlanningStatus) Text(
-            if (streaming) "正在接收回复…" else "正文中未发现预设思考片段；无法据此判断模型是否进行了内部推理。",
+            if (streaming && !bodyStarted) "正在等待回复…"
+            else "未发现可显示的思考过程；这不代表模型没有进行内部推理。",
             color = MutedInk, style = MaterialTheme.typography.labelSmall
         )
         presentation.blocks.forEachIndexed { index, block ->
@@ -51,14 +56,21 @@ internal fun StoryProseContent(presentation: StoryProsePresentation, streaming: 
             "未执行的正则：${presentation.skippedScripts.joinToString("、")}",
             color = MutedInk, style = MaterialTheme.typography.labelSmall
         )
-        if (!streaming && !raw.isNullOrBlank()) StoryProseSection("原始回复", raw,
-            note = "显示正则处理前的正文，用于核对模型实际返回的片段。")
     }
 }
 
 @Composable
-private fun StoryProseSection(title: String, text: String, note: String? = null, initiallyExpanded: Boolean = false) {
+private fun StoryProseSection(
+    title: String,
+    text: String,
+    note: String? = null,
+    initiallyExpanded: Boolean = false,
+    collapseWhen: Boolean = false
+) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
+    LaunchedEffect(collapseWhen) {
+        if (collapseWhen) expanded = false
+    }
     Surface(shape = RoundedCornerShape(16.dp), color = SurfaceInset,
         border = BorderStroke(1.dp, Hairline), modifier = Modifier.fillMaxWidth()) {
         Column {
