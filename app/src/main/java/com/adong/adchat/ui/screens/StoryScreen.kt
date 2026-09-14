@@ -850,6 +850,7 @@ private fun StoryWorkspaceContent(
     var autoFollow by remember(scrollSessionKey) { mutableStateOf(true) }
     val streamScrollSignals = remember(scrollSessionKey) {
         MutableSharedFlow<Unit>(
+            replay = 1,
             extraBufferCapacity = 1,
             onBufferOverflow = BufferOverflow.DROP_OLDEST
         )
