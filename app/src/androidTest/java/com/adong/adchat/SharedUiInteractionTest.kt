@@ -162,7 +162,7 @@ class SharedUiInteractionTest {
             raw = "<konatan_planning~>规划完成</konatan_planning~>正文已经开始。"
         }
         rule.waitForIdle()
-        rule.onNodeWithText("正文已经开始。").assertExists().performScrollTo().assertIsDisplayed()
+        rule.onNodeWithText("正文已经开始。", substring = true).assertExists().performScrollTo().assertIsDisplayed()
         rule.onNodeWithText("规划完成").assertDoesNotExist()
         screenshot("story-thought-auto-collapsed")
         rule.onNodeWithText("思考过程").performClick()
