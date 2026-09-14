@@ -44,7 +44,7 @@ class StoryInterruptedRegenerationTest {
             profileName = "old", model = "old-model"
         )
 
-        val retry = repository.restartInterruptedRevision(
+        val retry = repository.restartGenerationRevision(
             failed.message.id, failed.revision.id, "new", "new-model"
         )
 
@@ -61,12 +61,21 @@ class StoryInterruptedRegenerationTest {
     }
 
     @Test
-    fun retryRejectsCompletedStaleAndNonLatestReplies() {
+    fun retryCompletedReplyKeepsPreviousVersionAndAdvancesMemoryVersion() {
         repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Discussion, "user", "讨论")
         val complete = repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Discussion, "assistant", "完成")
-        assertThrows(IllegalArgumentException::class.java) {
-            repository.restartInterruptedRevision(complete.message.id, complete.revision.id, "p", "m")
-        }
+
+        val retry = repository.restartGenerationRevision(complete.message.id, complete.revision.id, "p", "m")
+
+        assertEquals(StoryRevisionState.Streaming, retry.revision.state)
+        assertEquals(1L, repository.getStory(story.id)?.memoryVersion)
+        val revisions = repository.listRevisions(complete.message.id)
+        assertEquals(2, revisions.size)
+        assertTrue(revisions.any { it.id == complete.revision.id && it.content == "完成" })
+    }
+
+    @Test
+    fun retryRejectsStaleAndNonLatestReplies() {
 
         repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "user", "开始")
         val failed = repository.appendMessage(
@@ -75,10 +84,10 @@ class StoryInterruptedRegenerationTest {
         )
         repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "user", "后续")
         assertThrows(IllegalArgumentException::class.java) {
-            repository.restartInterruptedRevision(failed.message.id, failed.revision.id, "p", "m")
+            repository.restartGenerationRevision(failed.message.id, failed.revision.id, "p", "m")
         }
         assertThrows(IllegalArgumentException::class.java) {
-            repository.restartInterruptedRevision(failed.message.id, "stale", "p", "m")
+            repository.restartGenerationRevision(failed.message.id, "stale", "p", "m")
         }
     }
 }

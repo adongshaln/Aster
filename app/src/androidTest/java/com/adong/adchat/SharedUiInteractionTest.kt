@@ -38,8 +38,13 @@ import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.TavernPresetConfiguration
 import com.adong.adchat.data.TavernPromptSetting
 import com.adong.adchat.data.TavernRegexSetting
+import com.adong.adchat.data.story.StoryMessage
+import com.adong.adchat.data.story.StoryMessageRevision
+import com.adong.adchat.data.story.StoryMessageWithRevision
+import com.adong.adchat.data.story.StoryRevisionState
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.screens.EmptyChat
+import com.adong.adchat.ui.screens.StoryMessageItem
 import com.adong.adchat.ui.screens.StoryWorkspaceEmpty
 import com.adong.adchat.ui.screens.StructuredMessageText
 import com.adong.adchat.ui.screens.TavernPresetConfigurationSheet
@@ -64,6 +69,55 @@ class SharedUiInteractionTest {
         }
         rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
+    }
+
+    @Test fun completedStoryReplyKeepsRegenerateAction() {
+        val revision = StoryMessageRevision(
+            id = "revision-complete",
+            messageId = "message-complete",
+            storyId = "story",
+            timelineId = "timeline",
+            workspace = StoryWorkspace.Discussion,
+            content = "已经完整生成的讨论回复",
+            state = StoryRevisionState.Complete
+        )
+        val row = StoryMessageWithRevision(
+            message = StoryMessage(
+                id = revision.messageId,
+                storyId = revision.storyId,
+                timelineId = revision.timelineId,
+                workspace = revision.workspace,
+                role = "assistant",
+                sequence = 2,
+                activeRevisionId = revision.id,
+                createdAt = 1
+            ),
+            revision = revision
+        )
+        var regenerateClicks = 0
+
+        content {
+            Box(Modifier.fillMaxSize().background(Canvas).padding(20.dp)) {
+                StoryMessageItem(
+                    row = row,
+                    displayContent = revision.content,
+                    regexHtml = false,
+                    prose = null,
+                    workspace = StoryWorkspace.Discussion,
+                    pendingCount = 0,
+                    actionsEnabled = true,
+                    regenerateEnabled = true,
+                    onRegenerate = { regenerateClicks++ },
+                    onOpenDiscussionAction = {},
+                    onOpenPendingCandidates = {},
+                    onOpenRevision = {},
+                    onDetailsExpanded = {}
+                )
+            }
+        }
+
+        rule.onNodeWithText("重新生成", substring = false).assertIsDisplayed().performClick()
+        rule.runOnIdle { assertEquals(1, regenerateClicks) }
     }
 
     @Test fun tavernPromptContentCanBeSavedDiscardedAndRestored() {

@@ -327,10 +327,11 @@ class StoryRepository(context: Context) : AutoCloseable {
     }
 
     /**
-     * Starts a fresh generation revision for the latest interrupted assistant message.
-     * The failed revision remains in history, while the original user turn is reused.
+     * Starts a fresh generation revision for the latest completed or interrupted
+     * assistant message. The previous revision remains in history, while the
+     * original user turn is reused.
      */
-    fun restartInterruptedRevision(
+    fun restartGenerationRevision(
         messageId: String,
         expectedRevisionId: String,
         profileName: String,
@@ -339,7 +340,9 @@ class StoryRepository(context: Context) : AutoCloseable {
         val current = queryMessageWithRevision(db, messageId) ?: error("这条回复已不存在")
         require(current.revision.id == expectedRevisionId) { "回复版本已变化，请重新打开后重试" }
         require(current.message.role == "assistant") { "只能重新生成模型回复" }
-        require(current.revision.state == StoryRevisionState.Interrupted) { "只能重新生成失败或未完整结束的回复" }
+        require(current.revision.state in setOf(StoryRevisionState.Complete, StoryRevisionState.Interrupted)) {
+            "只能重新生成已完成或未完整结束的回复"
+        }
         val activeTimeline = db.rawQuery(
             "SELECT 1 FROM ${StorySchema.STORIES} WHERE id = ? AND current_timeline_id = ? LIMIT 1",
             arrayOf(current.message.storyId, current.message.timelineId)
@@ -397,15 +400,21 @@ class StoryRepository(context: Context) : AutoCloseable {
             completedAt = null
         )
         insertRevision(db, revision)
-        check(
-            db.update(
-                StorySchema.MESSAGES,
-                ContentValues().apply { put("active_revision_id", revision.id) },
-                "id = ? AND active_revision_id = ?",
-                arrayOf(current.message.id, current.revision.id)
-            ) == 1
-        ) { "回复版本已变化，请重试" }
-        touchStory(db, current.message.storyId, now)
+        if (current.revision.state == StoryRevisionState.Complete) {
+            // Switching away from an accepted reply must invalidate derived memory
+            // and leave an auditable revision change, just like a manual rewrite.
+            activateRevision(db, current, revision, now)
+        } else {
+            check(
+                db.update(
+                    StorySchema.MESSAGES,
+                    ContentValues().apply { put("active_revision_id", revision.id) },
+                    "id = ? AND active_revision_id = ?",
+                    arrayOf(current.message.id, current.revision.id)
+                ) == 1
+            ) { "回复版本已变化，请重试" }
+            touchStory(db, current.message.storyId, now)
+        }
         StoryMessageWithRevision(current.message.copy(activeRevisionId = revision.id), revision)
     }
 

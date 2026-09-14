@@ -864,7 +864,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         launchGeneration(profile, workspace, retryTarget = null)
     }
 
-    fun regenerateInterrupted(profile: ApiProfile, target: StoryMessageWithRevision) {
+    fun regenerateReply(profile: ApiProfile, target: StoryMessageWithRevision) {
         launchGeneration(profile, target.message.workspace, retryTarget = target)
     }
 
@@ -880,7 +880,10 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     retryTarget.message.timelineId != story.currentTimelineId ||
                     retryTarget.message.workspace != workspace ||
                     retryTarget.message.role != "assistant" ||
-                    retryTarget.revision.state != StoryRevisionState.Interrupted
+                    retryTarget.revision.state !in setOf(
+                        StoryRevisionState.Complete,
+                        StoryRevisionState.Interrupted
+                    )
                 )) return
         val attachments = if (retrying) emptyList() else workspaceState(workspace).attachments.toList()
         val input = if (retrying) "" else draft(workspace).trim()
@@ -931,7 +934,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
                 assistant = retryTarget?.let { target ->
-                    store.restartInterruptedRevision(
+                    store.restartGenerationRevision(
                         messageId = target.message.id,
                         expectedRevisionId = target.revision.id,
                         profileName = profile.name,

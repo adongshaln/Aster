@@ -57,6 +57,12 @@ import com.adong.adchat.ui.components.AsterIconButton
 import com.adong.adchat.ui.components.AsterMark
 import com.adong.adchat.ui.story.StoryViewModel
 import com.adong.adchat.ui.theme.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 @Composable
@@ -832,63 +838,100 @@ private fun StoryWorkspaceContent(
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeight by remember { mutableStateOf(100.dp) }
 
-    val listState = rememberLazyListState(
-        initialFirstVisibleItemIndex = savedState.firstVisibleIndex.coerceAtMost(messages.lastIndex.coerceAtLeast(0)),
-        initialFirstVisibleItemScrollOffset = savedState.firstVisibleOffset.coerceAtLeast(0)
-    )
+    val scrollSessionKey = "${targetStory.id}:${targetStory.currentTimelineId}:${workspace.dbValue}"
+    val listState = key(scrollSessionKey) {
+        rememberLazyListState(
+            initialFirstVisibleItemIndex = savedState.firstVisibleIndex.coerceIn(0, messages.size),
+            initialFirstVisibleItemScrollOffset = savedState.firstVisibleOffset.coerceAtLeast(0)
+        )
+    }
     val scope = rememberCoroutineScope()
     val dragging by listState.interactionSource.collectIsDraggedAsState()
-    var autoFollow by remember { mutableStateOf(true) }
+    var autoFollow by remember(scrollSessionKey) { mutableStateOf(true) }
+    val streamScrollSignals = remember(scrollSessionKey) {
+        MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+    }
     val loading = storyVm.isLoading(workspace)
     val lastIsStreamingAssistant = messages.lastOrNull()?.let {
         it.message.role == "assistant" && it.revision.state == StoryRevisionState.Streaming
     } == true
     val hasStandaloneThinking = loading && !lastIsStreamingAssistant
-    val retryableMessageId = messages.lastOrNull()?.takeIf {
-        it.message.role == "assistant" && it.revision.state == StoryRevisionState.Interrupted
+    val regeneratableMessageId = messages.lastOrNull()?.takeIf {
+        it.message.role == "assistant" && (
+            it.revision.state == StoryRevisionState.Interrupted ||
+                it.revision.state == StoryRevisionState.Complete && it.revision.content.isNotBlank()
+            )
     }?.message?.id
     // Match ordinary chat: always keep a real trailing LazyColumn item that can be
     // anchored during IME animation. Scrolling to lastIndex only aligns the message
     // itself and does not keep the conversation bottom attached to the composer.
     val bottomItemIndex = messages.size + if (hasStandaloneThinking) 1 else 0
+    val latestBottomItemIndex by rememberUpdatedState(bottomItemIndex)
+    val latestHasScrollContent by rememberUpdatedState(messages.isNotEmpty() || loading)
+    val latestDragging by rememberUpdatedState(dragging)
+    val latestComposerFocused by rememberUpdatedState(composerFocused)
 
-    DisposableEffect(workspace) {
+    DisposableEffect(scrollSessionKey, listState) {
+        val timelineId = targetStory.currentTimelineId
         onDispose {
-            storyVm.saveScroll(workspace, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, savedState.timelineId)
+            storyVm.saveScroll(
+                workspace,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                timelineId
+            )
         }
     }
-    LaunchedEffect(dragging) {
+    LaunchedEffect(dragging, scrollSessionKey) {
         if (dragging) autoFollow = false
         else if (!listState.canScrollForward) autoFollow = true
     }
-    LaunchedEffect(messages.size, messages.lastOrNull()?.revision?.content?.length, loading) {
-        if (autoFollow && !dragging && (messages.isNotEmpty() || loading)) {
-            runCatching { listState.animateScrollToItem(bottomItemIndex) }
+    LaunchedEffect(
+        messages.size,
+        messages.lastOrNull()?.revision?.id,
+        messages.lastOrNull()?.revision?.content?.length,
+        messages.lastOrNull()?.revision?.state,
+        loading,
+        scrollSessionKey
+    ) {
+        streamScrollSignals.tryEmit(Unit)
+    }
+    LaunchedEffect(streamScrollSignals, scrollSessionKey, listState) {
+        streamScrollSignals.collect {
+            if (autoFollow && !latestDragging && !latestComposerFocused && latestHasScrollContent) {
+                try {
+                    listState.animateScrollToItem(latestBottomItemIndex)
+                } catch (cancelled: CancellationException) {
+                    // A gesture or detail reveal may cancel one animation. Keep the
+                    // collector alive, but propagate cancellation when this session leaves.
+                    currentCoroutineContext().ensureActive()
+                }
+            }
         }
     }
     LaunchedEffect(
         composerFocused,
-        targetStory.id,
-        targetStory.currentTimelineId,
-        workspace,
-        messages.size,
-        loading,
-        lastIsStreamingAssistant
+        scrollSessionKey,
+        listState
     ) {
         if (!composerFocused) return@LaunchedEffect
         autoFollow = true
 
         snapshotFlow {
             imeInsets.getBottom(composerDensity) to imeAnimationTarget.getBottom(composerDensity)
-        }.collect { (imeBottom, imeTargetBottom) ->
-            if (messages.isNotEmpty() || loading) {
-                // Same contract as ordinary chat: the list follows every IME inset
-                // frame and anchors to the trailing spacer, so content and composer
-                // move as one surface while the keyboard opens/closes.
-                runCatching { listState.scrollToItem(bottomItemIndex) }
-            }
-
         }
+            .distinctUntilChanged()
+            .collect {
+                if (latestHasScrollContent) {
+                    // Same contract as ordinary chat: the list follows every IME inset
+                    // frame and anchors to the trailing spacer, so content and composer
+                    // move as one surface while the keyboard opens/closes.
+                    runCatching { listState.scrollToItem(latestBottomItemIndex) }
+                }
+            }
     }
 
     storyVm.revisionTarget?.takeIf { !storyVm.rewriteOpen }?.let { target ->
@@ -1052,17 +1095,27 @@ private fun StoryWorkspaceContent(
                         }
                         result
                     }
+                    val renderedContent = display.structuredText()
+                    val renderingSignature = prose ?: display
+                    LaunchedEffect(row.revision.id, renderingSignature) {
+                        // Regex processing and native prose parsing can substantially
+                        // change the last item's height after the database update. Give
+                        // the same stable scroll collector one more bottom-follow signal.
+                        if (assistant && index == messages.lastIndex) {
+                            streamScrollSignals.tryEmit(Unit)
+                        }
+                    }
                     StoryMessageItem(
                         row = row,
-                        displayContent = display.structuredText(),
+                        displayContent = renderedContent,
                         regexHtml = display.containsHtml,
                         prose = if (nativeProse) prose ?: com.adong.adchat.data.story.StoryProsePresentation() else null,
                         workspace = workspace,
                         pendingCount = pending,
                         actionsEnabled = !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
-                        regenerateEnabled = row.message.id == retryableMessageId && profile != null &&
+                        regenerateEnabled = row.message.id == regeneratableMessageId && profile != null &&
                             !storyVm.revisionBusy && StoryWorkspace.entries.none { storyVm.isLoading(it) },
-                        onRegenerate = { profile?.let { storyVm.regenerateInterrupted(it, row) } },
+                        onRegenerate = { profile?.let { storyVm.regenerateReply(it, row) } },
                         onOpenDiscussionAction = { storyVm.openDiscussionAction(row) },
                         onOpenPendingCandidates = storyVm::openPendingCandidates,
                         onOpenRevision = { storyVm.openRevisionEditor(row) },
@@ -1138,7 +1191,7 @@ private fun StoryWorkspaceContent(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun StoryMessageItem(
+internal fun StoryMessageItem(
     row: StoryMessageWithRevision,
     displayContent: String,
     regexHtml: Boolean,
@@ -1221,11 +1274,15 @@ private fun StoryMessageItem(
                     Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (row.revision.content.isNotBlank()) ConversationCopyAction(row.revision.content)
-                            if (row.revision.state == StoryRevisionState.Interrupted && regenerateEnabled) {
+                            if (row.revision.state in setOf(
+                                    StoryRevisionState.Interrupted,
+                                    StoryRevisionState.Complete
+                                ) && regenerateEnabled) {
                                 ConversationMessageAction(
                                     icon = Icons.Rounded.Refresh,
                                     label = "重新生成",
-                                    onClick = onRegenerate
+                                    onClick = onRegenerate,
+                                    accent = row.revision.state == StoryRevisionState.Complete
                                 )
                             }
                             if (hasDetails) {
