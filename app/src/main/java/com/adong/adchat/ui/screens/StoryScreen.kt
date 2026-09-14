@@ -839,6 +839,26 @@ private fun StoryWorkspaceContent(
     var composerHeight by remember { mutableStateOf(100.dp) }
 
     val scrollSessionKey = "${targetStory.id}:${targetStory.currentTimelineId}:${workspace.dbValue}"
+    // Completed prose must keep its parsed presentation while LazyColumn recycles rows.
+    // Re-entering the viewport with an empty async placeholder changes the row height by
+    // hundreds/thousands of pixels (especially with thought/planning sections) and makes
+    // LazyColumn compensate by jumping the reading position.
+    val proseRenderSessionKey = remember(
+        scrollSessionKey,
+        storyVm.activeTavernPresetId,
+        storyVm.activeTavernPresetConfiguration,
+        storyVm.tavernRegexEnabled
+    ) {
+        listOf(
+            scrollSessionKey,
+            storyVm.activeTavernPresetId.orEmpty(),
+            storyVm.activeTavernPresetConfiguration.hashCode().toString(),
+            storyVm.tavernRegexEnabled.toString()
+        ).joinToString(":")
+    }
+    val prosePresentationCache = remember(proseRenderSessionKey) {
+        com.adong.adchat.data.story.StoryProsePresentationCache()
+    }
     val listState = key(scrollSessionKey) {
         rememberLazyListState(
             initialFirstVisibleItemIndex = savedState.firstVisibleIndex.coerceIn(0, messages.size),
@@ -1060,14 +1080,45 @@ private fun StoryWorkspaceContent(
                 itemsIndexed(messages, key = { _, row -> row.message.id }) { index, row ->
                     val assistant = row.message.role == "assistant"
                     val nativeProse = assistant && workspace == StoryWorkspace.Prose
-                    val prose by produceState<com.adong.adchat.data.story.StoryProsePresentation?>(
+                    val proseCacheKey = if (nativeProse && row.revision.state != StoryRevisionState.Streaming) {
+                        com.adong.adchat.data.story.StoryProsePresentationCache.Key(
+                            revisionId = row.revision.id,
+                            content = row.revision.content,
+                            depth = messages.lastIndex - index
+                        )
+                    } else null
+                    // Completed/history rows are parsed synchronously on their first layout and
+                    // retained for this story/timeline/workspace session. Therefore a recycled
+                    // LazyColumn row never measures as empty and expands one frame later.
+                    val completedProse = remember(proseCacheKey, prosePresentationCache) {
+                        proseCacheKey?.let { key ->
+                            prosePresentationCache.getOrPut(key) {
+                                storyVm.prosePresentationNow(
+                                    row.revision.content,
+                                    row.message.role,
+                                    messages.lastIndex - index,
+                                    streaming = false
+                                )
+                            }
+                        }
+                    }
+                    // Only the actively streaming reply keeps asynchronous parsing: its height is
+                    // already changing with incoming tokens and it is governed by bottom-follow.
+                    val streamingProse by produceState<com.adong.adchat.data.story.StoryProsePresentation?>(
                         null, row.revision.id, row.revision.content, row.revision.state,
                         storyVm.activeTavernPresetId, storyVm.activeTavernPresetConfiguration,
                         storyVm.tavernRegexEnabled, workspace, index, messages.size
                     ) {
-                        value = if (nativeProse) storyVm.prosePresentation(row.revision.content,
-                            row.message.role, messages.lastIndex - index, row.revision.state == StoryRevisionState.Streaming) else null
+                        value = if (nativeProse && row.revision.state == StoryRevisionState.Streaming) {
+                            storyVm.prosePresentation(
+                                row.revision.content,
+                                row.message.role,
+                                messages.lastIndex - index,
+                                streaming = true
+                            )
+                        } else null
                     }
+                    val prose = completedProse ?: streamingProse
                     val pending = if (assistant && workspace == StoryWorkspace.Discussion) {
                         storyVm.archiveProposals.count { it.sourceRevisionId == row.revision.id }
                     } else 0

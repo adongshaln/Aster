@@ -260,13 +260,18 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    suspend fun prosePresentation(content: String, role: String, depth: Int, streaming: Boolean):
+    fun prosePresentationNow(content: String, role: String, depth: Int, streaming: Boolean):
         com.adong.adchat.data.story.StoryProsePresentation {
         val preset = activeTavernPreset
         val enabled = tavernRegexEnabled
-        return withContext(Dispatchers.Default) {
-            com.adong.adchat.data.story.StoryProsePresenter.present(content, preset, role, depth, enabled, streaming)
-        }
+        return com.adong.adchat.data.story.StoryProsePresenter.present(
+            content, preset, role, depth, enabled, streaming
+        )
+    }
+
+    suspend fun prosePresentation(content: String, role: String, depth: Int, streaming: Boolean):
+        com.adong.adchat.data.story.StoryProsePresentation = withContext(Dispatchers.Default) {
+        prosePresentationNow(content, role, depth, streaming)
     }
 
     private suspend fun refreshTavernPresetState() {
