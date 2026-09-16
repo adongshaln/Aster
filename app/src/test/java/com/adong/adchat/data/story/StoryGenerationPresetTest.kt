@@ -13,7 +13,7 @@ import org.junit.Test
 class StoryGenerationPresetTest {
     private val context = StoryContextResult(
         systemPrompt = "BASE_STORY_SYSTEM",
-        history = listOf(ChatMessage("user", "ORIGINAL_USER_TURN")),
+        history = listOf(ChatMessage(role = "user", content = "ORIGINAL_USER_TURN")),
         estimatedChars = 32,
         maxChars = 48_000,
         includedMemoryIds = emptySet(),
