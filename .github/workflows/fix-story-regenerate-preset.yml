@@ -1,0 +1,42 @@
+name: Fix story regenerate preset
+
+on:
+  push:
+    branches:
+      - fix/story-regenerate-preset
+    paths:
+      - '.github/workflows/fix-story-regenerate-preset.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/story-regenerate-preset
+          fetch-depth: 0
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Apply regenerate preset fix
+        run: python .github/scripts/fix-story-regenerate-preset.py
+      - name: Check diff
+        run: git diff --check
+      - name: Run preset request regression tests
+        run: ./gradlew --no-daemon testDebugUnitTest --tests 'com.adong.adchat.data.story.StoryGenerationPresetTest' --tests 'com.adong.adchat.data.TavernPresetRuntimeTest'
+      - name: Run complete unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Commit product fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/build.gradle.kts CHANGELOG.md app/src/main/java app/src/test/java
+          git commit -m 'fix: preserve Tavern preset when regenerating story replies'
+          git push origin HEAD:fix/story-regenerate-preset
