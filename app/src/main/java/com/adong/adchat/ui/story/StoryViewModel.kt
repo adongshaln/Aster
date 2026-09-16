@@ -894,6 +894,12 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         val input = if (retrying) "" else draft(workspace).trim()
             .ifBlank { if (attachments.isNotEmpty()) "请参考所附图片，按当前工作区处理。" else "" }
         if ((!retrying && input.isBlank()) || revisionBusy || attachmentBusy) return
+        // Do not let a generation race an in-flight preset selection/configuration write.
+        // The request must observe one coherent preset snapshot from start to finish.
+        if (tavernPresetBusy) {
+            errors[workspace] = "预设配置正在更新，请稍后再生成。"
+            return
+        }
         val key = jobKey(story.id, workspace)
         if (loadingKeys[key] == true) return
         if (profile.id != story.profileId) {
@@ -916,6 +922,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val streamed = StringBuilder()
             var lastPersistAt = 0L
             try {
+                // Request-side source of truth: freeze the persisted Tavern selection and regex
+                // setting before mutating the assistant revision. Do not rely on the ViewModel's
+                // asynchronously refreshed display cache here; regenerate can otherwise observe
+                // a stale/null preset and silently fall back to the base story prompt.
+                val presetSnapshot = if (workspace == StoryWorkspace.Prose) tavernPresetStore.active() else null
+                val presetRegexEnabledSnapshot = tavernPresetStore.regexEnabled()
+
                 val userMessage = if (!retrying) store.appendMessage(
                     storyId = story.id,
                     timelineId = story.currentTimelineId,
@@ -975,24 +988,21 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                val preset = activeTavernPreset.takeIf { workspace == StoryWorkspace.Prose }
-                val prepared = preset?.let {
-                    TavernPresetRuntime.prepare(
-                        preset = it,
-                        baseSystemPrompt = context.systemPrompt,
-                        history = context.history,
-                        regexEnabled = tavernRegexEnabled
-                    )
-                }
+                val preparedRequest = com.adong.adchat.data.story.StoryGenerationPreset.prepare(
+                    workspace = workspace,
+                    context = context,
+                    preset = presetSnapshot,
+                    regexEnabled = presetRegexEnabledSnapshot
+                )
 
                 val result = trackedChat(
                     storyId = story.id, timelineId = story.currentTimelineId, category = workspace.dbValue, sourceId = assistant?.revision?.id,
                     profile = profile,
                     model = routeModel,
-                    systemPrompt = prepared?.systemPrompt ?: context.systemPrompt,
-                    history = prepared?.history ?: context.history,
+                    systemPrompt = preparedRequest.systemPrompt,
+                    history = preparedRequest.history,
                     cacheKey = "aster-story-${story.id}-${workspace.dbValue}",
-                    generationOptions = prepared?.generationOptions ?: com.adong.adchat.data.ChatGenerationOptions()
+                    generationOptions = preparedRequest.generationOptions
                 ) { delta ->
                     streamed.append(delta)
                     val now = SystemClock.elapsedRealtime()
