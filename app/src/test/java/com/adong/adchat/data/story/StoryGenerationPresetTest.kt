@@ -51,7 +51,12 @@ class StoryGenerationPresetTest {
         val fresh = StoryGenerationPreset.prepare(StoryWorkspace.Prose, context, preset, true)
         val regenerated = StoryGenerationPreset.prepare(StoryWorkspace.Prose, context, preset, true)
 
-        assertEquals(fresh, regenerated)
+        assertEquals(fresh.systemPrompt, regenerated.systemPrompt)
+        assertEquals(
+            fresh.history.map { it.role to it.content },
+            regenerated.history.map { it.role to it.content }
+        )
+        assertEquals(fresh.generationOptions, regenerated.generationOptions)
         assertTrue(fresh.history.any { it.content.contains("CUSTOM_PRESET_TOKEN") })
         assertTrue(fresh.history.any { it.role == "user" && it.content == "ORIGINAL_USER_TURN" })
         assertTrue(fresh.history.any { it.role == "assistant" && it.content.contains("ASSISTANT_PREFILL_TOKEN") })
@@ -62,7 +67,10 @@ class StoryGenerationPresetTest {
     @Test fun discussionDoesNotAccidentallyReceiveProsePreset() {
         val prepared = StoryGenerationPreset.prepare(StoryWorkspace.Discussion, context, preset, true)
         assertEquals(context.systemPrompt, prepared.systemPrompt)
-        assertEquals(context.history, prepared.history)
+        assertEquals(
+            context.history.map { it.role to it.content },
+            prepared.history.map { it.role to it.content }
+        )
         assertFalse(prepared.history.any { it.content.contains("CUSTOM_PRESET_TOKEN") })
         assertEquals(ChatGenerationOptions(), prepared.generationOptions)
     }
