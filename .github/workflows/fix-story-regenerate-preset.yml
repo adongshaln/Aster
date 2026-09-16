@@ -40,3 +40,4 @@ jobs:
           git add app/build.gradle.kts CHANGELOG.md app/src/main/java app/src/test/java
           git commit -m 'fix: preserve Tavern preset when regenerating story replies'
           git push origin HEAD:fix/story-regenerate-preset
+# rerun after correcting the regression fixture
