@@ -43,6 +43,28 @@ class StoryMemoryStoreTest {
         return value
     }
 
+    @Test fun deletingWholeStoryCascadesAcrossRoutesAndPreservesOtherStories() {
+        val original = source()
+        memory.applyOrganizerOutput(running(original), facts())
+        repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Discussion,
+            "user", "讨论", StoryRevisionState.Complete)
+        repo.forkProseRevision(original.message.id, original.revision.id, "另一条路线")
+        val other = repo.createStory("保留", "profile", "model")
+        val otherRow = repo.appendMessage(other.id, other.currentTimelineId, StoryWorkspace.Prose,
+            "user", "保留的正文", StoryRevisionState.Complete)
+        assertTrue(repo.deleteStory(story.id))
+        assertNull(repo.getStory(story.id))
+        assertTrue(repo.listTimelines(story.id).isEmpty())
+        assertEquals(0, count(StorySchema.MEMORIES))
+        assertEquals(0, count(StorySchema.JOBS))
+        assertEquals(1, count(StorySchema.MESSAGES))
+        assertEquals(1, count(StorySchema.REVISIONS))
+        assertEquals(otherRow.message.id, repo.loadMessages(other.id, other.currentTimelineId,
+            StoryWorkspace.Prose).single().message.id)
+        assertTrue(repo.deleteStory(other.id))
+        assertTrue(repo.listStories().isEmpty())
+    }
+
     @Test fun deletingReplyHidesMessageAndRejectsLateMemoryWrite() {
         val source = source()
         val job = running(source)

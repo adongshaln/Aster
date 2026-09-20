@@ -387,28 +387,45 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteStory(storyId: String) {
-        jobs.keys.filter { it.startsWith("$storyId|") }.forEach { key ->
+        if (revisionBusy || attachmentBusy) return
+        revisionBusy = true
+        stateEpoch++
+        val generationKeys = jobs.keys.filter { it.startsWith("$storyId|") }
+        val cancelledJobs = generationKeys.mapNotNull { key ->
             stopRequested += key
-            jobs.remove(key)?.cancel(CancellationException("Story deleted"))
-        }
-        organizerJobs.keys.filter { it.startsWith("$storyId|") }.forEach { key ->
-            organizerJobs.remove(key)?.cancel(CancellationException("Story deleted"))
+            jobs.remove(key)?.also { it.cancel(CancellationException("Story deleted")) }
+        } + organizerJobs.keys.filter { it.startsWith("$storyId|") }.mapNotNull { key ->
+            organizerJobs.remove(key)?.also { it.cancel(CancellationException("Story deleted")) }
         }
         viewModelScope.launch(Dispatchers.IO) {
-            store.deleteStory(storyId)
-            com.adong.adchat.data.story.StoryImages.directory(getApplication(),storyId).deleteRecursively()
-            val remaining = store.listStories()
-            withContext(Dispatchers.Main) {
-                stories.clear()
-                stories.addAll(remaining)
-                if (activeStoryId == storyId) {
-                    activeStoryId = remaining.firstOrNull()?.id
-                    activeWorkspace = StoryWorkspace.Discussion
-                    workspaceMessages.clear()
-                    workspaceStates.clear()
-                    archiveRecords.clear(); archiveConflicts.clear()
-                archiveProposals.clear()
+            try {
+                // Finish cancellation cleanup before removing the story and its attachment directory.
+                cancelledJobs.forEach { it.join() }
+                check(store.deleteStory(storyId)) { "故事已不存在，请重新打开列表" }
+                com.adong.adchat.data.story.StoryImages.directory(getApplication(), storyId).deleteRecursively()
+                val remaining = store.listStories()
+                withContext(Dispatchers.Main) {
+                    stories.clear(); stories.addAll(remaining)
+                    if (activeStoryId == storyId) {
+                        activeStoryId = remaining.firstOrNull()?.id
+                        activeWorkspace = StoryWorkspace.Discussion
+                        workspaceMessages.clear(); workspaceStates.clear()
+                        archiveRecords.clear(); archiveConflicts.clear(); archiveProposals.clear()
+                        errors.clear()
+                        revisionTarget = null; revisionHistory.clear()
+                        timelineHistoryOpen = false; timelineHistory.clear(); archiveOpen = false
+                    }
                     activeStory?.let(::loadActiveStoryState)
+                }
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    errors[activeWorkspace] = error.message ?: "删除整个对话失败，请重试"
+                    activeStory?.let(::loadActiveStoryState)
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) {
+                    generationKeys.forEach { loadingKeys.remove(it); stopRequested.remove(it) }
+                    revisionBusy = false
                 }
             }
         }

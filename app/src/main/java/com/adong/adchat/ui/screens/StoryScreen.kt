@@ -80,6 +80,7 @@ fun StoryScreen(
     }
 
     var showStoryPicker by remember { mutableStateOf(false) }
+    var deleteStoryTarget by remember { mutableStateOf<Story?>(null) }
     var showModelSwitcher by remember(story.id) { mutableStateOf(false) }
     var showTavernPresets by remember { mutableStateOf(false) }
     var showTavernPresetEditor by remember { mutableStateOf(false) }
@@ -102,6 +103,7 @@ fun StoryScreen(
             onHistory = storyVm::openTimelineHistory,
             tavernPresetName = storyVm.activeTavernPresetName,
             onTavernPresets = { showTavernPresets = true },
+            onDeleteStory = { deleteStoryTarget = story },
             historyEnabled = !storyVm.revisionBusy
         )
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -133,10 +135,27 @@ fun StoryScreen(
             confirmButton = { TextButton(onClick = storyVm::closeTimelineHistory, enabled = !storyVm.revisionBusy) { Text("关闭") } })
     }
 
+    deleteStoryTarget?.let { target ->
+        AdConfirmDialog(
+            title = "删除整个对话「${target.title}」？",
+            message = "将永久删除这个故事的全部讨论、正文、历史路线、版本、档案资料和附件，正在进行的生成也会停止。其他故事及酒馆预设不受影响。此操作无法撤销。",
+            confirmLabel = "删除整个对话", dismissLabel = "取消",
+            icon = Icons.Rounded.DeleteOutline, destructive = true,
+            onConfirm = {
+                storyVm.deleteStory(target.id)
+                deleteStoryTarget = null
+                showStoryPicker = false
+            },
+            onDismiss = { deleteStoryTarget = null }
+        )
+    }
+
     if (showStoryPicker) {
         StoryPickerSheet(
             stories = storyVm.stories,
             activeStoryId = story.id,
+            deleteEnabled = !storyVm.revisionBusy && !storyVm.attachmentBusy,
+            onDelete = { deleteStoryTarget = it },
             onSelect = {
                 storyVm.selectStory(it.id)
                 showStoryPicker = false
@@ -244,7 +263,8 @@ private fun StoryHeader(
     onHistory: () -> Unit,
     tavernPresetName: String,
     onTavernPresets: () -> Unit,
-    historyEnabled: Boolean
+    historyEnabled: Boolean,
+    onDeleteStory: () -> Unit
 ) {
     var showActions by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
@@ -269,7 +289,8 @@ private fun StoryHeader(
             AdActionOption("archive", "故事档案", "设定、人物与剧情记忆", Icons.Rounded.FolderOpen),
             AdActionOption("preset", "酒馆预设", "正文 · $tavernPresetName", Icons.Rounded.Tune),
             AdActionOption("history", "历史路线", "查看与切换创作路线", Icons.Rounded.History, enabled = historyEnabled),
-            AdActionOption("stories", "切换故事", icon = Icons.Rounded.AutoStories)
+            AdActionOption("stories", "切换故事", icon = Icons.Rounded.AutoStories),
+            AdActionOption("delete", "删除整个对话", "删除这个故事及其全部资料", Icons.Rounded.DeleteOutline, destructive = true, enabled = historyEnabled)
         ),
         onAction = { action ->
             showActions = false
@@ -278,6 +299,7 @@ private fun StoryHeader(
                 "preset" -> onTavernPresets()
                 "history" -> onHistory()
                 "stories" -> onStoryPicker()
+                "delete" -> onDeleteStory()
             }
         },
         onDismiss = { showActions = false }
@@ -1540,6 +1562,8 @@ private fun StoryPickerSheet(
     activeStoryId: String,
     onSelect: (Story) -> Unit,
     onCreate: () -> Unit,
+    deleteEnabled: Boolean,
+    onDelete: (Story) -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Canvas) {
@@ -1572,6 +1596,9 @@ private fun StoryPickerSheet(
                             Text(story.model.ifBlank { "未选择模型" }, color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                         }
                         if (selected) Icon(Icons.Rounded.Check, null, tint = Accent, modifier = Modifier.size(18.dp))
+                        IconButton(onClick = { onDelete(story) }, enabled = deleteEnabled) {
+                            Icon(Icons.Rounded.DeleteOutline, "删除整个对话：${story.title}", tint = Danger)
+                        }
                     }
                 }
             }
