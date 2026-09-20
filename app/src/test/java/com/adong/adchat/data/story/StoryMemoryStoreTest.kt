@@ -58,6 +58,15 @@ class StoryMemoryStoreTest {
         assertEquals(1, repo.listRevisions(source.message.id).size)
     }
 
+    @Test fun deletionDoesNotBreakSnapshotsForSubsequentBranches() {
+        val removed = source()
+        repo.removeConversationMessage(removed.message.id, removed.revision.id)
+        val later = source()
+        val route = repo.forkProseRevision(later.message.id, later.revision.id, "分支正文")
+        val messages = repo.loadMessages(story.id, route, StoryWorkspace.Prose)
+        assertEquals(listOf("分支正文"), messages.map { it.revision.content })
+    }
+
     @Test fun deletionRejectsStaleVersionAndStreamingWithoutChangingConversation() {
         val source = source()
         assertThrows(IllegalArgumentException::class.java) {

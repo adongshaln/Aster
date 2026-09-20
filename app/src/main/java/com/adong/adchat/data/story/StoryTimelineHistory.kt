@@ -11,7 +11,7 @@ internal object StoryTimelineHistory {
     fun captureBoundary(db: SQLiteDatabase, storyId: String, timelineId: String, messageId: String, sequence: Long) {
         val args = arrayOf(storyId, timelineId)
         val snapshot = JSONObject().put("format", 1)
-            .put("messages", rows(db, "SELECT * FROM ${StorySchema.MESSAGES} WHERE story_id = ? AND timeline_id = ? ORDER BY sequence_no", args))
+            .put("messages", rows(db, "SELECT m.* FROM ${StorySchema.MESSAGES} m JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id WHERE m.story_id = ? AND m.timeline_id = ? ORDER BY m.sequence_no", args))
             .put("revisions", rows(db, """SELECT r.id, r.state FROM ${StorySchema.REVISIONS} r JOIN ${StorySchema.MESSAGES} m
                 ON m.active_revision_id = r.id WHERE m.story_id = ? AND m.timeline_id = ?""", args))
             .put("memories", rows(db, "SELECT * FROM ${StorySchema.MEMORIES} WHERE story_id = ? AND timeline_id = ?", args))
