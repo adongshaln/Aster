@@ -43,6 +43,48 @@ class StoryMemoryStoreTest {
         return value
     }
 
+    @Test fun deletingReplyHidesMessageAndRejectsLateMemoryWrite() {
+        val source = source()
+        val job = running(source)
+        val later = repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose,
+            "user", "接下来的输入", StoryRevisionState.Complete)
+        val before = repo.getStory(story.id)!!.memoryVersion
+        repo.removeConversationMessage(source.message.id, source.revision.id)
+        assertEquals(listOf(later.message.id), repo.loadMessages(story.id, story.currentTimelineId,
+            StoryWorkspace.Prose).map { it.message.id })
+        assertFalse(repo.isRevisionActive(source.revision.id))
+        assertEquals(before + 1, repo.getStory(story.id)!!.memoryVersion)
+        assertEquals(StoryMemoryApplyResult.StaleSource, memory.applyOrganizerOutput(job, facts()))
+        assertEquals(1, repo.listRevisions(source.message.id).size)
+    }
+
+    @Test fun deletionRejectsStaleVersionAndStreamingWithoutChangingConversation() {
+        val source = source()
+        assertThrows(IllegalArgumentException::class.java) {
+            repo.removeConversationMessage(source.message.id, "outdated")
+        }
+        val stream = repo.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Discussion,
+            "assistant", "", StoryRevisionState.Streaming)
+        assertThrows(IllegalArgumentException::class.java) {
+            repo.removeConversationMessage(source.message.id, source.revision.id)
+        }
+        assertTrue(repo.isRevisionActive(source.revision.id))
+        assertTrue(repo.isRevisionActive(stream.revision.id))
+    }
+
+    @Test fun userMessagesCanBeDeletedInBothWorkspacesAndStayDeletedAfterReload() {
+        StoryWorkspace.entries.forEach { workspace ->
+            val row = repo.appendMessage(story.id, story.currentTimelineId, workspace,
+                "user", "要删除的输入", StoryRevisionState.Complete)
+            repo.removeConversationMessage(row.message.id, row.revision.id)
+        }
+        repo.close()
+        repo = StoryRepository(context)
+        StoryWorkspace.entries.forEach { workspace ->
+            assertTrue(repo.loadMessages(story.id, story.currentTimelineId, workspace).isEmpty())
+        }
+    }
+
     @Test fun missingConfigurationPreservesPendingJobUntilRouteIsRestored() {
         val job = memory.enqueueForRevision(story.id, story.currentTimelineId, source().revision.id)!!
         repeat(8) {

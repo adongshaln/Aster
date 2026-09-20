@@ -865,6 +865,36 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteConversationMessage(target: StoryMessageWithRevision) {
+        val story = activeStory ?: return
+        if (revisionBusy || StoryWorkspace.entries.any { isLoading(it) }) return
+        if (target.message.storyId != story.id || target.message.timelineId != story.currentTimelineId) return
+        revisionBusy = true
+        stateEpoch++
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                store.removeConversationMessage(target.message.id, target.revision.id)
+                val updated = store.getStory(story.id) ?: return@launch
+                withContext(Dispatchers.Main) {
+                    replaceStory(updated)
+                    if (activeStoryId == updated.id) {
+                        revisionTarget = null; revisionHistory.clear()
+                        workspaceMessages.clear(); workspaceStates.clear()
+                        archiveRecords.clear(); archiveConflicts.clear(); archiveProposals.clear()
+                        loadActiveStoryState(updated)
+                    }
+                }
+                scheduleMemoryMaintenance(updated.id, updated.currentTimelineId)
+            } catch (error: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (activeStoryId == story.id) errors[target.message.workspace] = error.message ?: "删除失败，请重试"
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.Main) { revisionBusy = false }
+            }
+        }
+    }
+
     fun send(profile: ApiProfile, workspace: StoryWorkspace = activeWorkspace) {
         launchGeneration(profile, workspace, retryTarget = null)
     }

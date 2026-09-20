@@ -95,6 +95,7 @@ class SharedUiInteractionTest {
             revision = revision
         )
         var regenerateClicks = 0
+        var deleteClicks = 0
 
         content {
             Box(Modifier.fillMaxSize().background(Canvas).padding(20.dp)) {
@@ -108,6 +109,7 @@ class SharedUiInteractionTest {
                     actionsEnabled = true,
                     regenerateEnabled = true,
                     onRegenerate = { regenerateClicks++ },
+                    onDelete = { deleteClicks++ },
                     onOpenDiscussionAction = {},
                     onOpenPendingCandidates = {},
                     onOpenRevision = {},
@@ -118,6 +120,8 @@ class SharedUiInteractionTest {
 
         rule.onNodeWithText("重新生成", substring = false).assertIsDisplayed().performClick()
         rule.runOnIdle { assertEquals(1, regenerateClicks) }
+        rule.onNodeWithText("删除消息").assertIsDisplayed().performClick()
+        rule.runOnIdle { assertEquals(1, deleteClicks) }
     }
 
     @Test fun tavernPromptContentCanBeSavedDiscardedAndRestored() {

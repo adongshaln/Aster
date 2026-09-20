@@ -418,6 +418,33 @@ class StoryRepository(context: Context) : AutoCloseable {
         StoryMessageWithRevision(current.message.copy(activeRevisionId = revision.id), revision)
     }
 
+    /** Retain revision provenance but remove this message from active conversation queries. */
+    fun removeConversationMessage(messageId: String, expectedRevisionId: String) = helper.writableDatabase.inTransaction { db ->
+        val current = queryMessageWithRevision(db, messageId) ?: error("消息已删除")
+        require(current.revision.id == expectedRevisionId) { "消息版本已变化，请重新打开后删除" }
+        val storyId = current.message.storyId
+        val timelineId = current.message.timelineId
+        require(db.rawQuery("SELECT 1 FROM ${StorySchema.STORIES} WHERE id = ? AND current_timeline_id = ?",
+            arrayOf(storyId, timelineId)).use { it.moveToFirst() }) { "故事路线已变化" }
+        require(!db.rawQuery("""SELECT 1 FROM ${StorySchema.MESSAGES} m
+            JOIN ${StorySchema.REVISIONS} r ON r.id = m.active_revision_id
+            WHERE m.story_id = ? AND r.state = 'streaming' LIMIT 1""",
+            arrayOf(storyId)).use { it.moveToFirst() }) { "请先结束生成再删除消息" }
+        val now = System.currentTimeMillis()
+        // No active revision means no visible message, context, or source-derived memory.
+        // Keep revision IDs intact: deleting them would SET NULL memory provenance and
+        // incorrectly turn generated facts into source-independent manual records.
+        check(db.update(StorySchema.MESSAGES, ContentValues().apply { put("active_revision_id", "") },
+            "id = ? AND active_revision_id = ?", arrayOf(messageId, expectedRevisionId)) == 1)
+        db.update(StorySchema.JOBS, ContentValues().apply {
+            put("state", StoryJobState.Stale.dbValue); put("error", "Source message deleted"); put("updated_at", now)
+        }, "source_revision_id IN (SELECT id FROM ${StorySchema.REVISIONS} WHERE message_id = ?) AND state IN ('pending','running')",
+            arrayOf(messageId))
+        db.execSQL("UPDATE ${StorySchema.STORIES} SET memory_version = memory_version + 1, updated_at = ? WHERE id = ?",
+            arrayOf(now, storyId))
+        StoryConflicts.refresh(db, storyId, timelineId)
+    }
+
     fun deleteMessage(messageId: String): Boolean = helper.writableDatabase.inTransaction { db ->
         val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
         // Only disposable empty generation placeholders may be physically removed.

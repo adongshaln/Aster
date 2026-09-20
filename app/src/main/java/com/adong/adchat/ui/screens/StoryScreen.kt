@@ -826,6 +826,19 @@ private fun StoryWorkspaceContent(
     val messages = storyVm.messages(workspace)
     val savedState = storyVm.workspaceState(workspace)
     val targetStory = storyVm.activeStory ?: return
+    var deleteMessageTarget by remember(targetStory.id, targetStory.currentTimelineId, workspace) {
+        mutableStateOf<StoryMessageWithRevision?>(null)
+    }
+    deleteMessageTarget?.let { target ->
+        AdConfirmDialog(
+            title = "删除这条消息？",
+            message = "这条消息将从当前路线的对话和模型上下文中移除，关联的自动记忆将失效。后续消息保留。",
+            confirmLabel = "删除", dismissLabel = "取消",
+            icon = Icons.Rounded.DeleteOutline, destructive = true,
+            onConfirm = { storyVm.deleteConversationMessage(target); deleteMessageTarget = null },
+            onDismiss = { deleteMessageTarget = null }
+        )
+    }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         if(uris.isNotEmpty()) storyVm.importAttachments(uris,true,targetStory.id,targetStory.currentTimelineId,workspace)
     }
@@ -1171,6 +1184,7 @@ private fun StoryWorkspaceContent(
                         onOpenDiscussionAction = { storyVm.openDiscussionAction(row) },
                         onOpenPendingCandidates = storyVm::openPendingCandidates,
                         onOpenRevision = { storyVm.openRevisionEditor(row) },
+                        onDelete = { deleteMessageTarget = row },
                         onDetailsExpanded = { messageId ->
                             val messageIndex = messages.indexOfFirst { it.message.id == messageId }
                             if (messageIndex >= 0) {
@@ -1256,7 +1270,8 @@ internal fun StoryMessageItem(
     onOpenDiscussionAction: () -> Unit,
     onOpenPendingCandidates: () -> Unit,
     onOpenRevision: () -> Unit,
-    onDetailsExpanded: (String) -> Unit
+    onDetailsExpanded: (String) -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     val user = row.message.role == "user"
     val waitingForFirstToken = !user && row.revision.content.isBlank() && row.revision.state == StoryRevisionState.Streaming
@@ -1385,6 +1400,13 @@ internal fun StoryMessageItem(
                         }
                     }
                 }
+            }
+            if (onDelete != null && actionsEnabled && row.revision.state != StoryRevisionState.Streaming) {
+                ConversationMessageAction(
+                    icon = Icons.Rounded.DeleteOutline,
+                    label = "删除消息",
+                    onClick = onDelete
+                )
             }
         }
     }

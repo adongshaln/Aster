@@ -2,7 +2,7 @@ name: Native UI preview
 
 on:
   push:
-    branches: ["design/**", "feature/story-mode", "feature/skills-runtime", "feature/tavern-presets"]
+    branches: ["design/**", "fix/story-delete", "feature/story-mode", "feature/skills-runtime", "feature/tavern-presets"]
     paths:
       - "app/src/main/java/com/adong/adchat/MainActivity.kt"
       - "app/src/main/java/com/adong/adchat/ui/**"
@@ -29,6 +29,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
       - name: Enable hardware acceleration
         run: |
