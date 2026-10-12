@@ -77,7 +77,8 @@ object CharacterCardFile {
             data.optJSONArray("alternate_greetings")?.optString(0).orEmpty()
         }
         val opening = prose(openingSource, name)
-        require(description.isNotBlank() || personality.isNotBlank() || scenario.isNotBlank() || opening.isNotBlank()) {
+        val importedBook = data.optJSONObject("character_book")?.let { parseWorldBook(it, name) } ?: StoryWorldBook()
+        require(description.isNotBlank() || personality.isNotBlank() || scenario.isNotBlank() || opening.isNotBlank() || importedBook.entries.isNotEmpty()) {
             "角色卡里没有可用的正文"
         }
         return ImportedCharacterCard(
@@ -89,11 +90,61 @@ object CharacterCardFile {
                 mesExample = example,
                 systemPrompt = systemPrompt,
                 postHistory = postHistory,
-                imported = true
+                imported = true,
+                worldBook = importedBook
             ),
             opening = opening
         )
     }
+
+    private fun parseWorldBook(book: JSONObject, charName: String): StoryWorldBook {
+        val entryArray = book.optJSONArray("entries") ?: book.optJSONObject("entries")?.let { map ->
+            org.json.JSONArray().apply { map.keys().forEach { key -> map.optJSONObject(key)?.let(::put) } }
+        }
+        val entries = entryArray?.let { array ->
+            (0 until array.length()).mapNotNull { index ->
+                (array.opt(index) as? JSONObject)?.let { parseWorldEntry(it, charName) }
+            }
+        }.orEmpty()
+        val budget = book.optInt("token_budget", 0).let { if (it > 0) (it * 4).coerceAtMost(20_000) else 20_000 }
+        return StoryWorldBook(
+            entries = entries,
+            scanDepth = book.optInt("scan_depth", 4).let { if (it > 0) it else 4 },
+            charBudget = budget,
+            recursive = book.optBoolean("recursive_scanning", true)
+        )
+    }
+
+    private fun parseWorldEntry(item: JSONObject, charName: String): StoryWorldBookEntry {
+        val keys = item.optJSONArray("key")?.stringList().orEmpty() + item.optJSONArray("keys")?.stringList().orEmpty()
+        val secondary = item.optJSONArray("secondary_keys")?.stringList().orEmpty()
+        val logic = when (item.opt("selective_logic")) {
+            0 -> WorldLogic.AND_ANY
+            1 -> WorldLogic.NOT_ANY
+            2 -> WorldLogic.AND_ALL
+            3 -> WorldLogic.NOT_ALL
+            else -> WorldLogic.AND_ANY
+        }
+        val beforeChar = when (val position = item.opt("position")) {
+            "before_char" -> true
+            "after_char" -> false
+            0 -> true
+            else -> false
+        }
+        return StoryWorldBookEntry(
+            keys = keys,
+            secondaryKeys = if (item.optBoolean("selective", true)) secondary else emptyList(),
+            logic = logic,
+            content = prose(item.optString("content").orEmpty(), charName),
+            enabled = item.optBoolean("enabled", true),
+            constant = item.optBoolean("constant", false),
+            insertionOrder = item.optInt("insertion_order", 100),
+            beforeChar = beforeChar
+        )
+    }
+
+    private fun org.json.JSONArray.stringList(): List<String> =
+        (0 until length()).mapNotNull { index -> optString(index).takeIf(String::isNotEmpty) }
 }
 
 private fun prose(raw: String, charName: String): String = cardProse(expandCardMacros(raw, charName))

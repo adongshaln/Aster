@@ -68,6 +68,69 @@ class CharacterCardImportTest {
 
     private fun StoryCharacterCard.hidesDiscussion() = imported
 
+    @Test
+    fun characterBookImportsWithCleanedEntries() {
+        val imported = CharacterCardFile.parse(cardJsonWithBook.toByteArray())
+        val book = imported.card.worldBook
+        assertEquals(2, book.entries.size)
+        val constantEntry = book.entries.first { it.constant }
+        assertTrue(constantEntry.beforeChar)
+        assertTrue(constantEntry.content.contains("世界树的传说"))
+        assertFalse(constantEntry.content.contains("<"))
+        val keyedEntry = book.entries.first { !it.constant }
+        assertTrue(keyedEntry.keys.contains("圣杯"))
+        assertFalse(keyedEntry.beforeChar)
+        assertTrue(keyedEntry.content.contains("梅尔文另有目的"))
+    }
+
+    @Test
+    fun characterBookMacrosAreExpanded() {
+        val imported = CharacterCardFile.parse(cardJsonWithBook.toByteArray())
+        val keyedEntry = imported.card.worldBook.entries.first { !it.constant }
+        assertTrue(keyedEntry.content.contains("梅尔文"))
+        assertFalse(keyedEntry.content.contains("{{char}}"))
+        assertFalse(keyedEntry.content.contains("{{user}}"))
+    }
+
+    @Test
+    fun characterBookSurvivesRoundTrip() {
+        val card = CharacterCardFile.parse(cardJsonWithBook.toByteArray()).card
+        val restored = StoryCharacterCard.fromStored(card.toJson())
+        val book = requireNotNull(restored).worldBook
+        assertEquals(card.worldBook, book)
+    }
+
+    @Test
+    fun bookOnlyCardStillImports() {
+        val json = """
+            {"spec":"chara_card_v2","data":{
+              "name":"无名",
+              "character_book":{"entries":[{"keys":["圣杯"],"content":"圣杯的设定"}]}
+            }}
+        """.trimIndent()
+        val imported = CharacterCardFile.parse(json.toByteArray())
+        assertEquals(1, imported.card.worldBook.entries.size)
+    }
+
+    private val cardJsonWithBook = """
+        {"spec":"chara_card_v2","data":{
+          "name":"梅尔文",
+          "description":"住在旧书店。",
+          "character_book":{
+            "scan_depth":3,
+            "token_budget":4096,
+            "recursive_scanning":true,
+            "entries":[
+              {"keys":[],"constant":true,"position":"before_char","insertion_order":50,
+               "content":"<div>世界树的传说，{{user}}不可不知。</div>"},
+              {"keys":["圣杯","Grail"],"secondary_keys":[],"selective":true,"selective_logic":0,
+               "position":"after_char","insertion_order":200,
+               "content":"圣杯战争中{{char}}另有目的，{{char}}与{{char}}不同。"}
+            ]
+          }
+        }}
+    """.trimIndent()
+
     private fun pngWithChara(json: String): ByteArray {
         val payload = Base64.getEncoder().encodeToString(json.toByteArray())
         val data = "chara\u0000$payload".toByteArray()

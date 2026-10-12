@@ -77,7 +77,9 @@ data class StoryContextResult(
     val includedMemoryIds: Set<String>,
     val includedProposalIds: Set<String>,
     val truncations: List<StoryContextTruncation>,
-    val protectedProseRevisionIds: Set<String> = emptySet()
+    val protectedProseRevisionIds: Set<String> = emptySet(),
+    val worldBefore: String = "",
+    val worldAfter: String = ""
 ) {
     val wasTruncated: Boolean get() = truncations.isNotEmpty()
     val withinHardBudget: Boolean get() = estimatedChars <= maxChars
@@ -136,9 +138,23 @@ object StoryContextComposer {
 
         val currentTurn = eligibleHistory.lastOrNull { it.message.role == "user" }
         val currentTurnCost = currentTurn?.let { historyCost(it, budget) } ?: 0
+        val activation = cast.card?.worldBook?.takeIf { it.entries.isNotEmpty() }?.let { book ->
+            StoryWorldBookEngine.activate(
+                book,
+                StoryWorldBookEngine.scanText(
+                    eligibleHistory.takeLast(book.scanDepth.coerceAtLeast(1)).map { row -> row.revision.content },
+                    cast.card,
+                    cast.userPersona
+                )
+            )
+        }
+        val worldBefore = activation?.before?.joinToString("\n\n").orEmpty()
+        val worldAfter = activation?.after?.joinToString("\n\n").orEmpty()
+        val workspaceInstruction = storyWorkspaceSystemInstruction(workspace, baseInstruction).trim()
         val base = buildString {
-            append(storyWorkspaceSystemInstruction(workspace, baseInstruction).trim())
-            val castBlock = cast.toPromptBlock()
+            append(workspaceInstruction)
+            val castBlock = cast.toPromptBlock(worldBefore = worldBefore, worldAfter = worldAfter)
+                .replace(Regex("(?i)\\{\\{original\\}\\}"), workspaceInstruction)
             if (castBlock.isNotBlank()) {
                 append("\n\n")
                 append(castBlock)
@@ -307,6 +323,9 @@ object StoryContextComposer {
                 budget.maxInputChars
             )
         }
+        if (activation != null && activation.omitted > 0) {
+            truncations += StoryContextTruncation("角色世界书", activation.omitted)
+        }
         return StoryContextResult(
             systemPrompt = systemPrompt,
             history = history,
@@ -316,7 +335,9 @@ object StoryContextComposer {
             includedProposalIds = includedProposalIds,
             truncations = truncations,
             protectedProseRevisionIds = protectedTurns.flatMap { it.rows }.filter { it.message.role == "assistant" }
-                .map { it.revision.id }.toSet()
+                .map { it.revision.id }.toSet(),
+            worldBefore = worldBefore,
+            worldAfter = worldAfter
         )
     }
 

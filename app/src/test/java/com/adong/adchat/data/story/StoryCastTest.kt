@@ -37,4 +37,69 @@ class StoryCastTest {
         assertTrue(result.systemPrompt.contains("旁白"))
         assertFalse(result.systemPrompt.contains("{{"))
     }
+
+    @Test
+    fun worldBookEntriesAreInjectedAroundTheCardHeader() {
+        val card = StoryCharacterCard(
+            name = "梅尔文", description = "一个人", personality = "冷淡", scenario = "Fate/strange Fake 同人",
+            worldBook = StoryWorldBook(
+                entries = listOf(
+                    StoryWorldBookEntry(keys = emptyList(), content = "雨夜横滨的常量背景", constant = true, beforeChar = true),
+                    StoryWorldBookEntry(keys = listOf("圣杯"), content = "圣杯战争的隐秘规则"),
+                    StoryWorldBookEntry(keys = listOf("完全不相关的关键词"), content = "不应出现的词条")
+                )
+            )
+        )
+        val result = StoryContextComposer.compose(
+            workspace = StoryWorkspace.Prose,
+            baseInstruction = "写正文",
+            memoryRecords = emptyList(),
+            proposals = emptyList(),
+            proseMessages = listOf(message("u1", "user", "今晚圣杯有动静", 1), message("a1", "assistant", "梅尔文抬头。", 2)),
+            discussionMessages = emptyList(),
+            cast = StoryCastContext(card = card, userPersona = "旁白")
+        )
+        val header = result.systemPrompt.indexOf("[已确认的对方角色卡")
+        assertTrue(header > 0)
+        assertTrue(result.systemPrompt.indexOf("雨夜横滨的常量背景") < header)
+        assertTrue(result.systemPrompt.indexOf("圣杯战争的隐秘规则") > header)
+        assertFalse(result.systemPrompt.contains("不应出现的词条"))
+        assertEquals("雨夜横滨的常量背景", result.worldBefore)
+        assertEquals("圣杯战争的隐秘规则", result.worldAfter)
+    }
+
+    @Test
+    fun originalMacroInCardIsReplacedWithWorkspaceInstruction() {
+        val card = StoryCharacterCard(
+            name = "梅尔文", description = "一个人", personality = "冷淡", scenario = "同人",
+            systemPrompt = "保持文风。{{original}}", imported = true
+        )
+        val result = StoryContextComposer.compose(
+            workspace = StoryWorkspace.Prose,
+            baseInstruction = "写正文",
+            memoryRecords = emptyList(),
+            proposals = emptyList(),
+            proseMessages = emptyList(),
+            discussionMessages = emptyList(),
+            cast = StoryCastContext(card = card, userPersona = "")
+        )
+        assertFalse(result.systemPrompt.contains("{{original}}"))
+        assertFalse(result.systemPrompt.contains("{{Original}}"))
+        assertTrue(result.systemPrompt.contains("保持文风。写正文"))
+    }
+
+    private fun message(id: String, role: String, content: String, sequence: Long): StoryMessageWithRevision {
+        val revisionId = "revision-$id"
+        return StoryMessageWithRevision(
+            message = StoryMessage(
+                id = id, storyId = "story", timelineId = "timeline", workspace = StoryWorkspace.Prose,
+                role = role, sequence = sequence, activeRevisionId = revisionId, createdAt = sequence
+            ),
+            revision = StoryMessageRevision(
+                id = revisionId, messageId = id, storyId = "story", timelineId = "timeline",
+                workspace = StoryWorkspace.Prose, content = content, state = StoryRevisionState.Complete,
+                createdAt = sequence, completedAt = sequence
+            )
+        )
+    }
 }

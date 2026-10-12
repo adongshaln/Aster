@@ -692,7 +692,9 @@ data class TavernCharacterContext(
     val personality: String = "",
     val scenario: String = "",
     val persona: String = "",
-    val mesExample: String = ""
+    val mesExample: String = "",
+    val wiBefore: String = "",
+    val wiAfter: String = ""
 ) {
     fun marker(identifier: String): String = when (identifier) {
         "charDescription" -> description
@@ -700,12 +702,15 @@ data class TavernCharacterContext(
         "scenario" -> scenario
         "personaDescription" -> persona
         "dialogueExamples" -> mesExample
+        "worldInfoBefore" -> wiBefore
+        "worldInfoAfter" -> wiAfter
         else -> ""
     }.trim()
 
     companion object {
         val CARD_MARKERS = setOf(
-            "charDescription", "charPersonality", "scenario", "personaDescription", "dialogueExamples"
+            "charDescription", "charPersonality", "scenario", "personaDescription", "dialogueExamples",
+            "worldInfoBefore", "worldInfoAfter"
         )
     }
 }
@@ -797,7 +802,9 @@ object TavernPresetRuntime {
         "description" to cast.description,
         "personality" to cast.personality,
         "scenario" to cast.scenario,
-        "persona" to cast.persona
+        "persona" to cast.persona,
+        "worldInfoBefore" to cast.wiBefore,
+        "worldInfoAfter" to cast.wiAfter
     )
 }
 
