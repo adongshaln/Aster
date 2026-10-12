@@ -88,6 +88,18 @@ class StoryCastTest {
         assertTrue(result.systemPrompt.contains("保持文风。写正文"))
     }
 
+    @Test
+    fun cardTextWithBracesDoesNotBreakExtraction() {
+        val withBrace = """{"name":"林夏","description":"规则 { 不挂牌 } 写在纸上"}"""
+        val card = StoryCharacterCard.parse(withBrace)
+        assertEquals("林夏", card.name)
+        assertTrue(card.description.contains("不挂牌"))
+
+        val prose = "说明文字带 { 括号 }\n{\"name\":\"乔\",\"description\":\"掌事\"}"
+        val fromProse = StoryCharacterCard.parse(prose)
+        assertEquals("乔", fromProse.name)
+    }
+
     private fun message(id: String, role: String, content: String, sequence: Long): StoryMessageWithRevision {
         val revisionId = "revision-$id"
         return StoryMessageWithRevision(

@@ -1437,7 +1437,13 @@ internal fun StoryMessageItem(
                 if (waitingForFirstToken && reasoning.isBlank()) {
                     ConversationThinkingIndicator()
                 } else if (prose != null) {
-                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming)
+                    com.adong.adchat.ui.components.StoryProseContent(
+                        prose, row.revision.state == StoryRevisionState.Streaming,
+                        onPanelAction = { text ->
+                            val draft = storyVm.draft(StoryWorkspace.Prose)
+                            storyVm.updateDraft(if (draft.isBlank()) text else "$draft\n\n$text", StoryWorkspace.Prose)
+                        }
+                    )
                 } else {
                     StructuredMessageText(
                         content = displayContent,

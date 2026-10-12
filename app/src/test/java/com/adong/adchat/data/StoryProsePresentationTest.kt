@@ -69,4 +69,19 @@ class StoryProsePresentationTest {
         assertFalse(result.blocks.any { it.html != null })
         assertTrue(result.blocks.any { "后文" in it.text })
     }
+
+    @Test fun bridgedDocumentIsStrippedAndStaysStableAcrossPresentations() {
+        val document = "<!doctype html><html><head><style>.a{color:red}</style></head><body><div class=\"panel\">面板</div></body></html>"
+        val bridged = com.adong.adchat.ui.components.HtmlPreviewDocument.wrap(document, allowScripts = true, panelBridge = true)
+        // extract the srcdoc source (what the iframe received) to simulate re-presentation
+        val srcdoc = bridged.substringAfter("srcdoc=\"").substringBefore("\"></iframe>")
+        val unescaped = srcdoc.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
+        val first = present("```html\n$unescaped\n```")
+        val html1 = first.blocks.single { it.html != null }.html!!
+        assertFalse(html1.contains("data-aster-"))
+        assertTrue(html1.contains("class=\"panel\""))
+        // present again — should not double-wrap or change shape
+        val second = present("```html\n$html1\n```")
+        assertEquals(html1, second.blocks.single { it.html != null }.html)
+    }
 }

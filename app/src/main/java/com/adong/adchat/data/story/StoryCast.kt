@@ -164,12 +164,38 @@ data class StoryCastContext(
 }
 
 internal fun extractJsonObject(raw: String): String {
-    val fenced = Regex("```(?:json)?\\s*([\\s\\S]*?)```").find(raw)?.groupValues?.get(1)
-    val source = fenced ?: raw
-    val start = source.indexOf('{')
-    val end = source.lastIndexOf('}')
-    require(start >= 0 && end > start) { "模型没有返回可解析的设定" }
-    return source.substring(start, end + 1)
+    val trimmed = raw.trim()
+    if (trimmed.startsWith("{")) return extractBalancedObject(trimmed)
+    val fenced = Regex("```(?:json)?\\s*([\\s\\S]*?)```").find(trimmed)?.groupValues?.get(1)
+    if (fenced != null) return extractBalancedObject(fenced)
+    throw IllegalArgumentException("模型没有返回可解析的设定")
+}
+
+/** First balanced {...} from the first '{', respecting strings and escapes. */
+internal fun extractBalancedObject(source: String): String {
+    var depth = 0
+    var inString = false
+    var escaped = false
+    var start = -1
+    for (i in source.indices) {
+        val ch = source[i]
+        if (inString) {
+            if (escaped) escaped = false
+            else if (ch == '\\') escaped = true
+            else if (ch == '"') inString = false
+            continue
+        }
+        when (ch) {
+            '"' -> inString = true
+            '{' -> { if (depth == 0) start = i; depth++ }
+            '}' -> {
+                depth--
+                if (depth == 0 && start >= 0) return source.substring(start, i + 1)
+                if (depth < 0) break
+            }
+        }
+    }
+    throw IllegalArgumentException("模型没有返回可解析的设定")
 }
 
 internal const val STORY_CHAR_CARD_PROMPT =

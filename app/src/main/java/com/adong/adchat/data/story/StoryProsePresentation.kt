@@ -25,6 +25,7 @@ object StoryProsePresenter {
     private val fence = Regex("```[^\\n]*\\n[\\s\\S]*?(?:```|$)")
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
     private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
+    private val bridgeMarker = "data-aster-"
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
@@ -52,7 +53,8 @@ object StoryProsePresenter {
             val language = code.substringBefore('\n').trim()
             val content = code.substringAfter('\n').removeSuffix("```")
             if (language.lowercase() in setOf("html", "htm") || (language.isEmpty() && htmlMarker.containsMatchIn(content))) {
-                if (content.length >= 80 && substantialHtml.containsMatchIn(content)) result += StoryProseBlock("", html = content.trim())
+                val document = stripBridgeArtifacts(content)
+                if (document.length >= 80 && substantialHtml.containsMatchIn(document)) result += StoryProseBlock("", html = document)
                 else appendFragment(content, result)
             } else result += StoryProseBlock(match.value)
             cursor = match.range.last + 1
@@ -61,8 +63,15 @@ object StoryProsePresenter {
         return result
     }
 
-    private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {
-        if (source.isBlank()) return
+    /** Remove our own panel-bridge scripts so a re-presented bridged document stays stable. */
+    private fun stripBridgeArtifacts(source: String): String {
+        if (!source.contains(bridgeMarker)) return source.trim()
+        val document = Jsoup.parseBodyFragment(source)
+        document.select("script[$bridgeMarker]").remove()
+        return document.body().html().trim()
+    }
+
+    private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {        if (source.isBlank()) return
         if (!htmlMarker.containsMatchIn(source)) {
             result += StoryProseBlock(source.trim())
             return

@@ -37,7 +37,8 @@ internal fun HtmlArtifactCard(
     filename: String = "document.html",
     ready: Boolean = true,
     allowScripts: Boolean = true,
-    actions: Boolean = true
+    actions: Boolean = true,
+    panelActions: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -58,7 +59,7 @@ internal fun HtmlArtifactCard(
     val canPreview = ready && code.length <= HtmlPreviewDocument.MAX_PREVIEW_CHARS
     Column(Modifier.fillMaxWidth()) {
         if (canPreview && !fullscreen) {
-            HtmlPreview(code, Modifier.fillMaxWidth().height(340.dp), allowScripts)
+            HtmlPreview(code, Modifier.fillMaxWidth().height(340.dp), allowScripts, panelActions)
         } else if (!fullscreen) {
             // 只在真的看不到预览时才占位：能预览时那一行本来就只是重复信息。
             Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
@@ -101,7 +102,7 @@ internal fun HtmlArtifactCard(
                     Text(filename, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("预览", Modifier.padding(16.dp), color = MutedInk)
                 }
-                HtmlPreview(code, Modifier.fillMaxWidth().weight(1f), allowScripts)
+                HtmlPreview(code, Modifier.fillMaxWidth().weight(1f), allowScripts, panelActions)
             }
         }
     }
@@ -109,11 +110,16 @@ internal fun HtmlArtifactCard(
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolean) {
+private fun HtmlPreview(
+    source: String,
+    modifier: Modifier,
+    allowScripts: Boolean,
+    panelActions: ((String) -> Unit)? = null
+) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var failed by remember(source, allowScripts) { mutableStateOf(false) }
-    val view = remember(source, allowScripts) { runCatching {
+    var failed by remember(source, allowScripts, panelActions) { mutableStateOf(false) }
+    val view = remember(source, allowScripts, panelActions) { runCatching {
         WebView(context).apply {
             layoutParams = android.view.ViewGroup.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
@@ -134,6 +140,12 @@ private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolea
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 mediaPlaybackRequiresUserGesture = true
                 cacheMode = WebSettings.LOAD_NO_CACHE
+            }
+            if (panelActions != null) {
+                addJavascriptInterface(
+                    object { @JavascriptInterface fun onPanelAction(text: String) { panelActions(text) } },
+                    "Aster"
+                )
             }
             CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
             webChromeClient = WebChromeClient()
@@ -175,7 +187,11 @@ private fun HtmlPreview(source: String, modifier: Modifier, allowScripts: Boolea
                 // Let the surrounding Compose window submit its first frame before
                 // Chromium starts drawing; otherwise a new dialog's toolbar can stay blank.
                 postOnAnimation {
-                    post { loadDataWithBaseURL(null, HtmlPreviewDocument.wrap(source, allowScripts), "text/html", "utf-8", null) }
+                    post { loadDataWithBaseURL(
+                        null,
+                        HtmlPreviewDocument.wrap(source, allowScripts, panelBridge = panelActions != null),
+                        "text/html", "utf-8", null
+                    ) }
                 }
             }
         },
