@@ -169,18 +169,22 @@ internal fun extractJsonObject(raw: String): String {
         trimmed.startsWith("{") -> trimmed
         else -> Regex("```(?:json)?\\s*([\\s\\S]*?)```").find(trimmed)?.groupValues?.get(1) ?: trimmed
     }
-    // Prefer a balanced object so braces inside string values don't truncate early;
-    // fall back to first-'{'..last-'}' for prose-wrapped model output.
-    return runCatching { extractBalancedObject(candidate) }.getOrElse {
-        val start = candidate.indexOf('{')
-        val end = candidate.lastIndexOf('}')
-        if (start >= 0 && end > start) candidate.substring(start, end + 1)
-        else throw IllegalArgumentException("模型没有返回可解析的设定")
+    // Braces can appear inside prose or string values; accept the first balanced object
+    // that is itself valid JSON, and fall back to first-'{'..last-'}' for model prose.
+    for (obj in balancedObjects(candidate)) {
+        runCatching { JSONObject(obj) }.onSuccess { return obj }
     }
+    val start = candidate.indexOf('{')
+    val end = candidate.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+        val sliced = candidate.substring(start, end + 1)
+        runCatching { JSONObject(sliced) }.onSuccess { return sliced }
+    }
+    throw IllegalArgumentException("模型没有返回可解析的设定")
 }
 
-/** First balanced {...} from the first '{', respecting strings and escapes. */
-internal fun extractBalancedObject(source: String): String {
+/** Every balanced {...} segment in the source, scanned left to right. */
+private fun balancedObjects(source: String): Sequence<String> = sequence {
     var depth = 0
     var inString = false
     var escaped = false
@@ -198,12 +202,15 @@ internal fun extractBalancedObject(source: String): String {
             '{' -> { if (depth == 0) start = i; depth++ }
             '}' -> {
                 depth--
-                if (depth == 0 && start >= 0) return source.substring(start, i + 1)
-                if (depth < 0) break
+                if (depth == 0 && start >= 0) {
+                    yield(source.substring(start, i + 1))
+                    start = -1
+                } else if (depth < 0) {
+                    depth = 0
+                }
             }
         }
     }
-    throw IllegalArgumentException("模型没有返回可解析的设定")
 }
 
 internal const val STORY_CHAR_CARD_PROMPT =

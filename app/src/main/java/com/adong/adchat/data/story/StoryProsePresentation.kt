@@ -66,9 +66,9 @@ object StoryProsePresenter {
     /** Remove our own panel-bridge scripts so a re-presented bridged document stays stable. */
     private fun stripBridgeArtifacts(source: String): String {
         if (!source.contains(bridgeMarker)) return source.trim()
-        val document = Jsoup.parseBodyFragment(source)
+        val document = Jsoup.parse(source)
         document.select("script[$bridgeMarker]").remove()
-        return document.body().html().trim()
+        return document.html().trim()
     }
 
     private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {        if (source.isBlank()) return
