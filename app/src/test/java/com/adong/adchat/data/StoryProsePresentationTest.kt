@@ -65,9 +65,21 @@ class StoryProsePresentationTest {
     }
 
     @Test fun tinyFencedHtmlSnippetStaysText() {
-        val result = present("前文```html\n<br><br>\n```后文")
+        val result = present("前文```html\n<br><br>\n```\n后文")
         assertFalse(result.blocks.any { it.html != null })
         assertTrue(result.blocks.any { "后文" in it.text })
+    }
+
+    @Test fun jsTemplateLiteralsInsideFencedHtmlDoNotCloseTheFenceEarly() {
+        val document = "```\n<!DOCTYPE html>\n<html><body>\n" +
+            "const tag = item.tag ? `<div class=\"pill-tag\">${'$'}{item.tag}</div>` : '';\n" +
+            "return `\n  <li class=\"choice-item\">${'$'}{item.text}</li>`;\n" +
+            "<div class=\"panel\">抉择内容</div></body></html>\n```"
+        val result = present("前文\n$document\n后文")
+        val html = result.blocks.single { it.html != null }
+        assertTrue(html.html.contains("choice-item"))
+        assertTrue(html.html.contains("抉择内容"))
+        assertTrue(result.blocks.any { it.text == "后文" })
     }
 
     @Test fun bridgedDocumentIsStrippedAndStaysStableAcrossPresentations() {
