@@ -112,7 +112,9 @@ data class StoryCharacterCard(
                 systemPrompt = json.optString("system_prompt").trim(),
                 postHistory = json.optString("post_history").trim(),
                 imported = json.optBoolean("imported", false),
-                worldBook = json.optJSONObject("world_book")?.let { runCatching { StoryWorldBook.fromJson(it) } }.getOrNull() ?: StoryWorldBook()
+                worldBook = json.optJSONObject("world_book")?.let { obj ->
+                    runCatching { StoryWorldBook.fromJson(obj) }.getOrNull()
+                } ?: StoryWorldBook()
             )
         }
     }
