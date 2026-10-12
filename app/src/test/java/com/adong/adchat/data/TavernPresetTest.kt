@@ -105,7 +105,7 @@ class TavernPresetTest {
         assertEquals(listOf("user", "user", "assistant", "user"), prepared.history.map { it.role })
         assertEquals("温柔|最后输入|1|x", prepared.history[0].content)
         assertEquals("旧 hidden", prepared.history[2].content)
-        assertEquals("温柔|最后输入|1|x", prepared.history.last().content)
+        assertEquals("最后输入", prepared.history.last().content)
         assertFalse(prepared.history.joinToString { it.content }.contains("{{"))
         assertEquals(0.7, prepared.generationOptions.temperature!!, 0.0)
         assertEquals(4096, prepared.generationOptions.maxOutputTokens)
