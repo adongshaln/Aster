@@ -261,6 +261,29 @@ class TavernPresetTest {
     }
 
     @Test
+    fun promptOnlyExpansionToHtmlDocumentIsNotTreatedAsHider() {
+        // linux_1.2-style: promptOnly script that EXPANDS tags into a full HTML document
+        val expander = TavernRegexScript(
+            id = "expander", name = "选项美化",
+            findRegex = "/<choices>([\\s\\S]*?)<\\/choices>/g",
+            replaceString = "```\n<!DOCTYPE html><html><body>choices panel</body></html>\n```",
+            trimStrings = emptyList(), placement = setOf(2), disabled = false,
+            promptOnly = true, markdownOnly = false, runOnEdit = false, substituteRegex = 0,
+            minDepth = null, maxDepth = 1
+        )
+        val hiderScript = hider()
+        val preset = presetWith(expander, hiderScript)
+        // depth 5: expander has maxDepth=1 so it does not run; hider strips the raw tags
+        val older = TavernPresetRuntime.display(preset, "正文<choices>A</choices>结尾", "assistant", 5, true)
+        assertFalse("<choices>" in older.text)
+        assertFalse("choices panel" in older.text)
+        // depth 1: expander runs and its HTML survives (NOT stripped as a hider)
+        val latest = TavernPresetRuntime.display(preset, "正文<choices>A</choices>结尾", "assistant", 1, true)
+        assertTrue("choices panel" in latest.text)
+        assertFalse("<choices>" in latest.text)
+    }
+
+    @Test
     fun wholeMessageBlankerDoesNotHideDisplay() {
         val blanker = TavernRegexScript(
             id = "blanker", name = "blanker", findRegex = "/^([\\s\\S]*?)$/", replaceString = "",

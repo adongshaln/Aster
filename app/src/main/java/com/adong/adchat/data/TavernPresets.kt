@@ -625,9 +625,21 @@ internal object TavernRegexEngine {
         }
     }
 
-    private fun isDisplayHider(script: TavernRegexScript): Boolean =
-        !script.disabled && script.promptOnly && !script.markdownOnly &&
-            script.replaceString.isBlank() && !wholeMessagePattern(script.findRegex)
+    private fun isDisplayHider(script: TavernRegexScript): Boolean {
+        if (script.disabled || !script.promptOnly || script.markdownOnly) return false
+        // Replacement must not carry an HTML payload — a hider's job is to disappear.
+        // linux_1.2-style 选项美化/状态美化 scripts are promptOnly but expand to full
+        // HTML documents; treating them as hiders would strip the panel they build.
+        if (htmlLikePayload(script.replaceString)) return false
+        return script.replaceString.isBlank() || !wholeMessagePattern(script.findRegex)
+    }
+
+    private fun htmlLikePayload(text: String): Boolean {
+        val probe = text.trimStart()
+        return probe.startsWith("```") && probe.removePrefix("```").trimStart()
+            .let { it.startsWith("<!DOCTYPE", true) || it.startsWith("<html", true) }
+            || probe.startsWith("<!DOCTYPE", true) || probe.startsWith("<html", true)
+    }
 
     private fun wholeMessagePattern(findRegex: String): Boolean {
         var pattern = findRegex

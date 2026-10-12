@@ -22,7 +22,7 @@ data class StoryProsePresentation(
 
 /** Presentation only: never writes cleaned text back to message history or request context. */
 object StoryProsePresenter {
-    private val fence = Regex("```[^\\n]*\\n[\\s\\S]*?(?:```|$)")
+    private val fence = Regex("```[ \\t]*\\n[\\s\\S]*?(?:```|$)")
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
     private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
     private val bridgeToken = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
