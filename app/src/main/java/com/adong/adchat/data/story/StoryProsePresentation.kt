@@ -22,7 +22,7 @@ data class StoryProsePresentation(
 
 /** Presentation only: never writes cleaned text back to message history or request context. */
 object StoryProsePresenter {
-    private val fence = Regex("```[ \\t]*\\n[\\s\\S]*?(?:```|$)")
+    private val fence = Regex("```([^\\n`]*)\\n([\\s\\S]*?)(?:```|$)")
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
     private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
     private val bridgeToken = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
@@ -52,14 +52,13 @@ object StoryProsePresenter {
         var cursor = 0
         for (match in fence.findAll(source)) {
             appendFragment(source.substring(cursor, match.range.first), result)
-            val code = match.value.removePrefix("```")
-            val language = code.substringBefore('\n').trim()
-            val content = code.substringAfter('\n').removeSuffix("```")
+            val language = match.groupValues[1].trim()
+            val content = match.groupValues[2].removeSuffix("```").trimEnd('\n')
             if (language.lowercase() in setOf("html", "htm") || (language.isEmpty() && htmlMarker.containsMatchIn(content))) {
                 val document = stripBridgeArtifacts(content)
                 if (document.length >= 80 && substantialHtml.containsMatchIn(document)) result += StoryProseBlock("", html = document)
                 else appendFragment(content, result)
-            } else result += StoryProseBlock(match.value)
+            } else result += StoryProseBlock(match.groupValues[0])
             cursor = match.range.last + 1
         }
         appendFragment(source.substring(cursor), result)
