@@ -402,6 +402,9 @@ class TavernPresetTest {
         assertEquals("assistant" to "ASSISTANT_D", prepared.history.first().let { it.role to it.content })
         assertEquals("user" to "真实用户", prepared.history[1].let { it.role to it.content })
         assertEquals("assistant" to "PREFILL", prepared.history.last().let { it.role to it.content })
+    }
+
+    private fun hider(): TavernRegexScript = TavernRegexScript(
         id = "hider", name = "hider", findRegex = "/<choices>([\\s\\S]*?)<\\/choices>/g", replaceString = "",
         trimStrings = emptyList(), placement = setOf(2), disabled = false,
         promptOnly = true, markdownOnly = false, runOnEdit = false, substituteRegex = 0,
