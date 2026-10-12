@@ -82,6 +82,26 @@ class StoryProsePresentationTest {
         assertTrue(result.blocks.any { it.text == "后文" })
     }
 
+    @Test fun generatedPanelDocumentIsHiddenFromReading() {
+        val doc = "<html><head><title>互动剧情面板 - 极速对齐版</title>" +
+            "<style>body{margin:0}.panel-header{font-size:20px}</style></head><body>" +
+            "<div class=\"panel-header\">抉择时刻</div></body></html>"
+        val result = present("前文\n```html\n$doc\n```\n后文")
+        assertFalse(result.blocks.any { it.html != null })
+        assertFalse(result.blocks.any { it.text.contains("抉择时刻") || it.text.contains("panel-header") })
+        assertTrue(result.blocks.any { it.text == "前文" })
+        assertTrue(result.blocks.any { it.text == "后文" })
+    }
+
+    @Test fun htmlDocumentWithoutPanelTitleStillRenders() {
+        val document = "<!doctype html><html><head><title>卡片</title><style>body{color:#333}</style></head><body>卡片正文</body></html>"
+        val result = present("前文\n```html\n$document\n```\n后文")
+        val html = result.blocks.single { it.html != null }
+        assertEquals(document, html.html)
+        assertTrue(result.blocks.any { it.text == "前文" })
+        assertTrue(result.blocks.any { it.text == "后文" })
+    }
+
     @Test fun bridgedDocumentIsStrippedAndStaysStableAcrossPresentations() {
         val document = "<!doctype html><html><head><style>.a{color:red}</style></head><body><div class=\"panel\">面板</div></body></html>"
         // simulate an already-bridged document whose capture script carries the bridge token

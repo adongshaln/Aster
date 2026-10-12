@@ -28,6 +28,14 @@ object StoryProsePresenter {
     private val bridgeToken = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
     private val bridgeScript = Regex("<script[^>]*>[^<]*${Regex.escape(bridgeToken)}[^<]*</script>", RegexOption.IGNORE_CASE)
     private val echoedInputPrefix = Regex("^【(?:LAST_USER_INPUT|HISTORICAL_USER_INPUT)】\\s*")
+    private val panelTitle = Regex("(?is)<title[^>]*>(.*?)</title>")
+
+    private fun generatedPanelDocument(document: String): Boolean {
+        val lower = document.lowercase()
+        if (!lower.contains("<html") && !lower.contains("<!doctype")) return false
+        val title = panelTitle.find(document)?.groupValues?.get(1)?.trim().orEmpty()
+        return title.contains("面板")
+    }
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
@@ -56,8 +64,11 @@ object StoryProsePresenter {
             val content = match.groupValues[2].removeSuffix("```").trimEnd('\n')
             if (language.lowercase() in setOf("html", "htm") || (language.isEmpty() && htmlMarker.containsMatchIn(content))) {
                 val document = stripBridgeArtifacts(content)
-                if (document.length >= 80 && substantialHtml.containsMatchIn(document)) result += StoryProseBlock("", html = document)
-                else appendFragment(content, result)
+                when {
+                    generatedPanelDocument(document) -> Unit
+                    document.length >= 80 && substantialHtml.containsMatchIn(document) -> result += StoryProseBlock("", html = document)
+                    else -> appendFragment(content, result)
+                }
             } else result += StoryProseBlock(match.groupValues[0])
             cursor = match.range.last + 1
         }
@@ -71,7 +82,9 @@ object StoryProsePresenter {
         return bridgeScript.replace(source, "").trim()
     }
 
-    private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {        if (source.isBlank()) return
+    private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {
+        if (source.isBlank()) return
+        if (generatedPanelDocument(source)) return
         if (!htmlMarker.containsMatchIn(source)) {
             result += StoryProseBlock(source.trim())
             return
