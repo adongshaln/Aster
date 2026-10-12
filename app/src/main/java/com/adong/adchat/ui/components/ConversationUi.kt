@@ -491,6 +491,53 @@ fun ConversationReadingVeil(modifier: Modifier = Modifier) {
     )))
 }
 
+/**
+ * Tracks whether the user is actively scrolling toward the end of [listState]:
+ * visible only during such a gesture, fading out [hideDelayMillis] after it stops,
+ * and hiding immediately once the bottom is reached.
+ */
+@Composable
+fun rememberTowardBottomScrollVisible(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    hideDelayMillis: Long = 4000L
+): Boolean {
+    var visible by remember { mutableStateOf(false) }
+    var ticker by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ticker) {
+        if (ticker == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(hideDelayMillis)
+        visible = false
+    }
+    LaunchedEffect(listState) {
+        var lastProgress = Triple(
+            listState.firstVisibleItemIndex,
+            listState.firstVisibleItemScrollOffset,
+            listState.isScrollInProgress
+        )
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                listState.isScrollInProgress
+            )
+        }.collect { current ->
+            val progress = current.first.toLong() * Int.MAX_VALUE + current.second
+            val previous = lastProgress.first.toLong() * Int.MAX_VALUE + lastProgress.second
+            if (current.third && progress > previous && listState.canScrollForward) {
+                visible = true
+                ticker++
+            } else if (!current.third || !listState.canScrollForward) {
+                if (visible) {
+                    visible = false
+                    ticker = 0
+                }
+            }
+            lastProgress = current
+        }
+    }
+    return visible
+}
+
 @Composable
 fun ConversationJumpToBottom(
     visible: Boolean,

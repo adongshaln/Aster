@@ -201,7 +201,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val chatImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         if (uris.isNotEmpty()) vm.attachChatImages(uris)
     }
-    val showJumpToBottom by remember { derivedStateOf { vm.messages.isNotEmpty() && listState.canScrollForward } }
+    val jumpToBottomVisible = rememberTowardBottomScrollVisible(listState)
     val questionIndices by remember {
         derivedStateOf { vm.messages.mapIndexedNotNull { index, message -> index.takeIf { message.role == "user" } } }
     }
@@ -391,9 +391,11 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
             ConversationReadingVeil(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight))
             ConversationJumpToBottom(
-                visible = showJumpToBottom, loading = vm.isChatLoading,
+                visible = jumpToBottomVisible, loading = vm.isChatLoading,
                 onClick = { autoFollow = true; scope.launch { listState.animateScrollToItem(vm.messages.size) } },
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = (composerHeight - 24.dp).coerceAtLeast(0.dp))
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
+                fadeMillisIn = 220,
+                fadeMillisOut = 220
             )
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()

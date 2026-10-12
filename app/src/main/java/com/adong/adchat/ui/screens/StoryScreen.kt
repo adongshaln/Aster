@@ -1078,43 +1078,8 @@ private fun StoryWorkspaceContent(
         else if (!listState.canScrollForward) autoFollow = true
     }
     // "Back to bottom" pill: only while the user is actively dragging toward the
-    // end of the list, fading out 2s after the gesture stops. Scroll progress is
-    // measured as total scrolled pixels (item index * huge offset + offset) so a
-    // wrap between items still reads as forward motion.
-    var jumpToBottomVisible by remember { mutableStateOf(false) }
-    var jumpTicker by remember { mutableIntStateOf(0) }
-    LaunchedEffect(jumpTicker, scrollSessionKey) {
-        if (jumpTicker == 0) return@LaunchedEffect
-        delay(2000)
-        jumpToBottomVisible = false
-    }
-    LaunchedEffect(scrollSessionKey, listState) {
-        var lastProgress = Triple(
-            listState.firstVisibleItemIndex,
-            listState.firstVisibleItemScrollOffset,
-            listState.isScrollInProgress
-        )
-        snapshotFlow {
-            Triple(
-                listState.firstVisibleItemIndex,
-                listState.firstVisibleItemScrollOffset,
-                listState.isScrollInProgress
-            )
-        }.collect { current ->
-            val progress = current.first.toLong() * Int.MAX_VALUE + current.second
-            val previous = lastProgress.first.toLong() * Int.MAX_VALUE + lastProgress.second
-            if (current.third && progress > previous && listState.canScrollForward) {
-                jumpToBottomVisible = true
-                jumpTicker++
-            } else if (!current.third || !listState.canScrollForward) {
-                if (jumpToBottomVisible) {
-                    jumpToBottomVisible = false
-                    jumpTicker = 0
-                }
-            }
-            lastProgress = current
-        }
-    }
+    // end of the list, fading out after the gesture stops. See rememberTowardBottomScrollVisible.
+    val jumpToBottomVisible = rememberTowardBottomScrollVisible(listState)
     LaunchedEffect(
         messages.size,
         messages.lastOrNull()?.revision?.id,
@@ -1446,8 +1411,6 @@ private fun StoryWorkspaceContent(
             visible = jumpToBottomVisible && storyVm.error(workspace) == null,
             loading = loading,
             onClick = {
-                jumpToBottomVisible = false
-                jumpTicker = 0
                 autoFollow = true
                 scope.launch { listState.animateScrollToItem(bottomItemIndex) }
             },
