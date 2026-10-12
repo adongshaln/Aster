@@ -492,8 +492,15 @@ fun ConversationReadingVeil(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun ConversationJumpToBottom(visible: Boolean, loading: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    AnimatedVisibility(visible, modifier, enter = fadeIn(tween(140)), exit = fadeOut(tween(100))) {
+fun ConversationJumpToBottom(
+    visible: Boolean,
+    loading: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    fadeMillisIn: Int = 140,
+    fadeMillisOut: Int = 100
+) {
+    AnimatedVisibility(visible, modifier, enter = fadeIn(tween(fadeMillisIn)), exit = fadeOut(tween(fadeMillisOut))) {
         Surface(
             onClick = onClick,
             color = Surface,
