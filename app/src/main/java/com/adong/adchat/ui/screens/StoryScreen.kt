@@ -1274,6 +1274,10 @@ private fun StoryWorkspaceContent(
                                 }
                             }
                         },
+                        onPanelAction = { text ->
+                            val draft = storyVm.draft(StoryWorkspace.Prose)
+                            storyVm.updateDraft(if (draft.isBlank()) text else "$draft\n\n$text", StoryWorkspace.Prose)
+                        },
                         reasoning = if (assistant && row.revision.state == StoryRevisionState.Streaming) {
                             storyVm.reasoning(workspace)
                         } else ""
@@ -1385,6 +1389,7 @@ internal fun StoryMessageItem(
     onOpenPendingCandidates: () -> Unit,
     onOpenRevision: () -> Unit,
     onDetailsExpanded: (String) -> Unit,
+    onPanelAction: (String) -> Unit = {},
     reasoning: String = "",
     onDelete: (() -> Unit)? = null
 ) {
@@ -1439,10 +1444,7 @@ internal fun StoryMessageItem(
                 } else if (prose != null) {
                     com.adong.adchat.ui.components.StoryProseContent(
                         prose, row.revision.state == StoryRevisionState.Streaming,
-                        onPanelAction = { text ->
-                            val draft = storyVm.draft(StoryWorkspace.Prose)
-                            storyVm.updateDraft(if (draft.isBlank()) text else "$draft\n\n$text", StoryWorkspace.Prose)
-                        }
+                        onPanelAction = onPanelAction
                     )
                 } else {
                     StructuredMessageText(
