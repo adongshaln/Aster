@@ -192,6 +192,7 @@ fun StoryScreen(
                 tavernPresetPicker.launch(arrayOf("application/json", "text/json", "text/plain", "application/octet-stream"))
             },
             onDelete = storyVm::deleteTavernPreset,
+            onRename = storyVm::renameTavernPreset,
             onConfigure = {
                 showTavernPresets = false
                 showTavernPresetEditor = true
@@ -293,7 +294,7 @@ private fun StoryHeader(
             )
         }
         Text(
-            "预设 · ${readablePresetName(tavernPresetName)}",
+            "预设 · ${tavernPresetName.trim().ifBlank { "未使用预设" }}",
             color = MutedInk,
             style = MaterialTheme.typography.labelMedium,
             maxLines = 1,
@@ -305,7 +306,7 @@ private fun StoryHeader(
         title = "故事选项", subtitle = "管理故事与创作路线",
         actions = listOf(
             AdActionOption("archive", "故事档案", "设定、人物与剧情记忆", Icons.Rounded.FolderOpen),
-            AdActionOption("preset", "酒馆预设", "正文 · ${readablePresetName(tavernPresetName)}", Icons.Rounded.Tune),
+            AdActionOption("preset", "酒馆预设", "正文 · ${tavernPresetName.trim().ifBlank { "未使用预设" }}", Icons.Rounded.Tune),
             AdActionOption("history", "历史路线", "查看与切换创作路线", Icons.Rounded.History, enabled = historyEnabled),
             AdActionOption("stories", "切换故事", icon = Icons.Rounded.AutoStories),
             AdActionOption("delete", "删除整个对话", "删除这个故事及其全部资料", Icons.Rounded.DeleteOutline, destructive = true, enabled = historyEnabled)
@@ -324,11 +325,6 @@ private fun StoryHeader(
     )
 }
 
-private fun readablePresetName(name: String): String {
-    val trimmed = name.trim()
-    return if (trimmed.length >= 16 && trimmed.all { it.isDigit() || it in 'a'..'f' || it in 'A'..'F' }) "自定义预设" else trimmed
-}
-
 @Composable
 private fun TavernPresetSheet(
     presets: List<TavernPresetSummary>,
@@ -340,10 +336,12 @@ private fun TavernPresetSheet(
     onRegexEnabled: (Boolean) -> Unit,
     onImport: () -> Unit,
     onDelete: (String) -> Unit,
+    onRename: (String, String) -> Unit,
     onConfigure: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var deleteCandidate by remember { mutableStateOf<TavernPresetSummary?>(null) }
+    var renameCandidate by remember { mutableStateOf<TavernPresetSummary?>(null) }
     AsterOptionsSheet(
         title = "酒馆预设",
         subtitle = "用于故事正文的提示词、参数与正则",
@@ -360,12 +358,13 @@ private fun TavernPresetSheet(
         )
         presets.forEach { preset ->
             TavernPresetRow(
-                title = readablePresetName(preset.name),
+                title = preset.name,
                 subtitle = "${preset.enabledPromptCount}/${preset.promptCount} 条提示 · ${preset.enabledRegexCount}/${preset.regexCount} 条正则",
                 selected = preset.id == activeId,
                 builtIn = preset.builtIn,
                 enabled = !busy,
                 onClick = { onSelect(preset.id) },
+                onRename = if (preset.builtIn) null else { { renameCandidate = preset } },
                 onDelete = if (preset.builtIn) null else { { deleteCandidate = preset } }
             )
         }
@@ -453,6 +452,34 @@ private fun TavernPresetSheet(
             onDismiss = { deleteCandidate = null }
         )
     }
+    renameCandidate?.let { preset ->
+        var name by remember(preset.id) { mutableStateOf(preset.name) }
+        AlertDialog(
+            onDismissRequest = { if (!busy) renameCandidate = null },
+            title = { Text("重命名预设") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(60) },
+                    enabled = !busy,
+                    singleLine = true,
+                    label = { Text("预设名称") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRename(preset.id, name)
+                        renameCandidate = null
+                    },
+                    enabled = !busy && name.isNotBlank()
+                ) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameCandidate = null }, enabled = !busy) { Text("取消") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -463,6 +490,7 @@ private fun TavernPresetRow(
     builtIn: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
+    onRename: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null
 ) {
     Surface(
@@ -493,6 +521,11 @@ private fun TavernPresetRow(
                     }
                 }
                 Text(subtitle, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            onRename?.let { rename ->
+                IconButton(onClick = rename, enabled = enabled) {
+                    Icon(Icons.Rounded.Edit, "重命名预设", Modifier.size(18.dp), tint = MutedInk)
+                }
             }
             onDelete?.let { delete ->
                 IconButton(onClick = delete, enabled = enabled) {

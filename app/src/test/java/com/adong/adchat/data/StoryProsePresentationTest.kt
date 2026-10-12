@@ -44,13 +44,29 @@ class StoryProsePresentationTest {
     }
 
     @Test fun preservesCodeExamplesAndPlainProseAroundMultipleHtmlFragments() {
-        val result = present("```xml\n<think>这是示例</think>\n```\n前文\n```html\n<style>body{display:none}</style><details><summary>事件</summary>已发生</details><script>BAD()</script>\n```\n后文")
+        val result = present("```xml\n<think>这是示例</think>\n```\n前文\n```html\n<details><summary>事件</summary>已发生</details><script>BAD()</script>\n```\n后文")
         assertTrue(result.planning.isEmpty())
         assertTrue(result.thinking.isEmpty())
         assertTrue(result.blocks.any { "<think>这是示例</think>" in it.text })
         assertTrue(result.blocks.any { it.text == "前文" })
         assertTrue(result.blocks.any { it.title == "事件" && it.text == "已发生" })
         assertTrue(result.blocks.any { it.text == "后文" })
-        assertFalse(result.blocks.any { "BAD()" in it.text || "display:none" in it.text })
+        assertFalse(result.blocks.any { it.html != null && "BAD()" in it.html })
+    }
+
+    @Test fun substantialFencedHtmlBecomesRenderableBlock() {
+        val document = "<!doctype html><html><head><style>body{margin:0;color:#333}</style></head><body>卡片正文</body></html>"
+        val result = present("前文\n```html\n$document\n```\n后文")
+        val html = result.blocks.single { it.html != null }
+        assertEquals(document, html.html)
+        assertEquals("", html.text)
+        assertTrue(result.blocks.any { it.text == "前文" })
+        assertTrue(result.blocks.any { it.text == "后文" })
+    }
+
+    @Test fun tinyFencedHtmlSnippetStaysText() {
+        val result = present("前文```html\n<br><br>\n```后文")
+        assertFalse(result.blocks.any { it.html != null })
+        assertTrue(result.blocks.any { "后文" in it.text })
     }
 }

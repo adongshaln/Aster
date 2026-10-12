@@ -232,6 +232,21 @@ class TavernPresetTest {
         assertTrue(configuration.prompts.first { it.name == "🚢文风-顺眼舒服" }.defaultEnabled)
     }
 
+    @Test
+    fun importWithoutDeclaredNameUsesFileNameAndRenamePersists() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = TavernPresetStore(context)
+        val imported = store.importPreset(ByteArrayInputStream(samplePreset().toByteArray()), "我的故事预设.json")
+        assertEquals("我的故事预设", store.list().first { it.id == imported.id }.name)
+
+        store.renamePreset(imported.id, "改名后的预设")
+        val reopened = TavernPresetStore(context)
+        assertEquals("改名后的预设", reopened.list().first { it.id == imported.id }.name)
+        assertEquals("改名后的预设", reopened.configuration(imported.id)!!.name)
+        assertTrue(runCatching { store.renamePreset(imported.id, "  ") }.isFailure)
+        assertTrue(runCatching { store.renamePreset(TavernPresetStore.BUILT_IN_ID, "x") }.isFailure)
+    }
+
     private fun samplePreset(): String {
         val prompts = JSONArray()
             .put(prompt("init", "init", "system", "{{setvar::tone::温柔}}", enabled = true))

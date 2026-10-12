@@ -318,7 +318,7 @@ class TavernPresetStore(context: Context) {
         }
         return TavernPresetConfiguration(
             id = preset.id,
-            name = preset.name,
+            name = readConfiguration(preset.id).name ?: preset.name,
             builtIn = preset.builtIn,
             prompts = prompts,
             regexScripts = regexScripts,
@@ -384,6 +384,18 @@ class TavernPresetStore(context: Context) {
         val digest = sha256(bytes)
         val preset = TavernPresetParser.parse(raw, "import:$digest", displayName, false)
         check(directory.exists() || directory.mkdirs()) { "无法创建酒馆预设目录" }
+        val declaredName = runCatching {
+            val root = JSONObject(raw)
+            sequenceOf("name", "preset_name", "presetName")
+                .map { root.optString(it).trim() }
+                .firstOrNull(String::isNotBlank)
+        }.getOrNull()
+        if (declaredName == null) {
+            val configuration = readConfiguration(preset.id)
+            configuration.name = displayName.substringBeforeLast('.').trim().takeIf(String::isNotEmpty)
+                ?: preset.name
+            writeConfiguration(preset.id, configuration)
+        }
         val atomic = AtomicFile(File(directory, "$digest.json"))
         val output = atomic.startWrite()
         try {
@@ -433,13 +445,26 @@ class TavernPresetStore(context: Context) {
         val regex = preset.regexScripts.mapIndexed { index, script ->
             configuration.regexEnabled[index]?.let { script.copy(disabled = !it) } ?: script
         }
-        return preset.copy(prompts = prompts, promptOrder = order, regexScripts = regex)
+        return preset.copy(name = configuration.name ?: preset.name, prompts = prompts, promptOrder = order, regexScripts = regex)
+    }
+
+    @Synchronized
+    fun renamePreset(id: String, newName: String) {
+        val name = newName.trim()
+        require(name.isNotEmpty()) { "预设名称不能为空" }
+        require(name.length <= 60) { "预设名称不能超过 60 个字符" }
+        requireNotNull(rawPreset(id)) { "酒馆预设已不存在" }
+        require(id != BUILT_IN_ID) { "内置预设不能改名" }
+        val configuration = readConfiguration(id)
+        configuration.name = name
+        writeConfiguration(id, configuration)
     }
 
     private data class StoredConfiguration(
         val promptEnabled: MutableMap<String, Boolean> = linkedMapOf(),
         val regexEnabled: MutableMap<Int, Boolean> = linkedMapOf(),
-        val promptContent: MutableMap<String, String> = linkedMapOf()
+        val promptContent: MutableMap<String, String> = linkedMapOf(),
+        var name: String? = null
     )
 
     private fun readConfiguration(presetId: String): StoredConfiguration {
@@ -455,19 +480,22 @@ class TavernPresetStore(context: Context) {
             val contentObject = root.optJSONObject("prompt_content") ?: JSONObject()
             val contents = linkedMapOf<String, String>()
             contentObject.keys().forEach { key -> (contentObject.opt(key) as? String)?.let { contents[key] = it } }
-            StoredConfiguration(prompts, regex, contents)
+            StoredConfiguration(prompts, regex, contents, root.optString("name").trim().takeIf(String::isNotEmpty))
         }.getOrDefault(StoredConfiguration())
     }
 
     private fun writeConfiguration(presetId: String, configuration: StoredConfiguration) {
-        if (configuration.promptEnabled.isEmpty() && configuration.regexEnabled.isEmpty() && configuration.promptContent.isEmpty()) {
+        if (configuration.promptEnabled.isEmpty() && configuration.regexEnabled.isEmpty() &&
+            configuration.promptContent.isEmpty() && configuration.name == null) {
             prefs.edit().remove(configurationKey(presetId)).apply()
             return
         }
         val prompts = JSONObject().apply { configuration.promptEnabled.forEach { (key, value) -> put(key, value) } }
         val regex = JSONObject().apply { configuration.regexEnabled.forEach { (key, value) -> put(key.toString(), value) } }
         val contents = JSONObject().apply { configuration.promptContent.forEach { (key, value) -> put(key, value) } }
-        val value = JSONObject().put("prompts", prompts).put("regex", regex).put("prompt_content", contents).toString()
+        val value = JSONObject().put("prompts", prompts).put("regex", regex).put("prompt_content", contents)
+            .apply { configuration.name?.let { put("name", it) } }
+            .toString()
         prefs.edit().putString(configurationKey(presetId), value).apply()
     }
 

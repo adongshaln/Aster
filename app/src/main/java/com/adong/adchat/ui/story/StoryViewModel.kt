@@ -240,6 +240,21 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun renameTavernPreset(id: String, name: String) {
+        if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
+        tavernPresetBusy = true
+        tavernPresetError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                tavernPresetStore.renamePreset(id, name)
+                refreshTavernPresetState()
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { tavernPresetError = error.message ?: "重命名酒馆预设失败" }
+            }
+            withContext(Dispatchers.Main) { tavernPresetBusy = false }
+        }
+    }
+
     fun deleteTavernPreset(id: String) {
         if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
         tavernPresetBusy = true

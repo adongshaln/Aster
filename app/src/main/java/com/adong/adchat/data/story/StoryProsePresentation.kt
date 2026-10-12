@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 
-data class StoryProseBlock(val text: String, val title: String? = null)
+data class StoryProseBlock(val text: String, val title: String? = null, val html: String? = null)
 
 data class StoryProsePresentation(
     val planning: String = "",
@@ -24,6 +24,7 @@ data class StoryProsePresentation(
 object StoryProsePresenter {
     private val fence = Regex("```[^\\n]*\\n[\\s\\S]*?(?:```|$)")
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
+    private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
@@ -51,7 +52,8 @@ object StoryProsePresenter {
             val language = code.substringBefore('\n').trim()
             val content = code.substringAfter('\n').removeSuffix("```")
             if (language.lowercase() in setOf("html", "htm") || (language.isEmpty() && htmlMarker.containsMatchIn(content))) {
-                appendFragment(content, result)
+                if (content.length >= 80 && substantialHtml.containsMatchIn(content)) result += StoryProseBlock("", html = content)
+                else appendFragment(content, result)
             } else result += StoryProseBlock(match.value)
             cursor = match.range.last + 1
         }

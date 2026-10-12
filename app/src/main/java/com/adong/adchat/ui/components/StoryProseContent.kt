@@ -21,7 +21,7 @@ import com.adong.adchat.ui.theme.*
 /** Story prose has a native reading surface, independent of document artifact previews. */
 @Composable
 internal fun StoryProseContent(presentation: StoryProsePresentation, streaming: Boolean) {
-    val bodyStarted = presentation.blocks.any { it.text.isNotBlank() }
+    val bodyStarted = presentation.blocks.any { it.text.isNotBlank() || it.html != null }
     val thoughtsInitiallyExpanded = streaming && !bodyStarted
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         if (presentation.thinking.isNotBlank()) {
@@ -48,8 +48,19 @@ internal fun StoryProseContent(presentation: StoryProsePresentation, streaming: 
         )
         presentation.blocks.forEachIndexed { index, block ->
             key(index, block.title) {
-                if (block.title != null) StoryProseSection(block.title, block.text)
-                else StructuredMessageText(block.text, streaming && index == presentation.blocks.lastIndex, false, false)
+                val streamingLast = streaming && index == presentation.blocks.lastIndex
+                when {
+                    block.html != null && streamingLast -> Text(
+                        block.html, color = MutedInk, style = MaterialTheme.typography.bodyMedium
+                    )
+                    block.html != null -> HtmlArtifactCard(
+                        code = block.html,
+                        allowScripts = true,
+                        actions = false
+                    )
+                    block.title != null -> StoryProseSection(block.title, block.text)
+                    else -> StructuredMessageText(block.text, streamingLast, false, false)
+                }
             }
         }
         if (presentation.skippedScripts.isNotEmpty()) Text(
