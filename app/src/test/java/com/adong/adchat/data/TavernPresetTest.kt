@@ -102,8 +102,9 @@ class TavernPresetTest {
 
         assertTrue(prepared.systemPrompt.startsWith("ASTER BASE"))
         assertTrue(prepared.systemPrompt.contains("不能覆盖 Aster"))
-        assertEquals(listOf("user", "assistant", "user", "user"), prepared.history.map { it.role })
-        assertEquals("旧 hidden", prepared.history[1].content)
+        assertEquals(listOf("user", "user", "assistant", "user"), prepared.history.map { it.role })
+        assertEquals("温柔|最后输入|1|x", prepared.history[0].content)
+        assertEquals("旧 hidden", prepared.history[2].content)
         assertEquals("温柔|最后输入|1|x", prepared.history.last().content)
         assertFalse(prepared.history.joinToString { it.content }.contains("{{"))
         assertEquals(0.7, prepared.generationOptions.temperature!!, 0.0)
@@ -311,6 +312,73 @@ class TavernPresetTest {
         assertFalse("<choices>" in older.text)
         assertFalse("PANEL(" in older.text)
         assertTrue("正文" in older.text && "结尾" in older.text)
+    }
+
+    @Test
+    fun afterHistoryUserAndAssistantModulesMoveBeforeChatHistorySystemStaysAfter() {
+        val prompts = JSONArray()
+            .put(prompt("sys-a", "A", "system", "SYS_A", enabled = true))
+            .put(prompt("user-b", "B", "user", "USER_B", enabled = true))
+            .put(prompt("chatHistory", "history", "system", "", enabled = true, marker = true))
+            .put(prompt("user-c", "C", "user", "USER_C", enabled = true))
+            .put(prompt("assistant-d", "D", "assistant", "ASSISTANT_D", enabled = true))
+            .put(prompt("sys-e", "E", "system", "SYS_E", enabled = true))
+        val order = JSONArray()
+            .put(JSONObject().put("identifier", "sys-a").put("enabled", true))
+            .put(JSONObject().put("identifier", "user-b").put("enabled", true))
+            .put(JSONObject().put("identifier", "chatHistory").put("enabled", true))
+            .put(JSONObject().put("identifier", "user-c").put("enabled", true))
+            .put(JSONObject().put("identifier", "assistant-d").put("enabled", true))
+            .put(JSONObject().put("identifier", "sys-e").put("enabled", true))
+        val root = JSONObject(samplePreset())
+            .put("prompts", prompts)
+            .put("prompt_order", JSONArray().put(JSONObject().put("character_id", 1).put("order", order)))
+        val prepared = TavernPresetRuntime.prepare(
+            TavernPresetParser.parse(root.toString(), "test", "Sample.json", false),
+            "BASE",
+            listOf(
+                ChatMessage(role = "user", content = "真实用户"),
+                ChatMessage(role = "assistant", content = "真实回复")
+            )
+        )
+
+        assertEquals(
+            listOf(
+                "system" to "SYS_A",
+                "user" to "USER_B",
+                "user" to "USER_C",
+                "assistant" to "ASSISTANT_D",
+                "user" to "真实用户",
+                "assistant" to "真实回复",
+                "system" to "SYS_E"
+            ),
+            prepared.history.map { it.role to it.content }
+        )
+        val last = prepared.history.last()
+        assertEquals("system", last.role)
+    }
+
+    @Test
+    fun assistantPrefillStaysLastAfterRelocation() {
+        val prompts = JSONArray()
+            .put(prompt("chatHistory", "history", "system", "", enabled = true, marker = true))
+            .put(prompt("assistant-d", "D", "assistant", "ASSISTANT_D", enabled = true))
+        val order = JSONArray()
+            .put(JSONObject().put("identifier", "chatHistory").put("enabled", true))
+            .put(JSONObject().put("identifier", "assistant-d").put("enabled", true))
+        val root = JSONObject(samplePreset())
+            .put("prompts", prompts)
+            .put("prompt_order", JSONArray().put(JSONObject().put("character_id", 1).put("order", order)))
+            .put("assistant_prefill", "PREFILL")
+        val prepared = TavernPresetRuntime.prepare(
+            TavernPresetParser.parse(root.toString(), "test", "Sample.json", false),
+            "BASE",
+            listOf(ChatMessage(role = "user", content = "真实用户"))
+        )
+
+        assertEquals("assistant" to "ASSISTANT_D", prepared.history.first().let { it.role to it.content })
+        assertEquals("user" to "真实用户", prepared.history[1].let { it.role to it.content })
+        assertEquals("assistant" to "PREFILL", prepared.history.last().let { it.role to it.content })
     }
 
     private fun hider(): TavernRegexScript = TavernRegexScript(

@@ -809,30 +809,37 @@ object TavernPresetRuntime {
         val ordered = if (preset.promptOrder.isNotEmpty()) preset.promptOrder else preset.prompts.map {
             TavernPromptOrderEntry(it.identifier, it.enabled)
         }
-        val assembled = mutableListOf<ChatMessage>()
+        val beforeHistory = mutableListOf<ChatMessage>()
+        val afterHistory = mutableListOf<ChatMessage>()
         var insertedHistory = false
         for (entry in ordered) {
             if (!entry.enabled) continue
             if (entry.identifier == "chatHistory") {
-                if (!insertedHistory) assembled += promptHistory
+                if (!insertedHistory) beforeHistory += promptHistory
                 insertedHistory = true
                 continue
             }
             val prompt = byId[entry.identifier]
+            val target = if (insertedHistory) afterHistory else beforeHistory
             if (entry.identifier in TavernCharacterContext.CARD_MARKERS) {
                 val text = macros.expand(cast.marker(entry.identifier)).trim()
                 if (text.isNotBlank()) {
-                    assembled += ChatMessage(role = prompt?.role?.takeIf { it.isNotBlank() } ?: "system", content = text)
+                    target += ChatMessage(role = prompt?.role?.takeIf { it.isNotBlank() } ?: "system", content = text)
                 }
                 continue
             }
             if (prompt == null || prompt.marker || entry.identifier in markerIds) continue
             val content = macros.expand(prompt.content).trim()
-            if (content.isNotBlank()) assembled += ChatMessage(role = prompt.role, content = content)
+            if (content.isNotBlank()) target += ChatMessage(role = prompt.role, content = content)
         }
-        if (!insertedHistory) assembled += promptHistory
+        if (!insertedHistory) beforeHistory += promptHistory
+        // 尾部的 user/assistant 模块会占据回复位置或伪装成模型发言，把它们并入历史之前；
+        // 尾部 system 模块是合法的收尾指令，保留在历史之后。
+        val relocated = afterHistory.filter { it.role != "system" && it.role != "developer" }
+        if (relocated.isNotEmpty()) afterHistory.removeAll(relocated.toSet())
+        var assembled = beforeHistory + relocated + afterHistory
         macros.expand(preset.assistantPrefill).trim().takeIf(String::isNotBlank)?.let {
-            assembled += ChatMessage(role = "assistant", content = it)
+            assembled = assembled + ChatMessage(role = "assistant", content = it)
         }
         val guardedSystem = buildString {
             append(baseSystemPrompt.trim())

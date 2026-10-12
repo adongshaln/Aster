@@ -27,10 +27,12 @@ object StoryProsePresenter {
     private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
     private val bridgeToken = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
     private val bridgeScript = Regex("<script[^>]*>[^<]*${Regex.escape(bridgeToken)}[^<]*</script>", RegexOption.IGNORE_CASE)
+    private val echoedInputPrefix = Regex("^【(?:LAST_USER_INPUT|HISTORICAL_USER_INPUT)】\\s*")
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
-        val split = if (role == "assistant") StoryThoughtParser.split(raw) else StoryThoughtSplit(raw, emptyList(), emptyList())
+        val body = if (role == "assistant") echoedInputPrefix.replace(raw.trimStart(), "") else raw
+        val split = if (role == "assistant") StoryThoughtParser.split(body) else StoryThoughtSplit(raw, emptyList(), emptyList())
         val output = if (preset != null && !streaming) {
             TavernPresetRuntime.display(preset, split.body, role, depth, regexEnabled)
         } else TavernRegexOutput(split.body, 0, emptyList())

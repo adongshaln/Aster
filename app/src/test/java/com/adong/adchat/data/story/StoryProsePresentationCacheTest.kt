@@ -43,6 +43,21 @@ class StoryProsePresentationCacheTest {
     }
 
     @Test
+    fun assistantEchoedUserInputPrefixIsStrippedAndNormalTextUntouched() {
+        val echoed = StoryProsePresenter.present("【LAST_USER_INPUT】正文", null, "assistant", 0, true, false)
+        assertEquals("正文", echoed.blocks.single().text)
+
+        val historical = StoryProsePresenter.present("【HISTORICAL_USER_INPUT】  正文", null, "assistant", 0, true, false)
+        assertEquals("正文", historical.blocks.single().text)
+
+        val normal = StoryProsePresenter.present("【其他标记】正文", null, "assistant", 0, true, false)
+        assertEquals("【其他标记】正文", normal.blocks.single().text)
+
+        val userRole = StoryProsePresenter.present("【LAST_USER_INPUT】正文", null, "user", 0, true, false)
+        assertEquals("【LAST_USER_INPUT】正文", userRole.blocks.single().text)
+    }
+
+    @Test
     fun cacheIsBoundedForLongStories() {
         val cache = StoryProsePresentationCache(maxEntries = 2)
         repeat(3) { index ->
