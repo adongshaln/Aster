@@ -52,7 +52,7 @@ object StoryProsePresenter {
             val language = code.substringBefore('\n').trim()
             val content = code.substringAfter('\n').removeSuffix("```")
             if (language.lowercase() in setOf("html", "htm") || (language.isEmpty() && htmlMarker.containsMatchIn(content))) {
-                if (content.length >= 80 && substantialHtml.containsMatchIn(content)) result += StoryProseBlock("", html = content)
+                if (content.length >= 80 && substantialHtml.containsMatchIn(content)) result += StoryProseBlock("", html = content.trim())
                 else appendFragment(content, result)
             } else result += StoryProseBlock(match.value)
             cursor = match.range.last + 1
