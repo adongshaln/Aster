@@ -594,7 +594,7 @@ internal object TavernRegexEngine {
         }
         if (surface == TavernRegexSurface.Display) {
             for (script in preset.regexScripts) {
-                if (!isDisplayHider(script)) continue
+                if (!isDisplayRepairer(script)) continue
                 val placementId = when (role) { "user" -> 1; "assistant" -> 2; else -> null }
                 if (placementId == null || placementId !in script.placement) continue
                 val find = substituteFindMacros(script.findRegex, script.substituteRegex, macroValues)
@@ -613,6 +613,17 @@ internal object TavernRegexEngine {
         return TavernRegexOutput(result, applied, skipped)
     }
 
+    /**
+     * promptOnly scripts act only on the Prompt surface in SillyTavern, but their effect defines
+     * how model output looks (tags become HTML panels). Without depth support in our display we
+     * re-apply them on Display at any depth so older messages render as intended. Whole-message
+     * anchored scripts (context trimming) are excluded — they are prompt-side-only by design.
+     */
+    private fun isDisplayRepairer(script: TavernRegexScript): Boolean {
+        if (script.disabled || !script.promptOnly || script.markdownOnly) return false
+        return !wholeMessagePattern(script.findRegex)
+    }
+
     private fun TavernRegexScript.appliesTo(role: String, depth: Int, surface: TavernRegexSurface): Boolean {
         if (disabled) return false
         val placementId = when (role) { "user" -> 1; "assistant" -> 2; else -> return false }
@@ -623,14 +634,6 @@ internal object TavernRegexEngine {
             TavernRegexSurface.Prompt -> promptOnly || !markdownOnly
             TavernRegexSurface.Display -> markdownOnly || !promptOnly
         }
-    }
-
-    private fun isDisplayHider(script: TavernRegexScript): Boolean {
-        if (script.disabled || !script.promptOnly || script.markdownOnly) return false
-        // Hiders delete a sub-block. linux_1.2-style 选项美化/状态美化 scripts are promptOnly
-        // but EXPAND to full HTML documents; treating them as hiders would strip their panel.
-        if (!script.replaceString.isBlank()) return false
-        return !wholeMessagePattern(script.findRegex)
     }
 
     private fun wholeMessagePattern(findRegex: String): Boolean {
