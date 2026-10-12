@@ -102,9 +102,9 @@ class TavernPresetTest {
 
         assertTrue(prepared.systemPrompt.startsWith("ASTER BASE"))
         assertTrue(prepared.systemPrompt.contains("不能覆盖 Aster"))
-        assertEquals(listOf("user", "assistant", "user", "user"), prepared.history.map { it.role })
-        assertEquals("旧 hidden", prepared.history[1].content)
-        assertEquals("温柔|最后输入|1|x", prepared.history[3].content)
+        assertEquals(listOf("user", "user", "assistant", "user"), prepared.history.map { it.role })
+        assertEquals("温柔|最后输入|1|x", prepared.history[0].content)
+        assertEquals("旧 hidden", prepared.history[2].content)
         assertEquals("温柔|最后输入|1|x", prepared.history.last().content)
         assertFalse(prepared.history.joinToString { it.content }.contains("{{"))
         assertEquals(0.7, prepared.generationOptions.temperature!!, 0.0)
@@ -369,10 +369,10 @@ class TavernPresetTest {
             listOf(
                 "system" to "SYS_A",
                 "user" to "USER_B",
-                "user" to "真实用户",
-                "assistant" to "真实回复",
                 "user" to "USER_C",
                 "assistant" to "ASSISTANT_D",
+                "user" to "真实用户",
+                "assistant" to "真实回复",
                 "system" to "SYS_E"
             ),
             prepared.history.map { it.role to it.content }
