@@ -5,6 +5,8 @@ internal object HtmlPreviewDocument {
     const val MAX_PREVIEW_CHARS = 1_000_000
     const val PANEL_CAPTURE_MARKER = "data-aster-panel"
     const val PANEL_BRIDGE_MARKER = "data-aster-bridge"
+    /** Unique token embedded in both bridge scripts so presenters can strip them on re-render. */
+    const val PANEL_TOKEN = "asterpanelbridge"
 
     fun wrap(source: String, allowScripts: Boolean = true, panelBridge: Boolean = false): String {
         require(source.length <= MAX_PREVIEW_CHARS)
@@ -24,7 +26,7 @@ internal object HtmlPreviewDocument {
     // Inside the srcdoc iframe: postMessage is a DOM API, not a fetch, so the inherited
     // connect-src 'none' policy does not govern it.
     private const val PANEL_CAPTURE_SCRIPT =
-        """<script $PANEL_CAPTURE_MARKER="1">(function(){
+        """<script $PANEL_CAPTURE_MARKER="1">(function(){/*$PANEL_TOKEN*/
 var last=0,lastText='';
 document.addEventListener('click',function(ev){
 var t=ev.target;if(!t||!t.closest)return;
@@ -40,7 +42,7 @@ try{window.parent.postMessage(text,'*');}catch(e){}
 })();</script>"""
 
     private const val PANEL_LISTENER_SCRIPT =
-        """<script $PANEL_BRIDGE_MARKER="1">window.addEventListener('message',function(e){
+        """<script $PANEL_BRIDGE_MARKER="1">/*$PANEL_TOKEN*/window.addEventListener('message',function(e){
 try{var a=window.Aster;if(a&&typeof e.data==='string'&&e.data.length>0&&e.data.length<=200){a.onPanelAction(e.data);}}catch(err){}
 });</script>"""
 }

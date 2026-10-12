@@ -72,12 +72,13 @@ class StoryProsePresentationTest {
 
     @Test fun bridgedDocumentIsStrippedAndStaysStableAcrossPresentations() {
         val document = "<!doctype html><html><head><style>.a{color:red}</style></head><body><div class=\"panel\">面板</div></body></html>"
-        // simulate an already-bridged document whose capture script carries the marker
-        val bridgedSource = document + "<script data-aster-panel=\"1\">window.parent.postMessage('x','*');</script>"
+        // simulate an already-bridged document whose capture script carries the bridge token
+        val token = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
+        val bridgedSource = document + "<script data-aster-panel=\"1\">(function(){/*$token*/var x=1;})();</script>"
         val first = present("```html\n$bridgedSource\n```")
         val html1 = first.blocks.single { it.html != null }.html!!
-        assertFalse(html1.contains("data-aster-"))
-        assertFalse(html1.contains("postMessage"))
+        assertFalse(html1.contains(token))
+        assertFalse(html1.contains("data-aster-panel"))
         assertTrue(html1.contains("class=\"panel\""))
         // present again — should stay stable
         val second = present("```html\n$html1\n```")

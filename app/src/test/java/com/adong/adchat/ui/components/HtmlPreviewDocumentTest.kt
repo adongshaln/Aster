@@ -19,6 +19,7 @@ class HtmlPreviewDocumentTest {
         val out = HtmlPreviewDocument.wrap("<p>hi</p>", allowScripts = true, panelBridge = true)
         assertTrue(out.contains(HtmlPreviewDocument.PANEL_CAPTURE_MARKER))
         assertTrue(out.contains(HtmlPreviewDocument.PANEL_BRIDGE_MARKER))
+        assertTrue(out.contains(HtmlPreviewDocument.PANEL_TOKEN))
         assertTrue(out.contains("window.parent.postMessage"))
         assertTrue(out.contains("window.Aster"))
     }

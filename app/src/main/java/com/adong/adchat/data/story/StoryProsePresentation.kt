@@ -25,7 +25,8 @@ object StoryProsePresenter {
     private val fence = Regex("```[^\\n]*\\n[\\s\\S]*?(?:```|$)")
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
     private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
-    private val bridgeMarker = "data-aster-"
+    private val bridgeToken = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
+    private val bridgeScript = Regex("<script[^>]*>[^<]*${Regex.escape(bridgeToken)}[^<]*</script>", RegexOption.IGNORE_CASE)
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
@@ -65,10 +66,8 @@ object StoryProsePresenter {
 
     /** Remove our own panel-bridge scripts so a re-presented bridged document stays stable. */
     private fun stripBridgeArtifacts(source: String): String {
-        if (!source.contains(bridgeMarker)) return source.trim()
-        val document = Jsoup.parse(source)
-        document.select("script[$bridgeMarker]").remove()
-        return document.html().trim()
+        if (!source.contains(bridgeToken)) return source.trim()
+        return bridgeScript.replace(source, "").trim()
     }
 
     private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {        if (source.isBlank()) return
