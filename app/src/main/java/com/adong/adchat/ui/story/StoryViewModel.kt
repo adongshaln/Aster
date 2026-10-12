@@ -1,6 +1,7 @@
 package com.adong.adchat.ui.story
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.OpenableColumns
@@ -71,6 +72,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val configStore = ConfigStore(application)
     private val api = ApiRepository(skillLoader = SkillRuntime.persistent(application))
     private val tavernPresetStore = TavernPresetStore(application)
+    private val discussionPrefs = application.getSharedPreferences("aster_story_discussion", Context.MODE_PRIVATE)
     private val jobs = linkedMapOf<String, Job>()
     private val organizerJobs = ConcurrentHashMap<String, Job>()
     @Volatile private var stateEpoch = 0L
@@ -116,6 +118,14 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var archiveOpen by mutableStateOf(false)
         private set
+
+    var activeDiscussionPresetId by mutableStateOf<String?>(null)
+        private set
+
+    fun selectDiscussionPreset(id: String?) {
+        discussionPrefs.edit().putString(DISCUSSION_PRESET_KEY, id.orEmpty()).apply()
+        activeDiscussionPresetId = id
+    }
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -374,24 +384,49 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     buffer.toByteArray()
                 }
                 val imported = CharacterCardFile.parse(bytes)
-                val story = store.createImportedStory(imported, profile.id, profile.chatModel)
-                withContext(Dispatchers.Main) {
-                    stories.add(0, story)
-                    stateEpoch++
-                    activeStoryId = story.id
-                    activeWorkspace = StoryWorkspace.Prose
-                    workspaceMessages.clear()
-                    workspaceStates.clear()
-                    archiveRecords.clear(); archiveConflicts.clear()
-                    archiveProposals.clear()
-                    errors.clear()
-                    cardImportError = null
-                    loadActiveStoryState(story)
-                    onCreated(story)
-                }
+                createImportedStoryOnMain(imported, profile, onCreated)
             }.onFailure { error ->
                 withContext(Dispatchers.Main) { cardImportError = error.message ?: "导入角色卡失败" }
             }
+        }
+    }
+
+    fun importCharacterCardJson(json: String, profile: ApiProfile, onCreated: (Story) -> Unit = {}) {
+        if (profile.chatModel.isBlank()) {
+            cardImportError = "请先配置一个可用的对话模型。"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val imported = CharacterCardFile.parse(json.toByteArray())
+                createImportedStoryOnMain(imported, profile, onCreated)
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) {
+                    cardImportError = if (error.message?.contains("角色卡") == true) error.message else "角色卡解析失败"
+                }
+            }
+        }
+    }
+
+    private suspend fun createImportedStoryOnMain(
+        imported: com.adong.adchat.data.story.ImportedCharacterCard,
+        profile: ApiProfile,
+        onCreated: (Story) -> Unit
+    ) {
+        val story = store.createImportedStory(imported, profile.id, profile.chatModel)
+        withContext(Dispatchers.Main) {
+            stories.add(0, story)
+            stateEpoch++
+            activeStoryId = story.id
+            activeWorkspace = StoryWorkspace.Prose
+            workspaceMessages.clear()
+            workspaceStates.clear()
+            archiveRecords.clear(); archiveConflicts.clear()
+            archiveProposals.clear()
+            errors.clear()
+            cardImportError = null
+            loadActiveStoryState(story)
+            onCreated(story)
         }
     }
 
@@ -1681,13 +1716,27 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
+    private fun loadDiscussionPresetId(): String? =
+        discussionPrefs.getString(DISCUSSION_PRESET_KEY, null)?.takeIf(String::isNotBlank)
+
     private fun workspaceSystemPrompt(workspace: StoryWorkspace): String = when (workspace) {
-        StoryWorkspace.Discussion -> """
-            你正在 Aster 的故事讨论工作区。与用户讨论设定、人物、文风和后续计划。
-            讨论中的建议、假设、备选方案和示例片段都不是已经发生的正式剧情。
-            不要因为自己提出了某个方案，就把它当作用户已经确认的事实。
-            标记为“未确认候选”的内容仅供讨论，除非之后被用户确认并写入正式资料，否则不得提升为故事事实。
-        """.trimIndent()
+        StoryWorkspace.Discussion -> buildString {
+            append(
+                """
+                你正在 Aster 的故事讨论工作区。与用户讨论设定、人物、文风和后续计划。
+                讨论中的建议、假设、备选方案和示例片段都不是已经发生的正式剧情。
+                不要因为自己提出了某个方案，就把它当作用户已经确认的事实。
+                标记为“未确认候选”的内容仅供讨论，除非之后被用户确认并写入正式资料，否则不得提升为故事事实。
+                """.trimIndent()
+            )
+            val presetPrompt: String? = activeDiscussionPresetId?.let { id: String ->
+                com.adong.adchat.data.story.StoryDiscussionPresets.byId(id)?.prompt
+            }
+            if (!presetPrompt.isNullOrBlank()) {
+                append("\n\n")
+                append(presetPrompt)
+            }
+        }
         StoryWorkspace.Prose -> """
             你正在 Aster 的故事正文工作区。根据用户给出的剧情方向、对白、人物行动或世界观约束继续创作正文。
             你只能把注入的“固定且已确认的故事资料”和“已确认的故事资料”视作正式资料；讨论候选不会提供给你。
@@ -1702,4 +1751,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             .firstOrNull()
             ?.take(240)
             ?: "未知错误"
+
+    private companion object {
+        const val DISCUSSION_PRESET_KEY = "discussion_preset_id"
+    }
 }

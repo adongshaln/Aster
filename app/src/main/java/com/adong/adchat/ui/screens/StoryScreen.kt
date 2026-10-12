@@ -86,6 +86,7 @@ fun StoryScreen(
     var showModelSwitcher by remember(story.id) { mutableStateOf(false) }
     var showTavernPresets by remember { mutableStateOf(false) }
     var showTavernPresetEditor by remember { mutableStateOf(false) }
+    var showDiscussionPresets by remember { mutableStateOf(false) }
     val tavernPresetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) storyVm.importTavernPreset(uri)
     }
@@ -106,6 +107,9 @@ fun StoryScreen(
             onHistory = storyVm::openTimelineHistory,
             tavernPresetName = storyVm.activeTavernPresetName,
             onTavernPresets = { showTavernPresets = true },
+            discussionPresetName = storyVm.activeDiscussionPresetId
+                ?.let { id -> com.adong.adchat.data.story.StoryDiscussionPresets.byId(id)?.name },
+            onDiscussionPresets = { showDiscussionPresets = true },
             onDeleteStory = { deleteStoryTarget = story },
             historyEnabled = !storyVm.revisionBusy
         )
@@ -201,6 +205,14 @@ fun StoryScreen(
         )
     }
 
+    if (showDiscussionPresets) {
+        StoryDiscussionPresetSheet(
+            activeId = storyVm.activeDiscussionPresetId,
+            onSelect = { storyVm.selectDiscussionPreset(it); showDiscussionPresets = false },
+            onDismiss = { showDiscussionPresets = false }
+        )
+    }
+
     if (showTavernPresetEditor) {
         storyVm.activeTavernPresetConfiguration?.let { configuration ->
             TavernPresetConfigurationSheet(
@@ -268,6 +280,8 @@ private fun StoryHeader(
     onHistory: () -> Unit,
     tavernPresetName: String,
     onTavernPresets: () -> Unit,
+    discussionPresetName: String?,
+    onDiscussionPresets: () -> Unit,
     historyEnabled: Boolean,
     onDeleteStory: () -> Unit
 ) {
@@ -300,6 +314,14 @@ private fun StoryHeader(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 4.dp).clickable(onClick = onTavernPresets)
+        )
+        Text(
+            "讨论预设 · ${discussionPresetName ?: "不使用"}",
+            color = MutedInk,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 4.dp).clickable(onClick = onDiscussionPresets)
         )
     }
     if (showActions) AdActionSheet(
@@ -537,6 +559,40 @@ private fun TavernPresetRow(
 }
 
 private enum class TavernConfigurationSection { Prompts, Regex }
+
+@Composable
+private fun StoryDiscussionPresetSheet(
+    activeId: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AsterOptionsSheet(
+        title = "讨论预设",
+        subtitle = "在讨论工作区附加一条系统提示词，改变讨论的方式",
+        headerIcon = Icons.Rounded.Forum,
+        onDismiss = onDismiss
+    ) {
+        TavernPresetRow(
+            title = "不使用",
+            subtitle = "仅使用 Aster 的故事讨论规则",
+            selected = activeId == null,
+            builtIn = false,
+            enabled = true,
+            onClick = { onSelect(null) }
+        )
+        com.adong.adchat.data.story.StoryDiscussionPresets.all.forEach { preset ->
+            TavernPresetRow(
+                title = preset.name,
+                subtitle = "引导式创作 SillyTavern V2 角色卡，支持材料查证",
+                selected = preset.id == activeId,
+                builtIn = true,
+                enabled = true,
+                onClick = { onSelect(preset.id) }
+            )
+        }
+    }
+}
+
 private enum class TavernConfigurationFilter { All, Enabled, Disabled, Modified }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -928,6 +984,26 @@ private fun StoryWorkspaceContent(
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeight by remember { mutableStateOf(100.dp) }
+    val scope = rememberCoroutineScope()
+    val exportContext = LocalContext.current
+    var cardExportTarget by remember { mutableStateOf<String?>(null) }
+    var cardExportName by remember { mutableStateOf("") }
+    val cardExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val json = cardExportTarget
+        cardExportTarget = null
+        if (uri != null && json != null) scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    exportContext.contentResolver.openOutputStream(uri, "w")?.use {
+                        it.write(json.toByteArray(Charsets.UTF_8))
+                    } != null
+                }.getOrDefault(false)
+            }
+            android.widget.Toast.makeText(
+                exportContext, if (ok) "已保存角色卡 JSON" else "保存失败，请重试", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     val scrollSessionKey = "${targetStory.id}:${targetStory.currentTimelineId}:${workspace.dbValue}"
     // Completed prose must keep its parsed presentation while LazyColumn recycles rows.
@@ -956,7 +1032,6 @@ private fun StoryWorkspaceContent(
             initialFirstVisibleItemScrollOffset = savedState.firstVisibleOffset.coerceAtLeast(0)
         )
     }
-    val scope = rememberCoroutineScope()
     val dragging by listState.interactionSource.collectIsDraggedAsState()
     var autoFollow by remember(scrollSessionKey) { mutableStateOf(true) }
     val streamScrollSignals = remember(scrollSessionKey) {
@@ -1240,6 +1315,10 @@ private fun StoryWorkspaceContent(
                         result
                     }
                     val renderedContent = display.structuredText()
+                    val characterCardJson = if (assistant && workspace == StoryWorkspace.Discussion &&
+                        row.revision.state == StoryRevisionState.Complete) {
+                        com.adong.adchat.data.story.CharacterCardFence.extract(renderedContent)
+                    } else null
                     val renderingSignature = prose ?: display
                     LaunchedEffect(row.revision.id, renderingSignature) {
                         // Regex processing and native prose parsing can substantially
@@ -1264,6 +1343,14 @@ private fun StoryWorkspaceContent(
                         onOpenPendingCandidates = storyVm::openPendingCandidates,
                         onOpenRevision = { storyVm.openRevisionEditor(row) },
                         onDelete = { deleteMessageTarget = row },
+                        characterCardJson = characterCardJson,
+                        onImportCharacterCard = { json ->
+                            profile?.let { storyVm.importCharacterCardJson(json, it) }
+                        },
+                        onExportCharacterCard = { json, name ->
+                            cardExportTarget = json; cardExportName = name
+                            cardExporter.launch("${name.ifBlank { "角色卡" }}.json")
+                        },
                         onDetailsExpanded = { messageId ->
                             val messageIndex = messages.indexOfFirst { it.message.id == messageId }
                             if (messageIndex >= 0) {
@@ -1390,12 +1477,20 @@ internal fun StoryMessageItem(
     onOpenRevision: () -> Unit,
     onDetailsExpanded: (String) -> Unit,
     onPanelAction: (String) -> Unit = {},
+    characterCardJson: String? = null,
+    onImportCharacterCard: (String) -> Unit = {},
+    onExportCharacterCard: (String, String) -> Unit = { _, _ -> },
     reasoning: String = "",
     onDelete: (() -> Unit)? = null
 ) {
     val user = row.message.role == "user"
     val waitingForFirstToken = !user && row.revision.content.isBlank() && row.revision.state == StoryRevisionState.Streaming
     val context = LocalContext.current
+    val cardName = remember(characterCardJson) {
+        characterCardJson?.let { json -> runCatching {
+            (org.json.JSONObject(json).optJSONObject("data") ?: org.json.JSONObject(json)).optString("name").trim()
+        }.getOrNull() }.orEmpty()
+    }
     var showDetails by remember(row.message.id) { mutableStateOf(false) }
     val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {
         StoryWorkspace.Discussion -> row.revision.state == StoryRevisionState.Complete
@@ -1453,6 +1548,29 @@ internal fun StoryMessageItem(
                         error = false,
                         htmlScriptsAllowed = !regexHtml
                     )
+                }
+                if (characterCardJson != null) {
+                    Row(
+                        Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onImportCharacterCard(characterCardJson) },
+                            enabled = actionsEnabled,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("导入为角色卡", style = MaterialTheme.typography.labelLarge)
+                        }
+                        OutlinedButton(
+                            onClick = { onExportCharacterCard(characterCardJson, cardName) },
+                            enabled = true,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("导出 JSON", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
                 }
                 if (row.revision.state in setOf(StoryRevisionState.Interrupted, StoryRevisionState.Stopped)) {
                     Surface(
