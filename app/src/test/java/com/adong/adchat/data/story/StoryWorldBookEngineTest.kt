@@ -94,8 +94,8 @@ class StoryWorldBookEngineTest {
     @Test
     fun groupsSortAscendingByInsertionOrder() {
         val book = StoryWorldBook(entries = listOf(
-            entry(content = "后注入的高位", insertionOrder = 300),
-            entry(content = "先注入的低位", insertionOrder = 10)
+            entry(content = "后注入的高位", insertionOrder = 300, constant = true),
+            entry(content = "先注入的低位", insertionOrder = 10, constant = true)
         ))
         assertEquals(listOf("先注入的低位", "后注入的高位"), StoryWorldBookEngine.activate(book, "").after)
     }
