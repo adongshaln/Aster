@@ -273,11 +273,11 @@ class TavernPresetTest {
         )
         val hiderScript = hider()
         val preset = presetWith(expander, hiderScript)
-        // depth 5: expander has maxDepth=1 so it does not run; hider strips the raw tags
+        // The display repairer re-applies promptOnly expanders at ANY depth so older messages
+        // that already contain the beautified panel keep it; the hider strips raw tags first.
         val older = TavernPresetRuntime.display(preset, "正文<choices>A</choices>结尾", "assistant", 5, true)
         assertFalse("<choices>" in older.text)
-        assertFalse("choices panel" in older.text)
-        // depth 1: expander runs and its HTML survives (NOT stripped as a hider)
+        assertTrue("choices panel" in older.text)
         val latest = TavernPresetRuntime.display(preset, "正文<choices>A</choices>结尾", "assistant", 1, true)
         assertTrue("choices panel" in latest.text)
         assertFalse("<choices>" in latest.text)
@@ -402,9 +402,6 @@ class TavernPresetTest {
         assertEquals("assistant" to "ASSISTANT_D", prepared.history.first().let { it.role to it.content })
         assertEquals("user" to "真实用户", prepared.history[1].let { it.role to it.content })
         assertEquals("assistant" to "PREFILL", prepared.history.last().let { it.role to it.content })
-    }
-
-    private fun hider(): TavernRegexScript = TavernRegexScript(
         id = "hider", name = "hider", findRegex = "/<choices>([\\s\\S]*?)<\\/choices>/g", replaceString = "",
         trimStrings = emptyList(), placement = setOf(2), disabled = false,
         promptOnly = true, markdownOnly = false, runOnEdit = false, substituteRegex = 0,

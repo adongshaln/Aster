@@ -840,11 +840,16 @@ object TavernPresetRuntime {
             if (content.isNotBlank()) target += ChatMessage(role = prompt.role, content = content)
         }
         if (!insertedHistory) beforeHistory += promptHistory
-        // 尾部的 user/assistant 模块会占据回复位置或伪装成模型发言，把它们并入历史之前；
+        // The history forms one contiguous block inside beforeHistory (at the chatHistory slot or
+        // appended at the end). Split around it so relocated trailing modules land before it.
+        val historyStart = if (promptHistory.isEmpty()) beforeHistory.size
+        else beforeHistory.indexOfFirst { it === promptHistory.first() }
+        val preHistoryModules = if (historyStart >= 0) beforeHistory.subList(0, historyStart) else emptyList()
+        // 尾部的 user/assistant 模块会占据回复位置或伪装成模型发言，把它们移到历史之前；
         // 尾部 system 模块是合法的收尾指令，保留在历史之后。
         val relocated = afterHistory.filter { it.role != "system" && it.role != "developer" }
         if (relocated.isNotEmpty()) afterHistory.removeAll(relocated.toSet())
-        var assembled = beforeHistory + relocated + afterHistory
+        var assembled = preHistoryModules + relocated + promptHistory + afterHistory
         macros.expand(preset.assistantPrefill).trim().takeIf(String::isNotBlank)?.let {
             assembled = assembled + ChatMessage(role = "assistant", content = it)
         }
