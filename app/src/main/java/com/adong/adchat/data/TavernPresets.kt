@@ -592,6 +592,24 @@ internal object TavernRegexEngine {
             if (replaced != result) applied++
             result = replaced
         }
+        if (surface == TavernRegexSurface.Display) {
+            for (script in preset.regexScripts) {
+                if (!isDisplayHider(script)) continue
+                val placementId = when (role) { "user" -> 1; "assistant" -> 2; else -> null }
+                if (placementId == null || placementId !in script.placement) continue
+                val find = substituteFindMacros(script.findRegex, script.substituteRegex, macroValues)
+                val compiledResult = cache.getOrPut(find) { runCatching { compile(find) } }
+                if (compiledResult.isFailure) {
+                    skipped += script.name
+                    continue
+                }
+                val compiled = compiledResult.getOrThrow()
+                val replaced = runCatching { replace(result, compiled, script) }
+                    .getOrElse { skipped += script.name; result }
+                if (replaced != result) applied++
+                result = replaced
+            }
+        }
         return TavernRegexOutput(result, applied, skipped)
     }
 
@@ -605,6 +623,22 @@ internal object TavernRegexEngine {
             TavernRegexSurface.Prompt -> promptOnly || !markdownOnly
             TavernRegexSurface.Display -> markdownOnly || !promptOnly
         }
+    }
+
+    private fun isDisplayHider(script: TavernRegexScript): Boolean =
+        !script.disabled && script.promptOnly && !script.markdownOnly &&
+            script.replaceString.isBlank() && !wholeMessagePattern(script.findRegex)
+
+    private fun wholeMessagePattern(findRegex: String): Boolean {
+        var pattern = findRegex
+        if (pattern.startsWith('/')) {
+            val delimiter = closingSlash(pattern)
+            if (delimiter > 0) pattern = pattern.substring(1, delimiter)
+        }
+        pattern = pattern.trim()
+        val anchoredStart = pattern.startsWith("^") || pattern.startsWith("\\A")
+        val anchoredEnd = pattern.endsWith("$") || pattern.endsWith("\\z") || pattern.endsWith("\\Z")
+        return anchoredStart && anchoredEnd
     }
 
     private fun compile(source: String): Compiled {
