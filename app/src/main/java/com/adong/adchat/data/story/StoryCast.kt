@@ -165,10 +165,18 @@ data class StoryCastContext(
 
 internal fun extractJsonObject(raw: String): String {
     val trimmed = raw.trim()
-    if (trimmed.startsWith("{")) return extractBalancedObject(trimmed)
-    val fenced = Regex("```(?:json)?\\s*([\\s\\S]*?)```").find(trimmed)?.groupValues?.get(1)
-    if (fenced != null) return extractBalancedObject(fenced)
-    throw IllegalArgumentException("模型没有返回可解析的设定")
+    val candidate = when {
+        trimmed.startsWith("{") -> trimmed
+        else -> Regex("```(?:json)?\\s*([\\s\\S]*?)```").find(trimmed)?.groupValues?.get(1) ?: trimmed
+    }
+    // Prefer a balanced object so braces inside string values don't truncate early;
+    // fall back to first-'{'..last-'}' for prose-wrapped model output.
+    return runCatching { extractBalancedObject(candidate) }.getOrElse {
+        val start = candidate.indexOf('{')
+        val end = candidate.lastIndexOf('}')
+        if (start >= 0 && end > start) candidate.substring(start, end + 1)
+        else throw IllegalArgumentException("模型没有返回可解析的设定")
+    }
 }
 
 /** First balanced {...} from the first '{', respecting strings and escapes. */
