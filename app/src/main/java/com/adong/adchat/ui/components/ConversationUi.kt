@@ -526,12 +526,15 @@ fun rememberTowardBottomScrollVisible(
             if (current.third && progress > previous && listState.canScrollForward) {
                 visible = true
                 ticker++
-            } else if (!current.third || !listState.canScrollForward) {
+            } else if (!listState.canScrollForward) {
+                // Bottom reached: hide immediately and cancel the pending timer.
                 if (visible) {
                     visible = false
                     ticker = 0
                 }
             }
+            // When the gesture simply stops, keep the button visible and let
+            // the ticker's hideDelayMillis fade it out.
             lastProgress = current
         }
     }
