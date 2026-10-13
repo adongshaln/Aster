@@ -76,6 +76,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         pendingMediaShare = extractSharedMediaText(intent)
         enableEdgeToEdge()
+        if (com.adong.adchat.island.IslandPermissions.isEnabled(this) &&
+            com.adong.adchat.island.IslandPermissions.isReady(this)
+        ) com.adong.adchat.island.IslandService.start(this)
         setContent {
             val themeMode = viewModel.appConfig.themeMode
             val dark = com.adong.adchat.ui.theme.themeIsDark(themeMode)
