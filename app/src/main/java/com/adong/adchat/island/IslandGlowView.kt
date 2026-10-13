@@ -166,8 +166,8 @@ half4 main(float2 p) {
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = COLOR_GLOW
-        // ADD 混合：叠加处自然变亮发白（API 29+ 用 BlendMode.PLUS，低版本 PorterDuff.ADD）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        // ADD 混合：叠加处自然变亮发白（API 31+ 用 BlendMode.PLUS，低版本 PorterDuff.ADD）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             blender = BlendMode.PLUS
         } else {
             @Suppress("DEPRECATION")
