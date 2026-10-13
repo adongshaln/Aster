@@ -162,12 +162,13 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
         val title = TextView(context).apply {
             textSize = 16f
-            setTextColor(0xFFF6F3EE.toInt())
+            setTextColor(0xFF1F1E1D.toInt())
+            paint.isFakeBoldText = true
             maxLines = 1
         }
         val url = TextView(context).apply {
-            textSize = 12f
-            setTextColor(0xFFB9B0A6.toInt())
+            textSize = 13f
+            setTextColor(0xFF87867F.toInt())
             maxLines = 1
         }
         val buttonRow = LinearLayout(context).apply {
@@ -187,10 +188,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         host.addView(title)
         host.addView(url, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(6) })
+        ).apply { topMargin = dp(8) })
         host.addView(buttonRow, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(14) })
+        ).apply { topMargin = dp(16) })
         return CardParts(host, title, url, parse, cancel)
     }
 
@@ -206,7 +207,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         return TextView(context).apply {
             this.text = text
             textSize = 14f
-            setTextColor(if (accent) 0xFF302C28.toInt() else 0xFFF6F3EE.toInt())
+            setTextColor(if (accent) 0xFFFFFFFF.toInt() else 0xFF1F1E1D.toInt())
+            if (accent) paint.isFakeBoldText = true
             setPadding(dp(18), dp(9), dp(18), dp(9))
             background = buttonDrawable(accent)
             setOnClickListener { onClick() }
@@ -295,10 +297,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun renderCard(link: IslandLink) {
         cardTitle.text = when (link.platform) {
-            MediaPlatform.Douyin -> "检测到抖音链接"
-            MediaPlatform.Bilibili -> "检测到B站链接"
-            MediaPlatform.Twitter -> "检测到 X 链接"
-            else -> "检测到链接"
+            MediaPlatform.Douyin -> "抖音链接"
+            MediaPlatform.Bilibili -> "B 站链接"
+            MediaPlatform.Twitter -> "X 链接"
+            else -> "链接"
         }
         cardUrl.text = shortDisplay(link.cleanedUrl.ifBlank { link.originalUrl })
     }
@@ -397,17 +399,17 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun cardDrawable(): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xF2352F2A.toInt())
-            cornerRadius = dp(24).toFloat()
+            setColor(0xFFF0EEE6.toInt())
+            cornerRadius = dp(28).toFloat()
         }
 
     private fun buttonDrawable(accent: Boolean): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
             if (accent) {
-                setColor(0xFFE8D5C4.toInt())
+                setColor(0xFFCC785C.toInt())
             } else {
-                setColor(0x33FFFFFF)
+                setColor(0x00000000)
             }
-            cornerRadius = dp(18).toFloat()
+            cornerRadius = dp(20).toFloat()
         }
 }
