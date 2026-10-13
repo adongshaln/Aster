@@ -20,7 +20,8 @@ import com.adong.adchat.media.MediaPlatform
 
 /**
  * 灵动岛视图（隐形形态）：
- * - 平时：窗口只有胶囊大小，叠在前置摄像头挖孔上（橙黄圆环包裹挖孔），
+ * - 平时：窗口只有圆环大小（外径 28dp，中心与挖孔中心重合），
+ *   叠在前置摄像头挖孔上（细橙黄圆环包裹挖孔），
  *   不遮挡屏幕其他区域的触摸；
  * - 点击胶囊：窗口获焦（“使用中”）→ 读剪贴板 → 识别到媒体链接后
  *   窗口放大为全屏宽 × 屏高 1/5 的询问卡片；
@@ -38,8 +39,12 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     companion object {
-        /** 与常见挖孔尺寸接近：点击目标即摄像头位置。 */
-        private const val PILL_SIZE_DP = 44f
+        // 按红米 Turbo 5 Max（density=3.25）实测校准：挖孔宽 66px ≈ 20.3dp，
+        // 挖孔中心距屏幕顶部 76px ≈ 23.4dp；圆环外径只比挖孔大一圈。
+        /** 圆环外径：挖孔约 20dp，只比它大一圈。 */
+        private const val PILL_SIZE_DP = 28f
+        /** 挖孔中心距屏幕顶部的距离（dp），圆环与挖孔中心重合。 */
+        private const val CUTOUT_CENTER_Y_DP = 23f
         private const val CARD_HEIGHT_RATIO = 0.2f
         private const val CARD_TIMEOUT_MS = 12_000L
     }
@@ -331,8 +336,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun ensureAttached() {
         if (attached) return
         val params = baseParams(dp(PILL_SIZE_DP.toInt()), dp(PILL_SIZE_DP.toInt()))
-        // 负 y 越出屏幕顶部，使胶囊贴到屏幕绝对顶端（挖孔处）。
-        params.y = -statusBarHeight()
+        // 圆环中心与挖孔中心重合
+        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
@@ -354,7 +359,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val params = windowParams ?: return
         params.width = dp(PILL_SIZE_DP.toInt())
         params.height = dp(PILL_SIZE_DP.toInt())
-        params.y = -statusBarHeight()
+        // 圆环中心与挖孔中心重合
+        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
     }
@@ -393,8 +399,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun pillDrawable(): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
-            setColor(0x66000000.toInt())
-            setStroke(dp(3), 0xFFFFB020.toInt())
+            setColor(0x33000000.toInt())
+            setStroke(dp(2), 0xFFFFB020.toInt())
         }
 
     private fun cardDrawable(): android.graphics.drawable.GradientDrawable =
