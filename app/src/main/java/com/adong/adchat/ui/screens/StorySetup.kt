@@ -140,14 +140,19 @@ fun Modifier.setupDockVerticalSwipe(
     onExpandedChange: (Boolean) -> Unit,
     thresholdPx: Float
 ): Modifier = pointerInput(expanded) {
+    var accumulated = 0f
     detectVerticalDragGestures(
-        onDragEnd = { },
-        onDragCancel = { },
+        onDragStart = { accumulated = 0f },
+        onDragEnd = { accumulated = 0f },
+        onDragCancel = { accumulated = 0f },
         onVerticalDrag = { change, amount ->
             change.consume()
-            if (!expanded && amount <= -thresholdPx) {
+            accumulated += amount
+            if (!expanded && accumulated <= -thresholdPx) {
+                accumulated = 0f
                 onExpandedChange(true)
-            } else if (expanded && amount >= thresholdPx) {
+            } else if (expanded && accumulated >= thresholdPx) {
+                accumulated = 0f
                 onExpandedChange(false)
             }
         }
