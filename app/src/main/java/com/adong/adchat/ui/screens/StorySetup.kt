@@ -1,16 +1,28 @@
 package com.adong.adchat.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -21,6 +33,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
@@ -109,6 +123,90 @@ fun StorySetupBar(
                     }
                 }
                 StorySetupPhase.Prose -> Unit
+            }
+        }
+    }
+}
+
+/**
+ * Vertical drag gesture for the collapsible setup dock: swipe up expands,
+ * swipe down collapses, once the accumulated drag passes [thresholdPx].
+ * Attach to the whole dock (setup bar + composer) so the gesture works
+ * anywhere inside it; children that consume drags (scrollable forms,
+ * text fields) naturally take precedence.
+ */
+fun Modifier.setupDockVerticalSwipe(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    thresholdPx: Float
+): Modifier = pointerInput(expanded) {
+    detectVerticalDragGestures(
+        onDragEnd = { },
+        onDragCancel = { },
+        onVerticalDrag = { change, amount ->
+            change.consume()
+            if (!expanded && amount <= -thresholdPx) {
+                onExpandedChange(true)
+            } else if (expanded && amount >= thresholdPx) {
+                onExpandedChange(false)
+            }
+        }
+    )
+}
+
+@Composable
+fun CollapsibleSetupDock(
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    busy: Boolean,
+    error: String?,
+    hint: String,
+    gestureEnabled: Boolean,
+    swipeModifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    if (!gestureEnabled) {
+        Box { content() }
+        return
+    }
+    Box(Modifier.fillMaxWidth().then(swipeModifier)) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {
+            content()
+        }
+        AnimatedVisibility(
+            visible = !expanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
+        ) {
+            Surface(
+                color = Surface,
+                shape = RoundedCornerShape(18.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 6.dp)
+                    .clickable { onExpandedChange(true) }
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 9.dp).fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (error != null) {
+                        Text(error, color = Danger, style = MaterialTheme.typography.labelMedium, maxLines = 1, modifier = Modifier.weight(1f))
+                    } else {
+                        Text(
+                            if (busy) "正在整理…" else hint,
+                            color = MutedInk,
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Icon(Icons.Rounded.KeyboardArrowUp, null, Modifier.size(20.dp), tint = MutedInk)
+                }
             }
         }
     }

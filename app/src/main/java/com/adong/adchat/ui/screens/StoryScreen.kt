@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1419,12 +1420,46 @@ private fun StoryWorkspaceContent(
             fadeMillisOut = 220
         )
 
+        val collapsibleSetup = workspace == StoryWorkspace.Discussion &&
+            targetStory.setupPhase != StorySetupPhase.Prose && profile != null
+        var setupExpanded by rememberSaveable(targetStory.id) { mutableStateOf(false) }
+        var lastSeenSetupPhase by rememberSaveable(targetStory.id) { mutableStateOf<StorySetupPhase?>(null) }
+        LaunchedEffect(targetStory.setupPhase) {
+            if (lastSeenSetupPhase != null && lastSeenSetupPhase != targetStory.setupPhase && collapsibleSetup) {
+                setupExpanded = true
+            }
+            lastSeenSetupPhase = targetStory.setupPhase
+        }
+        LaunchedEffect(storyVm.setupError) {
+            if (storyVm.setupError != null && collapsibleSetup) setupExpanded = true
+        }
+        val setupSwipeThresholdPx = with(composerDensity) { 34.dp.toPx() }
+        val setupSwipeModifier = if (collapsibleSetup) Modifier.setupDockVerticalSwipe(
+            expanded = setupExpanded,
+            onExpandedChange = { setupExpanded = it },
+            thresholdPx = setupSwipeThresholdPx
+        ) else Modifier
         Column(
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged {
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().then(setupSwipeModifier).onSizeChanged {
                 composerHeight = with(composerDensity) { it.height.toDp() }
             }
         ) {
-            StorySetupBar(
+            CollapsibleSetupDock(
+                expanded = setupExpanded,
+                onExpandedChange = { setupExpanded = it },
+                busy = storyVm.setupBusy,
+                error = storyVm.setupError,
+                hint = when (targetStory.setupPhase) {
+                    StorySetupPhase.Discussion -> "先把故事设定谈清楚 · 上滑打开"
+                    StorySetupPhase.CharReview -> "确认对方的角色卡 · 上滑打开"
+                    StorySetupPhase.Identity -> "你要在故事里担任谁 · 上滑打开"
+                    StorySetupPhase.PersonaReview -> "确认你的身份卡 · 上滑打开"
+                    StorySetupPhase.Prose -> ""
+                },
+                gestureEnabled = collapsibleSetup,
+                swipeModifier = Modifier
+            ) {
+                StorySetupBar(
                 phase = targetStory.setupPhase,
                 charCardJson = targetStory.charCardJson,
                 userPersona = targetStory.userPersona,
@@ -1439,7 +1474,8 @@ private fun StoryWorkspaceContent(
                 onSubmitIdentity = storyVm::submitIdentity,
                 onConfirmPersona = storyVm::confirmPersona,
                 onRegeneratePersona = storyVm::regeneratePersona
-            )
+                )
+            }
             if (targetStory.setupPhase == StorySetupPhase.Discussion || targetStory.setupPhase == StorySetupPhase.Prose) {
                 StoryComposer(
                 skillScope = "aster-story-${storyVm.activeStoryId}-${workspace.dbValue}",
