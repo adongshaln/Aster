@@ -20,7 +20,7 @@ import com.adong.adchat.media.MediaPlatform
 
 /**
  * 灵动岛视图（隐形形态）：
- * - 平时：窗口只有胶囊大小，叠在前置摄像头挖孔上（纯黑，视觉零存在），
+ * - 平时：窗口只有胶囊大小，叠在前置摄像头挖孔上（橙黄圆环包裹挖孔），
  *   不遮挡屏幕其他区域的触摸；
  * - 点击胶囊：窗口获焦（“使用中”）→ 读剪贴板 → 识别到媒体链接后
  *   窗口放大为全屏宽 × 屏高 1/5 的询问卡片；
@@ -39,8 +39,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     companion object {
         /** 与常见挖孔尺寸接近：点击目标即摄像头位置。 */
-        private const val PILL_WIDTH_DP = 62f
-        private const val PILL_HEIGHT_DP = 30f
+        private const val PILL_SIZE_DP = 44f
         private const val CARD_HEIGHT_RATIO = 0.2f
         private const val CARD_TIMEOUT_MS = 12_000L
     }
@@ -97,6 +96,22 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
     }
 
+    /**
+     * 短链展开完成后静默更新卡片文本：不触发 onLinkShown、不重播展开动画、
+     * 不重置超时（expand 里的 hideRunnable 仍在计时）。
+     */
+    fun updateCard(link: IslandLink) {
+        mainHandler.post {
+            ensureAttached()
+            if (state is State.Card) {
+                state = State.Card(link)
+                renderCard(link)
+            } else {
+                expand(link)
+            }
+        }
+    }
+
     /** 缩回挖孔。 */
     fun collapse() {
         mainHandler.post {
@@ -128,7 +143,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun buildPill(): LinearLayout {
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            // 纯黑 + 与挖孔同尺寸：叠在摄像头上视觉上即隐形
+            // 橙黄圆环 + 半透明黑底：像包裹前摄挖孔的圈
             background = pillDrawable()
             setOnTouchListener { _, event -> handlePillTouch(event) }
         }
@@ -268,7 +283,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             width, height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -276,7 +292,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun ensureAttached() {
         if (attached) return
-        val params = baseParams(dp(PILL_WIDTH_DP.toInt()), dp(PILL_HEIGHT_DP.toInt()))
+        val params = baseParams(dp(PILL_SIZE_DP.toInt()), dp(PILL_SIZE_DP.toInt()))
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
@@ -296,8 +312,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun applyPillWindowParams() {
         val params = windowParams ?: return
-        params.width = dp(PILL_WIDTH_DP.toInt())
-        params.height = dp(PILL_HEIGHT_DP.toInt())
+        params.width = dp(PILL_SIZE_DP.toInt())
+        params.height = dp(PILL_SIZE_DP.toInt())
         params.y = 0
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
@@ -307,6 +323,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val params = windowParams ?: return
         params.width = WindowManager.LayoutParams.MATCH_PARENT
         params.height = (screenSize.y * CARD_HEIGHT_RATIO).toInt()
+        // 卡片让开状态栏和挖孔，从其下缘开始。
         params.y = statusBarHeight() + dp(4)
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.GONE
@@ -335,8 +352,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun pillDrawable(): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xFF000000.toInt())
-            cornerRadius = dp((PILL_HEIGHT_DP / 2).toInt()).toFloat()
+            shape = android.graphics.drawable.GradientDrawable.OVAL
+            setColor(0x66000000.toInt())
+            setStroke(dp(3), 0xFFFFB020.toInt())
         }
 
     private fun cardDrawable(): android.graphics.drawable.GradientDrawable =

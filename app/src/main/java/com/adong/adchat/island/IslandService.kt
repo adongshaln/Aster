@@ -48,6 +48,9 @@ class IslandService : Service(), IslandView.Callbacks {
     private var islandView: IslandView? = null
     private var pendingLink: IslandLink? = null
 
+    /** 已处理过的短链，避免同一 URL 反复展开导致卡片死循环弹出。 */
+    private val handledUrls = HashSet<String>()
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -68,12 +71,13 @@ class IslandService : Service(), IslandView.Callbacks {
 
     private fun expandShortLink(link: IslandLink) {
         if (!IslandLinkParser.isShortLink(link.originalUrl)) return
+        if (!handledUrls.add(link.originalUrl)) return
         scope.launch {
             val expanded = IslandLinkResolver.expand(link.originalUrl)
             if (expanded != null) {
                 IslandLinkParser.resolveExpanded(link, expanded)?.let { resolved ->
                     pendingLink = resolved
-                    islandView?.show(resolved)
+                    islandView?.updateCard(resolved)
                 }
             }
         }
