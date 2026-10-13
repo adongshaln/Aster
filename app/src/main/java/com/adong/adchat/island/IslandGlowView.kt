@@ -79,13 +79,14 @@ uniform float u_glow;
 uniform float u_headAngle;
 uniform float u_arcSweep;
 uniform float u_colorMix;
-uniform half4 u_colFilament;
-uniform half4 u_colBody;
-uniform half4 u_colGlow;
-uniform half4 u_colFilament2;
-uniform half4 u_colBody2;
-uniform half4 u_colGlow2;
-
+// AGSL 要求：setColorUniform 对应的 uniform 必须带 layout(color) 声明，
+// 否则抛 IllegalArgumentException（HyperOS 实测崩溃）。
+layout(color) uniform half4 u_colFilament;
+layout(color) uniform half4 u_colBody;
+layout(color) uniform half4 u_colGlow;
+layout(color) uniform half4 u_colFilament2;
+layout(color) uniform half4 u_colBody2;
+layout(color) uniform half4 u_colGlow2;
 half4 main(float2 p) {
     float d = abs(length(p - ucenter) - u_ringR);
     float core = 1.0 - smoothstep(0.0, u_lineW, d);
@@ -213,8 +214,10 @@ half4 main(float2 p) {
 
         val sweep = arcSweepDeg()
         val shader = agslShader
+        // 厂商 ROM 的 shader 运行时异常也回退到分层渲染，绝不让光圈崩掉进程
         if (shader != null) {
-            drawAgsl(canvas, shader, cx, cy, ringR, coreWidth, sweep)
+            val drew = runCatching { drawAgsl(canvas, shader, cx, cy, ringR, coreWidth, sweep) }.isSuccess
+            if (!drew) drawLayered(canvas, cx, cy, ringR, coreWidth, sweep)
         } else {
             drawLayered(canvas, cx, cy, ringR, coreWidth, sweep)
         }
