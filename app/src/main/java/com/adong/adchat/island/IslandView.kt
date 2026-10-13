@@ -17,6 +17,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.adong.adchat.media.MediaPlatform
+import kotlin.math.roundToInt
 
 /**
  * 灵动岛视图（隐形形态）：
@@ -44,7 +45,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         /** 圆环外径：挖孔约 20dp，只比它大一圈。 */
         private const val PILL_SIZE_DP = 28f
         /** 挖孔中心距屏幕顶部的距离（dp），圆环与挖孔中心重合。 */
-        private const val CUTOUT_CENTER_Y_DP = 23f
+        private const val CUTOUT_CENTER_Y_DP = 25.5f
         private const val CARD_HEIGHT_RATIO = 0.2f
         private const val CARD_TIMEOUT_MS = 12_000L
     }
@@ -337,7 +338,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (attached) return
         val params = baseParams(dp(PILL_SIZE_DP.toInt()), dp(PILL_SIZE_DP.toInt()))
         // 圆环中心与挖孔中心重合
-        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
+        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
@@ -360,7 +361,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         params.width = dp(PILL_SIZE_DP.toInt())
         params.height = dp(PILL_SIZE_DP.toInt())
         // 圆环中心与挖孔中心重合
-        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
+        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
     }
