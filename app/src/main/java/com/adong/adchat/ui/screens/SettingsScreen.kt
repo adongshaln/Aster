@@ -1,8 +1,15 @@
 package com.adong.adchat.ui.screens
 
 import com.adong.adchat.BuildConfig
+import com.adong.adchat.island.IslandPermissions
+import com.adong.adchat.island.IslandService
 
+import android.Manifest
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
@@ -35,6 +42,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -233,6 +242,11 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
                         onClick = { vm.setFontWeight(DEFAULT_FONT_WEIGHT) },
                         modifier = Modifier.align(Alignment.End)
                     ) { Text("恢复默认") }
+                }
+            }
+            item {
+                SettingsDisclosure("链接灵动岛", "复制链接后，点一下前置摄像头旁的胶囊即可解析", Icons.Rounded.WorkspacePremium) {
+                    LinkIslandCard()
                 }
             }
             item { com.adong.adchat.ui.components.SkillPickerEntry(null) }
@@ -1015,6 +1029,62 @@ private fun SettingsDisclosure(
             AnimatedVisibility(expanded) {
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LinkIslandCard() {
+    val context = LocalContext.current
+    // Re-read readiness whenever we come back from a permission settings page.
+    var permissionTick by remember { mutableIntStateOf(0) }
+    var enabled by remember { mutableStateOf(IslandPermissions.isEnabled(context)) }
+    var ready by remember(permissionTick) { mutableStateOf(IslandPermissions.isReady(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) permissionTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val notificationRequest = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { _ -> permissionTick++ }
+    Column {
+        SettingSwitch(
+            title = "启用链接岛",
+            subtitle = if (ready) "复制抖音、B站或 X 链接后，点一下摄像头旁的黑色胶囊，选择「解析」直达下载页。"
+            else "需要「显示在其他应用上层」权限。开启后将前往授权页，返回本页后自动生效。",
+            checked = enabled,
+            onCheckedChange = { want ->
+                if (want) {
+                    enabled = true
+                    IslandPermissions.setEnabled(context, true)
+                    if (!Settings.canDrawOverlays(context)) {
+                        context.startActivity(IslandPermissions.overlaySettingsIntent(context))
+                    } else {
+                        if (Build.VERSION.SDK_INT >= 33 &&
+                            ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.POST_NOTIFICATIONS
+                            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                        ) notificationRequest.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                } else {
+                    enabled = false
+                    IslandPermissions.setEnabled(context, false)
+                    IslandService.stop(context)
+                }
+            }
+        )
+        // Returning from the settings page with permissions now granted: start the service.
+        LaunchedEffect(permissionTick) {
+            if (enabled && ready) IslandService.start(context)
+        }
+        if (enabled && !ready) {
+            TextButton(onClick = { context.startActivity(IslandPermissions.overlaySettingsIntent(context)) }) {
+                Text("前往授权悬浮窗")
             }
         }
     }
