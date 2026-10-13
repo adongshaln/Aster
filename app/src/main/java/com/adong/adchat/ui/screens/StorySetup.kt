@@ -6,7 +6,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +36,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import kotlin.math.abs
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
@@ -140,23 +143,32 @@ fun Modifier.setupDockVerticalSwipe(
     onExpandedChange: (Boolean) -> Unit,
     thresholdPx: Float
 ): Modifier = pointerInput(expanded) {
-    var accumulated = 0f
-    detectVerticalDragGestures(
-        onDragStart = { accumulated = 0f },
-        onDragEnd = { accumulated = 0f },
-        onDragCancel = { accumulated = 0f },
-        onVerticalDrag = { change, amount ->
-            change.consume()
-            accumulated += amount
-            if (!expanded && accumulated <= -thresholdPx) {
-                accumulated = 0f
-                onExpandedChange(true)
-            } else if (expanded && accumulated >= thresholdPx) {
-                accumulated = 0f
-                onExpandedChange(false)
+    var dy = 0f
+    var dx = 0f
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false)
+        dy = 0f; dx = 0f
+        do {
+            val event = awaitPointerEvent()
+            val change = event.changes.firstOrNull() ?: break
+            if (change.isConsumed) break
+            dy += change.positionChange().y
+            dx += change.positionChange().x
+            // Only react when the gesture is clearly vertical, so horizontal
+            // drags (drawer, message swipe) are left alone.
+            if (abs(dy) > abs(dx) * 1.5f) {
+                if (!expanded && dy <= -thresholdPx) {
+                    change.consume()
+                    onExpandedChange(true)
+                    break
+                } else if (expanded && dy >= thresholdPx) {
+                    change.consume()
+                    onExpandedChange(false)
+                    break
+                }
             }
-        }
-    )
+        } while (event.changes.any { it.pressed })
+    }
 }
 
 @Composable

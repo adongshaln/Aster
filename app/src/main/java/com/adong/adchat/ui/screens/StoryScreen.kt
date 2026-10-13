@@ -1433,7 +1433,7 @@ private fun StoryWorkspaceContent(
         LaunchedEffect(storyVm.setupError) {
             if (storyVm.setupError != null && collapsibleSetup) setupExpanded = true
         }
-        val setupSwipeThresholdPx = with(composerDensity) { 34.dp.toPx() }
+        val setupSwipeThresholdPx = with(composerDensity) { 56.dp.toPx() }
         val setupSwipeModifier = if (collapsibleSetup) Modifier.setupDockVerticalSwipe(
             expanded = setupExpanded,
             onExpandedChange = { setupExpanded = it },
