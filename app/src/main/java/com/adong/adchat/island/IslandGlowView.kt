@@ -1,7 +1,6 @@
 package com.adong.adchat.island
 
 import android.content.Context
-import android.graphics.BlendMode
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PorterDuff
@@ -166,13 +165,10 @@ half4 main(float2 p) {
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         color = COLOR_GLOW
-        // ADD 混合：叠加处自然变亮发白（API 31+ 用 BlendMode.PLUS，低版本 PorterDuff.ADD）
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            blender = BlendMode.PLUS
-        } else {
-            @Suppress("DEPRECATION")
-            xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
-        }
+        // ADD 混合：叠加处自然变亮发白。Paint.blender(BrandMode.PLUS) 是 API 31+
+        // 符号，编译目标下不可直接引用，统一用全版本可用的 PorterDuff.ADD。
+        @Suppress("DEPRECATION")
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
     }
     private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val filamentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
