@@ -283,8 +283,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             width, height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -293,6 +292,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun ensureAttached() {
         if (attached) return
         val params = baseParams(dp(PILL_SIZE_DP.toInt()), dp(PILL_SIZE_DP.toInt()))
+        // 负 y 越出屏幕顶部，使胶囊贴到屏幕绝对顶端（挖孔处）。
+        params.y = -statusBarHeight()
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
@@ -314,7 +315,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val params = windowParams ?: return
         params.width = dp(PILL_SIZE_DP.toInt())
         params.height = dp(PILL_SIZE_DP.toInt())
-        params.y = 0
+        params.y = -statusBarHeight()
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
     }
