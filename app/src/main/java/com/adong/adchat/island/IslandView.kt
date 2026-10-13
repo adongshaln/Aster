@@ -60,6 +60,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var attached = false
     private var windowParams: WindowManager.LayoutParams? = null
     private val hideRunnable = Runnable { collapse() }
+    /** 上一次已触发处理的链接（规范化后的 URL），同一链接只触发一次。 */
+    private var lastHandledLink: String? = null
 
     private val pillHost: LinearLayout
     private val cardHost: LinearLayout
@@ -233,6 +235,13 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val clip = currentClipText()
         val link = clip?.let { IslandLinkParser.parse(it) }
         if (link != null) {
+            // 同一链接只触发一次：与上次相同则静默忽略（不展开也不闪烁）
+            val key = link.cleanedUrl.ifBlank { link.originalUrl }
+            if (key == lastHandledLink) {
+                setWindowFocusable(false)
+                return
+            }
+            lastHandledLink = key
             expand(link)
         } else {
             flashNoLink()
