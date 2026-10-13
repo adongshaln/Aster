@@ -115,6 +115,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     /** 缩回挖孔。 */
     fun collapse() {
         mainHandler.post {
+            setFocusable(false)
             if (state == State.Hidden) return@post
             state = State.Hidden
             mainHandler.removeCallbacks(hideRunnable)
@@ -128,6 +129,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     fun destroy() {
         mainHandler.post {
+            setFocusable(false)
             state = State.Hidden
             mainHandler.removeCallbacksAndMessages(null)
             if (attached) {
@@ -213,17 +215,40 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     @SuppressLint("ClickableViewAccessibility")
     private fun handlePillTouch(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_UP) {
-            // 此刻窗口已获焦（“使用中”），直接读剪贴板
-            val clip = currentClipText()
-            val link = clip?.let { IslandLinkParser.parse(it) }
-            if (link != null) {
-                expand(link)
-            } else {
-                flashNoLink()
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // 提前切为可获焦：等系统把焦点切到本窗口后才能读剪贴板
+                setFocusable(true)
+            }
+            MotionEvent.ACTION_UP -> {
+                // 延迟 200ms 等焦点真正切换过来，再读剪贴板
+                mainHandler.postDelayed({ readClipboardAndHandle() }, 200)
             }
         }
         return true
+    }
+
+    /** 读取剪贴板并处理识别结果；无论成败最后都恢复不可获焦。 */
+    private fun readClipboardAndHandle() {
+        val clip = currentClipText()
+        val link = clip?.let { IslandLinkParser.parse(it) }
+        if (link != null) {
+            expand(link)
+        } else {
+            flashNoLink()
+        }
+        setFocusable(false)
+    }
+
+    /** 临时切换窗口焦点标志（读剪贴板需要窗口处于“使用中”状态）。 */
+    private fun setFocusable(focusable: Boolean) {
+        val params = windowParams ?: return
+        params.flags = if (focusable) {
+            params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+        } else {
+            params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        }
+        runCatching { windowManager.updateViewLayout(this, params) }
     }
 
     private fun currentClipText(): String? = runCatching {
@@ -275,8 +300,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     // ---------- 悬浮窗参数 ----------
 
     /**
-     * 窗口不加 FLAG_NOT_FOCUSABLE：胶囊被点击瞬间获焦，处于“使用中”，
-     * 才能读到剪贴板。平时窗口只有胶囊大小，不会挡住其他区域触摸。
+     * 窗口平时不可获焦（FLAG_NOT_FOCUSABLE）：系统不会把返回手势等按键
+     * 派发到这个置顶窗口，避免全局返回失效。仅在点击胶囊读剪贴板的瞬间
+     * 临时移除该标志获焦（“使用中”），读完立即恢复不可获焦。
      */
     private fun baseParams(width: Int, height: Int): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
@@ -284,7 +310,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
                 or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
