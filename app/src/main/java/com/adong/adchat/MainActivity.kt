@@ -22,6 +22,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,13 +36,18 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import com.adong.adchat.data.Conversation
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.*
@@ -175,7 +182,9 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = page != AppPage.Settings || drawerState.isOpen,
+        // Opening by swipe anywhere on screen is too trigger-happy; a narrow
+        // edge strip below gates it instead, closing keeps the built-in gesture.
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             AppDrawer(
                 vm = vm,
@@ -191,9 +200,12 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
         Scaffold(containerColor = Canvas) { padding ->
             val edgeToEdgePage = page == AppPage.Chat || page == AppPage.Story
             val pageBottomPadding = if (edgeToEdgePage) 0.dp else padding.calculateBottomPadding()
+            val drawerScope = scope
+            val drawerOpen: () -> Unit = { drawerScope.launch { drawerState.open() } }
             Box(
                 Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
-                    .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas))),
+                    .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas)))
+                    .drawerEdgeSwipe(drawerOpen),
                 contentAlignment = Alignment.TopCenter
             ) {
                 AnimatedContent(
@@ -303,6 +315,38 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
                 ) { Text("创建", fontWeight = FontWeight.Bold) }
             }
         )
+    }
+}
+
+/**
+ * Opens the drawer only for a clearly horizontal drag that starts inside a
+ * narrow strip along the screen's left edge, mirroring the system back
+ * gesture. Vertical drags and drags starting elsewhere never open it.
+ */
+private fun Modifier.drawerEdgeSwipe(onOpen: () -> Unit): Modifier = composed {
+    val density = LocalDensity.current
+    val edgeWidthPx = with(density) { 20.dp.toPx() }
+    val triggerPx = with(density) { 48.dp.toPx() }
+    pointerInput(Unit) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            if (down.position.x > edgeWidthPx) return@awaitEachGesture
+            var dx = 0f
+            var dy = 0f
+            while (true) {
+                val event = awaitPointerEvent()
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (change.isConsumed) break
+                dx += change.positionChange().x
+                dy += change.positionChange().y
+                if (abs(dx) > abs(dy) * 1.5f && dx >= triggerPx) {
+                    change.consume()
+                    onOpen()
+                    break
+                }
+                if (event.changes.none { it.pressed }) break
+            }
+        }
     }
 }
 
