@@ -43,7 +43,9 @@ data class ApiProfile(
     val extraHeaders: String = "",
     val cachedModels: List<ApiModel> = emptyList(),
     val lastLatencyMs: Long? = null,
-    val modelContexts: Map<String, ModelContextLimits> = emptyMap()
+    val modelContexts: Map<String, ModelContextLimits> = emptyMap(),
+    val apiFormat: String = API_FORMAT_OPENAI,
+    val messagesPath: String = "/v1/messages"
 )
 
 fun ApiProfile.normalized(): ApiProfile = copy(
@@ -62,7 +64,9 @@ fun ApiProfile.normalized(): ApiProfile = copy(
     imageModel = imageModel.trim(),
     mangaAnalysisModel = mangaAnalysisModel.trim(),
     searchModel = searchModel.trim(),
-    extraHeaders = extraHeaders.lineSequence().map(String::trim).filter(String::isNotBlank).joinToString("\n")
+    extraHeaders = extraHeaders.lineSequence().map(String::trim).filter(String::isNotBlank).joinToString("\n"),
+    apiFormat = if (apiFormat == API_FORMAT_ANTHROPIC) API_FORMAT_ANTHROPIC else API_FORMAT_OPENAI,
+    messagesPath = messagesPath.trim().ifBlank { "/v1/messages" }
 )
 
 fun ApiProfile.hasValidBaseUrl(): Boolean {
@@ -96,7 +100,8 @@ data class AppConfig(
     val allowXSearch: Boolean = false,
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
     val themeMode: String = THEME_MODE_ASTER,
-    val fontWeight: Int = DEFAULT_FONT_WEIGHT
+    val fontWeight: Int = DEFAULT_FONT_WEIGHT,
+    val allowInsecureCertificates: Boolean = false
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
@@ -193,6 +198,7 @@ class ConfigStore(context: Context) {
         .put("systemPrompt", config.systemPrompt)
         .put("themeMode", config.themeMode)
         .put("fontWeight", config.fontWeight)
+        .put("allowInsecureCertificates", config.allowInsecureCertificates)
         .put("profiles", JSONArray().apply {
             config.profiles.forEach { profile ->
                 put(JSONObject()
@@ -217,6 +223,8 @@ class ConfigStore(context: Context) {
                     .put("imageModel", profile.imageModel)
                     .put("mangaAnalysisModel", profile.mangaAnalysisModel)
                     .put("searchModel", profile.searchModel)
+                    .put("apiFormat", profile.apiFormat)
+                    .put("messagesPath", profile.messagesPath)
                     .put("extraHeaders", profile.extraHeaders)
                     .put("lastLatencyMs", profile.lastLatencyMs)
                     .put("cachedModels", JSONArray().apply {
@@ -257,6 +265,8 @@ class ConfigStore(context: Context) {
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),
                     searchModel = item.optString("searchModel"),
                     extraHeaders = item.optString("extraHeaders"),
+                    apiFormat = item.optString("apiFormat").ifBlank { API_FORMAT_OPENAI },
+                    messagesPath = item.optString("messagesPath").ifBlank { "/v1/messages" },
                     cachedModels = decodeModels(item.optJSONArray("cachedModels")),
                     lastLatencyMs = item.optLong("lastLatencyMs").takeIf { item.has("lastLatencyMs") && !item.isNull("lastLatencyMs") }
                 ))
@@ -277,7 +287,8 @@ class ConfigStore(context: Context) {
             allowXSearch = root.optBoolean("allowXSearch", false),
             systemPrompt = migrateSystemPrompt(root.optString("systemPrompt").ifBlank { DEFAULT_SYSTEM_PROMPT }),
             themeMode = root.optString("themeMode").takeIf { it in setOf(THEME_MODE_DARK, THEME_MODE_SYSTEM) } ?: THEME_MODE_ASTER,
-            fontWeight = root.optInt("fontWeight", DEFAULT_FONT_WEIGHT).coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX)
+            fontWeight = root.optInt("fontWeight", DEFAULT_FONT_WEIGHT).coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX),
+            allowInsecureCertificates = root.optBoolean("allowInsecureCertificates", false)
         )
     }
 
@@ -494,7 +505,8 @@ data class Conversation(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val profileId: String = "",
-    val model: String = ""
+    val model: String = "",
+    val titleSummarized: Boolean = false
 )
 
 data class ReferenceImageInput(

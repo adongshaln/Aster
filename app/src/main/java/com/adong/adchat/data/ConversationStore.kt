@@ -116,7 +116,8 @@ class ConversationStore(context: Context) {
             createdAt = item.optLong("createdAt", System.currentTimeMillis()),
             updatedAt = item.optLong("updatedAt", System.currentTimeMillis()),
             profileId = item.optString("profileId"),
-            model = item.optString("model")
+            model = item.optString("model"),
+            titleSummarized = item.optBoolean("titleSummarized")
         )
     }
 
@@ -133,6 +134,7 @@ class ConversationStore(context: Context) {
         .put("updatedAt", conversation.updatedAt)
         .put("profileId", conversation.profileId)
         .put("model", conversation.model)
+        .put("titleSummarized", conversation.titleSummarized)
         .put("messages", JSONArray().apply {
             conversation.messages.filter { includeStreaming || !it.isStreaming }.forEach { message ->
                 put(JSONObject()

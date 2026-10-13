@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +51,7 @@ import com.adong.adchat.data.story.StoryProposal
 import com.adong.adchat.data.story.StoryMemoryRecord
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRevisionState
+import com.adong.adchat.data.story.StorySetupPhase
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.*
@@ -64,6 +66,7 @@ import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
@@ -85,6 +88,7 @@ fun StoryScreen(
     var showModelSwitcher by remember(story.id) { mutableStateOf(false) }
     var showTavernPresets by remember { mutableStateOf(false) }
     var showTavernPresetEditor by remember { mutableStateOf(false) }
+    var showDiscussionPresets by remember { mutableStateOf(false) }
     val tavernPresetPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) storyVm.importTavernPreset(uri)
     }
@@ -94,6 +98,7 @@ fun StoryScreen(
         StoryHeader(
             story = story,
             workspace = storyVm.activeWorkspace,
+            setupPhase = story.setupPhase,
             profile = profile,
             onOpenDrawer = onOpenDrawer,
             onStoryPicker = { showStoryPicker = true },
@@ -104,6 +109,9 @@ fun StoryScreen(
             onHistory = storyVm::openTimelineHistory,
             tavernPresetName = storyVm.activeTavernPresetName,
             onTavernPresets = { showTavernPresets = true },
+            discussionPresetName = storyVm.activeDiscussionPresetId
+                ?.let { id -> com.adong.adchat.data.story.StoryDiscussionPresets.byId(id)?.name },
+            onDiscussionPresets = { showDiscussionPresets = true },
             onDeleteStory = { deleteStoryTarget = story },
             historyEnabled = !storyVm.revisionBusy
         )
@@ -190,11 +198,20 @@ fun StoryScreen(
                 tavernPresetPicker.launch(arrayOf("application/json", "text/json", "text/plain", "application/octet-stream"))
             },
             onDelete = storyVm::deleteTavernPreset,
+            onRename = storyVm::renameTavernPreset,
             onConfigure = {
                 showTavernPresets = false
                 showTavernPresetEditor = true
             },
             onDismiss = { showTavernPresets = false }
+        )
+    }
+
+    if (showDiscussionPresets) {
+        StoryDiscussionPresetSheet(
+            activeId = storyVm.activeDiscussionPresetId,
+            onSelect = { storyVm.selectDiscussionPreset(it); showDiscussionPresets = false },
+            onDismiss = { showDiscussionPresets = false }
         )
     }
 
@@ -254,6 +271,7 @@ fun StoryScreen(
 private fun StoryHeader(
     story: Story,
     workspace: StoryWorkspace,
+    setupPhase: com.adong.adchat.data.story.StorySetupPhase,
     profile: ApiProfile?,
     onOpenDrawer: () -> Unit,
     onStoryPicker: () -> Unit,
@@ -264,6 +282,8 @@ private fun StoryHeader(
     onHistory: () -> Unit,
     tavernPresetName: String,
     onTavernPresets: () -> Unit,
+    discussionPresetName: String?,
+    onDiscussionPresets: () -> Unit,
     historyEnabled: Boolean,
     onDeleteStory: () -> Unit
 ) {
@@ -277,18 +297,40 @@ private fun StoryHeader(
             AsterIconButton(Icons.Rounded.MoreHoriz, "故事选项", { showActions = true })
             AsterIconButton(Icons.Rounded.AddComment, "新建故事", onCreateStory)
         }
-        AsterSegmentedControl(
-            labels = listOf("讨论", "正文"),
-            selectedIndex = StoryWorkspace.entries.indexOf(workspace),
-            onSelect = { onWorkspace(StoryWorkspace.entries[it]) },
-            modifier = Modifier.padding(start = 48.dp, end = 48.dp, top = 2.dp, bottom = 4.dp)
+        if (!story.hidesDiscussion) {
+            AsterSegmentedControl(
+                labels = listOf("讨论", "正文"),
+                selectedIndex = StoryWorkspace.entries.indexOf(workspace),
+                onSelect = { index ->
+                    val next = StoryWorkspace.entries[index]
+                    if (next == StoryWorkspace.Prose && setupPhase != com.adong.adchat.data.story.StorySetupPhase.Prose) return@AsterSegmentedControl
+                    onWorkspace(next)
+                },
+                modifier = Modifier.padding(start = 48.dp, end = 48.dp, top = 2.dp, bottom = 4.dp)
+            )
+        }
+        Text(
+            "预设 · ${tavernPresetName.trim().ifBlank { "未使用预设" }}",
+            color = MutedInk,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 4.dp).clickable(onClick = onTavernPresets)
+        )
+        Text(
+            "讨论预设 · ${discussionPresetName ?: "不使用"}",
+            color = MutedInk,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(start = 22.dp, end = 22.dp, bottom = 4.dp).clickable(onClick = onDiscussionPresets)
         )
     }
     if (showActions) AdActionSheet(
         title = "故事选项", subtitle = "管理故事与创作路线",
         actions = listOf(
             AdActionOption("archive", "故事档案", "设定、人物与剧情记忆", Icons.Rounded.FolderOpen),
-            AdActionOption("preset", "酒馆预设", "正文 · $tavernPresetName", Icons.Rounded.Tune),
+            AdActionOption("preset", "酒馆预设", "正文 · ${tavernPresetName.trim().ifBlank { "未使用预设" }}", Icons.Rounded.Tune),
             AdActionOption("history", "历史路线", "查看与切换创作路线", Icons.Rounded.History, enabled = historyEnabled),
             AdActionOption("stories", "切换故事", icon = Icons.Rounded.AutoStories),
             AdActionOption("delete", "删除整个对话", "删除这个故事及其全部资料", Icons.Rounded.DeleteOutline, destructive = true, enabled = historyEnabled)
@@ -318,10 +360,12 @@ private fun TavernPresetSheet(
     onRegexEnabled: (Boolean) -> Unit,
     onImport: () -> Unit,
     onDelete: (String) -> Unit,
+    onRename: (String, String) -> Unit,
     onConfigure: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var deleteCandidate by remember { mutableStateOf<TavernPresetSummary?>(null) }
+    var renameCandidate by remember { mutableStateOf<TavernPresetSummary?>(null) }
     AsterOptionsSheet(
         title = "酒馆预设",
         subtitle = "用于故事正文的提示词、参数与正则",
@@ -344,6 +388,7 @@ private fun TavernPresetSheet(
                 builtIn = preset.builtIn,
                 enabled = !busy,
                 onClick = { onSelect(preset.id) },
+                onRename = if (preset.builtIn) null else { { renameCandidate = preset } },
                 onDelete = if (preset.builtIn) null else { { deleteCandidate = preset } }
             )
         }
@@ -431,6 +476,34 @@ private fun TavernPresetSheet(
             onDismiss = { deleteCandidate = null }
         )
     }
+    renameCandidate?.let { preset ->
+        var name by remember(preset.id) { mutableStateOf(preset.name) }
+        AlertDialog(
+            onDismissRequest = { if (!busy) renameCandidate = null },
+            title = { Text("重命名预设") },
+            text = {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(60) },
+                    enabled = !busy,
+                    singleLine = true,
+                    label = { Text("预设名称") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRename(preset.id, name)
+                        renameCandidate = null
+                    },
+                    enabled = !busy && name.isNotBlank()
+                ) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameCandidate = null }, enabled = !busy) { Text("取消") }
+            }
+        )
+    }
 }
 
 @Composable
@@ -441,6 +514,7 @@ private fun TavernPresetRow(
     builtIn: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
+    onRename: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null
 ) {
     Surface(
@@ -472,6 +546,11 @@ private fun TavernPresetRow(
                 }
                 Text(subtitle, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            onRename?.let { rename ->
+                IconButton(onClick = rename, enabled = enabled) {
+                    Icon(Icons.Rounded.Edit, "重命名预设", Modifier.size(18.dp), tint = MutedInk)
+                }
+            }
             onDelete?.let { delete ->
                 IconButton(onClick = delete, enabled = enabled) {
                     Icon(Icons.Rounded.DeleteOutline, "删除预设", Modifier.size(19.dp), tint = Danger)
@@ -482,6 +561,40 @@ private fun TavernPresetRow(
 }
 
 private enum class TavernConfigurationSection { Prompts, Regex }
+
+@Composable
+private fun StoryDiscussionPresetSheet(
+    activeId: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AsterOptionsSheet(
+        title = "讨论预设",
+        subtitle = "在讨论工作区附加一条系统提示词，改变讨论的方式",
+        headerIcon = Icons.Rounded.Forum,
+        onDismiss = onDismiss
+    ) {
+        TavernPresetRow(
+            title = "不使用",
+            subtitle = "仅使用 Aster 的故事讨论规则",
+            selected = activeId == null,
+            builtIn = false,
+            enabled = true,
+            onClick = { onSelect(null) }
+        )
+        com.adong.adchat.data.story.StoryDiscussionPresets.all.forEach { preset ->
+            TavernPresetRow(
+                title = preset.name,
+                subtitle = "引导式创作 SillyTavern V2 角色卡，支持材料查证",
+                selected = preset.id == activeId,
+                builtIn = true,
+                enabled = true,
+                onClick = { onSelect(preset.id) }
+            )
+        }
+    }
+}
+
 private enum class TavernConfigurationFilter { All, Enabled, Disabled, Modified }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -873,6 +986,26 @@ private fun StoryWorkspaceContent(
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeight by remember { mutableStateOf(100.dp) }
+    val scope = rememberCoroutineScope()
+    val exportContext = LocalContext.current
+    var cardExportTarget by remember { mutableStateOf<String?>(null) }
+    var cardExportName by remember { mutableStateOf("") }
+    val cardExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        val json = cardExportTarget
+        cardExportTarget = null
+        if (uri != null && json != null) scope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    exportContext.contentResolver.openOutputStream(uri, "w")?.use {
+                        it.write(json.toByteArray(Charsets.UTF_8))
+                    } != null
+                }.getOrDefault(false)
+            }
+            android.widget.Toast.makeText(
+                exportContext, if (ok) "已保存角色卡 JSON" else "保存失败，请重试", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
 
     val scrollSessionKey = "${targetStory.id}:${targetStory.currentTimelineId}:${workspace.dbValue}"
     // Completed prose must keep its parsed presentation while LazyColumn recycles rows.
@@ -901,7 +1034,6 @@ private fun StoryWorkspaceContent(
             initialFirstVisibleItemScrollOffset = savedState.firstVisibleOffset.coerceAtLeast(0)
         )
     }
-    val scope = rememberCoroutineScope()
     val dragging by listState.interactionSource.collectIsDraggedAsState()
     var autoFollow by remember(scrollSessionKey) { mutableStateOf(true) }
     val streamScrollSignals = remember(scrollSessionKey) {
@@ -946,6 +1078,9 @@ private fun StoryWorkspaceContent(
         if (dragging) autoFollow = false
         else if (!listState.canScrollForward) autoFollow = true
     }
+    // "Back to bottom" pill: only while the user is actively dragging toward the
+    // end of the list, fading out after the gesture stops. See rememberTowardBottomScrollVisible.
+    val jumpToBottomVisible = rememberTowardBottomScrollVisible(listState)
     LaunchedEffect(
         messages.size,
         messages.lastOrNull()?.revision?.id,
@@ -1185,6 +1320,10 @@ private fun StoryWorkspaceContent(
                         result
                     }
                     val renderedContent = display.structuredText()
+                    val characterCardJson = if (assistant && workspace == StoryWorkspace.Discussion &&
+                        row.revision.state == StoryRevisionState.Complete) {
+                        com.adong.adchat.data.story.CharacterCardFence.extract(renderedContent)
+                    } else null
                     val renderingSignature = prose ?: display
                     LaunchedEffect(row.revision.id, renderingSignature) {
                         // Regex processing and native prose parsing can substantially
@@ -1209,6 +1348,14 @@ private fun StoryWorkspaceContent(
                         onOpenPendingCandidates = storyVm::openPendingCandidates,
                         onOpenRevision = { storyVm.openRevisionEditor(row) },
                         onDelete = { deleteMessageTarget = row },
+                        characterCardJson = characterCardJson,
+                        onImportCharacterCard = { json ->
+                            profile?.let { storyVm.importCharacterCardJson(json, it) }
+                        },
+                        onExportCharacterCard = { json, name ->
+                            cardExportTarget = json; cardExportName = name
+                            cardExporter.launch("${name.ifBlank { "角色卡" }}.json")
+                        },
                         onDetailsExpanded = { messageId ->
                             val messageIndex = messages.indexOfFirst { it.message.id == messageId }
                             if (messageIndex >= 0) {
@@ -1218,6 +1365,10 @@ private fun StoryWorkspaceContent(
                                         with(composerDensity) { (composerHeight + 12.dp).toPx() })
                                 }
                             }
+                        },
+                        onPanelAction = { text ->
+                            val draft = storyVm.draft(StoryWorkspace.Prose)
+                            storyVm.updateDraft(if (draft.isBlank()) text else "$draft\n\n$text", StoryWorkspace.Prose)
                         },
                         reasoning = if (assistant && row.revision.state == StoryRevisionState.Streaming) {
                             storyVm.reasoning(workspace)
@@ -1258,32 +1409,96 @@ private fun StoryWorkspaceContent(
         }
 
         ConversationJumpToBottom(
-            visible = listState.canScrollForward && storyVm.error(workspace) == null,
+            visible = jumpToBottomVisible && storyVm.error(workspace) == null,
             loading = loading,
-            onClick = { autoFollow = true; scope.launch { listState.animateScrollToItem(bottomItemIndex) } },
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = composerHeight + 18.dp)
+            onClick = {
+                autoFollow = true
+                scope.launch { listState.animateScrollToItem(bottomItemIndex) }
+            },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
+            fadeMillisIn = 220,
+            fadeMillisOut = 220
         )
 
-        StoryComposer(
-            skillScope = "aster-story-${storyVm.activeStoryId}-${workspace.dbValue}",
-            value = storyVm.draft(workspace),
-            attachments = savedState.attachments,
-            attachmentBusy = storyVm.attachmentBusy,
-            onPickImages = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-            onPickDocument = { documentPicker.launch(com.adong.adchat.data.DocumentImport.mimeTypes) },
-            onRemoveImage = { storyVm.removeDraftImage(it,workspace) },
-            workspace = workspace,
-            loading = loading,
-            routeAvailable = profile != null,
-            onValueChange = { storyVm.updateDraft(it, workspace) },
-            onSend = {
-                if (profile != null) storyVm.send(profile, workspace) else storyVm.openArchive()
-                autoFollow = true
-            },
-            onStop = { storyVm.stop(workspace) },
-            onFocusChange = { composerFocused = it },
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().onSizeChanged { composerHeight=with(composerDensity) { it.height.toDp() } }
-        )
+        val collapsibleSetup = workspace == StoryWorkspace.Discussion &&
+            targetStory.setupPhase != StorySetupPhase.Prose && profile != null
+        var setupExpanded by rememberSaveable(targetStory.id) { mutableStateOf(false) }
+        var lastSeenSetupPhase by rememberSaveable(targetStory.id) { mutableStateOf<StorySetupPhase?>(null) }
+        LaunchedEffect(targetStory.setupPhase) {
+            if (lastSeenSetupPhase != null && lastSeenSetupPhase != targetStory.setupPhase && collapsibleSetup) {
+                setupExpanded = true
+            }
+            lastSeenSetupPhase = targetStory.setupPhase
+        }
+        LaunchedEffect(storyVm.setupError) {
+            if (storyVm.setupError != null && collapsibleSetup) setupExpanded = true
+        }
+        val setupSwipeThresholdPx = with(composerDensity) { 56.dp.toPx() }
+        val setupSwipeModifier = if (collapsibleSetup) Modifier.setupDockVerticalSwipe(
+            expanded = setupExpanded,
+            onExpandedChange = { setupExpanded = it },
+            thresholdPx = setupSwipeThresholdPx
+        ) else Modifier
+        Column(
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().then(setupSwipeModifier).onSizeChanged {
+                composerHeight = with(composerDensity) { it.height.toDp() }
+            }
+        ) {
+            CollapsibleSetupDock(
+                expanded = setupExpanded,
+                onExpandedChange = { setupExpanded = it },
+                busy = storyVm.setupBusy,
+                error = storyVm.setupError,
+                hint = when (targetStory.setupPhase) {
+                    StorySetupPhase.Discussion -> "先把故事设定谈清楚 · 上滑打开"
+                    StorySetupPhase.CharReview -> "确认对方的角色卡 · 上滑打开"
+                    StorySetupPhase.Identity -> "你要在故事里担任谁 · 上滑打开"
+                    StorySetupPhase.PersonaReview -> "确认你的身份卡 · 上滑打开"
+                    StorySetupPhase.Prose -> ""
+                },
+                gestureEnabled = collapsibleSetup,
+                swipeModifier = Modifier
+            ) {
+                StorySetupBar(
+                phase = targetStory.setupPhase,
+                charCardJson = targetStory.charCardJson,
+                userPersona = targetStory.userPersona,
+                identity = storyVm.identityDraft,
+                busy = storyVm.setupBusy,
+                error = storyVm.setupError,
+                profile = profile,
+                onIdentity = storyVm::updateIdentityDraft,
+                onEndDiscussion = storyVm::endDiscussion,
+                onConfirmChar = storyVm::confirmCharCard,
+                onRegenerateChar = storyVm::regenerateCharCard,
+                onSubmitIdentity = storyVm::submitIdentity,
+                onConfirmPersona = storyVm::confirmPersona,
+                onRegeneratePersona = storyVm::regeneratePersona
+                )
+            }
+            if (targetStory.setupPhase == StorySetupPhase.Discussion || targetStory.setupPhase == StorySetupPhase.Prose) {
+                StoryComposer(
+                skillScope = "aster-story-${storyVm.activeStoryId}-${workspace.dbValue}",
+                value = storyVm.draft(workspace),
+                attachments = savedState.attachments,
+                attachmentBusy = storyVm.attachmentBusy,
+                onPickImages = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                onPickDocument = { documentPicker.launch(com.adong.adchat.data.DocumentImport.mimeTypes) },
+                onRemoveImage = { storyVm.removeDraftImage(it, workspace) },
+                workspace = workspace,
+                loading = loading,
+                routeAvailable = profile != null,
+                onValueChange = { storyVm.updateDraft(it, workspace) },
+                onSend = {
+                    if (profile != null) storyVm.send(profile, workspace) else storyVm.openArchive()
+                    autoFollow = true
+                },
+                onStop = { storyVm.stop(workspace) },
+                onFocusChange = { composerFocused = it },
+                modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 }
 
@@ -1303,12 +1518,21 @@ internal fun StoryMessageItem(
     onOpenPendingCandidates: () -> Unit,
     onOpenRevision: () -> Unit,
     onDetailsExpanded: (String) -> Unit,
+    onPanelAction: (String) -> Unit = {},
+    characterCardJson: String? = null,
+    onImportCharacterCard: (String) -> Unit = {},
+    onExportCharacterCard: (String, String) -> Unit = { _, _ -> },
     reasoning: String = "",
     onDelete: (() -> Unit)? = null
 ) {
     val user = row.message.role == "user"
     val waitingForFirstToken = !user && row.revision.content.isBlank() && row.revision.state == StoryRevisionState.Streaming
     val context = LocalContext.current
+    val cardName = remember(characterCardJson) {
+        characterCardJson?.let { json -> runCatching {
+            (org.json.JSONObject(json).optJSONObject("data") ?: org.json.JSONObject(json)).optString("name").trim()
+        }.getOrNull() }.orEmpty()
+    }
     var showDetails by remember(row.message.id) { mutableStateOf(false) }
     val hasDetails = !user && row.revision.state != StoryRevisionState.Streaming && when (workspace) {
         StoryWorkspace.Discussion -> row.revision.state == StoryRevisionState.Complete
@@ -1355,7 +1579,10 @@ internal fun StoryMessageItem(
                 if (waitingForFirstToken && reasoning.isBlank()) {
                     ConversationThinkingIndicator()
                 } else if (prose != null) {
-                    com.adong.adchat.ui.components.StoryProseContent(prose, row.revision.state == StoryRevisionState.Streaming)
+                    com.adong.adchat.ui.components.StoryProseContent(
+                        prose, row.revision.state == StoryRevisionState.Streaming,
+                        onPanelAction = onPanelAction
+                    )
                 } else {
                     StructuredMessageText(
                         content = displayContent,
@@ -1363,6 +1590,29 @@ internal fun StoryMessageItem(
                         error = false,
                         htmlScriptsAllowed = !regexHtml
                     )
+                }
+                if (characterCardJson != null) {
+                    Row(
+                        Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { onImportCharacterCard(characterCardJson) },
+                            enabled = actionsEnabled,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("导入为角色卡", style = MaterialTheme.typography.labelLarge)
+                        }
+                        OutlinedButton(
+                            onClick = { onExportCharacterCard(characterCardJson, cardName) },
+                            enabled = true,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("导出 JSON", style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
                 }
                 if (row.revision.state in setOf(StoryRevisionState.Interrupted, StoryRevisionState.Stopped)) {
                     Surface(

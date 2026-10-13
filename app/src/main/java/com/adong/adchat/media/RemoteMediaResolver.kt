@@ -6,6 +6,7 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.adong.adchat.data.applyNetworkTrust
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,6 +23,7 @@ class RemoteMediaResolver {
         .retryOnConnectionFailure(true)
         .followRedirects(true)
         .followSslRedirects(true)
+        .applyNetworkTrust()
         .build()
 
     suspend fun resolve(input: MediaInput, onProgress: (String) -> Unit = {}): ResolvedMedia =

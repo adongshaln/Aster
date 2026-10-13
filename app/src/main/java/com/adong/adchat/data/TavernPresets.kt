@@ -318,7 +318,7 @@ class TavernPresetStore(context: Context) {
         }
         return TavernPresetConfiguration(
             id = preset.id,
-            name = preset.name,
+            name = readConfiguration(preset.id).name ?: preset.name,
             builtIn = preset.builtIn,
             prompts = prompts,
             regexScripts = regexScripts,
@@ -384,6 +384,18 @@ class TavernPresetStore(context: Context) {
         val digest = sha256(bytes)
         val preset = TavernPresetParser.parse(raw, "import:$digest", displayName, false)
         check(directory.exists() || directory.mkdirs()) { "无法创建酒馆预设目录" }
+        val declaredName = runCatching {
+            val root = JSONObject(raw)
+            sequenceOf("name", "preset_name", "presetName")
+                .map { root.optString(it).trim() }
+                .firstOrNull(String::isNotBlank)
+        }.getOrNull()
+        if (declaredName == null) {
+            val configuration = readConfiguration(preset.id)
+            configuration.name = displayName.substringBeforeLast('.').trim().takeIf(String::isNotEmpty)
+                ?: preset.name
+            writeConfiguration(preset.id, configuration)
+        }
         val atomic = AtomicFile(File(directory, "$digest.json"))
         val output = atomic.startWrite()
         try {
@@ -433,13 +445,26 @@ class TavernPresetStore(context: Context) {
         val regex = preset.regexScripts.mapIndexed { index, script ->
             configuration.regexEnabled[index]?.let { script.copy(disabled = !it) } ?: script
         }
-        return preset.copy(prompts = prompts, promptOrder = order, regexScripts = regex)
+        return preset.copy(name = configuration.name ?: preset.name, prompts = prompts, promptOrder = order, regexScripts = regex)
+    }
+
+    @Synchronized
+    fun renamePreset(id: String, newName: String) {
+        val name = newName.trim()
+        require(name.isNotEmpty()) { "预设名称不能为空" }
+        require(name.length <= 60) { "预设名称不能超过 60 个字符" }
+        requireNotNull(rawPreset(id)) { "酒馆预设已不存在" }
+        require(id != BUILT_IN_ID) { "内置预设不能改名" }
+        val configuration = readConfiguration(id)
+        configuration.name = name
+        writeConfiguration(id, configuration)
     }
 
     private data class StoredConfiguration(
         val promptEnabled: MutableMap<String, Boolean> = linkedMapOf(),
         val regexEnabled: MutableMap<Int, Boolean> = linkedMapOf(),
-        val promptContent: MutableMap<String, String> = linkedMapOf()
+        val promptContent: MutableMap<String, String> = linkedMapOf(),
+        var name: String? = null
     )
 
     private fun readConfiguration(presetId: String): StoredConfiguration {
@@ -455,19 +480,22 @@ class TavernPresetStore(context: Context) {
             val contentObject = root.optJSONObject("prompt_content") ?: JSONObject()
             val contents = linkedMapOf<String, String>()
             contentObject.keys().forEach { key -> (contentObject.opt(key) as? String)?.let { contents[key] = it } }
-            StoredConfiguration(prompts, regex, contents)
+            StoredConfiguration(prompts, regex, contents, root.optString("name").trim().takeIf(String::isNotEmpty))
         }.getOrDefault(StoredConfiguration())
     }
 
     private fun writeConfiguration(presetId: String, configuration: StoredConfiguration) {
-        if (configuration.promptEnabled.isEmpty() && configuration.regexEnabled.isEmpty() && configuration.promptContent.isEmpty()) {
+        if (configuration.promptEnabled.isEmpty() && configuration.regexEnabled.isEmpty() &&
+            configuration.promptContent.isEmpty() && configuration.name == null) {
             prefs.edit().remove(configurationKey(presetId)).apply()
             return
         }
         val prompts = JSONObject().apply { configuration.promptEnabled.forEach { (key, value) -> put(key, value) } }
         val regex = JSONObject().apply { configuration.regexEnabled.forEach { (key, value) -> put(key.toString(), value) } }
         val contents = JSONObject().apply { configuration.promptContent.forEach { (key, value) -> put(key, value) } }
-        val value = JSONObject().put("prompts", prompts).put("regex", regex).put("prompt_content", contents).toString()
+        val value = JSONObject().put("prompts", prompts).put("regex", regex).put("prompt_content", contents)
+            .apply { configuration.name?.let { put("name", it) } }
+            .toString()
         prefs.edit().putString(configurationKey(presetId), value).apply()
     }
 
@@ -564,7 +592,36 @@ internal object TavernRegexEngine {
             if (replaced != result) applied++
             result = replaced
         }
+        if (surface == TavernRegexSurface.Display) {
+            for (script in preset.regexScripts) {
+                if (!isDisplayRepairer(script)) continue
+                val placementId = when (role) { "user" -> 1; "assistant" -> 2; else -> null }
+                if (placementId == null || placementId !in script.placement) continue
+                val find = substituteFindMacros(script.findRegex, script.substituteRegex, macroValues)
+                val compiledResult = cache.getOrPut(find) { runCatching { compile(find) } }
+                if (compiledResult.isFailure) {
+                    skipped += script.name
+                    continue
+                }
+                val compiled = compiledResult.getOrThrow()
+                val replaced = runCatching { replace(result, compiled, script) }
+                    .getOrElse { skipped += script.name; result }
+                if (replaced != result) applied++
+                result = replaced
+            }
+        }
         return TavernRegexOutput(result, applied, skipped)
+    }
+
+    /**
+     * promptOnly scripts act only on the Prompt surface in SillyTavern, but their effect defines
+     * how model output looks (tags become HTML panels). Without depth support in our display we
+     * re-apply them on Display at any depth so older messages render as intended. Whole-message
+     * anchored scripts (context trimming) are excluded — they are prompt-side-only by design.
+     */
+    private fun isDisplayRepairer(script: TavernRegexScript): Boolean {
+        if (script.disabled || !script.promptOnly || script.markdownOnly) return false
+        return !wholeMessagePattern(script.findRegex)
     }
 
     private fun TavernRegexScript.appliesTo(role: String, depth: Int, surface: TavernRegexSurface): Boolean {
@@ -577,6 +634,18 @@ internal object TavernRegexEngine {
             TavernRegexSurface.Prompt -> promptOnly || !markdownOnly
             TavernRegexSurface.Display -> markdownOnly || !promptOnly
         }
+    }
+
+    private fun wholeMessagePattern(findRegex: String): Boolean {
+        var pattern = findRegex
+        if (pattern.startsWith('/')) {
+            val delimiter = closingSlash(pattern)
+            if (delimiter > 0) pattern = pattern.substring(1, delimiter)
+        }
+        pattern = pattern.trim()
+        val anchoredStart = pattern.startsWith("^") || pattern.startsWith("\\A")
+        val anchoredEnd = pattern.endsWith("$") || pattern.endsWith("\\z") || pattern.endsWith("\\Z")
+        return anchoredStart && anchoredEnd
     }
 
     private fun compile(source: String): Compiled {
@@ -685,6 +754,36 @@ data class TavernPreparedRequest(
     val generationOptions: ChatGenerationOptions
 )
 
+/** Fields from the confirmed character card. Blank fields stay out of the request. */
+data class TavernCharacterContext(
+    val name: String = "",
+    val description: String = "",
+    val personality: String = "",
+    val scenario: String = "",
+    val persona: String = "",
+    val mesExample: String = "",
+    val wiBefore: String = "",
+    val wiAfter: String = ""
+) {
+    fun marker(identifier: String): String = when (identifier) {
+        "charDescription" -> description
+        "charPersonality" -> personality
+        "scenario" -> scenario
+        "personaDescription" -> persona
+        "dialogueExamples" -> mesExample
+        "worldInfoBefore" -> wiBefore
+        "worldInfoAfter" -> wiAfter
+        else -> ""
+    }.trim()
+
+    companion object {
+        val CARD_MARKERS = setOf(
+            "charDescription", "charPersonality", "scenario", "personaDescription", "dialogueExamples",
+            "worldInfoBefore", "worldInfoAfter"
+        )
+    }
+}
+
 object TavernPresetRuntime {
     private val markerIds = TAVERN_CONTEXT_MARKER_IDS
 
@@ -693,8 +792,10 @@ object TavernPresetRuntime {
         baseSystemPrompt: String,
         history: List<ChatMessage>,
         regexEnabled: Boolean = true,
-        random: Random = Random.Default
+        random: Random = Random.Default,
+        cast: TavernCharacterContext = TavernCharacterContext()
     ): TavernPreparedRequest {
+        val charName = cast.name.ifBlank { preset.name }
         val depths = history.indices.associateWith { history.lastIndex - it }
         val promptHistory = history.mapIndexed { index, message ->
             if (!regexEnabled) message else message.copy(
@@ -704,34 +805,53 @@ object TavernPresetRuntime {
                     role = message.role,
                     depth = depths.getValue(index),
                     surface = TavernRegexSurface.Prompt,
-                    macroValues = mapOf("user" to "用户", "char" to preset.name)
+                    macroValues = castMacros(charName, cast)
                 ).text
             )
         }
         val lastUser = promptHistory.lastOrNull { it.role == "user" }?.content.orEmpty()
         val lastAssistant = promptHistory.lastOrNull { it.role == "assistant" }?.content.orEmpty()
-        val macros = TavernMacroProcessor(preset.name, lastUser, lastAssistant, random)
+        val macros = TavernMacroProcessor(charName, lastUser, lastAssistant, random, cast)
         val byId = preset.prompts.associateBy(TavernPrompt::identifier)
         val ordered = if (preset.promptOrder.isNotEmpty()) preset.promptOrder else preset.prompts.map {
             TavernPromptOrderEntry(it.identifier, it.enabled)
         }
-        val assembled = mutableListOf<ChatMessage>()
+        val beforeHistory = mutableListOf<ChatMessage>()
+        val afterHistory = mutableListOf<ChatMessage>()
         var insertedHistory = false
         for (entry in ordered) {
             if (!entry.enabled) continue
             if (entry.identifier == "chatHistory") {
-                if (!insertedHistory) assembled += promptHistory
+                if (!insertedHistory) beforeHistory += promptHistory
                 insertedHistory = true
                 continue
             }
-            val prompt = byId[entry.identifier] ?: continue
-            if (prompt.marker || entry.identifier in markerIds) continue
+            val prompt = byId[entry.identifier]
+            val target = if (insertedHistory) afterHistory else beforeHistory
+            if (entry.identifier in TavernCharacterContext.CARD_MARKERS) {
+                val text = macros.expand(cast.marker(entry.identifier)).trim()
+                if (text.isNotBlank()) {
+                    target += ChatMessage(role = prompt?.role?.takeIf { it.isNotBlank() } ?: "system", content = text)
+                }
+                continue
+            }
+            if (prompt == null || prompt.marker || entry.identifier in markerIds) continue
             val content = macros.expand(prompt.content).trim()
-            if (content.isNotBlank()) assembled += ChatMessage(role = prompt.role, content = content)
+            if (content.isNotBlank()) target += ChatMessage(role = prompt.role, content = content)
         }
-        if (!insertedHistory) assembled += promptHistory
+        if (!insertedHistory) beforeHistory += promptHistory
+        // The history forms one contiguous block inside beforeHistory (at the chatHistory slot or
+        // appended at the end). Split around it so relocated trailing modules land before it.
+        val historyStart = if (promptHistory.isEmpty()) beforeHistory.size
+        else beforeHistory.indexOfFirst { it === promptHistory.first() }
+        val preHistoryModules = if (historyStart >= 0) beforeHistory.subList(0, historyStart) else emptyList()
+        // 尾部的 user/assistant 模块会占据回复位置或伪装成模型发言，把它们移到历史之前；
+        // 尾部 system 模块是合法的收尾指令，保留在历史之后。
+        val relocated = afterHistory.filter { it.role != "system" && it.role != "developer" }
+        if (relocated.isNotEmpty()) afterHistory.removeAll(relocated.toSet())
+        var assembled = preHistoryModules + relocated + promptHistory + afterHistory
         macros.expand(preset.assistantPrefill).trim().takeIf(String::isNotBlank)?.let {
-            assembled += ChatMessage(role = "assistant", content = it)
+            assembled = assembled + ChatMessage(role = "assistant", content = it)
         }
         val guardedSystem = buildString {
             append(baseSystemPrompt.trim())
@@ -746,14 +866,26 @@ object TavernPresetRuntime {
         content: String,
         role: String,
         depth: Int,
-        regexEnabled: Boolean
+        regexEnabled: Boolean,
+        cast: TavernCharacterContext = TavernCharacterContext()
     ): TavernRegexOutput = if (!regexEnabled) TavernRegexOutput(content, 0, emptyList()) else TavernRegexEngine.apply(
         preset = preset,
         text = content,
         role = role,
         depth = depth,
         surface = TavernRegexSurface.Display,
-        macroValues = mapOf("user" to "用户", "char" to preset.name)
+        macroValues = castMacros(cast.name.ifBlank { preset.name }, cast)
+    )
+
+    private fun castMacros(charName: String, cast: TavernCharacterContext): Map<String, String> = mapOf(
+        "user" to "用户",
+        "char" to charName,
+        "description" to cast.description,
+        "personality" to cast.personality,
+        "scenario" to cast.scenario,
+        "persona" to cast.persona,
+        "worldInfoBefore" to cast.wiBefore,
+        "worldInfoAfter" to cast.wiAfter
     )
 }
 
@@ -761,7 +893,8 @@ private class TavernMacroProcessor(
     private val characterName: String,
     private val lastUserMessage: String,
     private val lastAssistantMessage: String,
-    private val random: Random
+    private val random: Random,
+    private val cast: TavernCharacterContext = TavernCharacterContext()
 ) {
     private val variables = linkedMapOf<String, String>()
 
@@ -806,6 +939,10 @@ private class TavernMacroProcessor(
         return when (trimmed.lowercase()) {
             "user" -> "用户"
             "char" -> characterName
+            "description", "chardescription" -> cast.description
+            "personality", "charpersonality" -> cast.personality
+            "scenario" -> cast.scenario
+            "persona", "personadescription" -> cast.persona
             "lastusermessage" -> lastUserMessage
             "lastcharmessage", "lastassistantmessage" -> lastAssistantMessage
             "time" -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())

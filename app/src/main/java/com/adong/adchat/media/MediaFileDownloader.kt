@@ -13,6 +13,7 @@ import kotlin.coroutines.coroutineContext
 import kotlin.math.min
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import com.adong.adchat.data.applyNetworkTrust
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -46,6 +47,7 @@ class MediaFileDownloader(context: Context) {
         .retryOnConnectionFailure(true)
         .followRedirects(true)
         .followSslRedirects(true)
+        .applyNetworkTrust()
         .build()
 
     @Volatile

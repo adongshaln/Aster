@@ -43,6 +43,9 @@ class StoryRepository(context: Context) : AutoCloseable {
                     put("automatic_memory_enabled", if (story.automaticMemoryEnabled) 1 else 0)
                     put("created_at", story.createdAt)
                     put("updated_at", story.updatedAt)
+                    put("setup_phase", StorySetupPhase.Discussion.dbValue)
+                    put("char_card_json", "")
+                    put("user_persona", "")
                 }
             )
             db.insertOrThrow(
@@ -71,7 +74,45 @@ class StoryRepository(context: Context) : AutoCloseable {
                 )
             }
         }
-        return story
+        return story.copy(setupPhase = StorySetupPhase.Discussion)
+    }
+
+    fun createImportedStory(imported: ImportedCharacterCard, profileId: String, model: String): Story {
+        val created = createStory(imported.card.name.take(60), profileId, model)
+        val updated = updateStorySetup(created.id, StorySetupPhase.Prose, charCardJson = imported.card.toJson())
+        if (imported.opening.isNotBlank()) {
+            appendMessage(
+                storyId = updated.id,
+                timelineId = updated.currentTimelineId,
+                workspace = StoryWorkspace.Prose,
+                role = "assistant",
+                content = imported.opening,
+                state = StoryRevisionState.Complete,
+                model = model
+            )
+        }
+        return getStory(updated.id) ?: updated
+    }
+
+    fun updateStorySetup(
+        storyId: String,
+        phase: StorySetupPhase,
+        charCardJson: String? = null,
+        userPersona: String? = null
+    ): Story {
+        val now = System.currentTimeMillis()
+        helper.writableDatabase.update(
+            StorySchema.STORIES,
+            ContentValues().apply {
+                put("setup_phase", phase.dbValue)
+                put("updated_at", now)
+                if (charCardJson != null) put("char_card_json", charCardJson)
+                if (userPersona != null) put("user_persona", userPersona)
+            },
+            "id = ?",
+            arrayOf(storyId)
+        )
+        return getStory(storyId) ?: error("故事不存在")
     }
 
     fun listStories(): List<Story> = helper.readableDatabase.query(
@@ -571,11 +612,11 @@ class StoryRepository(context: Context) : AutoCloseable {
         }
     }
 
-    fun historicalRewriteContext(messageId: String, revisionId: String, instruction: String, originalInput: String? = null, budget: StoryContextBudget = StoryContextBudget()): StoryContextResult =
+    fun historicalRewriteContext(messageId: String, revisionId: String, instruction: String, originalInput: String? = null, budget: StoryContextBudget = StoryContextBudget(), cast: StoryCastContext = StoryCastContext()): StoryContextResult =
         helper.readableDatabase.inTransaction { db ->
             val source=queryMessageWithRevision(db,messageId) ?: error("正文不存在")
             val boundary=StoryTimelineHistory.readBoundary(db,messageId,revisionId)
-            StoryHistoricalContext.compose(db,source,boundary,instruction,originalInput,budget)
+            StoryHistoricalContext.compose(db,source,boundary,instruction,originalInput,budget,cast)
         }
 
     fun beginRewrite(messageId: String, revisionId: String, memoryVersion: Long, instruction: String,
@@ -759,7 +800,10 @@ class StoryRepository(context: Context) : AutoCloseable {
         memoryVersion = long("memory_version"),
         automaticMemoryEnabled = int("automatic_memory_enabled") != 0,
         createdAt = long("created_at"),
-        updatedAt = long("updated_at")
+        updatedAt = long("updated_at"),
+        setupPhase = StorySetupPhase.fromDb(string("setup_phase")),
+        charCardJson = string("char_card_json"),
+        userPersona = string("user_persona")
     )
 
     private fun Cursor.toRevision(): StoryMessageRevision = StoryMessageRevision(

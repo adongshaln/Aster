@@ -57,6 +57,7 @@ data class AsterPalette(
     val night: Color,
     val quoteAmber: Color,
     val bracketBlue: Color,
+    val nameInk: Color,
     val amberSoft: Color
 )
 
@@ -80,6 +81,8 @@ val AsterPaletteLight = AsterPalette(
     night = Color(0xFF352F2A),
     quoteAmber = Color(0xFF9A6B12),
     bracketBlue = Color(0xFF6292B3),
+    // 人物名要和暖墨、品牌棕、危险红分开。浅色纸上用靛蓝，对比约 6:1。
+    nameInk = Color(0xFF3E5C86),
     amberSoft = Color(0xFFFFF1D8)
 )
 
@@ -101,6 +104,7 @@ val AsterPaletteDark = AsterPalette(
     night = Color(0xFF0F0E0C),
     quoteAmber = Color(0xFFD9A94E),
     bracketBlue = Color(0xFF8FB5D6),
+    nameInk = Color(0xFFA9C7E4),
     amberSoft = Color(0xFF43301C)
 )
 
@@ -136,6 +140,7 @@ val DangerSoft @Composable get() = LocalAsterPalette.current.dangerSoft
 val Night @Composable get() = LocalAsterPalette.current.night
 val QuoteAmber @Composable get() = LocalAsterPalette.current.quoteAmber
 val BracketBlue @Composable get() = LocalAsterPalette.current.bracketBlue
+val NameInk @Composable get() = LocalAsterPalette.current.nameInk
 val AmberSoft @Composable get() = LocalAsterPalette.current.amberSoft
 
 /** 收尾很慢的缓出。页面和品牌动画用它，避免线性滑动的硬停。 */
@@ -256,6 +261,7 @@ fun AsterTheme(
         night = animateColorAsState(target.night, tween(240, easing = FastOutSlowInEasing), label = "p-night").value,
         quoteAmber = animateColorAsState(target.quoteAmber, tween(240, easing = FastOutSlowInEasing), label = "p-amber").value,
         bracketBlue = animateColorAsState(target.bracketBlue, tween(240, easing = FastOutSlowInEasing), label = "p-bracket").value,
+        nameInk = animateColorAsState(target.nameInk, tween(240, easing = FastOutSlowInEasing), label = "p-name").value,
         amberSoft = animateColorAsState(target.amberSoft, tween(240, easing = FastOutSlowInEasing), label = "p-amberSoft").value
     )
     CompositionLocalProvider(

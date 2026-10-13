@@ -70,5 +70,45 @@ class DelegatedSearchTest {
         assertFalse(responseUsedDelegatedSearch(textOnly, "web"))
     }
 
+    @Test
+    fun anthropicSearchRequestUsesTheMessagesWebSearchTool() {
+        val body = anthropicWebSearchRequest("claude-sonnet-4-5", "查找作品")
+        assertEquals("claude-sonnet-4-5", body.getString("model"))
+        assertEquals("web_search_20250305", body.getJSONArray("tools").getJSONObject(0).getString("type"))
+        assertEquals("user", body.getJSONArray("messages").getJSONObject(0).getString("role"))
+    }
+
+    @Test
+    fun anthropicSearchResultKeepsNotesAndSources() {
+        val root = JSONObject().put("content", JSONArray()
+            .put(JSONObject().put("type", "server_tool_use").put("name", "web_search"))
+            .put(JSONObject().put("type", "web_search_tool_result").put("content", JSONArray()
+                .put(JSONObject().put("type", "web_search_result").put("title", "作品页").put("url", "https://www.pixiv.net/artworks/1"))))
+            .put(JSONObject().put("type", "text").put("text", "找到一张全身图。").put("citations", JSONArray()
+                .put(JSONObject().put("url", "https://www.pixiv.net/artworks/1").put("title", "作品页")))))
+        assertTrue(anthropicSearchPerformed(root))
+        val (research, sources) = parseAnthropicSearch(root)
+        assertEquals("找到一张全身图。", research)
+        assertEquals(listOf("https://www.pixiv.net/artworks/1"), sources.map { it.url })
+        assertFalse(anthropicSearchPerformed(JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "没有搜")))))
+    }
+
+    @Test
+    fun stepSearchDoesNotUseTheAnthropicServerTool() {
+        assertTrue("stepfun/step-5-preview".isStepModel())
+        assertFalse("claude-sonnet-4-5".isStepModel())
+        val search = stepSearchRequest("樋口円香")
+        assertEquals("樋口円香", search.getString("query"))
+        val parsed = parseStepSearch(JSONObject().put("results", JSONArray().put(JSONObject()
+            .put("title", "作品页")
+            .put("url", "https://www.pixiv.net/artworks/1")
+            .put("snippet", "日常全身"))))
+        assertEquals("https://www.pixiv.net/artworks/1", parsed.second.single().url)
+        assertTrue(parsed.first.contains("日常全身"))
+        val followUp = stepResearchRequest("step-5-preview", "樋口円香", parsed.first)
+        assertFalse(followUp.has("tools"))
+        assertEquals("step-5-preview", followUp.getString("model"))
+    }
+
     private fun JSONArray.toStringList(): List<String> = (0 until length()).map(::getString)
 }

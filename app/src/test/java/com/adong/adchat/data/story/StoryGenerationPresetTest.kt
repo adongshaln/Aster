@@ -74,4 +74,37 @@ class StoryGenerationPresetTest {
         assertFalse(prepared.history.any { it.content.contains("CUSTOM_PRESET_TOKEN") })
         assertEquals(ChatGenerationOptions(), prepared.generationOptions)
     }
+
+    @Test fun presetMarkersAndMacrosReceiveTheCharacterCard() {
+        val cardPreset = preset.copy(
+            name = "4d00dc6a3ca485618f31cd11b97d9c6efa349f2fb6ba6f5489252aa492d185a6",
+            prompts = listOf(
+                TavernPrompt("charDescription", "描述", "system", "", true, true, null, null),
+                TavernPrompt("scenario", "故事", "system", "", true, true, null, null),
+                TavernPrompt("main", "主提示", "system", "对方是{{char}}。{{description}} {{scenario}}", true, false, null, null)
+            ),
+            promptOrder = listOf(
+                TavernPromptOrderEntry("charDescription", true),
+                TavernPromptOrderEntry("scenario", true),
+                TavernPromptOrderEntry("main", true),
+                TavernPromptOrderEntry("chatHistory", true)
+            )
+        )
+        val prepared = StoryGenerationPreset.prepare(
+            StoryWorkspace.Prose,
+            context,
+            cardPreset,
+            regexEnabled = false,
+            cast = StoryCastContext(
+                card = StoryCharacterCard("梅尔文", "旧书店店主", "寡言", "Fate/strange Fake 同人"),
+                userPersona = "旁白"
+            )
+        )
+        val sent = prepared.history.joinToString("\n") { it.content }
+        assertTrue(sent.contains("梅尔文"))
+        assertTrue(sent.contains("旧书店店主"))
+        assertTrue(sent.contains("Fate/strange Fake 同人"))
+        assertFalse(sent.contains("{{"))
+        assertFalse(sent.contains(cardPreset.name))
+    }
 }

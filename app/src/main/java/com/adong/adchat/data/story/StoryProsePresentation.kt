@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 import org.jsoup.nodes.Node
 import org.jsoup.nodes.TextNode
 
-data class StoryProseBlock(val text: String, val title: String? = null)
+data class StoryProseBlock(val text: String, val title: String? = null, val html: String? = null)
 
 data class StoryProsePresentation(
     val planning: String = "",
@@ -22,12 +22,25 @@ data class StoryProsePresentation(
 
 /** Presentation only: never writes cleaned text back to message history or request context. */
 object StoryProsePresenter {
-    private val fence = Regex("```[^\\n]*\\n[\\s\\S]*?(?:```|$)")
+    private val fence = Regex("```([^\\n`]*)\\n([\\s\\S]*?)(?:^ {0,3}```[ \\t]*$|\\z)", RegexOption.MULTILINE)
     private val htmlMarker = Regex("</?(?:html|body|style|details|div|span|p|section|article|options|current_event|progress|tucao|konatan_chat|h[1-6]|br)\\b", RegexOption.IGNORE_CASE)
+    private val substantialHtml = Regex("<style|<!doctype|class=\"", RegexOption.IGNORE_CASE)
+    private val bridgeToken = com.adong.adchat.ui.components.HtmlPreviewDocument.PANEL_TOKEN
+    private val bridgeScript = Regex("<script[^>]*>[^<]*${Regex.escape(bridgeToken)}[^<]*</script>", RegexOption.IGNORE_CASE)
+    private val echoedInputPrefix = Regex("^【(?:LAST_USER_INPUT|HISTORICAL_USER_INPUT)】\\s*")
+    private val panelTitle = Regex("(?is)<title[^>]*>(.*?)</title>")
+
+    private fun generatedPanelDocument(document: String): Boolean {
+        val lower = document.lowercase()
+        if (!lower.contains("<html") && !lower.contains("<!doctype")) return false
+        val title = panelTitle.find(document)?.groupValues?.get(1)?.trim().orEmpty()
+        return title.contains("面板")
+    }
 
     fun present(raw: String, preset: TavernPreset?, role: String, depth: Int,
                 regexEnabled: Boolean, streaming: Boolean): StoryProsePresentation {
-        val split = if (role == "assistant") StoryThoughtParser.split(raw) else StoryThoughtSplit(raw, emptyList(), emptyList())
+        val body = if (role == "assistant") echoedInputPrefix.replace(raw.trimStart(), "") else raw
+        val split = if (role == "assistant") StoryThoughtParser.split(body) else StoryThoughtSplit(raw, emptyList(), emptyList())
         val output = if (preset != null && !streaming) {
             TavernPresetRuntime.display(preset, split.body, role, depth, regexEnabled)
         } else TavernRegexOutput(split.body, 0, emptyList())
@@ -47,20 +60,31 @@ object StoryProsePresenter {
         var cursor = 0
         for (match in fence.findAll(source)) {
             appendFragment(source.substring(cursor, match.range.first), result)
-            val code = match.value.removePrefix("```")
-            val language = code.substringBefore('\n').trim()
-            val content = code.substringAfter('\n').removeSuffix("```")
+            val language = match.groupValues[1].trim()
+            val content = match.groupValues[2].removeSuffix("```").trimEnd('\n')
             if (language.lowercase() in setOf("html", "htm") || (language.isEmpty() && htmlMarker.containsMatchIn(content))) {
-                appendFragment(content, result)
-            } else result += StoryProseBlock(match.value)
+                val document = stripBridgeArtifacts(content)
+                when {
+                    generatedPanelDocument(document) -> Unit
+                    document.length >= 80 && substantialHtml.containsMatchIn(document) -> result += StoryProseBlock("", html = document)
+                    else -> appendFragment(content, result)
+                }
+            } else result += StoryProseBlock(match.groupValues[0])
             cursor = match.range.last + 1
         }
         appendFragment(source.substring(cursor), result)
         return result
     }
 
+    /** Remove our own panel-bridge scripts so a re-presented bridged document stays stable. */
+    private fun stripBridgeArtifacts(source: String): String {
+        if (!source.contains(bridgeToken)) return source.trim()
+        return bridgeScript.replace(source, "").trim()
+    }
+
     private fun appendFragment(source: String, result: MutableList<StoryProseBlock>) {
         if (source.isBlank()) return
+        if (generatedPanelDocument(source)) return
         if (!htmlMarker.containsMatchIn(source)) {
             result += StoryProseBlock(source.trim())
             return

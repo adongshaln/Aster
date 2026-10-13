@@ -8,6 +8,11 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -16,12 +21,13 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -41,17 +47,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.runtime.staticCompositionLocalOf
+import com.adong.adchat.ui.markdown.linkAt
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -65,7 +79,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.chatImageHeaders
+import com.adong.adchat.data.downloadChatImage
+import com.adong.adchat.data.fetchPixivPreviewUrl
 import com.adong.adchat.data.ReasoningPolicy
 import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.ChatFileAttachment
@@ -76,6 +95,10 @@ import com.adong.adchat.data.TOOL_STATUS_COMPLETED
 import com.adong.adchat.data.TOOL_STATUS_FAILED
 import com.adong.adchat.data.TOOL_STATUS_RUNNING
 import com.adong.adchat.ui.MainViewModel
+import com.adong.adchat.ui.fittedImageDp
+import com.adong.adchat.ui.modelWorkingCaption
+import com.adong.adchat.ui.showModelWorkingFoot
+import com.adong.adchat.ui.waitingOnUser
 import com.adong.adchat.ui.ContextUsage
 import com.adong.adchat.ui.chat.questionNavigationTargets
 import com.adong.adchat.ui.components.*
@@ -83,11 +106,24 @@ import com.adong.adchat.ui.components.AdChoiceOption
 import com.adong.adchat.ui.components.AdSelectionSheet
 import com.adong.adchat.ui.components.QuickModelSwitcher
 import com.adong.adchat.ui.components.RouteKind
+import com.adong.adchat.data.ASK_USER_CUSTOM_OPTION
+import com.adong.adchat.data.ASK_USER_TOOL
+import com.adong.adchat.data.AskUserPrompt
 import com.adong.adchat.ui.markdown.MarkdownTable
 import com.adong.adchat.ui.markdown.MarkdownTableAlignment
 import com.adong.adchat.ui.markdown.containsMarkdownTable
 import com.adong.adchat.ui.markdown.markdownTableToTsv
+import com.adong.adchat.ui.markdown.emphasisSpanAllowed
+import com.adong.adchat.ui.markdown.isChapterHeading
+import com.adong.adchat.ui.markdown.isSceneBreak
+import com.adong.adchat.ui.markdown.isStarredProseLine
+import com.adong.adchat.ui.markdown.joinProseLine
 import com.adong.adchat.ui.markdown.parseMarkdownTableAt
+import com.adong.adchat.ui.markdown.readingSpans
+import com.adong.adchat.ui.markdown.splitInlineImages
+import com.adong.adchat.ui.markdown.nextPlainEnd
+import com.adong.adchat.ui.markdown.InlinePiece
+import com.adong.adchat.ui.markdown.ReadingSpan
 import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -101,6 +137,8 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.sin
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -121,7 +159,6 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     var showSwitcher by remember { mutableStateOf(false) }
     var showContextDialog by remember { mutableStateOf(false) }
-    var editCandidate by remember { mutableStateOf<com.adong.adchat.data.ChatMessage?>(null) }
     var pendingEditResend by remember { mutableStateOf<com.adong.adchat.data.ChatMessage?>(null) }
     val hostContext = LocalContext.current
     val contextModel = vm.chatProfile.chatModel
@@ -147,6 +184,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         }
     }
     var autoFollow by remember { mutableStateOf(true) }
+    val imageFrames = remember { mutableMapOf<String, Pair<Int, Int>>() }
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeightPx by remember { mutableIntStateOf(0) }
     var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
@@ -163,7 +201,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val chatImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(4)) { uris ->
         if (uris.isNotEmpty()) vm.attachChatImages(uris)
     }
-    val showJumpToBottom by remember { derivedStateOf { vm.messages.isNotEmpty() && listState.canScrollForward } }
+    val jumpToBottomVisible = rememberTowardBottomScrollVisible(listState)
     val questionIndices by remember {
         derivedStateOf { vm.messages.mapIndexedNotNull { index, message -> index.takeIf { message.role == "user" } } }
     }
@@ -197,7 +235,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     // 重试与继续生成只对最后一条消息开放：这会把该问答追加到列表末尾，作用在中间消息上
     // 等于把这一轮挪到别的提问后面，对话顺序和发给模型的历史会一起错乱。要重做更早的一轮，
-    // 用长按用户消息的「编辑重发」，它按原位截断而不是追加。
+    // 用用户消息下方的「编辑重发」，它按原位截断而不是追加。
     val retryableMessageId by remember {
         derivedStateOf {
             vm.messages.lastOrNull()?.takeIf {
@@ -308,13 +346,22 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             key = { it.id },
                             contentType = { it.role }
                         ) { message ->
+                        CompositionLocalProvider(LocalImageFrames provides imageFrames) {
                         ChatMessageItem(
                             message = message,
                             canRegenerate = message.id == regeneratableMessageId,
                             canRetry = message.id == retryableMessageId,
                             onRetry = { vm.retryMessage(message.id) },
                             onRegenerate = { vm.regenerateMessage(message.id) },
-                            onEditResend = { editCandidate = message },
+                            onEditResend = {
+                                val index = vm.messages.indexOfFirst { it.id == message.id }
+                                val removedAfter = (vm.messages.size - index - 1).coerceAtLeast(0)
+                                if (removedAfter > 0) pendingEditResend = message
+                                else {
+                                    vm.editUserMessage(message.id)
+                                    composerFocusRequester.requestFocus()
+                                }
+                            },
                             onConfigureContext = { showContextDialog = true },
                             onSaveFile = { file ->
                                 pendingFileExport = file
@@ -337,22 +384,35 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             }
                         )
                         }
+                        }
                         item { Spacer(Modifier.height(4.dp)) }
                     }
                 }
             }
             ConversationReadingVeil(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight))
             ConversationJumpToBottom(
-                visible = showJumpToBottom, loading = vm.isChatLoading,
+                visible = jumpToBottomVisible, loading = vm.isChatLoading,
                 onClick = { autoFollow = true; scope.launch { listState.animateScrollToItem(vm.messages.size) } },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = composerClearance)
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
+                fadeMillisIn = 220,
+                fadeMillisOut = 220
             )
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .onSizeChanged { composerHeightPx = it.height }
                     .navigationBarsPadding()
             ) {
-                ChatComposer(
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    vm.pendingQuestion?.let { prompt ->
+                        AskUserCard(
+                            prompt = prompt,
+                            draft = vm.questionDraft,
+                            onDraft = vm::updateQuestionDraft,
+                            onChoose = vm::chooseQuestionOption,
+                            onSubmitDraft = vm::submitQuestionDraft
+                        )
+                    }
+                    ChatComposer(
                     skillScope = "adchat-${vm.activeConversationId ?: "new"}",
                     focusRequester = composerFocusRequester,
                     value = vm.chatInput,
@@ -386,36 +446,11 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
                     onFocusChange = { composerFocused = it },
-                    modifier = Modifier.align(Alignment.BottomCenter)
+                    modifier = Modifier.fillMaxWidth()
                 )
+                }
             }
         }
-    }
-    editCandidate?.let { candidate ->
-        val index = vm.messages.indexOfFirst { it.id == candidate.id }
-        val removedAfter = (vm.messages.size - index - 1).coerceAtLeast(0)
-        AdActionSheet(
-            title = "这条消息",
-            subtitle = if (removedAfter > 0) "编辑重发会移除其后的 $removedAfter 条对话" else "编辑后重新发送",
-            actions = listOf(
-                AdActionOption("edit", "编辑重发", "载入输入框，修改后重新发送", Icons.Rounded.Edit),
-                AdActionOption("copy", "复制", "复制消息原文", Icons.Rounded.ContentCopy)
-            ),
-            onAction = { action ->
-                when (action.id) {
-                    "copy" -> {
-                        editCandidate = null
-                        hostContext.getSystemService(android.content.ClipboardManager::class.java)
-                            .setPrimaryClip(android.content.ClipData.newPlainText("Aster", candidate.content))
-                    }
-                    "edit" -> {
-                        editCandidate = null
-                        if (removedAfter > 0) pendingEditResend = candidate else vm.editUserMessage(candidate.id)
-                    }
-                }
-            },
-            onDismiss = { editCandidate = null }
-        )
     }
     pendingEditResend?.let { candidate ->
         val index = vm.messages.indexOfFirst { it.id == candidate.id }
@@ -562,10 +597,7 @@ private fun ChatMessageItem(
                     // 右下的 8dp 小角是 iMessage「气泡尖角指向发送者」的语言；
                     // AI 消息不用气泡时，用户气泡不需要方向性，对称圆角更一致。
                     color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp),
-                    border = BorderStroke(1.dp, Hairline.copy(alpha = .55f)),
-                    modifier = Modifier.pointerInput(message.id) {
-                        detectTapGestures(onLongPress = { onEditResend() })
-                    }
+                    border = BorderStroke(1.dp, Hairline.copy(alpha = .55f))
                 ) {
                     Column(Modifier.padding(7.dp)) {
                         if (message.attachments.isNotEmpty()) {
@@ -581,6 +613,10 @@ private fun ChatMessageItem(
                             }
                         }
                     }
+                }
+                Row(horizontalArrangement = Arrangement.End) {
+                    if (message.content.isNotBlank()) ConversationCopyAction(message.content)
+                    ConversationMessageAction(Icons.Rounded.Edit, "编辑重发", onEditResend)
                 }
             } else {
                 if (!waitingForFirstToken) {
@@ -599,6 +635,14 @@ private fun ChatMessageItem(
                         error = message.isError,
                         onStreamingTextAdvanced = onStreamingTextAdvanced
                     )
+                    if (showModelWorkingFoot(
+                            message.isStreaming,
+                            message.content.isBlank(),
+                            waitingOnUser(message.toolActivities)
+                        )
+                    ) {
+                        ModelWorkingFoot(modelWorkingCaption(message.toolActivities, message.isRecovering))
+                    }
                 }
                 if (message.generatedFiles.isNotEmpty()) {
                     GeneratedFilesPanel(message.generatedFiles, onSaveFile)
@@ -751,15 +795,18 @@ private fun StreamRecoveryStatus(
 @Composable
 private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
     var expanded by remember(activities.size) { mutableStateOf(false) }
-    val running = activities.any { it.status == TOOL_STATUS_RUNNING }
-    val failed = activities.any { it.status == TOOL_STATUS_FAILED }
     val latest = activities.last()
+    val waiting = latest.name == ASK_USER_TOOL && latest.status == TOOL_STATUS_RUNNING
+    val running = !waiting && activities.any { it.status == TOOL_STATUS_RUNNING }
+    val failed = !waiting && activities.any { it.status == TOOL_STATUS_FAILED }
     val tint = when {
+        waiting -> Sage
         failed -> Danger
         running -> Accent
         else -> Sage
     }
     val label = when {
+        waiting -> "请从下面的选项里选一个"
         running -> latest.label
         failed -> latest.label
         activities.size == 1 -> latest.label
@@ -770,13 +817,14 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
     Surface(
         onClick = { if (activities.size > 1) expanded = !expanded },
         color = when {
+            waiting -> SageSoft
             failed -> DangerSoft
             running -> AccentSoft.copy(alpha = .72f)
             else -> Color.Transparent
         },
         contentColor = Ink,
         shape = RoundedCornerShape(13.dp),
-        border = if (running || failed) null else BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
+        border = if (waiting || running || failed) null else BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
         // 高度动画只留 AnimatedVisibility 一层；工具状态在流式期间会反复刷新，
         // 再叠 animateContentSize 会让卡片高度持续微动画，和正文滚动叠加成噪声。
         modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
@@ -784,6 +832,7 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
         Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
+                    waiting -> Icon(Icons.Rounded.HelpOutline, null, Modifier.size(18.dp), tint = Sage)
                     running -> CircularProgressIndicator(
                         modifier = Modifier.size(17.dp),
                         color = tint,
@@ -1111,6 +1160,13 @@ private fun RichMessageText(
 
 @Composable
 private fun StreamingProseText(content: String, error: Boolean) {
+    LinkConfirm {
+    streamingProseText(content, error)
+    }
+}
+
+@Composable
+private fun streamingProseText(content: String, error: Boolean) {
     val normalized = content.replace("\r\n", "\n")
     // 尾段单独渲染，不把整段重新分词：生成期间每个 token 都重排会让长回答明显掉帧，
     // key(index, paragraph) 还会让尾段视图反复销毁重建。
@@ -1153,6 +1209,7 @@ internal fun StructuredMessageText(
     error: Boolean,
     htmlScriptsAllowed: Boolean = true
 ) {
+    LinkConfirm {
     val parts = remember(content) { content.split("```") }
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         parts.forEachIndexed { index, raw ->
@@ -1180,6 +1237,7 @@ internal fun StructuredMessageText(
                 )
             }
         }
+    }
     }
 }
 
@@ -1225,12 +1283,7 @@ private fun normalizeQuoteHeavyMarkdown(text: String): String {
     }
 }
 
-private fun isSceneBreakLine(line: String): Boolean {
-    val value = line.filterNot(Char::isWhitespace)
-    if (value in setOf("***", "——", "……", "...", "◇", "◆")) return true
-    if (value.length >= 3 && value.all { it == '-' }) return true
-    return value.length >= 3 && value.all { it == '*' }
-}
+private fun isSceneBreakLine(line: String): Boolean = isSceneBreak(line)
 
 private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
     val result = mutableListOf<MarkdownBlock>()
@@ -1268,13 +1321,18 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
                 flushQuote()
                 result += MarkdownBlock(5, "")
             }
+            isChapterHeading(line.trim()) -> {
+                flushParagraph()
+                flushQuote()
+                result += MarkdownBlock(1, line.trim(), level = 2)
+            }
             line.matches(Regex("""^#{1,6}\s+.*""")) -> {
                 flushParagraph()
                 flushQuote()
                 val level = line.takeWhile { it == '#' }.length
                 result += MarkdownBlock(1, line.drop(level).trimStart(), level = level)
             }
-            line.startsWith("- ") || line.startsWith("* ") -> {
+            line.startsWith("- ") || (line.startsWith("* ") && !isStarredProseLine(line)) -> {
                 flushParagraph()
                 flushQuote()
                 result += MarkdownBlock(2, line.drop(2).trim(), marker = "•")
@@ -1286,13 +1344,11 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
             }
             MARKDOWN_QUOTE_PREFIX.containsMatchIn(line) -> {
                 flushParagraph()
-                if (quote.isNotEmpty()) quote.append('\n')
-                quote.append(line.replaceFirst(MARKDOWN_QUOTE_PREFIX, "").trimEnd())
+                joinProseLine(quote, line.replaceFirst(MARKDOWN_QUOTE_PREFIX, "").trimEnd())
             }
             else -> {
                 flushQuote()
-                if (paragraph.isNotEmpty()) paragraph.append('\n')
-                paragraph.append(line.trim())
+                joinProseLine(paragraph, line.trim())
             }
         }
         lineIndex++
@@ -1304,6 +1360,143 @@ private fun parseMarkdownBlocks(text: String): List<MarkdownBlock> {
 
 @Composable
 private fun MarkdownTextBlock(raw: String, showCursor: Boolean, error: Boolean) {
+    val pieces = remember(raw) { splitInlineImages(raw) }
+    Column(verticalArrangement = Arrangement.spacedBy(READING_BLOCK_GAP_DP.dp)) {
+        pieces.forEachIndexed { pieceIndex, piece ->
+            when (piece) {
+                is InlinePiece.RemoteImage -> ChatRemoteImage(piece.url, piece.alt)
+                is InlinePiece.PixivArtwork -> PixivArtworkPreview(piece.id, piece.pageUrl)
+                is InlinePiece.Prose -> MarkdownProseBlock(
+                    raw = piece.text,
+                    showCursor = showCursor && pieceIndex == pieces.lastIndex,
+                    error = error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PixivArtworkPreview(id: String, pageUrl: String) {
+    var preview by remember(id) { mutableStateOf<String?>(null) }
+    var failed by remember(id) { mutableStateOf(false) }
+    LaunchedEffect(id) {
+        val found = withContext(Dispatchers.IO) { runCatching { fetchPixivPreviewUrl(id) }.getOrNull() }
+        if (found != null) preview = found else failed = true
+    }
+    val confirm = LocalConfirmLink.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(Modifier.width(280.dp).height(210.dp).clip(RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
+            when {
+                preview != null -> ChatRemoteImage(preview!!, "Pixiv $id", lockSlot = true)
+                !failed -> Text("正在读取 Pixiv 预览…", color = MutedInk, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+        Text(
+            pageUrl,
+            color = NameInk,
+            textDecoration = TextDecoration.Underline,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.clickable { confirm(pageUrl) }
+        )
+    }
+}
+
+private val LocalImageFrames = staticCompositionLocalOf<MutableMap<String, Pair<Int, Int>>> { mutableMapOf() }
+
+@Composable
+private fun ChatRemoteImage(url: String, alt: String, lockSlot: Boolean = false) {
+    val context = LocalContext.current
+    val frames = LocalImageFrames.current
+    val known = remember(url) { frames[url] }
+    var bytes by remember(url) { mutableStateOf<ByteArray?>(null) }
+    var directFailed by remember(url) { mutableStateOf(false) }
+    var downloadFailed by remember(url) { mutableStateOf(false) }
+    var zoomed by remember(url) { mutableStateOf(false) }
+    LaunchedEffect(url, directFailed) {
+        if (!directFailed || bytes != null || downloadFailed) return@LaunchedEffect
+        val loaded = withContext(Dispatchers.IO) { runCatching { downloadChatImage(url) }.getOrNull() }
+        if (loaded != null) bytes = loaded else downloadFailed = true
+    }
+    val shown = bytes ?: url
+    val request = ImageRequest.Builder(context).data(shown).crossfade(false)
+    if (bytes == null) chatImageHeaders(url).forEach { (name, value) -> request.addHeader(name, value) }
+    val model = request.build()
+    if (zoomed) ZoomedChatImage(model, alt.ifBlank { "图片" }) { zoomed = false }
+    val fitted = known?.let { fittedImageDp(it.first, it.second, maxWidth = 440f, maxHeight = 480f) }
+    val frame = when {
+        lockSlot -> Modifier.fillMaxSize()
+        fitted != null -> Modifier.size(fitted.first.dp, fitted.second.dp)
+        else -> Modifier.width(280.dp).height(210.dp)
+    }
+    Box(frame.clip(RoundedCornerShape(14.dp))) {
+        when {
+            bytes == null && directFailed && downloadFailed -> {
+                val confirm = LocalConfirmLink.current
+                Text(
+                    url,
+                    color = NameInk,
+                    textDecoration = TextDecoration.Underline,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.Center).padding(8.dp).clickable { confirm(url) }
+                )
+            }
+            bytes == null && directFailed -> Text(
+                "正在下载图片…",
+                color = MutedInk,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.align(Alignment.Center)
+            )
+            else -> AsyncImage(
+                model = model,
+                contentDescription = alt.ifBlank { "图片" },
+                modifier = Modifier.fillMaxSize().clickable { zoomed = true },
+                contentScale = ContentScale.Fit,
+                onSuccess = { state ->
+                    if (url !in frames) {
+                        val width = state.painter.intrinsicSize.width
+                        val height = state.painter.intrinsicSize.height
+                        if (width.isFinite() && height.isFinite() && width > 0f && height > 0f) {
+                            frames[url] = width.toInt() to height.toInt()
+                        }
+                    }
+                },
+                onError = { if (bytes == null) directFailed = true }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ZoomedChatImage(model: ImageRequest, description: String, onDismiss: () -> Unit) {
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    val transform = rememberTransformableState { zoom, pan, _ ->
+        scale = (scale * zoom).coerceIn(1f, 5f)
+        offset = if (scale <= 1f) Offset.Zero else offset + pan
+    }
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .94f)), contentAlignment = Alignment.Center) {
+            AsyncImage(
+                model = model,
+                contentDescription = description,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxWidth().graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                }.transformable(transform)
+            )
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                Text("关闭", color = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownProseBlock(raw: String, showCursor: Boolean, error: Boolean) {
     val blocks = remember(raw) { parseMarkdownBlocks(raw) }
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
@@ -1684,8 +1877,62 @@ private fun AsterWritingCursorLine(error: Boolean) {
 }
 
 @Composable
+private fun ModelWorkingFoot(caption: String) {
+    val density = LocalDensity.current
+    val transition = rememberInfiniteTransition(label = "model-working")
+    val beat by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(720, easing = LinearEasing), RepeatMode.Restart),
+        label = "model-working-beat"
+    )
+    val lift = with(density) { 4.dp.toPx() } * sin(PI * beat).toFloat()
+    Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        AsterMark(
+            Modifier.size(18.dp).graphicsLayer { translationY = -lift },
+            tint = Accent
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(caption, color = MutedInk, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+private val LocalConfirmLink = staticCompositionLocalOf<(String) -> Unit> { {} }
+
+@Composable
+private fun LinkConfirm(content: @Composable () -> Unit) {
+    var pending by remember { mutableStateOf<String?>(null) }
+    val handler = LocalUriHandler.current
+    CompositionLocalProvider(LocalConfirmLink provides { pending = it }) { content() }
+    val url = pending ?: return
+    AlertDialog(
+        onDismissRequest = { pending = null },
+        title = { Text("打开外部链接") },
+        text = { Text("即将离开 Aster，在浏览器中打开：\n$url") },
+        confirmButton = {
+            TextButton(onClick = {
+                pending = null
+                runCatching { handler.openUri(url) }
+            }) { Text("打开") }
+        },
+        dismissButton = { TextButton(onClick = { pending = null }) { Text("取消") } }
+    )
+}
+
+@Composable
 private fun inlineMarkdown(text: String): AnnotatedString {
-    val base = basicInlineMarkdown(text)
+    val base = buildAnnotatedString {
+        readingSpans(text).forEach { span ->
+            when (span) {
+                is ReadingSpan.Name -> {
+                    pushStyle(SpanStyle(color = NameInk, fontWeight = FontWeight.Medium))
+                    append(span.value)
+                    pop()
+                }
+                is ReadingSpan.Text -> append(basicInlineMarkdown(span.value))
+            }
+        }
+    }
     val source = base.text
     return buildAnnotatedString {
         append(base)
@@ -1708,12 +1955,24 @@ private fun inlineMarkdown(text: String): AnnotatedString {
 @Composable
 private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
     var index = 0
+    val confirmLink = LocalConfirmLink.current
+    val linkStyle = TextLinkStyles(SpanStyle(color = NameInk, textDecoration = TextDecoration.Underline))
     val tokens = listOf("**", "__", "~~", "`", "*", "_")
     while (index < text.length) {
+        val link = linkAt(text, index)
+        if (link != null) {
+            pushLink(LinkAnnotation.Clickable(link.url, linkStyle) { _ -> confirmLink(link.url) })
+            append(link.label)
+            pop()
+            index = link.end
+            continue
+        }
         val token = tokens.firstOrNull { text.startsWith(it, index) }
         if (token != null) {
             val end = text.indexOf(token, index + token.length)
-            if (end > index + token.length) {
+            val inner = if (end > index + token.length) text.substring(index + token.length, end) else null
+            val allowed = inner != null && (token !in setOf("*", "_") || emphasisSpanAllowed(inner))
+            if (inner != null && allowed) {
                 val style = when (token) {
                     "**", "__" -> SpanStyle(fontWeight = FontWeight.Bold)
                     "~~" -> SpanStyle(textDecoration = TextDecoration.LineThrough)
@@ -1721,16 +1980,60 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
                     else -> SpanStyle(fontStyle = FontStyle.Italic)
                 }
                 pushStyle(style)
-                append(text.substring(index + token.length, end))
+                append(basicInlineMarkdown(text.substring(index + token.length, end)))
                 pop()
                 index = end + token.length
             } else {
                 append(token); index += token.length
             }
         } else {
-            val next = tokens.map { text.indexOf(it, index) }.filter { it >= 0 }.minOrNull() ?: text.length
-            val target = next.coerceAtLeast(index + 1)
-            append(text.substring(index, target)); index = target
+            val target = nextPlainEnd(text, index, tokens)
+            append(text.substring(index, target))
+            index = target
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AskUserCard(
+    prompt: AskUserPrompt,
+    draft: String,
+    onDraft: (String) -> Unit,
+    onChoose: (String) -> Unit,
+    onSubmitDraft: () -> Unit
+) {
+    var writing by remember(prompt.question, prompt.options) { mutableStateOf(false) }
+    Surface(
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Hairline),
+        shadowElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(prompt.question, style = MaterialTheme.typography.titleSmall)
+            prompt.options.forEach { option ->
+                val custom = option == ASK_USER_CUSTOM_OPTION
+                if (custom && writing) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = onDraft,
+                        placeholder = { Text(option) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    TextButton(onClick = onSubmitDraft, enabled = draft.isNotBlank(), modifier = Modifier.align(Alignment.End)) {
+                        Text("发送")
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = { if (custom) writing = true else onChoose(option) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text(option) }
+                }
+            }
         }
     }
 }

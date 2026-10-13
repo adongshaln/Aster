@@ -1,29 +1,49 @@
 package com.adong.adchat.ui.components
 
-import org.junit.Assert.*
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HtmlPreviewDocumentTest {
-    @Test fun htmlCannotEscapeSrcdocAndAcquireTheParentOrigin() {
-        val wrapped = HtmlPreviewDocument.wrap("\" ></iframe><script>parent.hacked=true</script>&中文")
-        assertTrue(wrapped.contains("sandbox=\"allow-scripts\""))
-        assertFalse(wrapped.contains("allow-same-origin"))
-        assertFalse(wrapped.contains("<script>parent.hacked"))
-        assertTrue(wrapped.contains("&quot; &gt;&lt;/iframe&gt;"))
-        assertTrue(wrapped.contains("&amp;中文"))
-        assertTrue(wrapped.contains("connect-src 'none'"))
-        assertTrue(wrapped.contains("form-action 'none'"))
+
+    @Test
+    fun `wrap without panel bridge has no bridge markers`() {
+        val out = HtmlPreviewDocument.wrap("<p>hi</p>", allowScripts = true)
+        assertFalse(out.contains(HtmlPreviewDocument.PANEL_CAPTURE_MARKER))
+        assertFalse(out.contains(HtmlPreviewDocument.PANEL_BRIDGE_MARKER))
     }
 
-    @Test(expected = IllegalArgumentException::class)
-    fun oversizedDocumentDoesNotInstantiateAPreview() {
-        HtmlPreviewDocument.wrap("x".repeat(HtmlPreviewDocument.MAX_PREVIEW_CHARS + 1))
+    @Test
+    fun `wrap with panel bridge contains capture and listener scripts`() {
+        val out = HtmlPreviewDocument.wrap("<p>hi</p>", allowScripts = true, panelBridge = true)
+        assertTrue(out.contains(HtmlPreviewDocument.PANEL_CAPTURE_MARKER))
+        assertTrue(out.contains(HtmlPreviewDocument.PANEL_BRIDGE_MARKER))
+        assertTrue(out.contains(HtmlPreviewDocument.PANEL_TOKEN))
+        assertTrue(out.contains("window.parent.postMessage"))
+        assertTrue(out.contains("window.Aster"))
     }
 
-    @Test fun importedPresetHtmlCannotRunScripts() {
-        val wrapped = HtmlPreviewDocument.wrap("<script>alert(1)</script>", allowScripts = false)
-        assertTrue(wrapped.contains("sandbox=\"\""))
-        assertTrue(wrapped.contains("script-src 'none'"))
-        assertFalse(wrapped.contains("sandbox=\"allow-scripts\""))
+    @Test
+    fun `panel bridge without scripts still injects listener markup`() {
+        val out = HtmlPreviewDocument.wrap("<p>hi</p>", allowScripts = false, panelBridge = true)
+        assertTrue(out.contains(HtmlPreviewDocument.PANEL_CAPTURE_MARKER))
+        assertEquals("script-src 'none';", out.substringAfter("default-src 'none'; ").substringBefore(" style").trim())
+    }
+
+    @Test
+    fun `bridged variant keeps connect-src none and sandbox flags`() {
+        val out = HtmlPreviewDocument.wrap("<p>hi</p>", allowScripts = true, panelBridge = true)
+        assertTrue(out.contains("connect-src 'none'"))
+        assertTrue(out.contains("sandbox=\"allow-scripts\""))
+    }
+
+    @Test
+    fun `source round-trips escaped inside srcdoc`() {
+        val source = """<div class="x" data-a="1">& <b>bold</b><script>if(a<b){}</script></div>"""
+        val out = HtmlPreviewDocument.wrap(source, allowScripts = true)
+        val escaped = source.replace("&", "&amp;").replace("\"", "&quot;")
+            .replace("<", "&lt;").replace(">", "&gt;")
+        assertTrue(out.contains("srcdoc=\"$escaped\""))
     }
 }

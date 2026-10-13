@@ -1,6 +1,7 @@
 package com.adong.adchat.ui.media
 
 import android.graphics.Color as AndroidColor
+import com.adong.adchat.data.applyNetworkTrust
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -79,6 +80,7 @@ fun MediaPreviewPlayer(
             .followRedirects(true)
             .followSslRedirects(true)
             .retryOnConnectionFailure(true)
+            .applyNetworkTrust()
             .build()
         val httpFactory = OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(headers)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)

@@ -1,6 +1,7 @@
 package com.adong.adchat.ui.story
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.OpenableColumns
@@ -26,6 +27,9 @@ import com.adong.adchat.data.summary
 import com.adong.adchat.data.story.Story
 import com.adong.adchat.data.story.StoryConflictEntry
 import com.adong.adchat.data.story.StoryChangeEntry
+import com.adong.adchat.data.story.CharacterCardFile
+import com.adong.adchat.data.story.StoryCastContext
+import com.adong.adchat.data.story.StoryCharacterCard
 import com.adong.adchat.data.story.StoryArchiveStore
 import com.adong.adchat.data.story.StoryContextComposer
 import com.adong.adchat.data.story.StoryMemoryApplyResult
@@ -38,6 +42,10 @@ import com.adong.adchat.data.story.StoryMessageRevision
 import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRepository
 import com.adong.adchat.data.story.StoryRevisionState
+import com.adong.adchat.data.story.STORY_CHAR_CARD_PROMPT
+import com.adong.adchat.data.story.STORY_PERSONA_PROMPT
+import com.adong.adchat.data.story.StorySetupPhase
+import com.adong.adchat.data.story.parseUserPersona
 import com.adong.adchat.data.story.StoryStopCleanup
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.data.story.StoryWorkspaceState
@@ -64,6 +72,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val configStore = ConfigStore(application)
     private val api = ApiRepository(skillLoader = SkillRuntime.persistent(application))
     private val tavernPresetStore = TavernPresetStore(application)
+    private val discussionPrefs = application.getSharedPreferences("aster_story_discussion", Context.MODE_PRIVATE)
     private val jobs = linkedMapOf<String, Job>()
     private val organizerJobs = ConcurrentHashMap<String, Job>()
     @Volatile private var stateEpoch = 0L
@@ -109,6 +118,14 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var archiveOpen by mutableStateOf(false)
         private set
+
+    var activeDiscussionPresetId by mutableStateOf<String?>(null)
+        private set
+
+    fun selectDiscussionPreset(id: String?) {
+        discussionPrefs.edit().putString(DISCUSSION_PRESET_KEY, id.orEmpty()).apply()
+        activeDiscussionPresetId = id
+    }
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
@@ -233,6 +250,21 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun renameTavernPreset(id: String, name: String) {
+        if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
+        tavernPresetBusy = true
+        tavernPresetError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                tavernPresetStore.renamePreset(id, name)
+                refreshTavernPresetState()
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { tavernPresetError = error.message ?: "重命名酒馆预设失败" }
+            }
+            withContext(Dispatchers.Main) { tavernPresetBusy = false }
+        }
+    }
+
     fun deleteTavernPreset(id: String) {
         if (tavernPresetBusy || StoryWorkspace.entries.any(::isLoading)) return
         tavernPresetBusy = true
@@ -259,7 +291,17 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         return if (workspace != StoryWorkspace.Prose || preset == null) {
             TavernRegexOutput(content, 0, emptyList())
         } else withContext(Dispatchers.Default) {
-            TavernPresetRuntime.display(preset, content, role, depth, regexEnabled)
+            val card = activeStory?.let { StoryCharacterCard.fromStored(it.charCardJson) }
+            TavernPresetRuntime.display(
+                preset, content, role, depth, regexEnabled,
+                com.adong.adchat.data.TavernCharacterContext(
+                    name = card?.name.orEmpty(),
+                    description = card?.description.orEmpty(),
+                    personality = card?.personality.orEmpty(),
+                    scenario = card?.scenario.orEmpty(),
+                    persona = activeStory?.userPersona.orEmpty()
+                )
+            )
         }
     }
 
@@ -315,12 +357,85 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    var cardImportError by mutableStateOf<String?>(null)
+        private set
+
+    fun clearCardImportError() { cardImportError = null }
+
+    fun importCharacterCard(uri: Uri, profile: ApiProfile, onCreated: (Story) -> Unit = {}) {
+        if (profile.chatModel.isBlank()) {
+            cardImportError = "请先配置一个可用的对话模型。"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val resolver = getApplication<Application>().contentResolver
+                val bytes = requireNotNull(resolver.openInputStream(uri)) { "无法读取所选文件" }.use { input ->
+                    val buffer = java.io.ByteArrayOutputStream()
+                    val chunk = ByteArray(16 * 1024)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(chunk)
+                        if (count < 0) break
+                        total += count
+                        require(total <= 32 * 1024 * 1024) { "角色卡文件太大" }
+                        buffer.write(chunk, 0, count)
+                    }
+                    buffer.toByteArray()
+                }
+                val imported = CharacterCardFile.parse(bytes)
+                createImportedStoryOnMain(imported, profile, onCreated)
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { cardImportError = error.message ?: "导入角色卡失败" }
+            }
+        }
+    }
+
+    fun importCharacterCardJson(json: String, profile: ApiProfile, onCreated: (Story) -> Unit = {}) {
+        if (profile.chatModel.isBlank()) {
+            cardImportError = "请先配置一个可用的对话模型。"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val imported = CharacterCardFile.parse(json.toByteArray())
+                createImportedStoryOnMain(imported, profile, onCreated)
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) {
+                    cardImportError = if (error.message?.contains("角色卡") == true) error.message else "角色卡解析失败"
+                }
+            }
+        }
+    }
+
+    private suspend fun createImportedStoryOnMain(
+        imported: com.adong.adchat.data.story.ImportedCharacterCard,
+        profile: ApiProfile,
+        onCreated: (Story) -> Unit
+    ) {
+        val story = store.createImportedStory(imported, profile.id, profile.chatModel)
+        withContext(Dispatchers.Main) {
+            stories.add(0, story)
+            stateEpoch++
+            activeStoryId = story.id
+            activeWorkspace = StoryWorkspace.Prose
+            workspaceMessages.clear()
+            workspaceStates.clear()
+            archiveRecords.clear(); archiveConflicts.clear()
+            archiveProposals.clear()
+            errors.clear()
+            cardImportError = null
+            loadActiveStoryState(story)
+            onCreated(story)
+        }
+    }
+
     fun selectStory(storyId: String) {
         if (activeStoryId == storyId && workspaceMessages.isNotEmpty()) return
         val story = stories.firstOrNull { it.id == storyId } ?: return
         stateEpoch++
         activeStoryId = storyId
-        activeWorkspace = StoryWorkspace.Discussion
+        activeWorkspace = if (story.hidesDiscussion) StoryWorkspace.Prose else StoryWorkspace.Discussion
         workspaceMessages.clear()
         workspaceStates.clear()
         archiveRecords.clear(); archiveConflicts.clear()
@@ -330,9 +445,120 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun switchWorkspace(workspace: StoryWorkspace) {
+        if (workspace == StoryWorkspace.Discussion && activeStory?.hidesDiscussion == true) return
+        if (workspace == StoryWorkspace.Prose && activeStory?.setupPhase != StorySetupPhase.Prose) return
         activeWorkspace = workspace
         errors.remove(workspace)
     }
+
+    var setupBusy by mutableStateOf(false)
+        private set
+    var setupError by mutableStateOf<String?>(null)
+        private set
+    var identityDraft by mutableStateOf("")
+        private set
+
+    fun updateIdentityDraft(value: String) { identityDraft = value }
+    fun clearSetupError() { setupError = null }
+
+    fun endDiscussion(profile: ApiProfile) = generateCharCard(profile)
+
+    fun regenerateCharCard(profile: ApiProfile) = generateCharCard(profile)
+
+    private fun generateCharCard(profile: ApiProfile) {
+        val story = activeStory ?: return
+        if (setupBusy) return
+        if (story.setupPhase != StorySetupPhase.Discussion && story.setupPhase != StorySetupPhase.CharReview) return
+        val transcript = discussionTranscript()
+        if (transcript.isBlank()) {
+            setupError = "先讨论故事设定，再结束。"
+            return
+        }
+        setupBusy = true
+        setupError = null
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val raw = api.completePlain(
+                    profile,
+                    story.model.ifBlank { profile.chatModel },
+                    STORY_CHAR_CARD_PROMPT,
+                    "$transcript\n\n请输出 JSON。scenario 写这部同人的前提，description 只写对方这个人。"
+                )
+                val card = StoryCharacterCard.parse(raw)
+                val updated = store.updateStorySetup(story.id, StorySetupPhase.CharReview, charCardJson = card.toJson())
+                withContext(Dispatchers.Main) { replaceStory(updated) }
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { setupError = error.message ?: "角色卡没有生成" }
+            }
+            withContext(Dispatchers.Main) { setupBusy = false }
+        }
+    }
+
+    fun confirmCharCard(card: StoryCharacterCard) {
+        val story = activeStory ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = store.updateStorySetup(story.id, StorySetupPhase.Identity, charCardJson = card.toJson())
+            withContext(Dispatchers.Main) {
+                replaceStory(updated)
+                identityDraft = ""
+            }
+        }
+    }
+
+    fun submitIdentity(profile: ApiProfile) = generatePersona(profile)
+
+    fun regeneratePersona(profile: ApiProfile) = generatePersona(profile)
+
+    private fun generatePersona(profile: ApiProfile) {
+        val story = activeStory ?: return
+        if (setupBusy) return
+        val identity = identityDraft.trim()
+        if (identity.isBlank()) {
+            setupError = "先写下你要担任的身份。"
+            return
+        }
+        setupBusy = true
+        setupError = null
+        val transcript = discussionTranscript()
+        val charCard = story.charCardJson
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val raw = api.completePlain(
+                    profile,
+                    story.model.ifBlank { profile.chatModel },
+                    STORY_PERSONA_PROMPT,
+                    "对方角色卡：\n$charCard\n\n讨论：\n$transcript\n\n用户要担任：$identity\n\npersona 要写进这部作品，不要只重复对方的人物介绍。"
+                )
+                val persona = parseUserPersona(raw)
+                val updated = store.updateStorySetup(story.id, StorySetupPhase.PersonaReview, userPersona = persona)
+                withContext(Dispatchers.Main) { replaceStory(updated) }
+            }.onFailure { error ->
+                withContext(Dispatchers.Main) { setupError = error.message ?: "身份卡没有生成" }
+            }
+            withContext(Dispatchers.Main) { setupBusy = false }
+        }
+    }
+
+    fun confirmPersona(persona: String) {
+        val story = activeStory ?: return
+        val text = persona.trim()
+        if (text.isBlank()) {
+            setupError = "身份卡不能是空的。"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = store.updateStorySetup(story.id, StorySetupPhase.Prose, userPersona = text)
+            withContext(Dispatchers.Main) {
+                replaceStory(updated)
+                activeWorkspace = StoryWorkspace.Prose
+            }
+        }
+    }
+
+    private fun discussionTranscript(): String = messages(StoryWorkspace.Discussion).joinToString("\n\n") {
+        val who = if (it.message.role == "user") "用户" else "助手"
+        "$who：${it.revision.content}"
+    }.trim()
 
     var archiveInitialSection by mutableStateOf(0)
         private set
@@ -637,10 +863,11 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 val prose=store.loadMessages(story.id,story.currentTimelineId,StoryWorkspace.Prose)
                 val historical=replacementInput!=null || prose.lastOrNull()?.revision?.id!=target.revision.id
                 val context=if(historical) store.historicalRewriteContext(target.message.id,target.revision.id,instruction,replacementInput,
-                        com.adong.adchat.data.story.StoryContextBudget.forModel(profile, fresh.model))
+                        com.adong.adchat.data.story.StoryContextBudget.forModel(profile, fresh.model), StoryCastContext.fromStory(fresh))
                     else com.adong.adchat.data.story.StoryRewriteContext.compose(target,instruction,
                         archiveStore.contextMemorySnapshot(story.id,story.currentTimelineId),prose,
-                        budget = com.adong.adchat.data.story.StoryContextBudget.forModel(profile, fresh.model))
+                        budget = com.adong.adchat.data.story.StoryContextBudget.forModel(profile, fresh.model),
+                        cast = StoryCastContext.fromStory(fresh))
                 val created=store.beginRewrite(target.message.id,target.revision.id,fresh.memoryVersion,instruction,profile.name,fresh.model,historical,replacementInput)
                 candidate=created
                 withContext(Dispatchers.Main) { rewriteCandidate=created }
@@ -1024,6 +1251,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 refreshWorkspaceIfVisible(story.id, workspace)
 
                 val memorySnapshot = archiveStore.contextMemorySnapshot(story.id, story.currentTimelineId)
+                val cast = StoryCastContext.fromStory(story)
                 val context = StoryContextComposer.compose(
                     workspace = workspace,
                     baseInstruction = workspaceSystemPrompt(workspace),
@@ -1033,7 +1261,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     summarySources = memorySnapshot.summarySources,
                     proseMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose),
                     discussionMessages = store.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Discussion),
-                    budget = com.adong.adchat.data.story.StoryContextBudget.forModel(profile, routeModel)
+                    budget = com.adong.adchat.data.story.StoryContextBudget.forModel(profile, routeModel),
+                    cast = cast
                 )
                 context.truncationNotice?.let { notice ->
                     withContext(Dispatchers.Main) {
@@ -1045,7 +1274,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     workspace = workspace,
                     context = context,
                     preset = presetSnapshot,
-                    regexEnabled = presetRegexEnabledSnapshot
+                    regexEnabled = presetRegexEnabledSnapshot,
+                    cast = cast
                 )
 
                 val result = trackedChat(
@@ -1432,8 +1662,18 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         var result: com.adong.adchat.data.ChatCompletionResult? = null
         var state = "failed"
         try {
+            val prompt = if (category == "prose") {
+                listOf(
+                    systemPrompt,
+                    com.adong.adchat.ui.markdown.NARRATIVE_NAME_MARK_INSTRUCTION,
+                    com.adong.adchat.ui.markdown.COVER_IMAGE_INSTRUCTION
+                ).filter(String::isNotBlank).joinToString("\n\n")
+            } else {
+                listOf(systemPrompt, com.adong.adchat.ui.markdown.COVER_IMAGE_INSTRUCTION)
+                    .filter(String::isNotBlank).joinToString("\n\n")
+            }
             val response = api.streamChat(
-                profile, model, systemPrompt, preparedHistory, cacheKey,
+                profile, model, prompt, preparedHistory, cacheKey,
                 trimHistory = false,
                 skillsAllowed = category in setOf("prose", "discussion") && cacheKey.startsWith("aster-story-"),
                 generationOptions = generationOptions,
@@ -1476,13 +1716,27 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
+    private fun loadDiscussionPresetId(): String? =
+        discussionPrefs.getString(DISCUSSION_PRESET_KEY, null)?.takeIf(String::isNotBlank)
+
     private fun workspaceSystemPrompt(workspace: StoryWorkspace): String = when (workspace) {
-        StoryWorkspace.Discussion -> """
-            你正在 Aster 的故事讨论工作区。与用户讨论设定、人物、文风和后续计划。
-            讨论中的建议、假设、备选方案和示例片段都不是已经发生的正式剧情。
-            不要因为自己提出了某个方案，就把它当作用户已经确认的事实。
-            标记为“未确认候选”的内容仅供讨论，除非之后被用户确认并写入正式资料，否则不得提升为故事事实。
-        """.trimIndent()
+        StoryWorkspace.Discussion -> buildString {
+            append(
+                """
+                你正在 Aster 的故事讨论工作区。与用户讨论设定、人物、文风和后续计划。
+                讨论中的建议、假设、备选方案和示例片段都不是已经发生的正式剧情。
+                不要因为自己提出了某个方案，就把它当作用户已经确认的事实。
+                标记为“未确认候选”的内容仅供讨论，除非之后被用户确认并写入正式资料，否则不得提升为故事事实。
+                """.trimIndent()
+            )
+            val presetPrompt: String? = activeDiscussionPresetId?.let { id: String ->
+                com.adong.adchat.data.story.StoryDiscussionPresets.byId(id)?.prompt
+            }
+            if (!presetPrompt.isNullOrBlank()) {
+                append("\n\n")
+                append(presetPrompt)
+            }
+        }
         StoryWorkspace.Prose -> """
             你正在 Aster 的故事正文工作区。根据用户给出的剧情方向、对白、人物行动或世界观约束继续创作正文。
             你只能把注入的“固定且已确认的故事资料”和“已确认的故事资料”视作正式资料；讨论候选不会提供给你。
@@ -1497,4 +1751,8 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             .firstOrNull()
             ?.take(240)
             ?: "未知错误"
+
+    private companion object {
+        const val DISCUSSION_PRESET_KEY = "discussion_preset_id"
+    }
 }

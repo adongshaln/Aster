@@ -41,6 +41,7 @@ class ApiRepository internal constructor(
         .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .applyNetworkTrust()
         .build()
 
     // Some OpenAI-compatible gateways terminate long HTTP/2 SSE streams with RST_STREAM CANCEL.
@@ -103,6 +104,7 @@ class ApiRepository internal constructor(
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
         onReasoning: suspend (String) -> Unit = {},
+        onAskUser: suspend (AskUserPrompt) -> String = { "" },
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
@@ -162,7 +164,8 @@ class ApiRepository internal constructor(
                 throw error
             }
         }
-        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || skillLoadingEnabled
+        val askUserEnabled = skillsAllowed && BuiltInSkills.isEnabled(skillLoader)
+        val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || skillLoadingEnabled || askUserEnabled
         val initialContext = ModelContextPolicy.prepare(systemPrompt, history, profile.contextLimits(model), trimHistory)
         if (initialContext.omittedTurns > 0) onContextTrim(initialContext.omittedTurns)
 
@@ -178,8 +181,10 @@ class ApiRepository internal constructor(
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
                     nativeSkillReference = nativeSkillReference,
                     generationOptions = requestGenerationOptions,
+                    askUserEnabled = askUserEnabled,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
+                    onAskUser = onAskUser,
                     onDelta = deltaSink
                 )
             } else {
@@ -189,8 +194,10 @@ class ApiRepository internal constructor(
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
                     searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
                     generationOptions = requestGenerationOptions,
+                    askUserEnabled = askUserEnabled,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
+                    onAskUser = onAskUser,
                     onDelta = deltaSink
                 )
             }
@@ -296,15 +303,20 @@ class ApiRepository internal constructor(
         requireSkillLoad: Boolean,
         searchBackend: SearchBackendConfig?,
         generationOptions: ChatGenerationOptions,
+        askUserEnabled: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
+        onAskUser: suspend (AskUserPrompt) -> String,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
         val skillLoadingEnabled = skillSelectors.isNotEmpty()
         val delegatedSearchEnabled = profile.webSearchEnabled && searchBackend != null
         val messages = JSONArray()
-        val effectiveSystemPrompt = listOf(systemPrompt, SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty())
-            .filter(String::isNotBlank).joinToString("\n\n")
+        val effectiveSystemPrompt = listOf(
+            systemPrompt,
+            ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
+            SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
+        ).filter(String::isNotBlank).joinToString("\n\n")
         if (effectiveSystemPrompt.isNotBlank()) {
             messages.put(JSONObject().put("role", "system").put("content", effectiveSystemPrompt))
         }
@@ -322,6 +334,7 @@ class ApiRepository internal constructor(
         var firstDeltaAt: Long? = null
         var usage = TokenUsage()
         val full = StringBuilder()
+        var afterThought = false
         val reasoningTotal = StringBuilder()
         var outputComplete = false
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
@@ -331,6 +344,17 @@ class ApiRepository internal constructor(
         suspend fun recordActivity(activity: ChatToolActivity) {
             activities[activity.id] = activity
             onToolActivity(activity)
+        }
+
+        suspend fun noteWebSearch(root: JSONObject) {
+            when (webSearchSignal(root)) {
+                WebSearchSignal.Searching -> {
+                    recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
+                    if (full.isNotEmpty()) afterThought = true
+                }
+                WebSearchSignal.Completed -> recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+                null -> Unit
+            }
         }
 
         /** 思考内容单独累计，绝不混入正文；没有增量时保持静默避免打扰。 */
@@ -343,6 +367,7 @@ class ApiRepository internal constructor(
         suspend fun executeRound(forceSkill: Boolean, forceNoTools: Boolean): ProtocolRoundResult {
             outputComplete = false
             val toolPolicy = resolveChatToolPolicy(profile.webSearchEnabled && !skillLoadingEnabled && !delegatedSearchEnabled, profile.fileCreationEnabled)
+            val allowAskUser = askUserEnabled && !toolPolicy.webSearchEnabled
             val body = JSONObject()
                 .put("model", model)
                 .put("messages", messages)
@@ -353,7 +378,8 @@ class ApiRepository internal constructor(
                 skillLoadingEnabled,
                 skillSelectors,
                 delegatedSearchEnabled = delegatedSearchEnabled,
-                allowXSearch = searchBackend?.allowXSearch == true
+                allowXSearch = searchBackend?.allowXSearch == true,
+                askUserEnabled = allowAskUser
             )
             if (tools.length() > 0) {
                 body.put("tools", tools)
@@ -376,6 +402,7 @@ class ApiRepository internal constructor(
                 .header("Connection", "close")
                 .post(body.toString().toRequestBody(jsonMedia)).build()
             val call = streamingClient.newCall(request)
+            val reasoningMark = reasoningTotal.length
             val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
                 try { awaitCancellation() } finally { call.cancel() }
             }
@@ -383,6 +410,14 @@ class ApiRepository internal constructor(
             var roundUsage = TokenUsage()
             val roundCitations = linkedMapOf<String, ChatCitation>()
             val toolAccumulator = ChatToolCallAccumulator()
+            suspend fun appendRound(delta: String) {
+                if (delta.isEmpty()) return
+                val piece = textAfterThought(full, delta, afterThought)
+                afterThought = false
+                roundText.append(piece)
+                full.append(piece)
+                onDelta(piece)
+            }
             try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
@@ -398,6 +433,7 @@ class ApiRepository internal constructor(
                             val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
                             toolAccumulator.accept(root)
                             parseCitations(root).forEach { roundCitations[it.url] = it }
+                            noteWebSearch(root)
                             val choices = root.optJSONArray("choices")
                             val choice = choices?.optJSONObject(0)
                             if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
@@ -409,13 +445,15 @@ class ApiRepository internal constructor(
                                 if (choices != null && choices.length() == 0) completed = true
                             }
                             val delta = parseStreamDelta(root)
+                            val reasoning = parseReasoningDelta(root)
                             if (delta.isNotEmpty()) {
                                 if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                                roundText.append(delta)
-                                full.append(delta)
-                                onDelta(delta)
+                                appendRound(delta)
                             }
-                            emitReasoning(parseReasoningDelta(root))
+                            if (reasoning.isNotBlank()) {
+                                emitReasoning(reasoning)
+                                if (delta.isEmpty() && full.isNotEmpty()) afterThought = true
+                            }
                             true
                         }
                         if (!completed) throw IOException("Streaming connection ended before completion")
@@ -426,12 +464,15 @@ class ApiRepository internal constructor(
                         outputComplete = root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason") == "stop"
                         toolAccumulator.accept(root)
                         parseCitations(root).forEach { roundCitations[it.url] = it }
+                        noteWebSearch(root)
                         val result = runCatching { parseMessageContent(root) }.getOrDefault("")
                         if (result.isNotEmpty()) {
                             if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                            roundText.append(result); full.append(result); onDelta(result)
+                            appendRound(result)
                         }
-                        emitReasoning(parseReasoningDelta(root))
+                        val reasoning = parseReasoningDelta(root)
+                        emitReasoning(reasoning)
+                        if (reasoning.isNotBlank() && result.isEmpty() && full.isNotEmpty()) afterThought = true
                         roundUsage = parseUsage(root)
                     }
                 }
@@ -439,28 +480,57 @@ class ApiRepository internal constructor(
                 cancellationWatcher.cancel()
             }
             val calls = toolAccumulator.completedCalls()
+            val producedReasoning = reasoningTotal.substring(reasoningMark)
+            if (shouldContinueAfterReasoningOnly(roundText.toString(), calls.size, producedReasoning)) {
+                return ProtocolRoundResult(
+                    text = "",
+                    usage = roundUsage,
+                    toolCalls = calls,
+                    citations = roundCitations.values.toList(),
+                    reasoningOnly = true,
+                    reasoningText = producedReasoning
+                )
+            }
             if (roundText.isBlank() && calls.isEmpty()) throw IllegalStateException("No recognizable message content or tool call in API response")
             return ProtocolRoundResult(roundText.toString(), roundUsage, calls, roundCitations.values.toList())
         }
 
-        if (profile.webSearchEnabled && !delegatedSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
         var completedNormally = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
         var delegatedSearchCalls = 0
         val delegatedSearchCache = linkedMapOf<String, DelegatedSearchResult>()
         val skillToolReuseGuard = SkillToolReuseGuard()
+        var reasoningContinuations = 0
         for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
             skillToolReuseGuard.beginRound()
             val forceSkill = skillLoadingEnabled && requireSkillLoad && roundIndex == 0
             val forceNoTools = forceNoToolsNextRound
             forceNoToolsNextRound = false
+            if (roundIndex > 0 && full.isNotEmpty()) afterThought = true
             val round = executeRound(forceSkill, forceNoTools)
             if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
                 throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
             }
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
+            if (round.reasoningOnly) {
+                reasoningContinuations += 1
+                if (reasoningContinuations > 2) {
+                    val note = "思考内容过长，模型还没开始回答。可以降低思考强度后再试。"
+                    val prefix = if (full.isNotEmpty() && !full.endsWith('\n')) "\n\n" else ""
+                    full.append(prefix).append(note)
+                    onDelta(prefix + note)
+                    break
+                }
+                messages.put(JSONObject()
+                    .put("role", "assistant")
+                    .put("content", "")
+                    .put("reasoning_content", round.reasoningText))
+                messages.put(JSONObject().put("role", "user").put("content", REASONING_CONTINUE_PROMPT))
+                continue
+            }
+            reasoningContinuations = 0
             if (round.toolCalls.isEmpty()) {
                 completedNormally = true
                 break
@@ -485,7 +555,9 @@ class ApiRepository internal constructor(
             orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
-                val execution = if (call.name == DELEGATED_WEB_SEARCH_TOOL) {
+                val execution = if (call.name == ASK_USER_TOOL) {
+                    executeAskUser(call, onAskUser) { recordActivity(it) }
+                } else if (call.name == DELEGATED_WEB_SEARCH_TOOL) {
                     usedDelegatedSearchThisRound = true
                     val backend = searchBackend ?: throw IllegalStateException("联网搜索后端尚未配置")
                     val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
@@ -537,7 +609,9 @@ class ApiRepository internal constructor(
         if (!completedNormally) {
             throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
         }
-        if (profile.webSearchEnabled && !delegatedSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+        if (activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
+            recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+        }
         val duration = elapsedMs(started)
         val finalUsage = usage.copy(
             timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
@@ -572,8 +646,10 @@ class ApiRepository internal constructor(
         requireSkillLoad: Boolean,
         nativeSkillReference: NativeSkillReference?,
         generationOptions: ChatGenerationOptions,
+        askUserEnabled: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
+        onAskUser: suspend (AskUserPrompt) -> String,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
         val skillLoadingEnabled = skillSelectors.isNotEmpty()
@@ -589,16 +665,26 @@ class ApiRepository internal constructor(
         var firstDeltaAt: Long? = null
         var usage = TokenUsage()
         val full = StringBuilder()
+        var afterThought = false
         val reasoningTotal = StringBuilder()
         var outputComplete = false
         val generatedFiles = mutableListOf<GeneratedFileDraft>()
         val citations = linkedMapOf<String, ChatCitation>()
         val activities = linkedMapOf<String, ChatToolActivity>()
-        val tools = buildResponsesTools(profile.fileCreationEnabled, profile.webSearchEnabled, skillLoadingEnabled, skillSelectors).apply {
+        val tools = buildResponsesTools(
+            profile.fileCreationEnabled,
+            profile.webSearchEnabled,
+            skillLoadingEnabled,
+            skillSelectors,
+            askUserEnabled = askUserEnabled
+        ).apply {
             nativeSkillReference?.let { put(nativeSkillShellTool(it)) }
         }
-        val effectiveSystemPrompt = listOf(systemPrompt, SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty())
-            .filter(String::isNotBlank).joinToString("\n\n")
+        val effectiveSystemPrompt = listOf(
+            systemPrompt,
+            ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
+            SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
+        ).filter(String::isNotBlank).joinToString("\n\n")
 
         suspend fun recordActivity(activity: ChatToolActivity) {
             activities[activity.id] = activity
@@ -654,6 +740,14 @@ class ApiRepository internal constructor(
             var usedWebSearch = false
             val roundCitations = linkedMapOf<String, ChatCitation>()
             val toolAccumulator = ResponsesToolCallAccumulator()
+            suspend fun appendRound(delta: String) {
+                if (delta.isEmpty()) return
+                val piece = textAfterThought(full, delta, afterThought)
+                afterThought = false
+                roundText.append(piece)
+                full.append(piece)
+                onDelta(piece)
+            }
             try {
                 call.execute().use { response ->
                     if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
@@ -675,16 +769,20 @@ class ApiRepository internal constructor(
                                     val delta = root.optString("delta")
                                     if (delta.isNotEmpty()) {
                                         if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                                        roundText.append(delta); full.append(delta); onDelta(delta)
+                                        appendRound(delta)
                                     }
                                 }
                                 // 思考增量：官方为 response.reasoning_summary_text.delta，
                                 // 部分兼容网关用 response.reasoning_text.delta 或自定义 reasoning.*.delta。
-                                "response.reasoning_summary_text.delta", "response.reasoning_text.delta" ->
-                                    emitReasoning(root.optString("delta").ifBlank { reasoningEventText(root) })
+                                "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
+                                    val thought = root.optString("delta").ifBlank { reasoningEventText(root) }
+                                    emitReasoning(thought)
+                                    if (thought.isNotBlank() && full.isNotEmpty()) afterThought = true
+                                }
                                 "response.web_search_call.in_progress", "response.web_search_call.searching" -> {
                                     usedWebSearch = true
                                     recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
+                                    if (full.isNotEmpty()) afterThought = true
                                 }
                                 "response.web_search_call.completed" -> {
                                     usedWebSearch = true
@@ -703,7 +801,9 @@ class ApiRepository internal constructor(
                                 else -> {
                                     val type = root.optString("type")
                                     if (type.contains("reasoning", ignoreCase = true) && type.endsWith(".delta")) {
-                                        emitReasoning(reasoningEventText(root))
+                                        val thought = reasoningEventText(root)
+                                        emitReasoning(thought)
+                                        if (thought.isNotBlank() && full.isNotEmpty()) afterThought = true
                                     }
                                 }
                             }
@@ -722,9 +822,11 @@ class ApiRepository internal constructor(
                         val result = runCatching { parseResponsesText(root) }.getOrDefault("")
                         if (result.isNotEmpty()) {
                             if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                            roundText.append(result); full.append(result); onDelta(result)
+                            appendRound(result)
                         }
-                        emitReasoning(parseResponsesReasoning(root))
+                        val reasoning = parseResponsesReasoning(root)
+                        emitReasoning(reasoning)
+                        if (reasoning.isNotBlank() && result.isEmpty() && full.isNotEmpty()) afterThought = true
                         roundUsage = parseUsage(root)
                     }
                 }
@@ -736,7 +838,6 @@ class ApiRepository internal constructor(
             return ProtocolRoundResult(roundText.toString(), roundUsage, calls, roundCitations.values.toList(), responseId, usedWebSearch)
         }
 
-        if (profile.webSearchEnabled) recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "等待模型搜索网页", TOOL_STATUS_RUNNING))
         var requestInput = initialInput
         var previousResponseId: String? = null
         var completedNormally = false
@@ -748,6 +849,7 @@ class ApiRepository internal constructor(
             val forceSkill = skillLoadingEnabled && requireSkillLoad && toolRound == 0
             val forceNoTools = forceNoToolsNextRound
             forceNoToolsNextRound = false
+            if (toolRound > 0 && full.isNotEmpty()) afterThought = true
             val round = executeRound(requestInput, previousResponseId, forceSkill, forceNoTools)
             if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
                 throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
@@ -772,6 +874,14 @@ class ApiRepository internal constructor(
             orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
+                if (call.name == ASK_USER_TOOL) {
+                    val execution = executeAskUser(call, onAskUser) { recordActivity(it) }
+                    requestInput.put(JSONObject()
+                        .put("type", "function_call_output")
+                        .put("call_id", call.callId)
+                        .put("output", execution.output))
+                    return@forEach
+                }
                 val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                 recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
                 val execution = skillToolReuseGuard.execute(call, requestSkillLoader, skillSelectors.toSet())
@@ -791,7 +901,7 @@ class ApiRepository internal constructor(
             throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
         }
         if (profile.webSearchEnabled && activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
-            recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "本次回复未调用网络搜索", TOOL_STATUS_COMPLETED))
+            recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
         }
         val finalUsage = usage.copy(
             timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
@@ -815,6 +925,89 @@ class ApiRepository internal constructor(
         )
     }
 
+    private suspend fun executeAskUser(
+        call: PendingToolCall,
+        onAskUser: suspend (AskUserPrompt) -> String,
+        recordActivity: suspend (ChatToolActivity) -> Unit
+    ): ToolExecutionResult {
+        val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
+        val rawOptions = args.optJSONArray("options")
+        val options = if (rawOptions == null) emptyList() else (0 until rawOptions.length()).map { rawOptions.optString(it) }
+        val prompt = runCatching { normalizeAskUserPrompt(args.optString("question"), options) }.getOrElse { error ->
+            val failed = ChatToolActivity(call.callId, ASK_USER_TOOL, error.message ?: "无法发起提问", TOOL_STATUS_FAILED)
+            recordActivity(failed)
+            return ToolExecutionResult(
+                JSONObject().put("ok", false).put("error", error.message ?: "无法发起提问").toString(),
+                activity = failed
+            )
+        }
+        recordActivity(ChatToolActivity(call.callId, ASK_USER_TOOL, "正在等你选择", TOOL_STATUS_RUNNING))
+        val answer = onAskUser(prompt).trim()
+        val activity = if (answer.isBlank()) {
+            ChatToolActivity(call.callId, ASK_USER_TOOL, "没有收到选择", TOOL_STATUS_FAILED)
+        } else {
+            ChatToolActivity(call.callId, ASK_USER_TOOL, "已收到你的选择", TOOL_STATUS_COMPLETED)
+        }
+        recordActivity(activity)
+        val output = if (answer.isBlank()) {
+            JSONObject().put("ok", false).put("error", "empty_answer").toString()
+        } else {
+            JSONObject().put("ok", true).put("question", prompt.question).put("answer", answer).toString()
+        }
+        return ToolExecutionResult(output, activity = activity)
+    }
+
+    suspend fun summarizeConversationTitle(profile: ApiProfile, model: String, transcript: String): String =
+        withContext(Dispatchers.IO) {
+            validateProfile(profile)
+            require(model.isNotBlank()) { "Model is required" }
+            val quietEffort = ReasoningPolicy.choices(model).firstOrNull { it.id != ReasoningPolicy.DEFAULT }?.id
+                ?: profile.reasoningEffort
+            val quietProfile = profile.copy(reasoningEffort = quietEffort)
+            val instruction = "根据对话写一个不超过16个字的中文标题。只输出标题本身，不要引号、句号或解释。"
+            val clipped = transcript.take(4000)
+            val responsesApi = quietProfile.usesResponses(model)
+            val body = if (responsesApi) {
+                JSONObject().put("model", model).put("instructions", instruction).put("input", clipped).put("max_output_tokens", 2048)
+            } else {
+                JSONObject().put("model", model).put("max_tokens", 2048).put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", instruction))
+                    .put(JSONObject().put("role", "user").put("content", clipped)))
+            }
+            applyReasoningPolicy(body, quietProfile, model, responsesApi)
+            val path = if (responsesApi) quietProfile.responsesPath else quietProfile.chatPath
+            val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path))
+                .post(body.toString().toRequestBody(jsonMedia)).build()
+            val raw = executeTextCall(client.newCall(request))
+            val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("标题接口返回的不是有效 JSON") }
+            val text = if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+            sanitizeConversationTitle(text).ifBlank { throw IllegalStateException("标题为空") }
+        }
+
+    suspend fun completePlain(profile: ApiProfile, model: String, instruction: String, user: String): String =
+        withContext(Dispatchers.IO) {
+            validateProfile(profile)
+            require(model.isNotBlank()) { "Model is required" }
+            val quietEffort = ReasoningPolicy.choices(model).firstOrNull { it.id == "low" || it.id == "none" || it.id == "off" }?.id
+                ?: ReasoningPolicy.DEFAULT
+            val quietProfile = profile.copy(reasoningEffort = quietEffort)
+            val responsesApi = quietProfile.usesResponses(model)
+            val body = if (responsesApi) {
+                JSONObject().put("model", model).put("instructions", instruction).put("input", user).put("max_output_tokens", 4096)
+            } else {
+                JSONObject().put("model", model).put("max_tokens", 4096).put("messages", JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", instruction))
+                    .put(JSONObject().put("role", "user").put("content", user)))
+            }
+            applyReasoningPolicy(body, quietProfile, model, responsesApi)
+            val path = if (responsesApi) quietProfile.responsesPath else quietProfile.chatPath
+            val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path))
+                .post(body.toString().toRequestBody(jsonMedia)).build()
+            val raw = executeTextCall(client.newCall(request))
+            val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("设定接口返回的不是有效 JSON") }
+            if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+        }
+
     private suspend fun executeDelegatedSearch(
         backend: SearchBackendConfig,
         callId: String,
@@ -835,23 +1028,72 @@ class ApiRepository internal constructor(
 
 SEARCH QUERY:
 $query"""
-        val body = JSONObject()
-            .put("model", backend.model)
-            .put("input", input)
-            .put("tools", JSONArray().put(JSONObject().put("type", toolType)))
-        if (normalizedSource == "web") {
-            body.put("include", JSONArray().put("web_search_call.action.sources"))
+        val anthropic = backend.profile.apiFormat == API_FORMAT_ANTHROPIC
+        if ((anthropic || backend.model.isStepModel()) && normalizedSource == "x") {
+            throw IllegalStateException("当前搜索后端不支持 X Search")
         }
-        val request = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, backend.profile.responsesPath))
-            .post(body.toString().toRequestBody(jsonMedia))
-            .build()
+        if (backend.model.isStepModel()) {
+            val searchRequest = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, "/v1/search"))
+                .post(stepSearchRequest(query).toString().toRequestBody(jsonMedia))
+                .build()
+            val searchRaw = executeTextCall(client.newCall(searchRequest))
+            val searchRoot = runCatching { JSONObject(searchRaw) }.getOrElse { throw IllegalStateException("Step 搜索返回的不是有效 JSON") }
+            val (evidence, sources) = parseStepSearch(searchRoot)
+            require(sources.isNotEmpty()) { "Step 搜索没有返回结果" }
+            val research = runCatching {
+                val summaryCall = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, backend.profile.messagesPath))
+                if (backend.profile.apiKey.isNotBlank()) {
+                    summaryCall.header("x-api-key", backend.profile.apiKey.trim())
+                    summaryCall.header("anthropic-version", "2023-06-01")
+                }
+                val summaryRequest = summaryCall
+                    .post(stepResearchRequest(backend.model, query, evidence).toString().toRequestBody(jsonMedia))
+                    .build()
+                val summaryRaw = executeTextCall(client.newCall(summaryRequest))
+                val summaryRoot = JSONObject(summaryRaw)
+                parseAnthropicSearch(summaryRoot).first
+            }.getOrDefault("")
+            return@runCatching DelegatedSearchResult(
+                output = delegatedSearchToolOutput(query, normalizedSource, backend.model, research.ifBlank { evidence }, sources),
+                citations = sources,
+                activity = ChatToolActivity(callId, DELEGATED_WEB_SEARCH_TOOL,
+                    "已通过 ${backend.model} 搜索 · ${sources.size} 个来源", TOOL_STATUS_COMPLETED)
+            )
+        }
+        val body = if (anthropic) {
+            anthropicWebSearchRequest(backend.model, input)
+        } else {
+            JSONObject()
+                .put("model", backend.model)
+                .put("input", input)
+                .put("tools", JSONArray().put(JSONObject().put("type", toolType)))
+                .apply {
+                    if (normalizedSource == "web") put("include", JSONArray().put("web_search_call.action.sources"))
+                }
+        }
+        val path = if (anthropic) backend.profile.messagesPath else backend.profile.responsesPath
+        val searchCall = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, path))
+        if (anthropic && backend.profile.apiKey.isNotBlank()) {
+            searchCall.header("x-api-key", backend.profile.apiKey.trim())
+            searchCall.header("anthropic-version", "2023-06-01")
+        }
+        val request = searchCall.post(body.toString().toRequestBody(jsonMedia)).build()
         val raw = executeTextCall(client.newCall(request))
         val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("联网搜索后端返回的不是有效 JSON") }
-        require(responseUsedDelegatedSearch(root, normalizedSource)) {
-            "联网搜索后端返回了响应，但未实际执行 ${if (normalizedSource == "x") "X Search" else "Web Search"}"
+        val research: String
+        val sources: List<ChatCitation>
+        if (anthropic) {
+            require(anthropicSearchPerformed(root)) { "联网搜索后端返回了响应，但未实际执行 Web Search" }
+            val parsed = parseAnthropicSearch(root)
+            research = parsed.first
+            sources = parsed.second
+        } else {
+            require(responseUsedDelegatedSearch(root, normalizedSource)) {
+                "联网搜索后端返回了响应，但未实际执行 ${if (normalizedSource == "x") "X Search" else "Web Search"}"
+            }
+            research = parseResponsesText(root)
+            sources = parseServerSideSearchSources(root)
         }
-        val research = parseResponsesText(root)
-        val sources = parseServerSideSearchSources(root)
         DelegatedSearchResult(
             output = delegatedSearchToolOutput(query, normalizedSource, backend.model, research, sources),
             citations = sources,

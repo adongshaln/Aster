@@ -56,6 +56,7 @@ object GitHubSkillBundleRuntime : SkillBundleLoader {
         .readTimeout(60, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .applyNetworkTrust()
         .build()
 
     override fun loadBundle(sourceUrl: String): SkillBundle {
@@ -178,6 +179,7 @@ object NativeSkillsApi : NativeSkillUploader {
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(90, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .applyNetworkTrust()
         .build()
 
     override fun upload(profile: ApiProfile, bundle: SkillBundle): NativeSkillReference {

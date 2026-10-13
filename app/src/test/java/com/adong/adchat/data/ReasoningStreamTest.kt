@@ -11,6 +11,14 @@ import org.json.JSONObject
  * 推理模型的思考流必须与正文分流：用户要能看见模型在推进，而正文不能被思考内容污染。
  */
 class ReasoningStreamTest {
+    @Test
+    fun reasoningWithoutTextOrToolsContinuesInsteadOfFailing() {
+        assertTrue(shouldContinueAfterReasoningOnly("", 0, "想了两万字"))
+        assertFalse(shouldContinueAfterReasoningOnly("回答", 0, "想了两万字"))
+        assertFalse(shouldContinueAfterReasoningOnly("", 1, "想了两万字"))
+        assertFalse(shouldContinueAfterReasoningOnly("", 0, "   "))
+    }
+
     @Test fun chatCompletionsStreamsReasoningSeparatelyFromContent() = runBlocking {
         val server = MockWebServer()
         server.start()

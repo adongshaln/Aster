@@ -132,8 +132,16 @@ internal data class ProtocolRoundResult(
     val toolCalls: List<PendingToolCall>,
     val citations: List<ChatCitation>,
     val responseId: String = "",
-    val usedWebSearch: Boolean = false
+    val usedWebSearch: Boolean = false,
+    val reasoningOnly: Boolean = false,
+    val reasoningText: String = ""
 )
+
+internal const val REASONING_CONTINUE_PROMPT =
+    "思考已经足够。请直接给出回答；如果仍需要工具，请立刻调用。不要再只输出思考。"
+
+internal fun shouldContinueAfterReasoningOnly(text: String, toolCallCount: Int, reasoning: String): Boolean =
+    text.isBlank() && toolCallCount == 0 && reasoning.isNotBlank()
 
 internal operator fun TokenUsage.plus(other: TokenUsage): TokenUsage = TokenUsage(
     inputTokens = inputTokens + other.inputTokens,
@@ -167,7 +175,8 @@ internal fun buildChatTools(
     skillLoadingEnabled: Boolean = false,
     skillSelectors: List<String> = emptyList(),
     delegatedSearchEnabled: Boolean = false,
-    allowXSearch: Boolean = false
+    allowXSearch: Boolean = false,
+    askUserEnabled: Boolean = false
 ): JSONArray = JSONArray().apply {
     if (fileCreationEnabled) {
         put(JSONObject()
@@ -183,13 +192,17 @@ internal fun buildChatTools(
     if (delegatedSearchEnabled) {
         put(JSONObject().put("type", "function").put("function", delegatedSearchDefinition(allowXSearch)))
     }
+    if (askUserEnabled) {
+        put(JSONObject().put("type", "function").put("function", askUserDefinition(responsesApi = false)))
+    }
 }
 
 internal fun buildResponsesTools(
     fileCreationEnabled: Boolean,
     webSearchEnabled: Boolean,
     skillLoadingEnabled: Boolean = false,
-    skillSelectors: List<String> = emptyList()
+    skillSelectors: List<String> = emptyList(),
+    askUserEnabled: Boolean = false
 ): JSONArray = JSONArray().apply {
     if (webSearchEnabled) put(JSONObject().put("type", WEB_SEARCH_TOOL))
     if (fileCreationEnabled) put(createFileDefinition(responsesApi = true))
@@ -197,6 +210,29 @@ internal fun buildResponsesTools(
         put(loadSkillDefinition(responsesApi = true, skillSelectors = skillSelectors))
         put(readSkillDefinition(true, skillSelectors))
     }
+    if (askUserEnabled) put(askUserDefinition(responsesApi = true))
+}
+
+private fun askUserDefinition(responsesApi: Boolean): JSONObject {
+    val parameters = JSONObject()
+        .put("type", "object")
+        .put("properties", JSONObject()
+            .put("question", JSONObject()
+                .put("type", "string")
+                .put("description", "One focused question for the missing decision."))
+            .put("options", JSONObject()
+                .put("type", "array")
+                .put("minItems", 2)
+                .put("maxItems", 3)
+                .put("items", JSONObject().put("type", "string"))
+                .put("description", "Two or three concrete choices. Do not add a free-text option; the app appends one.")))
+        .put("required", JSONArray(listOf("question", "options")))
+        .put("additionalProperties", false)
+    val definition = JSONObject()
+        .put("name", ASK_USER_TOOL)
+        .put("description", "Ask one multiple-choice question only when a missing decision would change the result and cannot be assumed. Skip it when the request is already clear.")
+        .put("parameters", parameters)
+    return if (responsesApi) definition.put("type", "function").put("strict", true) else definition
 }
 
 private fun createFileDefinition(responsesApi: Boolean): JSONObject {
@@ -497,6 +533,40 @@ internal fun parseCitations(root: JSONObject): List<ChatCitation> {
     acceptMessage(choice?.optJSONObject("message"))
     acceptMessage(choice?.optJSONObject("delta"))
     return result.values.toList()
+}
+
+internal enum class WebSearchSignal { Searching, Completed }
+
+/** A search indicator is earned by a real search event, not by the toggle being on. */
+internal fun webSearchSignal(root: JSONObject): WebSearchSignal? {
+    val type = root.optString("type")
+    if (type == "response.web_search_call.in_progress" || type == "response.web_search_call.searching") {
+        return WebSearchSignal.Searching
+    }
+    if (type == "response.web_search_call.completed") return WebSearchSignal.Completed
+    if (responseUsedWebSearch(root)) return WebSearchSignal.Completed
+    fun from(obj: JSONObject?): WebSearchSignal? {
+        if (obj == null) return null
+        val status = obj.optString("status").ifBlank { obj.optString("web_search_status") }.lowercase()
+        val kind = obj.optString("type")
+        val looksLikeSearch = kind.contains("web_search") || obj.has("web_search") || obj.has("web_search_status")
+        if (!looksLikeSearch && status !in setOf("searching", "in_progress", "running")) return null
+        return when (status) {
+            "completed", "complete", "done" -> WebSearchSignal.Completed
+            "searching", "in_progress", "running" -> WebSearchSignal.Searching
+            else -> if (kind.contains("web_search")) WebSearchSignal.Searching else null
+        }
+    }
+    from(root)?.let { return it }
+    from(root.optJSONObject("web_search"))?.let { return it }
+    val choice = root.optJSONArray("choices")?.optJSONObject(0)
+    from(choice)?.let { return it }
+    val delta = choice?.optJSONObject("delta")
+    from(delta)?.let { return it }
+    from(delta?.optJSONObject("web_search"))?.let { return it }
+    from(choice?.optJSONObject("message"))?.let { return it }
+    if (parseCitations(root).isNotEmpty()) return WebSearchSignal.Completed
+    return null
 }
 
 internal fun responseUsedWebSearch(root: JSONObject): Boolean {

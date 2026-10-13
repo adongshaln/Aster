@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.adong.adchat.data.ASK_USER_SOURCE
 import com.adong.adchat.data.LoadedSkill
 import com.adong.adchat.data.SkillRuntime
 import com.adong.adchat.ui.theme.Danger
@@ -51,7 +52,8 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
     var deleting by remember { mutableStateOf<LoadedSkill?>(null) }
     suspend fun reload() {
         val result = withContext(Dispatchers.IO) { runtime.listInstalled() to conversationScope?.let(runtime::selection).orEmpty() }
-        skills = result.first; selected = result.second
+        skills = result.first.filter { it.sourceUrl != ASK_USER_SOURCE }
+        selected = result.second
     }
     fun action(message: String, block: () -> Unit) {
         if (busy) return

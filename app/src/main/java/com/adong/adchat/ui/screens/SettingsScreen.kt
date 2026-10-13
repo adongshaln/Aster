@@ -47,6 +47,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.adong.adchat.data.API_FORMAT_ANTHROPIC
+import com.adong.adchat.data.API_FORMAT_OPENAI
 import com.adong.adchat.data.ApiModel
 import com.adong.adchat.data.ApiProfile
 import com.adong.adchat.data.DEFAULT_FONT_WEIGHT
@@ -63,6 +65,7 @@ import com.adong.adchat.data.invalidExtraHeaderLines
 import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.resolveConversationRoute
 import com.adong.adchat.data.normalized
+import com.adong.adchat.data.isStepModel
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.ConnectionUiState
 import com.adong.adchat.ui.MainViewModel
@@ -178,6 +181,16 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
                         shape = RoundedCornerShape(15.dp), colors = editorFieldColors()
                     )
                     Text("修改自动保存，仅用于对话。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            item {
+                SettingsDisclosure("网络安全", "默认校验服务器证书", Icons.Rounded.Lock) {
+                    SettingSwitch(
+                        title = "关闭证书校验",
+                        subtitle = "允许自签名或不受信任的证书。只在你信任当前网络时打开，否则连接可能被窃听。",
+                        checked = vm.appConfig.allowInsecureCertificates,
+                        onCheckedChange = vm::setAllowInsecureCertificates
+                    )
                 }
             }
             item {
@@ -512,22 +525,27 @@ private fun SearchBackendCard(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text("委托搜索", style = MaterialTheme.typography.titleSmall)
-                    Text("Chat 模型需要实时资料时，由此 Responses 模型在后台检索", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                    Text("Chat 模型需要实时资料时，由此模型在后台检索", color = MutedInk, style = MaterialTheme.typography.bodySmall)
                 }
             }
             RouteValueButton("API", profile.name, Icons.Rounded.Dns, Accent) { showProfileSheet = true }
             RouteValueButton("搜索模型", profile.searchModel.ifBlank { "未选择" }, Icons.Rounded.TravelExplore, Accent) { showModelSheet = true }
             SettingSwitch(
                 title = "允许 X Search",
-                subtitle = "允许搜索模型检索公开 X 帖子；普通网页搜索始终可用",
-                checked = allowXSearch,
+                subtitle = if (profile.apiFormat == API_FORMAT_ANTHROPIC) "Anthropic 搜索后端只支持网页搜索" else "允许搜索模型检索公开 X 帖子；普通网页搜索始终可用",
+                checked = allowXSearch && profile.apiFormat != API_FORMAT_ANTHROPIC,
+                enabled = profile.apiFormat != API_FORMAT_ANTHROPIC,
                 onCheckedChange = onAllowX
             )
             Text(
-                if (profile.searchModel.isBlank()) {
-                    "选择支持 Responses + web_search 的模型后，Gemini、Claude 等 Chat 模型即可通过 Aster 委托联网。"
-                } else {
-                    "已配置 ${profile.searchModel}。Aster 只向搜索后端发送模型生成的独立查询，不转发整段聊天记录。"
+                when {
+                    profile.searchModel.isStepModel() ->
+                        "已配置 ${profile.searchModel}。Step 模型先调用 /v1/search，再经 Messages 整理笔记，不使用 Anthropic 的 web_search 工具。"
+                    profile.apiFormat == API_FORMAT_ANTHROPIC && profile.searchModel.isNotBlank() ->
+                        "已配置 ${profile.searchModel}。搜索走 Anthropic Messages 的 web_search，只发送独立查询。"
+                    profile.searchModel.isBlank() ->
+                        "选择 Responses 的 web_search，或把 API 格式设为 Anthropic 后选择 Claude。Chat 模型即可委托联网。"
+                    else -> "已配置 ${profile.searchModel}。Aster 只向搜索后端发送模型生成的独立查询，不转发整段聊天记录。"
                 },
                 color = MutedInk,
                 style = MaterialTheme.typography.bodySmall
@@ -538,7 +556,7 @@ private fun SearchBackendCard(
     if (showProfileSheet) {
         AdSelectionSheet(
             title = "选择联网搜索 API",
-            subtitle = "搜索模型固定通过该配置的 Responses 路径调用",
+            subtitle = if (profile.apiFormat == API_FORMAT_ANTHROPIC) "搜索模型通过该配置的 Anthropic Messages 路径调用" else "搜索模型通过该配置的 Responses 路径调用",
             options = profiles.map { item ->
                 AdChoiceOption(item.id, item.name, item.baseUrl, Icons.Rounded.Dns, if (item.id == profile.id) "当前" else null)
             },
@@ -895,6 +913,27 @@ private fun ProfileEditor(
                     EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
                     EditorField("Chat / Gemini 路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
                     EditorField("Responses 路径", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)
+                    Text("接口格式", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ImageProtocolOption("OpenAI", draft.apiFormat != API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
+                            draft = draft.copy(apiFormat = API_FORMAT_OPENAI)
+                        }
+                        ImageProtocolOption("Anthropic", draft.apiFormat == API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
+                            draft = draft.copy(apiFormat = API_FORMAT_ANTHROPIC)
+                        }
+                    }
+                    Text(
+                        if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
+                            "对话仍走上方的 OpenAI 兼容路径。把这个配置选为联网搜索后端时，搜索改走 Messages API 的 web_search。"
+                        } else {
+                            "GPT 与 Grok 的对话和默认搜索走 Responses。Anthropic 格式只在作为搜索后端时使用。"
+                        },
+                        color = MutedInk,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
+                        EditorField("Messages 路径", draft.messagesPath, { draft = draft.copy(messagesPath = it) }, "/v1/messages", Icons.Outlined.Forum)
+                    }
                     EditorField("绘图接口路径", draft.imagePath, { draft = draft.copy(imagePath = it) }, "/v1/images/generations", Icons.Outlined.Image)
                     EditorField("\u53c2\u8003\u56fe\u7f16\u8f91\u8def\u5f84", draft.imageEditPath, { draft = draft.copy(imageEditPath = it) }, "/v1/images/edits", Icons.Outlined.AutoFixHigh, supporting = "multipart image edit endpoint")
                     EditorField(
@@ -982,13 +1021,19 @@ private fun SettingsDisclosure(
 }
 
 @Composable
-private fun SettingSwitch(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun SettingSwitch(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onCheckedChange: (Boolean) -> Unit
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = Ink)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MutedInk)
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 

@@ -45,7 +45,8 @@ internal object StoryRewrites {
 
 object StoryRewriteContext {
     fun compose(source: StoryMessageWithRevision, instruction: String, snapshot: StoryContextMemorySnapshot,
-        prose: List<StoryMessageWithRevision>, originalInput: String? = null, budget: StoryContextBudget = StoryContextBudget()): StoryContextResult {
+        prose: List<StoryMessageWithRevision>, originalInput: String? = null, budget: StoryContextBudget = StoryContextBudget(),
+        cast: StoryCastContext = StoryCastContext()): StoryContextResult {
         require(source.message.role == "assistant" && source.message.workspace == StoryWorkspace.Prose &&
             source.revision.state == StoryRevisionState.Complete)
         require(instruction.isNotBlank() && instruction.length <= 8000) { "请填写 1–8,000 字符的修改要求。" }
@@ -63,6 +64,7 @@ object StoryRewriteContext {
                 "没有提供的讨论内容、候选设定和推断不得自行补入。",
             records,emptyList(),prior+current,emptyList(),budget = budget,
             organizedProseRevisionIds=snapshot.organizedProseRevisionIds,
-            summarySources=snapshot.summarySources.filterKeys { id -> records.any { it.id==id } })
+            summarySources=snapshot.summarySources.filterKeys { id -> records.any { it.id==id } },
+            cast=cast)
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.ui.fittedImageDp
 import com.adong.adchat.ui.theme.*
 import kotlin.math.PI
 import kotlin.math.sin
@@ -401,6 +402,8 @@ fun ConversationImages(attachments: List<ChatImageAttachment>) {
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         attachments.forEach { attachment ->
+            val fitted = fittedImageDp(attachment.width, attachment.height, maxWidth = 200f, maxHeight = 200f)
+            val frame = if (fitted == null) Modifier.size(116.dp) else Modifier.size(fitted.first.dp, fitted.second.dp)
             Surface(
                 color = Color.White.copy(alpha = .12f),
                 shape = RoundedCornerShape(14.dp),
@@ -409,8 +412,8 @@ fun ConversationImages(attachments: List<ChatImageAttachment>) {
                 AsyncImage(
                     model = attachment.uri,
                     contentDescription = attachment.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(116.dp).clip(RoundedCornerShape(13.dp))
+                    contentScale = ContentScale.Fit,
+                    modifier = frame.clip(RoundedCornerShape(13.dp))
                 )
             }
         }
@@ -488,15 +491,82 @@ fun ConversationReadingVeil(modifier: Modifier = Modifier) {
     )))
 }
 
+/**
+ * Tracks whether the user is actively scrolling toward the end of [listState]:
+ * visible only during such a gesture, fading out [hideDelayMillis] after it stops,
+ * and hiding immediately once the bottom is reached.
+ */
 @Composable
-fun ConversationJumpToBottom(visible: Boolean, loading: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    AnimatedVisibility(visible, modifier, enter = fadeIn(tween(140)), exit = fadeOut(tween(100))) {
-        Surface(onClick = onClick, color = Surface, contentColor = Accent, shape = CircleShape,
-            border = BorderStroke(1.dp, Hairline), tonalElevation = 0.dp, shadowElevation = 0.dp) {
-            Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(20.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (loading) "跟随生成" else "回到底部", style = MaterialTheme.typography.labelLarge)
+fun rememberTowardBottomScrollVisible(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    hideDelayMillis: Long = 4000L
+): Boolean {
+    var visible by remember { mutableStateOf(false) }
+    var ticker by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ticker) {
+        if (ticker == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(hideDelayMillis)
+        visible = false
+    }
+    LaunchedEffect(listState) {
+        var lastProgress = Triple(
+            listState.firstVisibleItemIndex,
+            listState.firstVisibleItemScrollOffset,
+            listState.isScrollInProgress
+        )
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                listState.isScrollInProgress
+            )
+        }.collect { current ->
+            val progress = current.first.toLong() * Int.MAX_VALUE + current.second
+            val previous = lastProgress.first.toLong() * Int.MAX_VALUE + lastProgress.second
+            if (current.third && progress > previous && listState.canScrollForward) {
+                visible = true
+                ticker++
+            } else if (!listState.canScrollForward) {
+                // Bottom reached: hide immediately and cancel the pending timer.
+                if (visible) {
+                    visible = false
+                    ticker = 0
+                }
+            }
+            // When the gesture simply stops, keep the button visible and let
+            // the ticker's hideDelayMillis fade it out.
+            lastProgress = current
+        }
+    }
+    return visible
+}
+
+@Composable
+fun ConversationJumpToBottom(
+    visible: Boolean,
+    loading: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    fadeMillisIn: Int = 140,
+    fadeMillisOut: Int = 100
+) {
+    AnimatedVisibility(visible, modifier, enter = fadeIn(tween(fadeMillisIn)), exit = fadeOut(tween(fadeMillisOut))) {
+        Surface(
+            onClick = onClick,
+            color = Surface,
+            contentColor = Accent,
+            shape = CircleShape,
+            border = BorderStroke(1.dp, Hairline),
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            modifier = Modifier.size(48.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Rounded.KeyboardArrowDown,
+                    if (loading) "跟随生成" else "回到底部",
+                    Modifier.size(22.dp)
+                )
             }
         }
     }

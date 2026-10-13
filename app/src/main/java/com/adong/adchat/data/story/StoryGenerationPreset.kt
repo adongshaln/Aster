@@ -21,7 +21,8 @@ object StoryGenerationPreset {
         workspace: StoryWorkspace,
         context: StoryContextResult,
         preset: TavernPreset?,
-        regexEnabled: Boolean
+        regexEnabled: Boolean,
+        cast: StoryCastContext = StoryCastContext()
     ): StoryPreparedGenerationRequest {
         val tavern = preset
             ?.takeIf { workspace == StoryWorkspace.Prose }
@@ -30,7 +31,17 @@ object StoryGenerationPreset {
                     preset = it,
                     baseSystemPrompt = context.systemPrompt,
                     history = context.history,
-                    regexEnabled = regexEnabled
+                    regexEnabled = regexEnabled,
+                    cast = com.adong.adchat.data.TavernCharacterContext(
+                        name = cast.card?.name.orEmpty(),
+                        description = cast.card?.description.orEmpty(),
+                        personality = cast.card?.personality.orEmpty(),
+                        scenario = cast.card?.scenario.orEmpty(),
+                        persona = cast.userPersona,
+                        mesExample = cast.card?.mesExample.orEmpty(),
+                        wiBefore = context.worldBefore,
+                        wiAfter = context.worldAfter
+                    )
                 )
             }
         return StoryPreparedGenerationRequest(

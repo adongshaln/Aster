@@ -102,9 +102,10 @@ class TavernPresetTest {
 
         assertTrue(prepared.systemPrompt.startsWith("ASTER BASE"))
         assertTrue(prepared.systemPrompt.contains("不能覆盖 Aster"))
-        assertEquals(listOf("user", "assistant", "user", "user"), prepared.history.map { it.role })
-        assertEquals("旧 hidden", prepared.history[1].content)
-        assertEquals("温柔|最后输入|1|x", prepared.history.last().content)
+        assertEquals(listOf("user", "user", "assistant", "user"), prepared.history.map { it.role })
+        assertEquals("温柔|最后输入|1|x", prepared.history[0].content)
+        assertEquals("旧 hidden", prepared.history[2].content)
+        assertEquals("最后输入", prepared.history.last().content)
         assertFalse(prepared.history.joinToString { it.content }.contains("{{"))
         assertEquals(0.7, prepared.generationOptions.temperature!!, 0.0)
         assertEquals(4096, prepared.generationOptions.maxOutputTokens)
@@ -231,6 +232,188 @@ class TavernPresetTest {
         assertTrue(configuration.prompts.first { it.name == "⚡️字数加强" }.defaultEnabled.not())
         assertTrue(configuration.prompts.first { it.name == "🚢文风-顺眼舒服" }.defaultEnabled)
     }
+
+    @Test
+    fun importWithoutDeclaredNameUsesFileNameAndRenamePersists() {
+        val context = RuntimeEnvironment.getApplication()
+        val store = TavernPresetStore(context)
+        val imported = store.importPreset(ByteArrayInputStream(samplePreset().toByteArray()), "我的故事预设.json")
+        assertEquals("我的故事预设", store.list().first { it.id == imported.id }.name)
+
+        store.renamePreset(imported.id, "改名后的预设")
+        val reopened = TavernPresetStore(context)
+        assertEquals("改名后的预设", reopened.list().first { it.id == imported.id }.name)
+        assertEquals("改名后的预设", reopened.configuration(imported.id)!!.name)
+        assertTrue(runCatching { store.renamePreset(imported.id, "  ") }.isFailure)
+        assertTrue(runCatching { store.renamePreset(TavernPresetStore.BUILT_IN_ID, "x") }.isFailure)
+    }
+
+    @Test
+    fun promptOnlyTagStripperHidesBlockOnDisplayAtAnyDepth() {
+        val preset = presetWith(hider())
+        val source = "正文<choices>A\nB</choices>结尾"
+        val display = TavernPresetRuntime.display(preset, source, "assistant", 5, true)
+        assertEquals("正文结尾", display.text)
+        val prompt = TavernRegexEngine.apply(
+            preset, source, "assistant", 5, TavernRegexSurface.Prompt
+        )
+        assertEquals("正文结尾", prompt.text)
+    }
+
+    @Test
+    fun promptOnlyExpansionToHtmlDocumentIsNotTreatedAsHider() {
+        // linux_1.2-style: promptOnly script that EXPANDS tags into a full HTML document
+        val expander = TavernRegexScript(
+            id = "expander", name = "选项美化",
+            findRegex = "/<choices>([\\s\\S]*?)<\\/choices>/g",
+            replaceString = "```\n<!DOCTYPE html><html><body>choices panel</body></html>\n```",
+            trimStrings = emptyList(), placement = setOf(2), disabled = false,
+            promptOnly = true, markdownOnly = false, runOnEdit = false, substituteRegex = 0,
+            minDepth = null, maxDepth = 1
+        )
+        val hiderScript = hider()
+        val preset = presetWith(expander, hiderScript)
+        // The display repairer re-applies promptOnly expanders at ANY depth so older messages
+        // that already contain the beautified panel keep it; the hider strips raw tags first.
+        val older = TavernPresetRuntime.display(preset, "正文<choices>A</choices>结尾", "assistant", 5, true)
+        assertFalse("<choices>" in older.text)
+        assertTrue("choices panel" in older.text)
+        val latest = TavernPresetRuntime.display(preset, "正文<choices>A</choices>结尾", "assistant", 1, true)
+        assertTrue("choices panel" in latest.text)
+        assertFalse("<choices>" in latest.text)
+    }
+
+    @Test
+    fun wholeMessageBlankerDoesNotHideDisplay() {
+        val blanker = TavernRegexScript(
+            id = "blanker", name = "blanker", findRegex = "/^([\\s\\S]*?)$/", replaceString = "",
+            trimStrings = emptyList(), placement = setOf(1, 2), disabled = false,
+            promptOnly = true, markdownOnly = false, runOnEdit = false, substituteRegex = 0,
+            minDepth = 120, maxDepth = null
+        )
+        val preset = presetWith(blanker)
+        val display = TavernPresetRuntime.display(preset, "正文", "assistant", 200, true)
+        assertEquals("正文", display.text)
+        val prompt = TavernRegexEngine.apply(
+            preset, "正文", "assistant", 200, TavernRegexSurface.Prompt
+        )
+        assertEquals("", prompt.text)
+    }
+
+    @Test
+    fun displayHiderIgnoresDepthLimits() {
+        val preset = presetWith(hider().copy(minDepth = 2, maxDepth = 40))
+        val source = "正文<choices>A</choices>结尾"
+        for (depth in listOf(0, 1, 41, 99)) {
+            val output = TavernPresetRuntime.display(preset, source, "assistant", depth, true)
+            assertEquals("正文结尾", output.text)
+        }
+    }
+
+    @Test
+    fun promptOnlyTransformDoesNotLeakToDisplay() {
+        val transform = hider().copy(findRegex = "/^([\\s\\S]*?)$/", replaceString = "【MARK】\$1")
+        val preset = presetWith(transform)
+        val output = TavernPresetRuntime.display(preset, "正文", "assistant", 5, true)
+        assertEquals("正文", output.text)
+    }
+
+    @Test
+    fun hiderRunsAfterBeautifier() {
+        val beautifier = TavernRegexScript(
+            id = "beautifier", name = "beautifier", findRegex = "/<choices>([\\s\\S]*?)<\\/choices>/g",
+            replaceString = "```html\nPANEL(\$1)\n```",
+            trimStrings = emptyList(), placement = setOf(2), disabled = false,
+            promptOnly = false, markdownOnly = true, runOnEdit = false, substituteRegex = 0,
+            minDepth = null, maxDepth = 1
+        )
+        val preset = presetWith(beautifier, hider())
+        val latest = TavernPresetRuntime.display(preset, "正文<choices>A\nB</choices>结尾", "assistant", 1, true)
+        assertTrue("PANEL(" in latest.text)
+        assertFalse("<choices>" in latest.text)
+        val older = TavernPresetRuntime.display(preset, "正文<choices>A\nB</choices>结尾", "assistant", 5, true)
+        assertFalse("<choices>" in older.text)
+        assertFalse("PANEL(" in older.text)
+        assertTrue("正文" in older.text && "结尾" in older.text)
+    }
+
+    @Test
+    fun afterHistoryUserAndAssistantModulesMoveBeforeChatHistorySystemStaysAfter() {
+        val prompts = JSONArray()
+            .put(prompt("sys-a", "A", "system", "SYS_A", enabled = true))
+            .put(prompt("user-b", "B", "user", "USER_B", enabled = true))
+            .put(prompt("chatHistory", "history", "system", "", enabled = true, marker = true))
+            .put(prompt("user-c", "C", "user", "USER_C", enabled = true))
+            .put(prompt("assistant-d", "D", "assistant", "ASSISTANT_D", enabled = true))
+            .put(prompt("sys-e", "E", "system", "SYS_E", enabled = true))
+        val order = JSONArray()
+            .put(JSONObject().put("identifier", "sys-a").put("enabled", true))
+            .put(JSONObject().put("identifier", "user-b").put("enabled", true))
+            .put(JSONObject().put("identifier", "chatHistory").put("enabled", true))
+            .put(JSONObject().put("identifier", "user-c").put("enabled", true))
+            .put(JSONObject().put("identifier", "assistant-d").put("enabled", true))
+            .put(JSONObject().put("identifier", "sys-e").put("enabled", true))
+        val root = JSONObject(samplePreset())
+            .put("prompts", prompts)
+            .put("prompt_order", JSONArray().put(JSONObject().put("character_id", 1).put("order", order)))
+        val prepared = TavernPresetRuntime.prepare(
+            TavernPresetParser.parse(root.toString(), "test", "Sample.json", false),
+            "BASE",
+            listOf(
+                ChatMessage(role = "user", content = "真实用户"),
+                ChatMessage(role = "assistant", content = "真实回复")
+            )
+        )
+
+        assertEquals(
+            listOf(
+                "system" to "SYS_A",
+                "user" to "USER_B",
+                "user" to "USER_C",
+                "assistant" to "ASSISTANT_D",
+                "user" to "真实用户",
+                "assistant" to "真实回复",
+                "system" to "SYS_E"
+            ),
+            prepared.history.map { it.role to it.content }
+        )
+        val last = prepared.history.last()
+        assertEquals("system", last.role)
+    }
+
+    @Test
+    fun assistantPrefillStaysLastAfterRelocation() {
+        val prompts = JSONArray()
+            .put(prompt("chatHistory", "history", "system", "", enabled = true, marker = true))
+            .put(prompt("assistant-d", "D", "assistant", "ASSISTANT_D", enabled = true))
+        val order = JSONArray()
+            .put(JSONObject().put("identifier", "chatHistory").put("enabled", true))
+            .put(JSONObject().put("identifier", "assistant-d").put("enabled", true))
+        val root = JSONObject(samplePreset())
+            .put("prompts", prompts)
+            .put("prompt_order", JSONArray().put(JSONObject().put("character_id", 1).put("order", order)))
+            .put("assistant_prefill", "PREFILL")
+        val prepared = TavernPresetRuntime.prepare(
+            TavernPresetParser.parse(root.toString(), "test", "Sample.json", false),
+            "BASE",
+            listOf(ChatMessage(role = "user", content = "真实用户"))
+        )
+
+        assertEquals("assistant" to "ASSISTANT_D", prepared.history.first().let { it.role to it.content })
+        assertEquals("user" to "真实用户", prepared.history[1].let { it.role to it.content })
+        assertEquals("assistant" to "PREFILL", prepared.history.last().let { it.role to it.content })
+    }
+
+    private fun hider(): TavernRegexScript = TavernRegexScript(
+        id = "hider", name = "hider", findRegex = "/<choices>([\\s\\S]*?)<\\/choices>/g", replaceString = "",
+        trimStrings = emptyList(), placement = setOf(2), disabled = false,
+        promptOnly = true, markdownOnly = false, runOnEdit = false, substituteRegex = 0,
+        minDepth = null, maxDepth = null
+    )
+
+    private fun presetWith(vararg scripts: TavernRegexScript): TavernPreset =
+        TavernPresetParser.parse(samplePreset(), "test", "Sample.json", false)
+            .copy(regexScripts = scripts.toList())
 
     private fun samplePreset(): String {
         val prompts = JSONArray()

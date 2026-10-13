@@ -15,6 +15,9 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.adong.adchat.data.*
+import com.adong.adchat.ui.markdown.COVER_IMAGE_INSTRUCTION
+import com.adong.adchat.ui.markdown.NARRATIVE_NAME_MARK_INSTRUCTION
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineStart
@@ -84,6 +87,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     var appConfig by mutableStateOf(store.load())
         private set
+    init {
+        NetworkTrust.allowInsecureCertificates = appConfig.allowInsecureCertificates
+        val loader = coil.ImageLoader.Builder(getApplication())
+            .okHttpClient(okhttp3.OkHttpClient.Builder().applyNetworkTrust().build())
+            .build()
+        coil.Coil.setImageLoader(loader)
+    }
     val modelCache = mutableStateMapOf<String, List<ApiModel>>()
     val connectionStates = mutableStateMapOf<String, ConnectionUiState>()
     var chatInput by mutableStateOf("")
@@ -155,6 +165,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var isChatLoading by mutableStateOf(false)
         private set
+    var pendingQuestion by mutableStateOf<AskUserPrompt?>(null)
+        private set
+    var questionDraft by mutableStateOf("")
+        private set
+    private var questionAwaiting: CompletableDeferred<String>? = null
     private var chatJob: Job? = null
     private var chatStopRequested = false
     private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
@@ -354,6 +369,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setAllowXSearch(enabled: Boolean) {
         appConfig = appConfig.copy(allowXSearch = enabled)
         persist(); notice = if (enabled) "已允许联网后端使用 X Search" else "已关闭 X Search"
+    }
+
+    fun setAllowInsecureCertificates(enabled: Boolean) {
+        if (appConfig.allowInsecureCertificates == enabled) return
+        NetworkTrust.allowInsecureCertificates = enabled
+        appConfig = appConfig.copy(allowInsecureCertificates = enabled)
+        persist()
+        notice = if (enabled) "已关闭证书校验，仅在信任当前网络时使用" else "已恢复证书校验"
     }
 
     fun setModelContextWindow(profileId: String, model: String, window: Int) {
@@ -617,6 +640,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .put("imageModel", profile.imageModel)
                         .put("mangaAnalysisModel", profile.mangaAnalysisModel)
                         .put("searchModel", profile.searchModel)
+                        .put("apiFormat", profile.apiFormat)
+                        .put("messagesPath", profile.messagesPath)
                         .put("extraHeaders", profile.extraHeaders)
                     )
                 }
@@ -655,7 +680,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),
                     searchModel = item.optString("searchModel"),
-                    extraHeaders = item.optString("extraHeaders")
+                    extraHeaders = item.optString("extraHeaders"),
+                    apiFormat = item.optString("apiFormat").ifBlank { com.adong.adchat.data.API_FORMAT_OPENAI },
+                    messagesPath = item.optString("messagesPath").ifBlank { "/v1/messages" }
                 ))
             }
         }
@@ -788,12 +815,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var lastRecoveryAt = 0L
             var lastReasoningPushAt = 0L
             var automaticRecoveryCount = 0
+            var summarizeTitle = false
             try {
                 val requestHistory = withContext(Dispatchers.IO) { prepareChatHistory(history) }
                 val result = repository.streamChat(
                     profile = profile,
                     model = model,
-                    systemPrompt = appConfig.systemPrompt,
+                    systemPrompt = listOf(appConfig.systemPrompt, NARRATIVE_NAME_MARK_INSTRUCTION, COVER_IMAGE_INSTRUCTION)
+                        .filter(String::isNotBlank).joinToString("\n\n"),
                     history = requestHistory,
                     cacheKey = "adchat-${activeConversationId ?: profile.id}",
                     searchBackend = searchBackendConfig(),
@@ -819,6 +848,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     },
+                    onAskUser = { prompt -> awaitQuestion(prompt) },
                     onReasoning = { chunk ->
                         reasoned.append(chunk)
                         val now = SystemClock.elapsedRealtime()
@@ -862,7 +892,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     createdAt = recoveryCreatedAt,
                                     updatedAt = System.currentTimeMillis(),
                                     profileId = profile.id,
-                                    model = model
+                                    model = model,
+                                    titleSummarized = recoveryBase?.titleSummarized ?: false
                                 )
                             )
                         }
@@ -886,6 +917,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         toolActivities = result.toolActivities
                     )
                 }
+                summarizeTitle = true
             } catch (error: Throwable) {
                 val partial = streamed.toString().trimEnd()
                 val reasonedText = reasoned.toString().trimEnd()
@@ -979,6 +1011,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 chatStopRequested = false
                 chatJob = null
                 persistCurrentConversation(clearRecoveryMessageId = assistantId)
+                if (summarizeTitle) scheduleTitleSummary()
             }
         }
     }
@@ -1003,7 +1036,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopGeneration() {
         if (!isChatLoading) return
         chatStopRequested = true
+        questionAwaiting?.cancel()
         chatJob?.cancel(CancellationException("User stopped generation"))
+    }
+
+    fun updateQuestionDraft(value: String) { questionDraft = value }
+
+    fun chooseQuestionOption(option: String) {
+        if (option == ASK_USER_CUSTOM_OPTION) return
+        questionAwaiting?.complete(option)
+    }
+
+    fun submitQuestionDraft() {
+        val text = questionDraft.trim()
+        if (text.isBlank()) return
+        questionAwaiting?.complete(text)
+    }
+
+    private suspend fun awaitQuestion(prompt: AskUserPrompt): String {
+        val deferred = CompletableDeferred<String>()
+        withContext(Dispatchers.Main.immediate) {
+            questionDraft = ""
+            pendingQuestion = prompt
+            questionAwaiting = deferred
+        }
+        return try {
+            deferred.await()
+        } finally {
+            withContext(Dispatchers.Main.immediate) {
+                if (questionAwaiting === deferred) {
+                    pendingQuestion = null
+                    questionAwaiting = null
+                    questionDraft = ""
+                }
+            }
+        }
     }
 
     fun regenerateMessage(messageId: Long) {
@@ -1169,7 +1236,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun renameConversation(id: String, title: String) {
         val index = conversations.indexOfFirst { it.id == id }
         if (index < 0 || title.isBlank()) return
-        conversations[index] = conversations[index].copy(title = title.trim(), updatedAt = System.currentTimeMillis())
+        conversations[index] = conversations[index].copy(
+            title = title.trim(),
+            titleSummarized = true,
+            updatedAt = System.currentTimeMillis()
+        )
         sortAndSaveConversations()
     }
 
@@ -1870,21 +1941,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scheduleSessionSave(immediate = true)
         }
         val index = conversations.indexOfFirst { it.id == id }
-        val title = stableMessages.firstOrNull { it.role == "user" }?.content
-            ?.replace(Regex("\\s+"), " ")?.trim()?.take(24)?.ifBlank { null } ?: "\u65b0\u5bf9\u8bdd"
-        val createdAt = conversations.getOrNull(index)?.createdAt ?: now
+        val existing = conversations.getOrNull(index)
+        val title = automaticConversationTitle(stableMessages)
+        val createdAt = existing?.createdAt ?: now
         val selectedProfile = chatProfile
         val conversation = Conversation(
             id = id,
-            title = conversations.getOrNull(index)?.title ?: title,
+            title = existing?.title ?: title,
             messages = stableMessages,
             createdAt = createdAt,
             updatedAt = now,
             profileId = selectedProfile.id,
-            model = selectedProfile.chatModel
+            model = selectedProfile.chatModel,
+            titleSummarized = existing?.titleSummarized ?: false
         )
         if (index >= 0) conversations[index] = conversation else conversations.add(conversation)
         sortAndSaveConversations(clearRecoveryMessageId)
+    }
+
+    private fun scheduleTitleSummary() {
+        val id = activeConversationId ?: return
+        val snapshot = conversations.firstOrNull { it.id == id } ?: return
+        if (snapshot.titleSummarized || userRounds(snapshot.messages) < 3) return
+        if (!isAutomaticTitle(snapshot.title, snapshot.messages)) {
+            val index = conversations.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                conversations[index] = conversations[index].copy(titleSummarized = true)
+                sortAndSaveConversations()
+            }
+            return
+        }
+        val profile = chatProfile
+        val model = profile.chatModel
+        if (model.isBlank()) return
+        val transcript = snapshot.messages.filter {
+            !it.isError && !it.isStreaming && !it.isContinuation && (it.role == "user" || it.role == "assistant")
+        }.takeLast(6).joinToString("\n") { message ->
+            val who = if (message.role == "user") "用户" else "助手"
+            "$who：${message.content.replace(Regex("\\s+"), " ").trim().take(180)}"
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val title = runCatching { repository.summarizeConversationTitle(profile, model, transcript) }.getOrNull()
+            withContext(Dispatchers.Main) {
+                val index = conversations.indexOfFirst { it.id == id }
+                if (index < 0 || conversations[index].titleSummarized) return@withContext
+                val current = conversations[index]
+                conversations[index] = current.copy(
+                    title = title?.takeIf(String::isNotBlank) ?: current.title,
+                    titleSummarized = true
+                )
+                sortAndSaveConversations()
+            }
+        }
     }
 
     private fun bindCurrentConversationRoute(profile: ApiProfile, model: String) {

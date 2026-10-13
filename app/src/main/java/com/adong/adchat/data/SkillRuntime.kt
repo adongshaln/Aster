@@ -229,7 +229,11 @@ class SkillRuntime(
     companion object {
         fun inMemory(loader: SkillLoader = GitHubSkillRuntime): SkillRuntime = SkillRuntime(MemorySkillLibrary(), loader)
         // GitHub Skills use a pinned remote manifest and lazy per-file reads. Do not download the whole repository archive.
-        fun persistent(context: Context): SkillRuntime = SkillRuntime(FileSkillLibrary(context.applicationContext), GitHubSkillRuntime)
+        fun persistent(context: Context): SkillRuntime {
+            val library = FileSkillLibrary(context.applicationContext)
+            BuiltInSkills.ensureInstalled(library)
+            return SkillRuntime(library, GitHubSkillRuntime)
+        }
     }
 }
 
@@ -379,6 +383,7 @@ internal object GitHubSkillRuntime : SkillLoader {
         .readTimeout(30, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
+        .applyNetworkTrust()
         .build()
 
     private data class ManifestResolution(

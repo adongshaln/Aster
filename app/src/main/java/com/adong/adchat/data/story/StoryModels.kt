@@ -11,6 +11,18 @@ enum class StoryWorkspace(val dbValue: String) {
     }
 }
 
+enum class StorySetupPhase(val dbValue: String) {
+    Discussion("discussion"),
+    CharReview("char_review"),
+    Identity("identity"),
+    PersonaReview("persona_review"),
+    Prose("prose");
+
+    companion object {
+        fun fromDb(value: String): StorySetupPhase = entries.firstOrNull { it.dbValue == value } ?: Prose
+    }
+}
+
 enum class StoryRevisionState(val dbValue: String) {
     Complete("complete"),
     Streaming("streaming"),
@@ -93,8 +105,14 @@ data class Story(
     val memoryVersion: Long = 0,
     val automaticMemoryEnabled: Boolean = true,
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
-)
+    val updatedAt: Long = System.currentTimeMillis(),
+    val setupPhase: StorySetupPhase = StorySetupPhase.Prose,
+    val charCardJson: String = "",
+    val userPersona: String = ""
+) {
+    val hidesDiscussion: Boolean
+        get() = StoryCharacterCard.fromStored(charCardJson)?.imported == true
+}
 
 data class StoryTimeline(
     val id: String = newTimelineId(),

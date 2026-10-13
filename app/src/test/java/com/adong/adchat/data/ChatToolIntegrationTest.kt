@@ -92,6 +92,7 @@ class ChatToolIntegrationTest {
             ) {}
 
             assertEquals("搜索结果", result.text)
+            assertTrue(result.toolActivities.none { it.id == "web_search" })
             val body = JSONObject(server.takeRequest().body.readUtf8())
             assertTrue(body.has("web_search_options"))
             assertFalse(body.has("tools"))

@@ -55,6 +55,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
                 9 -> { StorySchema.MIGRATION_9_TO_10_STATEMENTS.forEach(db::execSQL); version = 10 }
                 10 -> { StorySchema.MIGRATION_10_TO_11_STATEMENTS.forEach(db::execSQL); version = 11 }
                 11 -> { StorySchema.MIGRATION_11_TO_12_STATEMENTS.forEach(db::execSQL); version = 12 }
+                12 -> { StorySchema.MIGRATION_12_TO_13_STATEMENTS.forEach(db::execSQL); version = 13 }
                 else -> error("No story database migration from version $version to $newVersion")
             }
         }
@@ -62,7 +63,7 @@ internal class StoryDatabase(context: Context) : SQLiteOpenHelper(
 
     companion object {
         const val DATABASE_NAME = "aster_story.db"
-        const val DATABASE_VERSION = 12
+        const val DATABASE_VERSION = 13
     }
 }
 
@@ -224,6 +225,11 @@ internal object StorySchema {
     val MIGRATION_11_TO_12_STATEMENTS = listOf(
         "ALTER TABLE $REVISIONS ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE $WORKSPACE_STATE ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'"
+    )
+    val MIGRATION_12_TO_13_STATEMENTS = listOf(
+        "ALTER TABLE $STORIES ADD COLUMN setup_phase TEXT NOT NULL DEFAULT 'prose'",
+        "ALTER TABLE $STORIES ADD COLUMN char_card_json TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE $STORIES ADD COLUMN user_persona TEXT NOT NULL DEFAULT ''"
     )
     val CREATE_STATEMENTS: List<String> = listOf(
         """
@@ -414,5 +420,5 @@ internal object StorySchema {
             FOREIGN KEY(story_id) REFERENCES $STORIES(id) ON DELETE CASCADE
         )
         """.trimIndent()
-    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS + MIGRATION_8_TO_9_STATEMENTS + MIGRATION_9_TO_10_STATEMENTS + MIGRATION_10_TO_11_STATEMENTS + MIGRATION_11_TO_12_STATEMENTS
+    ) + MANUAL_MEMORY_CHANGE_STATEMENTS + MIGRATION_3_TO_4_STATEMENTS + MIGRATION_4_TO_5_STATEMENTS + MIGRATION_5_TO_6_STATEMENTS + MIGRATION_6_TO_7_STATEMENTS + MIGRATION_7_TO_8_STATEMENTS + MIGRATION_8_TO_9_STATEMENTS + MIGRATION_9_TO_10_STATEMENTS + MIGRATION_10_TO_11_STATEMENTS + MIGRATION_11_TO_12_STATEMENTS + MIGRATION_12_TO_13_STATEMENTS
 }

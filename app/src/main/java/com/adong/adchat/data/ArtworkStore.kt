@@ -22,6 +22,7 @@ class ArtworkStore(private val context: Context) {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .applyNetworkTrust()
         .build()
 
     fun load(): List<GeneratedImage> = runCatching {
