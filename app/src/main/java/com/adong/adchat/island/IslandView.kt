@@ -115,7 +115,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     /** 缩回挖孔。 */
     fun collapse() {
         mainHandler.post {
-            setFocusable(false)
+            setWindowFocusable(false)
             if (state == State.Hidden) return@post
             state = State.Hidden
             mainHandler.removeCallbacks(hideRunnable)
@@ -129,7 +129,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     fun destroy() {
         mainHandler.post {
-            setFocusable(false)
+            setWindowFocusable(false)
             state = State.Hidden
             mainHandler.removeCallbacksAndMessages(null)
             if (attached) {
@@ -218,7 +218,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // 提前切为可获焦：等系统把焦点切到本窗口后才能读剪贴板
-                setFocusable(true)
+                setWindowFocusable(true)
             }
             MotionEvent.ACTION_UP -> {
                 // 延迟 200ms 等焦点真正切换过来，再读剪贴板
@@ -237,11 +237,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         } else {
             flashNoLink()
         }
-        setFocusable(false)
+        setWindowFocusable(false)
     }
 
     /** 临时切换窗口焦点标志（读剪贴板需要窗口处于“使用中”状态）。 */
-    private fun setFocusable(focusable: Boolean) {
+    private fun setWindowFocusable(focusable: Boolean) {
         val params = windowParams ?: return
         params.flags = if (focusable) {
             params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
