@@ -337,7 +337,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (attached) return
         val params = baseParams(dp(PILL_SIZE_DP.toInt()), dp(PILL_SIZE_DP.toInt()))
         // 圆环中心与挖孔中心重合
-        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2
+        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
@@ -360,7 +360,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         params.width = dp(PILL_SIZE_DP.toInt())
         params.height = dp(PILL_SIZE_DP.toInt())
         // 圆环中心与挖孔中心重合
-        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2
+        params.y = dp(CUTOUT_CENTER_Y_DP.toInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
     }
