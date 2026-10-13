@@ -319,18 +319,17 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
 }
 
 /**
- * Opens the drawer only for a clearly horizontal drag that starts inside a
- * narrow strip along the screen's left edge, mirroring the system back
- * gesture. Vertical drags and drags starting elsewhere never open it.
+ * Opens the drawer for a clearly horizontal, deliberate drag anywhere on
+ * screen: horizontal travel must dominate the vertical one and exceed
+ * [triggerPx] before the drawer responds. Light or diagonal drags never
+ * open it.
  */
 private fun Modifier.drawerEdgeSwipe(onOpen: () -> Unit): Modifier = composed {
     val density = LocalDensity.current
-    val edgeWidthPx = with(density) { 20.dp.toPx() }
-    val triggerPx = with(density) { 48.dp.toPx() }
+    val triggerPx = with(density) { 72.dp.toPx() }
     pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            if (down.position.x > edgeWidthPx) return@awaitEachGesture
             var dx = 0f
             var dy = 0f
             while (true) {
@@ -339,7 +338,7 @@ private fun Modifier.drawerEdgeSwipe(onOpen: () -> Unit): Modifier = composed {
                 if (change.isConsumed) break
                 dx += change.positionChange().x
                 dy += change.positionChange().y
-                if (abs(dx) > abs(dy) * 1.5f && dx >= triggerPx) {
+                if (abs(dx) > abs(dy) * 2f && abs(dx) >= triggerPx) {
                     change.consume()
                     onOpen()
                     break
