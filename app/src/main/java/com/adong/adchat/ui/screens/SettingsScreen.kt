@@ -182,6 +182,21 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
                 }
             }
             item {
+                SettingsDisclosure(
+                    "输入建议",
+                    vm.suggestionProfile.suggestionModel.takeIf(String::isNotBlank)?.let { "${vm.suggestionProfile.name} · ${vm.suggestionProfile.suggestionModel}" } ?: "未配置 · 回复结束后不预测输入",
+                    Icons.Rounded.AutoAwesome
+                ) {
+                    InputSuggestionCard(
+                        profile = vm.suggestionProfile,
+                        profiles = vm.profiles,
+                        models = vm.modelsFor(vm.suggestionProfile.id),
+                        onProfile = vm::selectSuggestionProfile,
+                        onModel = { vm.selectSuggestionModel(vm.suggestionProfile.id, it) }
+                    )
+                }
+            }
+            item {
                 SettingsDisclosure("助手偏好", "角色、语气与回答习惯", Icons.Rounded.EditNote) {
                     OutlinedTextField(
                         value = vm.appConfig.systemPrompt, onValueChange = vm::updateSystemPrompt,
@@ -594,6 +609,82 @@ private fun SearchBackendCard(
             onDismiss = { showModelSheet = false },
             searchPlaceholder = "搜索模型 ID",
             headerIcon = Icons.Rounded.TravelExplore
+        )
+    }
+}
+
+@Composable
+private fun InputSuggestionCard(
+    profile: ApiProfile,
+    profiles: List<ApiProfile>,
+    models: List<ApiModel>,
+    onProfile: (String) -> Unit,
+    onModel: (String) -> Unit
+) {
+    var showProfileSheet by remember { mutableStateOf(false) }
+    var showModelSheet by remember { mutableStateOf(false) }
+    val candidates = models.filterNot { it.id.isImageLike() }.sortedWith(
+        compareByDescending<ApiModel> { it.id.contains("grok", ignoreCase = true) }
+            .thenBy { it.id.lowercase() }
+    )
+    val displayModels = buildList {
+        if (profile.suggestionModel.isNotBlank() && candidates.none { it.id == profile.suggestionModel }) add(ApiModel(profile.suggestionModel))
+        addAll(candidates)
+    }.distinctBy { it.id }
+
+    Surface(color = Canvas, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.AutoAwesome, null, tint = Accent, modifier = Modifier.size(20.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("输入建议", style = MaterialTheme.typography.titleSmall)
+                    Text("回复完成后预测你的下一句输入", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            RouteValueButton("API", profile.name, Icons.Rounded.Dns, Accent) { showProfileSheet = true }
+            RouteValueButton("建议模型", profile.suggestionModel.ifBlank { "未选择" }, Icons.Rounded.AutoAwesome, Accent) { showModelSheet = true }
+            Text(
+                if (profile.suggestionModel.isBlank()) {
+                    "选择一个响应快、成本低的模型（如 DeepSeek Flash、GPT Luna 级别）。模型负责在回复结束后预测你可能的下一句输入，点按即可填入。留空则关闭该功能。"
+                } else {
+                    "已配置 ${profile.suggestionModel}。思考强度自动使用该模型支持的最低档位；每次预测只携带最近两轮对话。"
+                },
+                color = MutedInk,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+
+    if (showProfileSheet) {
+        AdSelectionSheet(
+            title = "选择输入建议 API",
+            subtitle = "建议模型通过该配置的 API 路径调用",
+            options = profiles.map { item ->
+                AdChoiceOption(item.id, item.name, item.baseUrl, Icons.Rounded.Dns, if (item.id == profile.id) "当前" else null)
+            },
+            selectedId = profile.id,
+            onSelect = { onProfile(it.id); showProfileSheet = false },
+            onDismiss = { showProfileSheet = false },
+            searchPlaceholder = "搜索 API 配置",
+            headerIcon = Icons.Rounded.AutoAwesome
+        )
+    }
+    if (showModelSheet) {
+        AdSelectionSheet(
+            title = "选择建议模型",
+            subtitle = if (displayModels.isEmpty()) "请先测试 API 并同步模型" else "Grok 模型优先显示，也可以选择其他兼容模型",
+            options = displayModels.map { model ->
+                AdChoiceOption(model.id, model.id, model.ownedBy.ifBlank { profile.name }, Icons.Rounded.AutoAwesome,
+                    if (model.id == profile.suggestionModel) "当前" else null)
+            },
+            selectedId = profile.suggestionModel,
+            onSelect = { onModel(it.id); showModelSheet = false },
+            onDismiss = { showModelSheet = false },
+            searchPlaceholder = "搜索模型 ID",
+            headerIcon = Icons.Rounded.AutoAwesome
         )
     }
 }

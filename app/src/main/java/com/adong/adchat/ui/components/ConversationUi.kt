@@ -56,6 +56,8 @@ fun ConversationComposer(
     placeholder: String = "说说你的想法…",
     testTag: String = "chat",
     configureRequired: Boolean = false,
+    suggestion: String? = null,
+    onSuggestionClick: () -> Unit = {},
     contextAction: (@Composable () -> Unit)? = null,
     reasoningAction: (@Composable () -> Unit)? = null
 ) {
@@ -126,6 +128,46 @@ fun ConversationComposer(
                     loading = attachmentLoading,
                     onRemove = onRemoveImage
                 )
+            }
+        }
+        // 输入建议条：模型预测的下一句，点按填入；只在输入框还是空的时候出现。
+        // 退出动画期间 suggestion 已变 null，记住最后一次的文本让淡出不闪空。
+        var shownSuggestion by remember { mutableStateOf<String?>(null) }
+        if (suggestion != null) shownSuggestion = suggestion
+        AnimatedVisibility(
+            visible = suggestion != null && value.isBlank(),
+            enter = fadeIn(tween(150)),
+            exit = fadeOut(tween(150))
+        ) {
+            Surface(
+                onClick = onSuggestionClick,
+                color = Accent.copy(alpha = .10f),
+                contentColor = Ink,
+                shape = RoundedCornerShape(18.dp),
+                border = BorderStroke(1.dp, Hairline.copy(alpha = .72f)),
+                shadowElevation = 0.dp,
+                modifier = Modifier
+                    .padding(top = 6.dp)
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp)
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.AutoAwesome, "输入建议", Modifier.size(16.dp), tint = MutedInk)
+                    Spacer(Modifier.width(7.dp))
+                    Text(
+                        shownSuggestion.orEmpty(),
+                        Modifier.weight(1f),
+                        color = Ink,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text("点按填入", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
         Surface(

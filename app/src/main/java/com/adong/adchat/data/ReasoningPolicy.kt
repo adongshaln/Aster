@@ -120,6 +120,24 @@ internal object ReasoningPolicy {
             ?: choices(model).firstOrNull()
     }
 
+    /**
+     * 家族的最低思考档 id：输入建议这类小请求只要最快出结果，按模型家族取最省思考的档位。
+     * 未知家族或档位表里没有对应 id（模型名变种防御）时返回 [DEFAULT]，即不写任何思考参数。
+     */
+    fun minimalEffort(model: String): String {
+        val id = when (family(model)) {
+            ReasoningFamily.Gpt -> "minimal"
+            ReasoningFamily.Grok -> "low"
+            ReasoningFamily.Claude -> "low"
+            ReasoningFamily.Glm -> "none"
+            ReasoningFamily.KimiEffort -> "low"
+            ReasoningFamily.KimiToggle -> "off"
+            ReasoningFamily.DeepSeek -> "none"
+            ReasoningFamily.Unsupported -> return DEFAULT
+        }
+        return choices(model).firstOrNull { it.id == id }?.id ?: DEFAULT
+    }
+
     fun contract(model: String, responsesApi: Boolean): ReasoningContract = when (family(model)) {
         ReasoningFamily.Gpt -> ReasoningContract(
             if (responsesApi) "reasoning.effort" else "reasoning_effort",

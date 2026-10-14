@@ -1000,6 +1000,42 @@ class ApiRepository internal constructor(
             if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
         }
 
+    /**
+     * 输入建议：小请求（60 tokens），思考强度取该模型家族支持的最低档。失败由调用方静默处理。
+     * [model] 由设置指定（ApiProfile.suggestionModel）；为空白视为功能关闭，直接返回 null。
+     * 与 completePlain 的差异：不走 applyReasoningPolicy（避免叠加 profile 的思考强度），
+     * 而是显式写入 minimalEffort 档位。
+     */
+    suspend fun suggestNextMessage(profile: ApiProfile, model: String, history: List<ChatMessage>): String? {
+        if (model.isBlank()) return null
+        return withContext(Dispatchers.IO) {
+            validateProfile(profile)
+            val responsesApi = profile.usesResponses(model)
+            val body = if (responsesApi) {
+                val input = JSONArray()
+                history.forEach { message ->
+                    input.put(JSONObject().put("role", message.role).put("content", message.content))
+                }
+                input.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
+                JSONObject().put("model", model).put("instructions", InputSuggester.SUGGESTION_INSTRUCTION)
+                    .put("input", input).put("max_output_tokens", 60)
+            } else {
+                val messages = JSONArray()
+                    .put(JSONObject().put("role", "system").put("content", InputSuggester.SUGGESTION_INSTRUCTION))
+                history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
+                messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
+                JSONObject().put("model", model).put("max_tokens", 60).put("messages", messages)
+            }
+            ReasoningPolicy.write(body, model, ReasoningPolicy.minimalEffort(model), responsesApi, outputTokenLimit = 60)
+            val path = if (responsesApi) profile.responsesPath else profile.chatPath
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path))
+                .post(body.toString().toRequestBody(jsonMedia)).build()
+            val raw = executeTextCall(client.newCall(request))
+            val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("输入建议接口返回的不是有效 JSON") }
+            if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+        }
+    }
+
     private suspend fun executeDelegatedSearch(
         backend: SearchBackendConfig,
         callId: String,
