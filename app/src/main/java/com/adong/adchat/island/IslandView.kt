@@ -106,10 +106,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var windowParams: WindowManager.LayoutParams? = null
     private val hideRunnable = Runnable { collapse() }
 
-    /** 动态探测到的前摄挖孔中心坐标（屏幕绝对像素），未探测到时使用校准默认值。 */
-    private var cutoutCenterX: Int = screenSize.x / 2
-    private var cutoutCenterY: Int = dpF(DEFAULT_CUTOUT_CENTER_Y_DP).roundToInt()
-    private var cutoutCalibrated = false
+    /** 挖孔中心距屏顶距离（px，屏幕绝对坐标），用实测校准值；Cutout 只用于内径微调。 */
+    private val cutoutCenterY: Int = dpF(DEFAULT_CUTOUT_CENTER_Y_DP).roundToInt()
 
     /** 上一次已触发处理的链接（规范化后的 URL），同一链接防重复打扰。 */
     private var lastHandledLink: String? = null
@@ -309,28 +307,20 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     /**
-     * 自动探测系统 DisplayCutout（API 28+），精确对齐前摄挖孔中心与内径。
-     * 若当前 ROM 对悬浮窗未下发 Cutout Insets，则平滑回退至实测校准值。
+     * 挖孔内径微调：boundingRect 在 overlay 窗口下发的坐标系不可靠（实测 HyperOS 会把
+     * 局部坐标当屏幕坐标用，导致圆环跑偏），所以中心一律用实测校准值，只借鉴挖孔宽度
+     * 调整圆环内缘半径。
      */
     private fun calibrateFromDisplayCutout(insets: WindowInsets? = rootWindowInsets) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || insets == null) return
         val cutout = insets.displayCutout ?: return
         val rects = cutout.boundingRects
         if (rects.isEmpty()) return
-        // 取最靠近屏幕顶部的挖孔区域
         val topHole = rects.minByOrNull { it.top } ?: return
-        if (topHole.width() in 20..240 && topHole.centerY() in 10..220) {
-            cutoutCenterX = topHole.centerX()
-            cutoutCenterY = topHole.centerY()
-            // 动态适配圆环内缘：镜头半径 + 1.5dp 纯黑熄屏间隙
+        if (topHole.width() in 20..240) {
+            // 动态适配圆环内缘：镜头半径 + 1.5dp 纯黑熄屏间隙（中心坐标不采用）
             val holeRadiusDp = (max(topHole.width(), topHole.height()) / 2f) / density
             glowView.innerEdgeDp = (holeRadiusDp + 1.5f).coerceIn(9.5f, 16f)
-            if (!cutoutCalibrated) {
-                cutoutCalibrated = true
-                if (state == State.Hidden) {
-                    applyPillWindowParams()
-                }
-            }
         }
     }
 
@@ -844,7 +834,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (attached) return
         val sizePx = dpF(WINDOW_SIZE_DP).roundToInt()
         val params = baseParams(sizePx, sizePx).apply {
-            x = cutoutCenterX - screenSize.x / 2
+            x = 0 // gravity CENTER_HORIZONTAL 已居中，无需 x 偏移
             y = pillWindowTopY()
         }
         runCatching { windowManager.addView(this, params) }
@@ -872,7 +862,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val sizePx = dpF(WINDOW_SIZE_DP).roundToInt()
         params.width = sizePx
         params.height = sizePx
-        params.x = cutoutCenterX - screenSize.x / 2
+        params.x = 0
         params.y = pillWindowTopY()
         sizePill()
         runCatching { windowManager.updateViewLayout(this, params) }
