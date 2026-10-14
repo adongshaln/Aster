@@ -32,7 +32,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatImageAttachment
-import com.adong.adchat.data.ChatImageAttachment
 import com.adong.adchat.ui.fittedImageDp
 import com.adong.adchat.ui.theme.*
 import kotlin.math.PI
@@ -370,8 +369,8 @@ fun ConversationComposer(
 
                     AnimatedVisibility(
                         visible = isFocused,
-                        enter = scaleIn(0.8f, AsterSpring.snappy()) + fadeIn(AsterSpring.editorial()),
-                        exit = scaleOut(0.8f, AsterSpring.snappy()) + fadeOut(tween(90))
+                        enter = scaleIn(initialScale = 0.8f, animationSpec = AsterSpring.snappy()) + fadeIn(AsterSpring.editorial()),
+                        exit = scaleOut(targetScale = 0.8f, animationSpec = AsterSpring.snappy()) + fadeOut(tween(90))
                     ) {
                         IconButton(
                             onClick = {
@@ -439,8 +438,8 @@ fun ConversationComposer(
                         AnimatedContent(
                             targetState = loading,
                             transitionSpec = {
-                                (scaleIn(0.65f, AsterSpring.gentleBounce()) + fadeIn(AsterSpring.editorial())) togetherWith
-                                    (scaleOut(0.65f, AsterSpring.snappy()) + fadeOut(tween(110)))
+                                (scaleIn(initialScale = 0.65f, animationSpec = AsterSpring.gentleBounce()) + fadeIn(AsterSpring.editorial())) togetherWith
+                                    (scaleOut(targetScale = 0.65f, animationSpec = AsterSpring.snappy()) + fadeOut(tween(110)))
                             },
                             label = "send-stop"
                         ) { isLoading ->
@@ -856,10 +855,10 @@ fun ConversationJumpToBottom(
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = scaleIn(0.72f, AsterSpring.gentleBounce()) +
+        enter = scaleIn(initialScale = 0.72f, animationSpec = AsterSpring.gentleBounce()) +
             slideInVertically(AsterSpring.spatial()) { it / 2 } +
             fadeIn(tween(fadeMillisIn)),
-        exit = scaleOut(0.78f, AsterSpring.snappy()) +
+        exit = scaleOut(targetScale = 0.78f, animationSpec = AsterSpring.snappy()) +
             slideOutVertically(AsterSpring.snappy()) { it / 3 } +
             fadeOut(tween(fadeMillisOut))
     ) {
