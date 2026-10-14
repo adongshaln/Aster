@@ -62,48 +62,47 @@ data class AsterPalette(
 )
 
 val AsterPaletteLight = AsterPalette(
-    canvas = Color(0xFFF6F3EE),
-    surface = Color(0xFFFFFDFA),
-    ink = Color(0xFF302C28),
-    // 辅助文字在浅色画布上要过 4.5:1。#787169 实测只有 4.35:1，压到 surfaceInset 上更低，
-    // 再叠 alpha 的（禁用态、分隔符）几乎看不见。降到 #6B6459 后 canvas 5.28:1、
-    // surfaceInset 4.84:1。深色板不受影响。
-    mutedInk = Color(0xFF6B6459),
-    hairline = Color(0xFFE6E0D7),
-    accent = Color(0xFF8B5E4B),
-    accentSoft = Color(0xFFF0E5DC),
-    sage = Color(0xFF586B56),
-    sageSoft = Color(0xFFE8EDE3),
-    surfaceInset = Color(0xFFEEE9E1),
-    warmWhite = Color(0xFFFFF9F0),
-    danger = Color(0xFFB33A32),
-    dangerSoft = Color(0xFFFFE8E5),
-    night = Color(0xFF352F2A),
-    quoteAmber = Color(0xFF9A6B12),
-    bracketBlue = Color(0xFF6292B3),
+    // Claude 纸感调色板：Pampas 暖羊皮纸画布 + 象牙卡片 + Terracotta 陶土强调
+    canvas = Color(0xFFF4F3EE),
+    surface = Color(0xFFFAF9F5),
+    ink = Color(0xFF141413),
+    // 辅助文字在浅色画布上要过 4.5:1。暖板岩灰 #6B6963 在 canvas 上约 4.9:1。
+    mutedInk = Color(0xFF6B6963),
+    hairline = Color(0xFFE3E0D6),
+    accent = Color(0xFFB9654A),
+    accentSoft = Color(0xFFF7E6DF),
+    sage = Color(0xFF2E6F4E),
+    sageSoft = Color(0xFFE4F0EA),
+    surfaceInset = Color(0xFFEAE7DF),
+    warmWhite = Color(0xFFFCFBF8),
+    danger = Color(0xFFC94A4A),
+    dangerSoft = Color(0xFFF9E3E0),
+    night = Color(0xFF141413),
+    quoteAmber = Color(0xFFC88A2B),
+    bracketBlue = Color(0xFF3B6EA5),
     // 人物名要和暖墨、品牌棕、危险红分开。浅色纸上用靛蓝，对比约 6:1。
     nameInk = Color(0xFF3E5C86),
-    amberSoft = Color(0xFFFFF1D8)
+    amberSoft = Color(0xFFF6E8CC)
 )
 
 /** 暖调深色：与浅色同一套语义，仅数值不同。night 比画布更深，保住「深色强调面」语义。 */
 val AsterPaletteDark = AsterPalette(
-    canvas = Color(0xFF171512),
-    surface = Color(0xFF201E1B),
-    ink = Color(0xFFECE7DF),
-    mutedInk = Color(0xFFA39C92),
-    hairline = Color(0xFF35312C),
-    accent = Color(0xFFC08B72),
-    accentSoft = Color(0xFF3A2E27),
-    sage = Color(0xFF93A88B),
-    sageSoft = Color(0xFF262E24),
-    surfaceInset = Color(0xFF2A2724),
-    warmWhite = Color(0xFF1A1815),
-    danger = Color(0xFFE07A6F),
-    dangerSoft = Color(0xFF46231F),
+    canvas = Color(0xFF141413),
+    surface = Color(0xFF1E1E1C),
+    ink = Color(0xFFF0EFEA),
+    mutedInk = Color(0xFF9A9891),
+    hairline = Color(0xFF2E2D2A),
+    accent = Color(0xFFE28769),
+    accentSoft = Color(0xFF382620),
+    sage = Color(0xFF52B788),
+    sageSoft = Color(0xFF1E352B),
+    surfaceInset = Color(0xFF282725),
+    warmWhite = Color(0xFF1A1918),
+    danger = Color(0xFFE06C75),
+    dangerSoft = Color(0xFF3A2320),
     night = Color(0xFF0F0E0C),
-    quoteAmber = Color(0xFFD9A94E),
-    bracketBlue = Color(0xFF8FB5D6),
+    quoteAmber = Color(0xFFE0A449),
+    bracketBlue = Color(0xFF61AFEF),
     nameInk = Color(0xFFA9C7E4),
     amberSoft = Color(0xFF43301C)
 )
