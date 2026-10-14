@@ -2,12 +2,8 @@ package com.adong.adchat.island
 
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
-import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.drawable.GradientDrawable
@@ -21,7 +17,6 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
@@ -29,28 +24,20 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.adong.adchat.media.MediaPlatform
-import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
- * 灵动链接岛（Glow & Dynamic Link Island）容器视图：
+ * 灵动链接岛视图（Liquid Chrono-Corona Island）：
  *
- * 1. 待机态（Ring）：
- *    - 发光圆环与前摄挖孔同心对齐（优先读取系统 [ android.view.DisplayCutout ] 真实坐标，
- *      回退至红米 Turbo 5 Max 实测校准值）；
- *    - 3.5s 正弦透明度呼吸（仅改硬件层 View.alpha，零 onDraw 开销）；
- *    - 息屏、窗口不可见或系统关闭动画时自动挂起动画，极致省电。
- *
- * 2. 交互与识别叙事（Touch -> Scan -> Flash & Ripple）：
- *    - 按下瞬间：触感反馈（與视觉峰值同步 < 16ms）+ 连续时间阻尼弹簧（ζ ≈ 0.5）驱动线宽外扩；
- *    - 抬手识链：临时获焦读取剪贴板，识别到链接后启动 480ms 强减速彗星扫描弧；
- *    - 收束高潮：在扫描弧收束最亮帧瞬切翡翠绿 + 白芯闪光 + 外扩涟漪，光圈停留展示换色高潮后
- *      丝滑展开暗色曜石灵动岛卡片。
- *
- * 3. 展开态（Obsidian Dynamic Capsule Card）：
- *    - 摒弃生硬的浅色大方块，采用与 OLED 挖孔一脉相承的「曜石黑 + 琥珀/翡翠微光描边」悬浮胶囊卡；
- *    - 支持上滑手势快速收起、点击外部收起、以及平滑进度追踪。
+ * - **定位基准**：100% 沿用原版经过真机校准的窗口尺寸（44dp）、Window Flags 与 `params.y` 计算公式，
+ *   确保圆心严丝合缝对准前置摄像头中心；
+ * - **常驻弱呼吸**：4.2 秒一周期的静谧正弦微呼吸（透明度 0.45 ↔ 0.78，硬件层零重绘）；
+ * - **按压物理弹簧**：二阶欠阻尼谐振弹簧（带过冲与角动量流光旋转）+ 毫秒级同步清脆触感；
+ * - **触发事件反馈**：双侧流光星轨对称攀升 -> 顶点聚变闪光换色 -> 双层同心光波涟漪 -> 展开黑曜石晶石卡片。
  */
 class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
 
@@ -64,23 +51,21 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     companion object {
-        // 默认挖孔校准参数（红米 Turbo 5 Max: density=3.25，挖孔中心距屏幕顶约 25.5dp）
-        private const val DEFAULT_CUTOUT_CENTER_Y_DP = 23.4f
+        // 严格采用原版实测校准的圆心定位参数（红米 Turbo 5 Max: density=3.25）
+        /** 挖孔中心距屏幕顶部的距离（dp），圆环与挖孔中心重合。 */
+        private const val CUTOUT_CENTER_Y_DP = 23.4f
+        /** 悬浮窗边长（dp）：严格保持 44dp。 */
         private const val WINDOW_SIZE_DP = IslandGlowView.WINDOW_SIZE_DP
 
-        // 展开态灵动胶囊卡尺寸与超时
-        private const val CARD_SIDE_MARGIN_DP = 16
-        private const val CARD_TOP_OFFSET_DP = 8
         private const val CARD_TIMEOUT_MS = 12_000L
+        /** 常驻弱呼吸周期（4.2s 舒缓正弦呼吸，只改硬件层 alpha，零重绘）。 */
+        private const val BREATH_PERIOD_MS = 4_200L
+        /** 事件触发星冕聚变动画时长（ms）。 */
+        private const val EVENT_FEEDBACK_MS = 660L
 
-        // 动画时序参数
-        private const val BREATH_PERIOD_MS = 3_500L
-        private const val SCAN_DURATION_MS = 480L
-        private const val FLASH_HOLD_MS = 160L
-
-        // 阻尼弹簧参数：k = 260 s⁻², c = 16.1 s⁻¹ -> 阻尼比 ζ ≈ 0.5，带约 16% 灵动过冲
-        private const val SPRING_K = 260f
-        private const val SPRING_C = 16.1f
+        // 二阶欠阻尼物理弹簧参数：ω_n ≈ 18.5 rad/s, ζ ≈ 0.38（极具弹性与精密阻尼感）
+        private const val SPRING_K = 340f
+        private const val SPRING_C = 14.2f
     }
 
     sealed class State {
@@ -96,65 +81,36 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealSize(it)
     }
-
-    private fun dp(v: Int): Int = (v * density).roundToInt()
+    private fun dp(v: Int): Int = (v * density).toInt()
     private fun dpF(v: Float): Float = v * density
 
     private var state: State = State.Hidden
     private var attached = false
-    private var isScreenInteractive = true
     private var windowParams: WindowManager.LayoutParams? = null
     private val hideRunnable = Runnable { collapse() }
-
-    /** 挖孔中心距屏顶距离（px，屏幕绝对坐标），用实测校准值；Cutout 只用于内径微调。 */
-    private val cutoutCenterY: Int = dpF(DEFAULT_CUTOUT_CENTER_Y_DP).roundToInt()
-
-    /** 上一次已触发处理的链接（规范化后的 URL），同一链接防重复打扰。 */
+    /** 上一次已触发处理的链接（规范化后的 URL），同一链接只触发一次。 */
     private var lastHandledLink: String? = null
 
     private val glowView: IslandGlowView
     private val pillHost: View
     private val cardHost: LinearLayout
-    private val platformBadge: TextView
+    private val platformTag: TextView
     private val cardTitle: TextView
     private val cardUrl: TextView
     private val parseButton: TextView
     private val cancelButton: TextView
 
-    // 动画器
+    // 动画编排器
     private var breathAnimator: ValueAnimator? = null
     private var springAnimator: ValueAnimator? = null
-    private var scanAnimator: ValueAnimator? = null
-    private var flashRippleAnimator: ValueAnimator? = null
-    private var progressAnimator: ValueAnimator? = null
+    private var eventAnimator: ValueAnimator? = null
+    private var nudgeAnimator: ValueAnimator? = null
 
-    // 弹簧物理状态（连点保留速度，绝不跳变）
-    private var springX = 1f
-    private var springV = 0f
+    // 连续时间物理弹簧状态（保留实时位置与速度，快速连点丝滑不跳帧）
+    private var springPos = 1f
+    private var springVel = 0f
     private var springTarget = 1f
-
-    // 进度指数平滑状态
-    private var smoothedProgress = 0f
-    private var targetProgress = -1f
-
-    // 息屏/亮屏广播监听：息屏零耗电
-    private var screenReceiverRegistered = false
-    private val screenStateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> {
-                    isScreenInteractive = false
-                    pauseAllIdleAnimations()
-                }
-                Intent.ACTION_SCREEN_ON -> {
-                    isScreenInteractive = true
-                    if (state == State.Hidden && attached) {
-                        startBreathing()
-                    }
-                }
-            }
-        }
-    }
+    private var angularVel = 0f
 
     init {
         clipChildren = false
@@ -167,40 +123,42 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
         val card = buildCard()
         cardHost = card.host
-        platformBadge = card.badge
+        platformTag = card.tag
         cardTitle = card.title
         cardUrl = card.url
         parseButton = card.parse
         cancelButton = card.cancel
 
-        addView(cardHost, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+        addView(cardHost, LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.WRAP_CONTENT
+        ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            leftMargin = dp(CARD_SIDE_MARGIN_DP)
-            rightMargin = dp(CARD_SIDE_MARGIN_DP)
+            leftMargin = dp(14)
+            rightMargin = dp(14)
         })
-        addView(pillHost, LayoutParams(dp(WINDOW_SIZE_DP.toInt()), dp(WINDOW_SIZE_DP.toInt())).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        })
+        addView(pillHost)
         cardHost.visibility = View.GONE
     }
 
     // ---------- 公共接口 ----------
 
-    /** 挂载灵动岛光圈悬浮窗。 */
+    /** 挂载悬浮窗（常驻镜头光环形态）。 */
     fun attach() {
         mainHandler.post { ensureAttached() }
     }
 
-    /** 外部（分享入口 / 剪贴板监听）直接推一条链接进来，带光效过渡展开询问卡片。 */
+    /** 外部（分享入口 / 短链展开）直接推一条链接进来，触发星冕特效后展开询问卡片。 */
     fun show(link: IslandLink) {
         mainHandler.post {
             ensureAttached()
             if (state is State.Card) {
                 state = State.Card(link)
                 renderCard(link)
-                resetCardTimeout()
+                mainHandler.removeCallbacks(hideRunnable)
+                mainHandler.postDelayed(hideRunnable, CARD_TIMEOUT_MS)
             } else {
-                scanThenExpand(link)
+                playEventFeedbackThenExpand(link)
             }
         }
     }
@@ -220,29 +178,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
     }
 
-    /**
-     * 更新下载/解析进度（0..1），内部使用指数平滑追踪，单调递增不抖动。
-     * 传 -1f 结束进度展示。
-     */
-    fun setDownloadProgress(value: Float) {
-        mainHandler.post {
-            if (value < 0f) {
-                targetProgress = -1f
-                smoothedProgress = 0f
-                progressAnimator?.cancel()
-                glowView.progress = -1f
-                glowView.arcIndeterminate = false
-                return@post
-            }
-            val clamped = value.coerceIn(0f, 1f)
-            // 只增不减，避免下载进度回跳导致弧头抖动
-            targetProgress = max(targetProgress, clamped)
-            glowView.arcIndeterminate = false
-            ensureProgressSmoothing()
-        }
-    }
-
-    /** 缩回挖孔光圈态。 */
+    /** 缩回挖孔光环态。 */
     fun collapse() {
         mainHandler.post {
             setWindowFocusable(false)
@@ -259,17 +195,14 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
     }
 
-    /** 销毁悬浮窗并释放所有动画与广播监听。 */
     fun destroy() {
         mainHandler.post {
             setWindowFocusable(false)
             state = State.Hidden
-            unregisterScreenReceiver()
-            pauseAllIdleAnimations()
+            breathAnimator?.cancel()
             springAnimator?.cancel()
-            scanAnimator?.cancel()
-            flashRippleAnimator?.cancel()
-            progressAnimator?.cancel()
+            eventAnimator?.cancel()
+            nudgeAnimator?.cancel()
             mainHandler.removeCallbacksAndMessages(null)
             if (attached) {
                 runCatching { windowManager.removeView(this@IslandView) }
@@ -278,80 +211,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
     }
 
-    // ---------- 窗口生命周期与省电控制 ----------
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        registerScreenReceiver()
-        post { calibrateFromDisplayCutout() }
-    }
-
-    override fun onDetachedFromWindow() {
-        unregisterScreenReceiver()
-        pauseAllIdleAnimations()
-        super.onDetachedFromWindow()
-    }
-
-    override fun onWindowVisibilityChanged(visibility: Int) {
-        super.onWindowVisibilityChanged(visibility)
-        if (visibility == View.VISIBLE && isScreenInteractive) {
-            if (state == State.Hidden) startBreathing()
-        } else {
-            pauseAllIdleAnimations()
-        }
-    }
-
-    override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
-        calibrateFromDisplayCutout(insets)
-        return super.onApplyWindowInsets(insets)
-    }
-
-    /**
-     * 挖孔内径微调：boundingRect 在 overlay 窗口下发的坐标系不可靠（实测 HyperOS 会把
-     * 局部坐标当屏幕坐标用，导致圆环跑偏），所以中心一律用实测校准值，只借鉴挖孔宽度
-     * 调整圆环内缘半径。
-     */
-    private fun calibrateFromDisplayCutout(insets: WindowInsets? = rootWindowInsets) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P || insets == null) return
-        val cutout = insets.displayCutout ?: return
-        val rects = cutout.boundingRects
-        if (rects.isEmpty()) return
-        val topHole = rects.minByOrNull { it.top } ?: return
-        if (topHole.width() in 20..240) {
-            // 动态适配圆环内缘：镜头半径 + 1.5dp 纯黑熄屏间隙（中心坐标不采用）
-            val holeRadiusDp = (max(topHole.width(), topHole.height()) / 2f) / density
-            glowView.innerEdgeDp = (holeRadiusDp + 1.5f).coerceIn(9.5f, 16f)
-        }
-    }
-
-    private fun registerScreenReceiver() {
-        if (screenReceiverRegistered) return
-        runCatching {
-            val filter = IntentFilter().apply {
-                addAction(Intent.ACTION_SCREEN_OFF)
-                addAction(Intent.ACTION_SCREEN_ON)
-            }
-            context.registerReceiver(screenStateReceiver, filter)
-            screenReceiverRegistered = true
-        }
-    }
-
-    private fun unregisterScreenReceiver() {
-        if (!screenReceiverRegistered) return
-        runCatching { context.unregisterReceiver(screenStateReceiver) }
-        screenReceiverRegistered = false
-    }
-
-    private fun pauseAllIdleAnimations() {
-        breathAnimator?.cancel()
-        breathAnimator = null
-    }
-
-    // ---------- 曜石灵动胶囊卡片构建 ----------
+    // ---------- 高定黑曜石悬浮卡片构建 ----------
 
     private data class CardParts(
         val host: LinearLayout,
-        val badge: TextView,
+        val tag: TextView,
         val title: TextView,
         val url: TextView,
         val parse: TextView,
@@ -362,37 +226,49 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun buildCard(): CardParts {
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(16), dp(18), dp(14))
-            background = cardDrawable(accentColor = 0xFF34D399.toInt())
-            elevation = dpF(12f)
+            setPadding(dp(18), dp(12), dp(18), dp(16))
+            background = cardDrawable(0xFF38BDF8.toInt())
         }
 
-        // 顶部行：平台胶囊徽章 + 标题 + 副标题提示
+        // 顶部灵动岛金属微光导引条
+        val grabber = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(0x40FFFFFF)
+                cornerRadius = dpF(2f)
+            }
+        }
+        host.addView(grabber, LinearLayout.LayoutParams(dp(32), dp(3)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(12)
+        })
+
+        // 标题行：平台高定徽章 + 标题文本
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val badge = TextView(context).apply {
+        val tag = TextView(context).apply {
             textSize = 11f
-            setTextColor(0xFF06281E.toInt())
+            setTextColor(0xFF090D14.toInt())
             paint.isFakeBoldText = true
             setPadding(dp(8), dp(3), dp(8), dp(3))
-            background = badgeDrawable(0xFF34D399.toInt())
+            background = tagDrawable(0xFF38BDF8.toInt())
         }
 
         val title = TextView(context).apply {
             textSize = 15.5f
-            setTextColor(0xFFF5F5F7.toInt())
+            setTextColor(0xFFF8FAFC.toInt())
             paint.isFakeBoldText = true
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
 
-        headerRow.addView(badge, LinearLayout.LayoutParams(
+        headerRow.addView(tag, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { rightMargin = dp(8) })
+        ).apply { rightMargin = dp(9) })
 
         headerRow.addView(title, LinearLayout.LayoutParams(
             0,
@@ -400,25 +276,25 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             1f
         ))
 
-        // 中部行：清洗后的单行 URL 预览框
+        // 链接展示舱
         val url = TextView(context).apply {
             textSize = 12.5f
-            setTextColor(0xFFA1A1AA.toInt())
+            setTextColor(0xFF94A3B8.toInt())
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = urlBoxDrawable()
+            background = urlCapsuleDrawable()
         }
 
-        // 底部行：操作按钮（[忽略] + [立即解析]）
+        // 底部按钮行
         val buttonRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
         }
 
-        val cancel = actionButton("忽略", accent = false) { collapse() }
-        val parse = actionButton("立即解析", accent = true) {
-            hapticTick()
+        val cancel = actionButton("不用了", accent = false) { collapse() }
+        val parse = actionButton("解析链接", accent = true) {
+            hapticClick()
             (state as? State.Card)?.let { callbacks.onParseRequested(it.link) }
         }
 
@@ -432,10 +308,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        host.addView(headerRow, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ))
+        host.addView(headerRow)
         host.addView(url, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -443,18 +316,18 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         host.addView(buttonRow, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(12) })
+        ).apply { topMargin = dp(14) })
 
-        // 支持上滑手势收起卡片
-        var downY = 0f
+        // 支持上滑轻扫收起卡片
+        var touchDownY = 0f
         host.setOnTouchListener { _, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    downY = ev.rawY
+                    touchDownY = ev.rawY
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (downY - ev.rawY > dp(24)) {
+                    if (touchDownY - ev.rawY > dp(22)) {
                         collapse()
                         true
                     } else false
@@ -463,22 +336,22 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             }
         }
 
-        return CardParts(host, badge, title, url, parse, cancel)
+        return CardParts(host, tag, title, url, parse, cancel)
     }
 
     private fun actionButton(text: String, accent: Boolean, onClick: () -> Unit): TextView {
         return TextView(context).apply {
             this.text = text
             textSize = 13.5f
-            setTextColor(if (accent) 0xFF090D0B.toInt() else 0xFFD4D4D8.toInt())
-            paint.isFakeBoldText = accent
+            setTextColor(if (accent) 0xFF061018.toInt() else 0xFFE2E8F0.toInt())
+            if (accent) paint.isFakeBoldText = true
             setPadding(dp(18), dp(8), dp(18), dp(8))
-            background = buttonDrawable(accent)
+            background = buttonDrawable(accent, 0xFF38BDF8.toInt())
             setOnClickListener { onClick() }
         }
     }
 
-    // ---------- 触摸与剪贴板交互 ----------
+    // ---------- 交互与剪贴板识链 ----------
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && state is State.Card) {
@@ -490,22 +363,21 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     @SuppressLint("ClickableViewAccessibility")
     private fun handlePillTouch(event: MotionEvent): Boolean {
-        if (state is State.Card) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                // 提前切为可获焦：等系统把窗口置为焦点态后才能读取 Android 10+ 剪贴板
+                // 提前切为可获焦：等系统把焦点切到本窗口后才能读剪贴板
                 setWindowFocusable(true)
-                // 按下瞬间：触感反馈与弹簧线宽外扩同帧触发（相差 < 16ms）
-                hapticTick()
-                pressVisual(toPressed = true)
+                // 按下瞬间：弹簧外扩 + 角动量加速 + 清脆触感同帧触发
+                hapticClick()
+                animateSpringPress(pressed = true)
             }
             MotionEvent.ACTION_UP -> {
-                pressVisual(toPressed = false)
-                // 延迟 180ms 等待窗口焦点切换完成再读剪贴板
-                mainHandler.postDelayed({ readClipboardAndHandle() }, 180)
+                animateSpringPress(pressed = false)
+                // 延迟 200ms 等焦点真正切换过来，再读剪贴板
+                mainHandler.postDelayed({ readClipboardAndHandle() }, 200)
             }
             MotionEvent.ACTION_CANCEL -> {
-                pressVisual(toPressed = false)
+                animateSpringPress(pressed = false)
                 setWindowFocusable(false)
             }
         }
@@ -518,30 +390,26 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (link != null) {
             val key = link.cleanedUrl.ifBlank { link.originalUrl }
             if (key == lastHandledLink) {
-                // 同一链接已处理过：轻闪反馈，不重复展开打扰
-                flashNoLink()
+                playSubtleEmptyNudge()
                 setWindowFocusable(false)
                 return
             }
             lastHandledLink = key
-            scanThenExpand(link)
+            playEventFeedbackThenExpand(link)
         } else {
-            flashNoLink()
+            playSubtleEmptyNudge()
         }
         setWindowFocusable(false)
     }
 
     private fun setWindowFocusable(focusable: Boolean) {
         val params = windowParams ?: return
-        val newFlags = if (focusable) {
+        params.flags = if (focusable) {
             params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
         } else {
             params.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
         }
-        if (newFlags != params.flags) {
-            params.flags = newFlags
-            runCatching { windowManager.updateViewLayout(this, params) }
-        }
+        runCatching { windowManager.updateViewLayout(this, params) }
     }
 
     private fun currentClipText(): String? = runCatching {
@@ -549,77 +417,80 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         item.coerceToText(context)?.toString()
     }.getOrNull()
 
-    // ---------- 光圈动画编排（只改 IslandGlowView 状态参数） ----------
+    // ---------- 核心动画编排（常驻弱呼吸 / 物理弹簧 / 触发事件星冕聚变） ----------
 
-    private fun areAnimationsEnabled(): Boolean =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ValueAnimator.areAnimatorsEnabled()
-        } else true
-
-    /** 待机呼吸：只改 View.alpha（配合 LAYER_TYPE_HARDWARE 不触发 onDraw）。 */
+    /**
+     * 1. 常驻弱呼吸灯效果：
+     * 仅改变硬件加速层 View.alpha（0.45 ↔ 0.78），克制温润、不抢视线且零重绘开销。
+     */
     private fun startBreathing() {
         breathAnimator?.cancel()
-        if (!isScreenInteractive || !areAnimationsEnabled() || state != State.Hidden) {
-            glowView.alpha = 1f
-            return
-        }
-        breathAnimator = ValueAnimator.ofFloat(glowView.alpha, 0.74f, 1f).apply {
+        if (state != State.Hidden) return
+        val startAlpha = glowView.alpha
+        breathAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = BREATH_PERIOD_MS
             repeatMode = ValueAnimator.RESTART
             repeatCount = ValueAnimator.INFINITE
-            interpolator = null // 使用三角函数映射正弦呼吸
+            interpolator = null
             addUpdateListener { anim ->
-                val frac = anim.animatedFraction
-                // 0.75 <-> 1.0 平滑正弦呼吸
-                val breath = 0.875f + 0.125f * kotlin.math.cos(2.0 * Math.PI * frac).toFloat()
-                glowView.alpha = breath
+                val p = anim.animatedFraction
+                // 余弦平滑呼吸波：在 0.45 .. 0.78 之间轻柔起伏
+                val wave = 0.615f + 0.165f * cos(2.0 * Math.PI * p).toFloat()
+                // 首周期平滑过渡
+                glowView.alpha = if (p < 0.15f) {
+                    startAlpha + (wave - startAlpha) * (p / 0.15f)
+                } else wave
             }
             start()
         }
     }
 
     /**
-     * 按下 / 回弹：真实时间步长阻尼弹簧（ζ ≈ 0.5），连点保留当前速度 v，绝不跳变。
-     * 修复了原实现中 glow 随 springX 反向插值的公式错误。
+     * 2. 点击物理弹簧阻尼效果：
+     * 连续时间二阶欠阻尼谐振弹簧（保留实时速度，连点不跳变），同时赋予流光角动量冲量。
      */
-    private fun pressVisual(toPressed: Boolean) {
-        springTarget = if (toPressed) 1.42f else 1f
-        if (!areAnimationsEnabled()) {
-            springX = springTarget
-            springV = 0f
-            glowView.lineWidthScale = springTarget
-            glowView.glow = if (toPressed) 1f else 0.22f
-            return
-        }
-        if (toPressed) {
+    private fun animateSpringPress(pressed: Boolean) {
+        if (eventAnimator?.isRunning == true) return
+        nudgeAnimator?.cancel()
+        if (pressed) {
             breathAnimator?.cancel()
-            glowView.alpha = 1f
+            glowView.alpha = 0.96f
+            springTarget = 1.44f
+            // 注入角速度冲量，让金属流光随按压快速流转
+            angularVel = 240f
+        } else {
+            springTarget = 1.0f
+            angularVel = max(angularVel, 110f)
         }
+
         springAnimator?.cancel()
         springAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 550
-            var lastTimeNs = System.nanoTime()
+            duration = 620L
+            var lastNs = System.nanoTime()
             addUpdateListener {
                 val nowNs = System.nanoTime()
-                val dt = ((nowNs - lastTimeNs) / 1_000_000_000f).coerceIn(0.001f, 0.032f)
-                lastTimeNs = nowNs
+                val dt = ((nowNs - lastNs) / 1_000_000_000f).coerceIn(0.001f, 0.033f)
+                lastNs = nowNs
 
-                // 连续时间阻尼弹簧积分：a = -k(x - target) - c·v
-                val accel = -SPRING_K * (springX - springTarget) - SPRING_C * springV
-                springV += accel * dt
-                springX += springV * dt
+                // 二阶弹簧微分方程积分：a = -k(x - target) - c*v
+                val accel = -SPRING_K * (springPos - springTarget) - SPRING_C * springVel
+                springVel += accel * dt
+                springPos += springVel * dt
 
-                glowView.lineWidthScale = springX.coerceIn(0.85f, 1.85f)
-                // 线宽从 1.0 -> 1.42 时，光晕同步从 0.22 -> 1.0 正向增强
-                val norm = ((springX - 1f) / 0.42f).coerceIn(0f, 1.25f)
-                glowView.glow = (0.22f + 0.78f * norm).coerceIn(0.15f, 1f)
+                // 角动量流体阻尼衰减
+                angularVel *= exp(-4.5f * dt)
+                glowView.orbitAngle = (glowView.orbitAngle + angularVel * dt) % 360f
+
+                glowView.springScale = springPos.coerceIn(0.82f, 1.85f)
+                val norm = ((springPos - 1f) / 0.44f).coerceIn(0f, 1.25f)
+                glowView.glowIntensity = (0.26f + 0.64f * norm).coerceIn(0.18f, 0.95f)
             }
             doOnAnimEnd {
-                springX = springTarget
-                springV = 0f
-                glowView.lineWidthScale = springTarget
-                glowView.glow = if (toPressed) 1f else 0.22f
-                if (!toPressed && state == State.Hidden && scanAnimator?.isRunning != true) {
+                springPos = springTarget
+                springVel = 0f
+                glowView.springScale = springTarget
+                glowView.glowIntensity = if (pressed) 0.9f else 0.26f
+                if (!pressed && state == State.Hidden && eventAnimator?.isRunning != true) {
                     startBreathing()
                 }
             }
@@ -628,65 +499,90 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     /**
-     * 识别叙事：
-     * 1. 亮弧绕一圈（480ms 强减速 + 不确定弧长伸缩）；
-     * 2. 收束最亮瞬间：硬切翡翠绿（colorMix = 1f）+ 白芯闪光（flash = 1f）+ 外扩涟漪（rippleT 0->1）；
-     * 3. 保持光环可见并展开下方曜石灵动胶囊卡，让用户清晰看到「换色收束 -> 卡片生长」的完整叙事。
+     * 3. 触发事件特殊反馈（「星冕聚变 · 极光涟漪」）：
+     * - 0.00..0.42：双侧流光星轨从镜头底部对称加速攀升至顶点；
+     * - 0.42：顶点碰撞触发清脆触感 + 极光冰青换色 + 星芒高光爆发 + 弹性扩张；
+     * - 0.42..1.00：双层同心光波涟漪向外柔和扩散消散，完整演绎后再展开悬浮卡片。
      */
-    private fun scanThenExpand(link: IslandLink) {
+    private fun playEventFeedbackThenExpand(link: IslandLink) {
         breathAnimator?.cancel()
         springAnimator?.cancel()
-        scanAnimator?.cancel()
-        flashRippleAnimator?.cancel()
-
-        if (!areAnimationsEnabled()) {
-            glowView.colorMix = 1f
-            expand(link)
-            return
-        }
+        nudgeAnimator?.cancel()
+        eventAnimator?.cancel()
 
         glowView.alpha = 1f
-        glowView.colorMix = 0f
-        glowView.glow = 0.65f
-        glowView.arcIndeterminate = true
+        glowView.colorShift = 0f
+        glowView.convergeT = 0f
+        glowView.flashIntensity = 0f
+        glowView.rippleProgress = 0f
 
-        scanAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = SCAN_DURATION_MS
-            interpolator = DecelerateInterpolator(2.4f)
+        var climaxTriggered = false
+        eventAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = EVENT_FEEDBACK_MS
+            interpolator = null
             addUpdateListener { anim ->
-                val t = anim.animatedValue as Float
-                glowView.headAngle = 360f * t
-                glowView.progress = t
-                glowView.glow = 0.65f + 0.35f * t
-                glowView.lineWidthScale = 1f + 0.22f * kotlin.math.sin(Math.PI * t).toFloat()
+                val t = anim.animatedFraction
+                if (t < 0.42f) {
+                    // 第一幕：双侧流光加速聚拢
+                    val p = t / 0.42f
+                    val eased = p * p * (3f - 2f * p)
+                    glowView.convergeT = eased
+                    glowView.glowIntensity = 0.35f + 0.50f * eased
+                    glowView.springScale = 1f + 0.18f * sin(Math.PI * eased).toFloat()
+                    glowView.orbitAngle -= 2.4f
+                } else {
+                    // 第二 & 第三幕：顶点聚变闪光 + 极光换色 + 双层同心冲击波
+                    if (!climaxTriggered) {
+                        climaxTriggered = true
+                        glowView.convergeT = 0f
+                        glowView.colorShift = 1f
+                        hapticDoublePulse()
+                    }
+                    val p = (t - 0.42f) / 0.58f
+                    val decel = 1f - (1f - p) * (1f - p)
+                    glowView.rippleProgress = decel
+                    glowView.flashIntensity = exp(-4.8f * p)
+                    // 阻尼余振缩放
+                    val dampedWave = exp(-5.0f * p) * cos(2.2 * Math.PI * p).toFloat()
+                    glowView.springScale = 1f + 0.32f * dampedWave
+                    glowView.glowIntensity = 0.95f - 0.55f * decel
+                    glowView.orbitAngle += 1.8f * (1f - p)
+                }
             }
             doOnAnimEnd {
-                // 最亮帧瞬切翡翠绿 + 触发收束闪光与涟漪，绝不出现混浊过渡色
-                glowView.colorMix = 1f
-                glowView.progress = -1f
-                glowView.arcIndeterminate = false
-                glowView.headAngle = 0f
-                glowView.flash = 1f
-                glowView.rippleT = 0f
-                hapticTick()
-
-                // 展开卡片，同时光圈在顶部播放 360ms 的换色闪光与涟漪余韵
+                glowView.reset()
                 expand(link)
-                flashRippleAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-                    duration = 380L
-                    interpolator = DecelerateInterpolator(1.8f)
-                    addUpdateListener { fAnim ->
-                        val ft = fAnim.animatedValue as Float
-                        glowView.flash = (1f - ft * 1.4f).coerceIn(0f, 1f)
-                        glowView.rippleT = ft
-                        glowView.glow = 1f - 0.55f * ft
-                    }
-                    doOnAnimEnd {
-                        glowView.flash = 0f
-                        glowView.rippleT = -1f
-                    }
-                    start()
-                }
+            }
+            start()
+        }
+    }
+
+    /**
+     * 未识别到链接时的轻奢微颤反馈（Subtle Double-Tap Shimmer）：
+     * 阻尼径向微收束回弹 + 铂金偏光快速掠过，优雅克制。
+     */
+    private fun playSubtleEmptyNudge() {
+        if (eventAnimator?.isRunning == true) return
+        breathAnimator?.cancel()
+        springAnimator?.cancel()
+        nudgeAnimator?.cancel()
+
+        val baseOrbit = glowView.orbitAngle
+        glowView.alpha = 0.92f
+        nudgeAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 460L
+            interpolator = DecelerateInterpolator(1.6f)
+            addUpdateListener { anim ->
+                val t = anim.animatedFraction
+                val wave = exp(-4.2f * t) * sin(2.0 * Math.PI * 1.5 * t).toFloat()
+                glowView.springScale = 1f - 0.14f * wave
+                glowView.glowIntensity = 0.26f + 0.28f * (1f - t)
+                glowView.orbitAngle = baseOrbit + 140f * t
+            }
+            doOnAnimEnd {
+                glowView.springScale = 1f
+                glowView.glowIntensity = 0.26f
+                startBreathing()
             }
             start()
         }
@@ -696,69 +592,22 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         state = State.Card(link)
         renderCard(link)
         applyCardWindowParams()
-
-        // 保持顶部光环可见（作为灵动岛的发光锚点），卡片从挖孔下方丝滑生长展开
-        pillHost.visibility = View.VISIBLE
         cardHost.visibility = View.VISIBLE
         cardHost.alpha = 0f
-        cardHost.scaleX = 0.55f
-        cardHost.scaleY = 0.35f
-        cardHost.pivotX = (screenSize.x / 2f) - dp(CARD_SIDE_MARGIN_DP)
+        cardHost.scaleX = 0.62f
+        cardHost.scaleY = 0.42f
+        cardHost.pivotX = (screenSize.x - dp(28)) / 2f
         cardHost.pivotY = 0f
-        cardHost.translationY = -dpF(12f)
-
         cardHost.animate()
             .alpha(1f)
             .scaleX(1f)
             .scaleY(1f)
-            .translationY(0f)
-            .setDuration(280)
-            .setInterpolator(OvershootInterpolator(0.85f))
+            .setDuration(260)
+            .setInterpolator(OvershootInterpolator(0.8f))
             .start()
-
-        resetCardTimeout()
-        callbacks.onLinkShown(link)
-    }
-
-    private fun resetCardTimeout() {
         mainHandler.removeCallbacks(hideRunnable)
         mainHandler.postDelayed(hideRunnable, CARD_TIMEOUT_MS)
-    }
-
-    private fun flashNoLink() {
-        breathAnimator?.cancel()
-        scanAnimator?.cancel()
-        if (!areAnimationsEnabled()) return
-        ValueAnimator.ofFloat(1f, 0.3f, 1f).apply {
-            duration = 380
-            addUpdateListener { anim -> glowView.alpha = anim.animatedValue as Float }
-            doOnAnimEnd { startBreathing() }
-            start()
-        }
-    }
-
-    /** 进度值指数平滑追踪：避免下载进度跳变引起弧头抖动。 */
-    private fun ensureProgressSmoothing() {
-        if (progressAnimator?.isRunning == true) return
-        progressAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 1000L
-            repeatCount = ValueAnimator.INFINITE
-            addUpdateListener {
-                if (targetProgress < 0f) {
-                    cancel()
-                    return@addUpdateListener
-                }
-                val diff = targetProgress - smoothedProgress
-                smoothedProgress += diff * 0.18f
-                glowView.progress = smoothedProgress.coerceIn(0f, 1f)
-                glowView.headAngle = (glowView.headAngle + 2.2f) % 360f
-                if (abs(diff) < 0.002f && targetProgress >= 0.999f) {
-                    glowView.progress = 1f
-                    cancel()
-                }
-            }
-            start()
-        }
+        callbacks.onLinkShown(link)
     }
 
     private inline fun ValueAnimator.doOnAnimEnd(crossinline onEnd: () -> Unit) {
@@ -771,30 +620,42 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         })
     }
 
-    private fun hapticTick() {
+    // ---------- 触感引擎 ----------
+
+    private fun getVibrator(): Vibrator? = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
+    }.getOrNull()
+
+    private fun hapticClick() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         runCatching {
-            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-            }
-            vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
+            getVibrator()?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK))
         }
     }
 
-    // ---------- 卡片内容与主题着色 ----------
+    private fun hapticDoublePulse() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        runCatching {
+            getVibrator()?.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK))
+        }
+    }
+
+    // ---------- 卡片渲染 ----------
 
     private fun renderCard(link: IslandLink) {
-        val (badgeText, titleText, accentColor) = when (link.platform) {
-            MediaPlatform.Douyin -> Triple("抖音", "检测到抖音视频链接", 0xFF34D399.toInt())
-            MediaPlatform.Bilibili -> Triple("Bilibili", "检测到 B 站视频链接", 0xFF38BDF8.toInt())
-            MediaPlatform.Twitter -> Triple("X / Twitter", "检测到 X 媒体链接", 0xFFA78BFA.toInt())
-            else -> Triple("LINK", "检测到可解析媒体链接", 0xFFFBBF24.toInt())
+        val (tagText, titleText, accentColor) = when (link.platform) {
+            MediaPlatform.Douyin -> Triple("DOUYIN", "识别到抖音视频链接", 0xFF34D399.toInt())
+            MediaPlatform.Bilibili -> Triple("BILIBILI", "识别到 B 站视频链接", 0xFF38BDF8.toInt())
+            MediaPlatform.Twitter -> Triple("X / MEDIA", "识别到 X 媒体链接", 0xFFA78BFA.toInt())
+            else -> Triple("LINK", "识别到可解析媒体链接", 0xFFE5C384.toInt())
         }
-        platformBadge.text = badgeText
-        platformBadge.background = badgeDrawable(accentColor)
+        platformTag.text = tagText
+        platformTag.background = tagDrawable(accentColor)
         cardTitle.text = titleText
         cardHost.background = cardDrawable(accentColor)
         parseButton.background = buttonDrawable(accent = true, accentColor = accentColor)
@@ -802,90 +663,74 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     private fun shortDisplay(url: String): String =
-        if (url.length <= 58) url else url.take(55) + "…"
+        if (url.length <= 56) url else url.take(53) + "…"
 
-    // ---------- 悬浮窗布局参数（全屏绝对坐标体系，精准对齐挖孔） ----------
+    // ---------- 悬浮窗参数（100% 保持原版圆心定位逻辑） ----------
 
     private fun baseParams(width: Int, height: Int): WindowManager.LayoutParams =
         WindowManager.LayoutParams(
-            width,
-            height,
+            width, height,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                 or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
                 or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
                 or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
-            }
         }
-
-    private fun pillWindowTopY(): Int {
-        val halfWin = dpF(WINDOW_SIZE_DP / 2f).roundToInt()
-        return cutoutCenterY - halfWin
-    }
 
     private fun ensureAttached() {
         if (attached) return
-        val sizePx = dpF(WINDOW_SIZE_DP).roundToInt()
-        val params = baseParams(sizePx, sizePx).apply {
-            x = 0 // gravity CENTER_HORIZONTAL 已居中，无需 x 偏移
-            y = pillWindowTopY()
-        }
+        val params = baseParams(dp(WINDOW_SIZE_DP.toInt()), dp(WINDOW_SIZE_DP.toInt()))
+        // 完全沿用原版真机校准的圆心 y 坐标计算公式
+        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(WINDOW_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
         pillHost.visibility = View.VISIBLE
         sizePill()
-        // 静态光晕走硬件层：待机呼吸只改 View.alpha，不触发 onDraw
         pillHost.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         startBreathing()
     }
 
     private fun sizePill() {
-        val sizePx = dpF(WINDOW_SIZE_DP).roundToInt()
-        val lp = (pillHost.layoutParams as? LayoutParams) ?: LayoutParams(sizePx, sizePx)
-        lp.width = sizePx
-        lp.height = sizePx
+        val lp = pillHost.layoutParams as? LayoutParams ?: LayoutParams(
+            LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT
+        )
+        lp.width = LayoutParams.MATCH_PARENT
+        lp.height = LayoutParams.MATCH_PARENT
         lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        lp.topMargin = 0
         pillHost.layoutParams = lp
     }
 
     private fun applyPillWindowParams() {
         val params = windowParams ?: return
-        val sizePx = dpF(WINDOW_SIZE_DP).roundToInt()
-        params.width = sizePx
-        params.height = sizePx
-        params.x = 0
-        params.y = pillWindowTopY()
-        sizePill()
+        params.width = dp(WINDOW_SIZE_DP.toInt())
+        params.height = dp(WINDOW_SIZE_DP.toInt())
+        // 完全沿用原版真机校准的圆心 y 坐标计算公式
+        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(WINDOW_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
     }
 
     private fun applyCardWindowParams() {
         val params = windowParams ?: return
-        val topY = pillWindowTopY()
-        val ringSizePx = dpF(WINDOW_SIZE_DP).roundToInt()
-
         params.width = WindowManager.LayoutParams.MATCH_PARENT
         params.height = WindowManager.LayoutParams.WRAP_CONTENT
-        params.x = 0
-        params.y = topY
-
-        // 卡片排布在发光圆环正下方，形成「光圈 + 悬浮灵动胶囊」一体化视觉
-        val cardLp = cardHost.layoutParams as LayoutParams
-        cardLp.topMargin = ringSizePx + dp(CARD_TOP_OFFSET_DP)
-        cardHost.layoutParams = cardLp
-
+        // 卡片让开状态栏和挖孔，从其下缘开始
+        params.y = statusBarHeight() + dp(4)
         runCatching { windowManager.updateViewLayout(this, params) }
+        pillHost.visibility = View.GONE
     }
+
+    private fun statusBarHeight(): Int {
+        val resources = context.resources
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else dp(30)
+    }
+
+    // ---------- 卡片收起动画与绘制资源 ----------
 
     private fun animateCardCollapse(onEnd: () -> Unit) {
         if (cardHost.visibility != View.VISIBLE) {
@@ -894,52 +739,44 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
         cardHost.animate()
             .alpha(0f)
-            .scaleX(0.6f)
-            .scaleY(0.35f)
-            .translationY(-dpF(10f))
+            .scaleX(0.65f)
+            .scaleY(0.4f)
             .setDuration(200)
             .withEndAction(onEnd)
             .start()
     }
 
-    // ---------- 曜石质感 Drawable 构建 ----------
-
     private fun cardDrawable(accentColor: Int): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            // 曜石深邃暗底，与前摄挖孔自然融为一体
-            setColor(0xF2121316.toInt())
+            setColor(0xF5111318.toInt())
             cornerRadius = dpF(26f)
-            // 1dp 柔和发光描边（呼应光圈换色）
-            val strokeColor = (accentColor and 0x00FFFFFF) or (0x55 shl 24)
-            setStroke(max(1, dp(1)), strokeColor)
+            val borderCol = (accentColor and 0x00FFFFFF) or (0x48 shl 24)
+            setStroke(max(1, dp(1)), borderCol)
         }
 
-    private fun badgeDrawable(accentColor: Int): GradientDrawable =
+    private fun tagDrawable(accentColor: Int): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             setColor(accentColor)
-            cornerRadius = dpF(10f)
+            cornerRadius = dpF(8f)
         }
 
-    private fun urlBoxDrawable(): GradientDrawable =
+    private fun urlCapsuleDrawable(): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            setColor(0xFF1C1E22.toInt())
+            setColor(0xFF1A1D24.toInt())
             cornerRadius = dpF(12f)
-            setStroke(max(1, (density * 0.8f).roundToInt()), 0x22FFFFFF)
+            setStroke(max(1, (density * 0.7f).roundToInt()), 0x1FFFFFFF)
         }
 
-    private fun buttonDrawable(
-        accent: Boolean,
-        accentColor: Int = 0xFF34D399.toInt()
-    ): GradientDrawable =
+    private fun buttonDrawable(accent: Boolean, accentColor: Int): GradientDrawable =
         GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             if (accent) {
                 setColor(accentColor)
             } else {
-                setColor(0x1FFFFFFF)
+                setColor(0x18FFFFFF)
             }
             cornerRadius = dpF(18f)
         }
