@@ -29,9 +29,9 @@ import androidx.compose.ui.unit.sp
 import com.adong.adchat.ui.theme.*
 
 data class ConversationStarter(
-    val icon: ImageVector,
     val title: String,
     val detail: String,
+    val icon: ImageVector,
     val prompt: String
 )
 
