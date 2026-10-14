@@ -888,6 +888,15 @@ private fun GeneratedFilesPanel(files: List<ChatFileAttachment>, onSaveFile: (Ch
                 HtmlArtifactCard(code = file.content, filename = file.name)
                 return@forEach
             }
+            if (file.mimeType.substringBefore(';') == "image/svg+xml") {
+                // SVG 不是完整 HTML：包一层可自适应缩放的壳再交给 HtmlArtifactCard。
+                HtmlArtifactCard(
+                    code = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'><style>html,body{margin:0;padding:8px;background:#fff;display:flex;justify-content:center}svg{max-width:100%;height:auto}</style></head><body>" +
+                        file.content + "</body></html>",
+                    filename = file.name
+                )
+                return@forEach
+            }
             Surface(
                 color = Surface,
                 shape = RoundedCornerShape(15.dp),
@@ -1223,6 +1232,11 @@ internal fun StructuredMessageText(
                         code = code,
                         ready = !streaming && index < parts.lastIndex,
                         allowScripts = htmlScriptsAllowed
+                    )
+                } else if (language?.lowercase() == "mermaid") {
+                    MermaidArtifactCard(
+                        code = code,
+                        ready = !streaming && index < parts.lastIndex
                     )
                 } else CodeBlock(
                     language = language,

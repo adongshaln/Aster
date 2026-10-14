@@ -252,7 +252,7 @@ private fun createFileDefinition(responsesApi: Boolean): JSONObject {
         .put("additionalProperties", false)
     val definition = JSONObject()
         .put("name", CREATE_FILE_TOOL)
-        .put("description", "Create a real downloadable file (PDF, DOCX, XLSX, PPTX, HTML or text) only when the user explicitly asks for a file or export. Do not use it merely because a normal answer contains Markdown formatting. For HTML pages, use text/html and a complete self-contained document with inline CSS/JavaScript and embedded images; the app previews offline without external resources.")
+        .put("description", "Create a real downloadable file (PDF, DOCX, XLSX, PPTX, HTML, SVG or text) only when the user explicitly asks for a file or export. Do not use it merely because a normal answer contains Markdown formatting. For HTML pages, use text/html and a complete self-contained document with inline CSS/JavaScript and embedded images; the app previews offline without external resources. For SVG diagrams, use image/svg+xml with a complete standalone SVG document.")
         .put("parameters", parameters)
     return if (responsesApi) definition.put("type", "function").put("strict", true) else definition
 }
@@ -583,7 +583,8 @@ private val MIME_EXTENSIONS = mapOf(
     "text/plain" to "txt",
     "application/json" to "json",
     "text/csv" to "csv",
-    "text/html" to "html"
+    "text/html" to "html",
+    "image/svg+xml" to "svg"
 ) + DocumentFiles.extensions
 
 private val ALLOWED_EXTENSIONS = MIME_EXTENSIONS.values.toSet()

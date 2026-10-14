@@ -24,7 +24,7 @@ internal object DocumentFiles {
     val extensions = mapOf(PDF to "pdf", DOCX to "docx", XLSX to "xlsx", PPTX to "pptx")
     const val MAX_SOURCE = 200_000
     const val MAX_BYTES = 10 * 1024 * 1024
-    const val CONTENT_HELP = "For text/HTML use complete UTF-8 source. For PDF or DOCX use Markdown (headings, paragraphs, lists, pipe tables). For XLSX use a JSON string: {\"sheets\":[{\"name\":\"Sheet1\",\"rows\":[[\"Name\",\"Amount\"],[\"Example\",12.5]]}]}. Cells are text, numbers, booleans, null, or {\"formula\":\"SUM(B2:B5)\"}; formula results recalculate when opened. For PPTX use a JSON string: {\"slides\":[{\"title\":\"Title\",\"bullets\":[\"Point one\",\"Point two\"]}]}. Each slide: title at most 100 characters, at most 8 bullets, each at most 180 characters. Do not send base64, binary, macros, external resources or fake file links."
+    const val CONTENT_HELP = "For text/HTML use complete UTF-8 source. For PDF or DOCX use Markdown (headings, paragraphs, lists, pipe tables). For XLSX use a JSON string: {\"sheets\":[{\"name\":\"Sheet1\",\"rows\":[[\"Name\",\"Amount\"],[\"Example\",12.5]]}]}. Cells are text, numbers, booleans, null, or {\"formula\":\"SUM(B2:B5)\"}; formula results recalculate when opened. For PPTX use a JSON string: {\"slides\":[{\"title\":\"Title\",\"bullets\":[\"Point one\",\"Point two\"]}]}. Each slide: title at most 100 characters, at most 8 bullets, each at most 180 characters. Do not send base64, binary, macros, external resources or fake file links. For SVG diagrams use image/svg+xml with complete standalone SVG source."
 
     fun create(name: String, mime: String, source: String): GeneratedFileDraft {
         require(source.isNotBlank() && source.length <= MAX_SOURCE) { "文档正文不能为空，且不能超过 200,000 字符" }
