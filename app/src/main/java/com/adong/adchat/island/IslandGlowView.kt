@@ -2,342 +2,492 @@ package com.adong.adchat.island
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.RectF
 import android.graphics.RuntimeShader
 import android.graphics.SweepGradient
 import android.os.Build
 import android.view.View
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sin
 
 /**
- * 灵动岛光圈自绘视图 —— 「渲染是状态的纯函数」。
+ * 镜头星冕光环视图（Liquid Chrono-Corona Halo）——「渲染是状态的纯函数」。
  *
- * 本类不持有任何动画/逻辑，只存几个浮点参数；[onDraw] 只按参数画，不写逻辑。
- * 动画编排（呼吸、弹簧、扫描弧）全部在 [IslandView] 里，只负责改这里的参数。
- *
- * 四层质感（设计规格 docs/GLOW_ISLAND_SPEC.md）：
- * 1. 黑底：内侧 1.5dp 间隙纯黑（OLED 像素熄灭，与镜头孔融为一体），外侧黑垫
- *    2.5dp（发光要有暗处可发）；
- * 2. 核心线：1.5dp 主体 + 中心 0.6dp 灯丝线（中心偏白、边缘偏饱和的色温层次）；
- * 3. 光晕：3 层渐宽渐淡描边 ADD 叠加（[glow] 控制强度）；
- * 4. 流光：SweepGradient 首尾同色，只转 local/canvas matrix（[headAngle]）。
- *
- * 渲染分两个分支：API 33+ 用一个 AGSL [RuntimeShader] 画整个光环
- * （距离场 d = |length(p-c) - R|，核心 1-smoothstep，光晕 exp(-d·k)，
- * 无层叠台阶）；API 26..32 回退到分层描边实现。两个分支视觉参数同源。
- *
- * 待机零重绘：本 View 设 LAYER_TYPE_HARDWARE，待机时外部只改 View.alpha
- * （不触发 onDraw），只有交互和处理中才逐帧改参数。
+ * 视觉层级设计：
+ * 1. 光学消光暗舱（Optical Pitch Chamber）：内缘 11.5dp 纯黑遮罩，与挖孔无缝融为一体；
+ * 2. 微米级精密倒角（Micro-Chamfer Bezel）：紧贴内孔的 0.5dp 各向异性金属高光圈；
+ * 3. 双折射流光主环（Birefringent Liquid Ring）：香槟钛金 + 冷月银 + 冰川青的温润色温散射；
+ * 4. 柔雾光冕与边缘消隐（Atmospheric Corona & Vignette）：非对称指数光晕 + 窗口边缘平滑归零，
+ *    绝不在 44dp 悬浮窗边界产生方形裁切痕；
+ * 5. 事件触发特效（Corona Ignition）：双侧流光星轨对称攀升 -> 顶点碰撞聚变闪光 -> 双层同心光波涟漪。
  */
 class IslandGlowView(context: Context) : View(context) {
 
     companion object {
-        /** 光圈外径（dp）：比挖孔（约 20dp）大一圈。窗口 y 定位以此对准挖孔中心。 */
-        const val RING_OUTER_DP = 28f
-        /** 悬浮窗边长（dp）：光圈外径 + 光晕约 6dp + 黑垫 2.5dp，上下各留一份。 */
-        const val WINDOW_SIZE_DP = 44f
+        /** 光圈基准外径（dp）：严格保持原版 28dp。 */
+        const val RING_OUTER_DP = 32f
+        /** 悬浮窗边长（dp）：严格保持原版 44dp，确保圆心定位公式 100% 兼容。 */
+        const val WINDOW_SIZE_DP = 48f
 
-        /** 圆环内缘（dp）：挖孔半径约 10dp + 1.5dp 纯黑间隙。形变只向外长，内缘固定。 */
-        private const val INNER_EDGE_DP = 11.5f
-        private const val CORE_LINE_DP = 1.5f
-        private const val FILAMENT_LINE_DP = 0.6f
+        /** 圆环固定内缘半径（dp）：挖孔半径约 10dp + 1.5dp 纯黑消光间隙。 */
+        private const val INNER_EDGE_DP = 13f
+        /** 基础核心环线宽（dp）。 */
+        private const val BASE_RING_WIDTH_DP = 1.6f
 
-        // 待机调色板：橙（中心偏白 → 主体橙 → 光晕深橙）
-        private const val COLOR_FILAMENT = 0xFFF3D6.toInt()
-        private const val COLOR_BODY = 0xFFB020.toInt()
-        private const val COLOR_AMBER = 0xFF9400.toInt()
-        private const val COLOR_PALE = 0xFFE9A8.toInt()
-        private const val COLOR_GLOW = 0xFF6A00.toInt()
+        // 常驻态调色板：香槟钛金 & 冷月铂金（高定腕表/镜头圈质感）
+        private const val COL_IDLE_CORE = 0xFFFFF9EE.toInt()     // 暖白铂金灯丝
+        private const val COL_IDLE_PRIMARY = 0xFFE5C384.toInt()  // 香槟钛金主体
+        private const val COL_IDLE_SECONDARY = 0xFF94A3B8.toInt()// 冷月银灰偏光
+        private const val COL_IDLE_GLOW = 0xFFD99B4E.toInt()     // 暖金柔雾光晕
 
-        // 识别成功换色调色板：换色只发生在收束最亮帧，不插值（避免混浊过渡色）
-        private const val COLOR2_FILAMENT = 0xFFE4FFF2.toInt()
-        private const val COLOR2_BODY = 0xFF34D399.toInt()
-        private const val COLOR2_AMBER = 0xFF0FA968.toInt()
-        private const val COLOR2_PALE = 0xFFA7F3D0.toInt()
-        private const val COLOR2_GLOW = 0xFF0E9F6E.toInt()
-
-        // 光晕 3 层描边：宽度（dp）与基准 alpha，乘 glow 后使用
-        private val GLOW_WIDTHS_DP = floatArrayOf(3f, 5f, 8f)
-        private val GLOW_ALPHAS = floatArrayOf(0.35f, 0.18f, 0.08f)
+        // 事件触发调色板：极光冰青 & 翡翠星冕
+        private const val COL_EVENT_CORE = 0xFFECFEFF.toInt()    // 极光冰白核心
+        private const val COL_EVENT_PRIMARY = 0xFF38BDF8.toInt() // 冰川天青主光
+        private const val COL_EVENT_SECONDARY = 0xFF34D399.toInt()// 翡翠流光副色
+        private const val COL_EVENT_GLOW = 0xFF0EA5E9.toInt()    // 深海蓝青光冕
 
         /**
-         * AGSL：一个 shader 画整个光环。
-         * - 距离场 d = |length(p - c) - R|，核心 1-smoothstep(0, w, d)，光晕 exp(-d*k)*glow；
-         * - 色温 mix(灯丝白, 主体色, smoothstep(0, w*4, d))：中心偏白、边缘偏饱和；
-         * - 流光 = 角度相对 headAngle 的余弦亮度调制；
-         * - 拖尾弧 = 头亮尾暗的角度 bump（u_arcSweep <= 0.5 表示关闭）。
+         * AGSL 物理级光学着色器（API 33+）：
+         * - 严格限制在 u_maxR 半径内自然消隐，绝不触碰方形窗口边界；
+         * - 包含各向异性金属光泽、双侧聚拢星轨、顶点聚变闪光与双层扩散光波。
          */
         private const val AGSL_SRC = """
-uniform float2 ucenter;
+uniform float2 u_center;
+uniform float u_innerEdge;
 uniform float u_ringR;
-uniform float u_lineW;
-uniform float u_glowK;
+uniform float u_halfW;
+uniform float u_maxR;
 uniform float u_glow;
-uniform float u_headAngle;
-uniform float u_arcSweep;
-uniform float u_colorMix;
-// AGSL 要求：setColorUniform 对应的 uniform 必须带 layout(color) 声明，
-// 否则抛 IllegalArgumentException（HyperOS 实测崩溃）。
-layout(color) uniform half4 u_colFilament;
-layout(color) uniform half4 u_colBody;
-layout(color) uniform half4 u_colGlow;
-layout(color) uniform half4 u_colFilament2;
-layout(color) uniform half4 u_colBody2;
-layout(color) uniform half4 u_colGlow2;
+uniform float u_orbitDeg;
+uniform float u_colorShift;
+uniform float u_convergeT;
+uniform float u_flash;
+uniform float u_rippleT;
+
+layout(color) uniform half4 u_idleCore;
+layout(color) uniform half4 u_idlePrimary;
+layout(color) uniform half4 u_idleSecondary;
+layout(color) uniform half4 u_idleGlow;
+
+layout(color) uniform half4 u_eventCore;
+layout(color) uniform half4 u_eventPrimary;
+layout(color) uniform half4 u_eventSecondary;
+layout(color) uniform half4 u_eventGlow;
+
+float hash12(float2 p) {
+    float3 p3 = fract(float3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
 half4 main(float2 p) {
-    float d = abs(length(p - ucenter) - u_ringR);
-    float core = 1.0 - smoothstep(0.0, u_lineW, d);
-    float glow = exp(-d * u_glowK) * u_glow;
-    float temp = smoothstep(0.0, u_lineW * 4.0, d);
-    half4 filamentCol = mix(u_colFilament, u_colFilament2, half(u_colorMix));
-    half4 bodyCol = mix(u_colBody, u_colBody2, half(u_colorMix));
-    half4 glowCol = mix(u_colGlow, u_colGlow2, half(u_colorMix));
-    half3 col = mix(filamentCol.rgb, bodyCol.rgb, temp);
-    float ang = degrees(atan(p.y - ucenter.y, p.x - ucenter.x));
-    float rel = u_headAngle - ang;
-    rel -= floor(rel / 360.0) * 360.0;
-    float flow = 0.82 + 0.28 * (0.5 + 0.5 * cos(6.28318 * (1.0 - rel / 360.0)));
-    float a = clamp((core + glow * 0.45) * flow, 0.0, 1.0);
-    half3 rgb = col * a;
-    if (u_arcSweep > 0.5) {
-        if (rel < u_arcSweep) {
-            float t = 1.0 - rel / u_arcSweep;
-            float bump = t * t;
-            half3 headCol = mix(bodyCol.rgb, half3(1.0), 0.55 * t);
-            rgb += headCol * bump * 0.8;
-            a = clamp(a + bump * 0.8, 0.0, 1.0);
-            rgb = min(rgb, half3(a));
+    float2 delta = p - u_center;
+    float r = length(delta);
+
+    // 1. 镜头孔内部纯黑消光舱（含抗锯齿内缘）
+    if (r < u_innerEdge - 0.9) {
+        return half4(0.0, 0.0, 0.0, 1.0);
+    }
+    if (r >= u_maxR) {
+        return half4(0.0, 0.0, 0.0, 0.0);
+    }
+    float innerMask = smoothstep(u_innerEdge - 0.7, u_innerEdge + 0.35, r);
+    // 窗口外缘安全柔化遮罩：确保光晕和涟漪在到达 44dp 窗口边界前平滑归零
+    float outerVignette = 1.0 - smoothstep(u_maxR - 3.2, u_maxR - 0.3, r);
+
+    // 2. 非对称距离场：内侧陡峭防侵蚀镜头，外侧丝滑扩散
+    float signedD = r - u_ringR;
+    float d = abs(signedD);
+    float asymD = signedD < 0.0 ? d * 1.9 : d;
+
+    // 核心环与中心高光灯丝
+    float body = 1.0 - smoothstep(0.0, u_halfW, asymD);
+    float filament = 1.0 - smoothstep(0.0, u_halfW * 0.42, asymD);
+
+    // 紧贴内缘的微米级精密金属倒角线
+    float bezelD = abs(r - (u_innerEdge + 0.55));
+    float bezel = (1.0 - smoothstep(0.0, max(0.8, u_halfW * 0.35), bezelD)) * 0.45;
+
+    // 指数衰减柔雾光冕
+    float glowFalloff = exp(-asymD / max(1.5, u_halfW * 2.6));
+    float halo = glowFalloff * u_glow * innerMask * outerVignette;
+
+    // 3. 各向异性角度偏光（模拟金属拉丝与光学镀膜双峰反射）
+    float angRad = atan(delta.y, delta.x);
+    float angDeg = degrees(angRad);
+    float relRad = radians(angDeg - u_orbitDeg);
+    float spec1 = 0.5 + 0.5 * cos(relRad);
+    float spec2 = 0.5 + 0.5 * sin(relRad * 2.0 + 0.6);
+
+    half3 coreCol = mix(u_idleCore.rgb, u_eventCore.rgb, half(u_colorShift));
+    half3 priCol = mix(u_idlePrimary.rgb, u_eventPrimary.rgb, half(u_colorShift));
+    half3 secCol = mix(u_idleSecondary.rgb, u_eventSecondary.rgb, half(u_colorShift));
+    half3 haloCol = mix(u_idleGlow.rgb, u_eventGlow.rgb, half(u_colorShift));
+
+    half3 ringTint = mix(secCol, priCol, half(spec1));
+    ringTint = mix(ringTint, coreCol, half(filament * 0.82 + spec2 * 0.22));
+    half3 baseCol = mix(haloCol, ringTint, half(clamp(body + bezel, 0.0, 1.0)));
+
+    float orbitalMod = 0.78 + 0.22 * (0.65 * spec1 + 0.35 * spec2);
+    float alpha = clamp((body * 0.96 + bezel + halo * 0.52) * orbitalMod, 0.0, 1.0);
+    half3 rgb = baseCol * half(alpha);
+
+    // 4. 事件第一幕：双侧流光星轨从底部(90°)对称向上(-90°)聚拢
+    if (u_convergeT > 0.001 && u_convergeT < 0.999) {
+        // 将角度变换为相对于底部(90°)的对称夹角 sym in [0, 180°]
+        float fromBottom = angDeg - 90.0;
+        fromBottom -= floor((fromBottom + 180.0) / 360.0) * 360.0;
+        float symDeg = abs(fromBottom);
+        float headDeg = u_convergeT * 180.0;
+        float distBehind = headDeg - symDeg;
+        float tailLen = 95.0;
+        if (distBehind >= -6.0 && distBehind < tailLen) {
+            float trail = distBehind < 0.0
+                ? (1.0 + distBehind / 6.0)
+                : (1.0 - distBehind / tailLen);
+            trail = clamp(trail, 0.0, 1.0);
+            float radialMask = 1.0 - smoothstep(0.0, u_halfW * 1.75, asymD);
+            float boost = trail * trail * radialMask;
+            half3 streamCol = mix(u_eventPrimary.rgb, half3(1.0), half(trail * 0.7));
+            rgb += streamCol * half(boost * 1.15);
+            alpha = clamp(alpha + boost * 0.9, 0.0, 1.0);
         }
     }
-    return half4(rgb, a);
+
+    // 5. 事件第二幕：顶点碰撞聚变闪光（Zenith Starburst & Full-Ring Ignition）
+    if (u_flash > 0.001) {
+        float topDist = abs(angDeg + 90.0);
+        topDist = min(topDist, 360.0 - topDist);
+        float zenithSpot = exp(-topDist / 38.0) * exp(-asymD / (u_halfW * 3.2));
+        float ringFlash = exp(-asymD / (u_halfW * 2.4)) * 0.75;
+        float totalFlash = (zenithSpot * 0.85 + ringFlash) * u_flash * innerMask * outerVignette;
+        half3 flashCol = mix(u_eventCore.rgb, half3(1.0), half(0.65));
+        rgb += flashCol * half(totalFlash);
+        alpha = clamp(alpha + totalFlash * 0.85, 0.0, 1.0);
+    }
+
+    // 6. 事件第三幕：双重同心冲击波光环（一快一慢向外扩散消散）
+    if (u_rippleT > 0.001 && u_rippleT < 0.999) {
+        float span = max(2.0, (u_maxR - 1.2) - u_ringR);
+        // 主波纹
+        float r1 = u_ringR + u_rippleT * span;
+        float w1 = max(1.0, u_halfW * (1.15 - 0.65 * u_rippleT));
+        float env1 = (1.0 - u_rippleT) * (1.0 - u_rippleT);
+        float wave1 = (1.0 - smoothstep(0.0, w1, abs(r - r1))) * env1;
+
+        // 次级回响波纹（延迟触发）
+        float t2 = clamp((u_rippleT - 0.18) / 0.82, 0.0, 1.0);
+        float r2 = u_ringR + t2 * span * 0.78;
+        float w2 = max(0.8, u_halfW * (0.85 - 0.5 * t2));
+        float env2 = (1.0 - t2) * (1.0 - t2) * step(0.18, u_rippleT);
+        float wave2 = (1.0 - smoothstep(0.0, w2, abs(r - r2))) * env2 * 0.55;
+
+        float waveTotal = (wave1 + wave2) * innerMask * outerVignette;
+        half3 waveCol = mix(u_eventSecondary.rgb, u_eventCore.rgb, half(0.45));
+        rgb += waveCol * half(waveTotal * 0.9);
+        alpha = clamp(alpha + waveTotal * 0.75, 0.0, 1.0);
+    }
+
+    // 7. 内孔边缘纯黑过渡 + 蓝噪抖动消除暗部色带
+    float holeBlack = (1.0 - innerMask) * outerVignette;
+    float dither = (hash12(p) - 0.5) / 255.0;
+    float finalA = clamp(alpha + holeBlack + dither, 0.0, 1.0);
+    half3 finalRgb = clamp(rgb + half(dither), half3(0.0), half3(finalA));
+    return half4(finalRgb, half(finalA));
 }
 """
     }
 
-    // ---------- 状态参数（动画只改这些，onDraw 只读） ----------
+    // ---------- 响应式视觉状态参数（由外部物理动画器驱动） ----------
 
-    /** 光晕强度：0..1。待机基线 0.2，按下/扫描时 1。 */
-    var glow: Float = 0.2f
-        set(value) { field = value; invalidate() }
+    /** 弹簧缩放因子：1.0 为基准；按下时弹性外扩至 ~1.45，释放后带阻尼回弹。 */
+    var springScale: Float = 1f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
-    /** 线宽缩放：按下弹簧驱动 1 -> 1.4（带过冲）。形变只向外长，内缘固定。 */
-    var lineWidthScale: Float = 1f
-        set(value) { field = value; invalidate() }
+    /** 光冕辉度（0..1）：常驻态 ~0.26，按压或触发事件时升至 0.95。 */
+    var glowIntensity: Float = 0.26f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
-    /** 0 = 橙色待机；1 = 识别成功换色。只做 0/1 硬切（在最亮帧换色，不插值）。 */
-    var colorMix: Float = 0f
-        set(value) { field = value; invalidate() }
+    /** 各向异性流光旋转角（度）。 */
+    var orbitAngle: Float = -45f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
-    /** 流光头角度（度），同时是进度弧的亮头位置。SweepGradient 首尾同色可无缝旋转。 */
-    var headAngle: Float = 0f
-        set(value) { field = value; invalidate() }
+    /** 调色板混合度：0 = 香槟钛金（常驻），1 = 极光冰青（事件触发）。 */
+    var colorShift: Float = 0f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
-    /** -1 = 无进度弧；0..1 = 弧（见 [arcIndeterminate]）。 */
-    var progress: Float = -1f
-        set(value) { field = value; invalidate() }
+    /** 双侧流光星轨聚拢进度（0..1，0 表示不显示）。 */
+    var convergeT: Float = 0f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
-    /**
-     * progress 处于 0..1 时：true = Material 不确定弧（弧长在 40°..220° 间正弦伸缩，
-     * 头部随 [headAngle] 旋转）；false = 确定弧（弧长 = progress * 360°）。
-     */
-    var arcIndeterminate: Boolean = false
-        set(value) { field = value; invalidate() }
+    /** 聚变高光爆发强度（0..1）。 */
+    var flashIntensity: Float = 0f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
 
-    /** 恢复待机参数（收起/隐藏时调用）。呼吸不在此处理，外部只改 alpha。 */
+    /** 双重同心涟漪扩散进度（0..1，0 表示不显示）。 */
+    var rippleProgress: Float = 0f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
+
+    /** 恢复至常驻静谧状态。 */
     fun reset() {
-        glow = 0.2f
-        lineWidthScale = 1f
-        colorMix = 0f
-        headAngle = 0f
-        progress = -1f
-        arcIndeterminate = false
+        springScale = 1f
+        glowIntensity = 0.26f
+        orbitAngle = -45f
+        colorShift = 0f
+        convergeT = 0f
+        flashIntensity = 0f
+        rippleProgress = 0f
         alpha = 1f
     }
 
-    // ---------- 渲染 ----------
+    // ---------- 渲染引擎 ----------
 
     private val density = resources.displayMetrics.density
-    private fun dp(v: Float) = v * density
+    private fun dp(v: Float): Float = v * density
 
-    private val blackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF000000.toInt() }
+    private val blackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xFF000000.toInt()
+    }
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = COLOR_GLOW
-        // ADD 混合：叠加处自然变亮发白。Paint.blender(BrandMode.PLUS) 是 API 31+
-        // 符号，编译目标下不可直接引用，统一用全版本可用的 PorterDuff.ADD。
         @Suppress("DEPRECATION")
         xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
     }
-    private val corePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
     private val filamentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = COLOR_FILAMENT
     }
     private val arcPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
     }
-    private val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val ripplePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+    private val shaderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
 
-    /** API 33+ 的 AGSL 渲染器；创建失败（厂商 shader 编译异常）则回退分层实现。 */
+    private val arcRect = RectF()
+    private val shaderMatrix = Matrix()
+    private var cachedCx = -1f
+    private var cachedCy = -1f
+    private var idleSweep: SweepGradient? = null
+    private var eventSweep: SweepGradient? = null
+
     private val agslShader: RuntimeShader? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             runCatching { RuntimeShader(AGSL_SRC) }.getOrNull()
         } else null
 
-    /** 光晕衰减系数（px^-1）：1/e 衰减长度约 4dp。 */
-    private val glowK = 0.25f / density
-
-    private val filamentColor: Int
-        get() = if (colorMix > 0.5f) COLOR2_FILAMENT else COLOR_FILAMENT
-    private val bodyColor: Int
-        get() = if (colorMix > 0.5f) COLOR2_BODY else COLOR_BODY
-    private val paleColor: Int
-        get() = if (colorMix > 0.5f) COLOR2_PALE else COLOR_PALE
-    private val glowColor: Int
-        get() = if (colorMix > 0.5f) COLOR2_GLOW else COLOR_GLOW
-
     override fun onDraw(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
+        val maxR = min(cx, cy)
         val innerEdge = dp(INNER_EDGE_DP)
-        val coreWidth = dp(CORE_LINE_DP) * lineWidthScale
-        // 内缘固定，形变只向外长（往里缩会被镜头孔“吃掉”）
-        val ringR = innerEdge + coreWidth / 2f
 
-        // 1. 黑底：只保留内间隙（OLED 像素熄灭、与镜头孔融合）。
-        //    不画外垫黑圈——浅色界面上会显得孔大一圈，光晕直接叠在界面上。
-        canvas.drawCircle(cx, cy, innerEdge, blackPaint)
+        // 内缘固定不缩进，弹簧形变仅向外生长
+        val coreWidth = dp(BASE_RING_WIDTH_DP) * springScale
+        val extraExpand = max(0f, springScale - 1f) * dp(0.85f)
+        val ringR = innerEdge + coreWidth / 2f + extraExpand
 
-        val sweep = arcSweepDeg()
         val shader = agslShader
-        // 厂商 ROM 的 shader 运行时异常也回退到分层渲染，绝不让光圈崩掉进程
-        if (shader != null) {
-            val drew = runCatching { drawAgsl(canvas, shader, cx, cy, ringR, coreWidth, sweep) }.isSuccess
-            if (!drew) drawLayered(canvas, cx, cy, ringR, coreWidth, sweep)
-        } else {
-            drawLayered(canvas, cx, cy, ringR, coreWidth, sweep)
+        if (shader != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val ok = runCatching {
+                drawWithAgsl(canvas, shader, cx, cy, innerEdge, ringR, coreWidth / 2f, maxR)
+            }.isSuccess
+            if (ok) return
         }
+        drawWithCanvasFallback(canvas, cx, cy, innerEdge, ringR, coreWidth, maxR)
     }
 
-    /** 当前弧长（度）：progress < 0 无弧；不确定模式 40°..220° 正弦伸缩；确定模式 progress*360°。 */
-    private fun arcSweepDeg(): Float = when {
-        progress < 0f -> 0f
-        arcIndeterminate -> 40f + 90f * (1f - cos(2.0 * Math.PI * progress.toDouble()).toFloat()) // 40..220
-        else -> progress.coerceIn(0f, 1f) * 360f
-    }
-
-    // ---------- AGSL 分支（API 33+） ----------
-
-    private fun drawAgsl(
+    private fun drawWithAgsl(
         canvas: Canvas,
         shader: RuntimeShader,
-        cx: Float, cy: Float, ringR: Float, coreWidth: Float, sweep: Float
+        cx: Float,
+        cy: Float,
+        innerEdge: Float,
+        ringR: Float,
+        halfW: Float,
+        maxR: Float
     ) {
-        shader.setFloatUniform("ucenter", cx, cy)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        shader.setFloatUniform("u_center", cx, cy)
+        shader.setFloatUniform("u_innerEdge", innerEdge)
         shader.setFloatUniform("u_ringR", ringR)
-        shader.setFloatUniform("u_lineW", coreWidth / 2f)
-        shader.setFloatUniform("u_glowK", glowK)
-        shader.setFloatUniform("u_glow", glow)
-        shader.setFloatUniform("u_headAngle", headAngle)
-        shader.setFloatUniform("u_arcSweep", sweep)
-        shader.setFloatUniform("u_colorMix", if (colorMix > 0.5f) 1f else 0f)
-        shader.setColorUniform("u_colFilament", COLOR_FILAMENT)
-        shader.setColorUniform("u_colBody", COLOR_BODY)
-        shader.setColorUniform("u_colGlow", COLOR_GLOW)
-        shader.setColorUniform("u_colFilament2", COLOR2_FILAMENT)
-        shader.setColorUniform("u_colBody2", COLOR2_BODY)
-        shader.setColorUniform("u_colGlow2", COLOR2_GLOW)
+        shader.setFloatUniform("u_halfW", halfW)
+        shader.setFloatUniform("u_maxR", maxR)
+        shader.setFloatUniform("u_glow", glowIntensity)
+        shader.setFloatUniform("u_orbitDeg", orbitAngle)
+        shader.setFloatUniform("u_colorShift", colorShift.coerceIn(0f, 1f))
+        shader.setFloatUniform("u_convergeT", convergeT.coerceIn(0f, 1f))
+        shader.setFloatUniform("u_flash", flashIntensity.coerceIn(0f, 1f))
+        shader.setFloatUniform("u_rippleT", rippleProgress.coerceIn(0f, 1f))
+
+        shader.setColorUniform("u_idleCore", COL_IDLE_CORE)
+        shader.setColorUniform("u_idlePrimary", COL_IDLE_PRIMARY)
+        shader.setColorUniform("u_idleSecondary", COL_IDLE_SECONDARY)
+        shader.setColorUniform("u_idleGlow", COL_IDLE_GLOW)
+
+        shader.setColorUniform("u_eventCore", COL_EVENT_CORE)
+        shader.setColorUniform("u_eventPrimary", COL_EVENT_PRIMARY)
+        shader.setColorUniform("u_eventSecondary", COL_EVENT_SECONDARY)
+        shader.setColorUniform("u_eventGlow", COL_EVENT_GLOW)
+
         shaderPaint.shader = shader
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shaderPaint)
         shaderPaint.shader = null
     }
 
-    // ---------- 分层回退分支（API 26..32） ----------
-
-    private fun drawLayered(
+    private fun drawWithCanvasFallback(
         canvas: Canvas,
-        cx: Float, cy: Float, ringR: Float, coreWidth: Float, sweep: Float
+        cx: Float,
+        cy: Float,
+        innerEdge: Float,
+        ringR: Float,
+        coreWidth: Float,
+        maxR: Float
     ) {
-        // 3. 光晕：3 层渐宽渐淡描边，ADD 混合
-        if (glow > 0.01f) {
-            glowPaint.color = glowColor
-            for (i in GLOW_WIDTHS_DP.indices) {
-                glowPaint.strokeWidth = dp(GLOW_WIDTHS_DP[i])
-                glowPaint.alpha = (GLOW_ALPHAS[i] * glow * 255f).toInt().coerceIn(0, 255)
+        ensureFallbackShaders(cx, cy)
+        val isEvent = colorShift > 0.5f
+        val glowCol = if (isEvent) COL_EVENT_GLOW else COL_IDLE_GLOW
+        val coreCol = if (isEvent) COL_EVENT_CORE else COL_IDLE_CORE
+        val priCol = if (isEvent) COL_EVENT_PRIMARY else COL_IDLE_PRIMARY
+
+        // 1. 三层柔雾光晕
+        val totalGlow = (glowIntensity + flashIntensity * 0.6f).coerceIn(0f, 1.3f)
+        if (totalGlow > 0.01f) {
+            val widths = floatArrayOf(2.8f, 5.0f, 7.6f)
+            val alphas = floatArrayOf(0.32f, 0.16f, 0.07f)
+            glowPaint.color = glowCol
+            for (i in widths.indices) {
+                glowPaint.strokeWidth = dp(widths[i])
+                glowPaint.alpha = (alphas[i] * totalGlow * 255f).toInt().coerceIn(0, 255)
                 canvas.drawCircle(cx, cy, ringR, glowPaint)
             }
         }
 
-        // 4. 核心线：SweepGradient 首尾同色，转 canvas 即流光（不重建 shader）
-        corePaint.shader = sweepGradient(cx, cy)
-        corePaint.strokeWidth = coreWidth
-        canvas.save()
-        canvas.rotate(headAngle, cx, cy)
-        canvas.drawCircle(cx, cy, ringR, corePaint)
-        // 灯丝线：同圆更细的描边
-        filamentPaint.color = filamentColor
-        filamentPaint.strokeWidth = dp(FILAMENT_LINE_DP)
+        // 2. 各向异性流光主环
+        val sweep = if (isEvent) eventSweep else idleSweep
+        if (sweep != null) {
+            shaderMatrix.reset()
+            shaderMatrix.setRotate(orbitAngle, cx, cy)
+            sweep.setLocalMatrix(shaderMatrix)
+        }
+        ringPaint.shader = sweep
+        ringPaint.strokeWidth = coreWidth
+        canvas.drawCircle(cx, cy, ringR, ringPaint)
+        ringPaint.shader = null
+
+        // 3. 高色温灯丝内芯
+        filamentPaint.color = coreCol
+        filamentPaint.strokeWidth = dp(0.6f) * (1f + flashIntensity * 0.5f)
+        filamentPaint.alpha = (210 + (flashIntensity * 45f).toInt()).coerceIn(0, 255)
         canvas.drawCircle(cx, cy, ringR, filamentPaint)
-        canvas.restore()
-        corePaint.shader = null
 
-        // 5. 识别弧：头亮尾暗的渐变描边。旋转 canvas 使渐变 headFrac 处对齐弧头（headAngle）。
-        if (sweep > 0.5f) {
-            val headFrac = (sweep / 360f).coerceIn(0.02f, 0.98f)
-            val tail = bodyColor
-            setArcAlpha(arcPaint, tail, filamentColor, headFrac)
-            arcPaint.strokeWidth = coreWidth * 1.6f
-            canvas.save()
-            canvas.rotate(headAngle - sweep, cx, cy)
-            val r = maxOf(cx, cy)
-            val bounds = android.graphics.RectF(cx - r, cy - r, cx + r, cy + r)
-            canvas.drawArc(bounds, 0f, 360f, false, arcPaint)
-            canvas.restore()
-            arcPaint.shader = null
+        // 4. 双侧对称聚拢星轨
+        if (convergeT in 0.01f..0.99f) {
+            arcRect.set(cx - ringR, cy - ringR, cx + ringR, cy + ringR)
+            val spanDeg = convergeT * 180f
+            val tailDeg = min(spanDeg, 85f)
+            arcPaint.strokeWidth = coreWidth * 1.35f
+            arcPaint.color = COL_EVENT_CORE
+            arcPaint.alpha = 240
+            // 右侧上行弧 (从 90° 逆时针到 90° - spanDeg)
+            canvas.drawArc(arcRect, 90f - spanDeg, tailDeg, false, arcPaint)
+            // 左侧上行弧 (从 90° 顺时针到 90° + spanDeg)
+            canvas.drawArc(arcRect, 90f + spanDeg - tailDeg, tailDeg, false, arcPaint)
         }
+
+        // 5. 双层扩散光波涟漪
+        if (rippleProgress in 0.01f..0.99f) {
+            val span = max(dp(2f), (maxR - dp(1.5f)) - ringR)
+            val r1 = ringR + rippleProgress * span
+            val env1 = (1f - rippleProgress) * (1f - rippleProgress)
+            ripplePaint.color = priCol
+            ripplePaint.strokeWidth = dp(1.3f) * (1f - 0.5f * rippleProgress)
+            ripplePaint.alpha = (env1 * 190f).toInt().coerceIn(0, 255)
+            canvas.drawCircle(cx, cy, r1, ripplePaint)
+        }
+
+        // 6. 压紧内孔纯黑消光圆
+        canvas.drawCircle(cx, cy, innerEdge, blackPaint)
     }
 
-    /** 识别弧 SweepGradient：弧尾透明 → 渐亮 → 弧头灯丝白 → 头后立即归零。 */
-    private fun setArcAlpha(paint: Paint, tailColor: Int, headColor: Int, headFrac: Float) {
-        val tailA = (0.55f * 255f).toInt()
-        val headA = 255
-        val colors = intArrayOf(
-            tailColor and 0x00FFFFFF,
-            (tailColor and 0x00FFFFFF) or (tailA shl 24),
-            (headColor and 0x00FFFFFF) or (headA shl 24),
-            tailColor and 0x00FFFFFF,
-            tailColor and 0x00FFFFFF
+    private fun ensureFallbackShaders(cx: Float, cy: Float) {
+        if (cx == cachedCx && cy == cachedCy && idleSweep != null) return
+        cachedCx = cx
+        cachedCy = cy
+        val pos = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        idleSweep = SweepGradient(
+            cx,
+            cy,
+            intArrayOf(
+                COL_IDLE_PRIMARY,
+                COL_IDLE_CORE,
+                COL_IDLE_SECONDARY,
+                COL_IDLE_CORE,
+                COL_IDLE_PRIMARY
+            ),
+            pos
         )
-        val positions = floatArrayOf(
-            0f,
-            headFrac * 0.7f,
-            headFrac,
-            (headFrac + 0.02f).coerceAtMost(1f),
-            1f
+        eventSweep = SweepGradient(
+            cx,
+            cy,
+            intArrayOf(
+                COL_EVENT_PRIMARY,
+                COL_EVENT_CORE,
+                COL_EVENT_SECONDARY,
+                COL_EVENT_CORE,
+                COL_EVENT_PRIMARY
+            ),
+            pos
         )
-        val cx = width / 2f
-        val cy = height / 2f
-        paint.shader = SweepGradient(cx, cy, colors, positions)
-    }
-
-    /** 核心线 SweepGradient：橙 → 琥珀 → 淡黄 → 橙（首尾同色）。 */
-    private fun sweepGradient(cx: Float, cy: Float): SweepGradient {
-        val body = bodyColor
-        return if (colorMix > 0.5f) {
-            SweepGradient(
-                cx, cy,
-                intArrayOf(body, COLOR2_AMBER, COLOR2_PALE, body),
-                floatArrayOf(0f, 0.33f, 0.66f, 1f)
-            )
-        } else {
-            SweepGradient(
-                cx, cy,
-                intArrayOf(body, COLOR_AMBER, COLOR_PALE, body),
-                floatArrayOf(0f, 0.33f, 0.66f, 1f)
-            )
-        }
     }
 }
