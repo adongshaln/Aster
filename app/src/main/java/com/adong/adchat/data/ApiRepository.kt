@@ -501,7 +501,6 @@ class ApiRepository internal constructor(
         var delegatedSearchCalls = 0
         val delegatedSearchCache = linkedMapOf<String, DelegatedSearchResult>()
         val skillToolReuseGuard = SkillToolReuseGuard()
-        var reasoningContinuations = 0
         for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
             skillToolReuseGuard.beginRound()
             val forceSkill = skillLoadingEnabled && requireSkillLoad && roundIndex == 0
@@ -515,14 +514,8 @@ class ApiRepository internal constructor(
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.reasoningOnly) {
-                reasoningContinuations += 1
-                if (reasoningContinuations > 2) {
-                    val note = "思考内容过长，模型还没开始回答。可以降低思考强度后再试。"
-                    val prefix = if (full.isNotEmpty() && !full.endsWith('\n')) "\n\n" else ""
-                    full.append(prefix).append(note)
-                    onDelta(prefix + note)
-                    break
-                }
+                // 模型持续回传思考就持续续轮，不主动中断；
+                // 总轮数仍由 MAX_TOOL_ROUNDS 兜底，防止模型无限空转。
                 messages.put(JSONObject()
                     .put("role", "assistant")
                     .put("content", "")
@@ -530,7 +523,6 @@ class ApiRepository internal constructor(
                 messages.put(JSONObject().put("role", "user").put("content", REASONING_CONTINUE_PROMPT))
                 continue
             }
-            reasoningContinuations = 0
             if (round.toolCalls.isEmpty()) {
                 completedNormally = true
                 break
@@ -607,7 +599,7 @@ class ApiRepository internal constructor(
             forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
         if (!completedNormally) {
-            throw IllegalStateException("工具调用未在 ${MAX_TOOL_ROUNDS} 轮内完成（模型可能重复读取了同一份技能资料）")
+            throw IllegalStateException("请求未在 ${MAX_TOOL_ROUNDS} 轮内完成。若模型连续多轮只输出思考没有正文，可能是输出预算（max_tokens）被思考耗尽，请提高输出上限或降低思考强度后重试。")
         }
         if (activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
             recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
