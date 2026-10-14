@@ -2,10 +2,10 @@ package com.adong.adchat.data
 
 /**
  * 输入建议的纯逻辑：从对话历史裁出预测上下文、清洗模型返回的预测文本。
- * 网络请求在 ApiRepository.suggestNextMessage，这里不发起任何 IO。
+ * 网络请求在 ApiRepository.suggestNextMessage，这里不发起任何 IO；
+ * 预测模型由设置指定（ApiProfile.suggestionModel），不在此硬编码。
  */
 internal object InputSuggester {
-    const val SUGGESTION_MODEL = "deepseek-v4.1-flash"
     const val SUGGESTION_INSTRUCTION = "你是一个输入预测器。分析上面的对话：助手的回复刚结束，用户正在考虑下一步。预测用户此刻最可能输入的下一条消息。要求：1)必须站在用户视角，说用户想解决的问题，绝不要延续助手的话题惯性 2)符合用户此前消息的口吻（口语/书面、长短） 3)一条消息，不超过30字 4)只输出消息文本本身，无引号无解释。如果对话已自然收尾、用户大概率不再继续，只输出：结束"
     const val SUGGESTION_PLACEHOLDER = "[在此预测用户下一条消息]"
     private const val END_MARK = "结束"

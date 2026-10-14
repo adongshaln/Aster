@@ -215,6 +215,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     val imageProfile: ApiProfile get() = appConfig.imageProfile()
     val searchProfile: ApiProfile get() = appConfig.searchProfile()
+    val suggestionProfile: ApiProfile get() = appConfig.suggestionProfile()
     val allowXSearch: Boolean get() = appConfig.allowXSearch
     private fun searchBackendConfig(): SearchBackendConfig? {
         val profile = appConfig.searchProfile()
@@ -368,6 +369,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         updateProfile(profileId) { it.copy(searchModel = selected) }
         appConfig = appConfig.copy(activeSearchProfileId = profileId)
         persist(); notice = "联网搜索模型已设置为 $selected"
+    }
+
+    fun selectSuggestionProfile(profileId: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
+        persist(); notice = "输入建议已切换到 ${profile.name}"
+    }
+
+    fun selectSuggestionModel(profileId: String, model: String) {
+        val selected = model.trim()
+        if (selected.isBlank()) return
+        updateProfile(profileId) { it.copy(suggestionModel = selected) }
+        appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
+        persist(); notice = "输入建议模型已设置为 $selected"
     }
 
     fun setAllowXSearch(enabled: Boolean) {
@@ -1038,7 +1053,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 inputSuggestion = null
                 return@launch
             }
-            val result = runCatching { repository.suggestNextMessage(chatProfile, history) }.getOrNull()
+            val result = runCatching {
+                repository.suggestNextMessage(suggestionProfile, suggestionProfile.suggestionModel, history)
+            }.getOrNull()
             // runCatching 会吞掉取消异常：被换掉后回来的旧任务不能再覆盖新建议。
             if (!isActive) return@launch
             inputSuggestion = InputSuggester.cleanSuggestion(result)

@@ -40,6 +40,7 @@ data class ApiProfile(
     val imageModel: String = "",
     val mangaAnalysisModel: String = "",
     val searchModel: String = "",
+    val suggestionModel: String = "",
     val extraHeaders: String = "",
     val cachedModels: List<ApiModel> = emptyList(),
     val lastLatencyMs: Long? = null,
@@ -64,6 +65,7 @@ fun ApiProfile.normalized(): ApiProfile = copy(
     imageModel = imageModel.trim(),
     mangaAnalysisModel = mangaAnalysisModel.trim(),
     searchModel = searchModel.trim(),
+    suggestionModel = suggestionModel.trim(),
     extraHeaders = extraHeaders.lineSequence().map(String::trim).filter(String::isNotBlank).joinToString("\n"),
     apiFormat = if (apiFormat == API_FORMAT_ANTHROPIC) API_FORMAT_ANTHROPIC else API_FORMAT_OPENAI,
     messagesPath = messagesPath.trim().ifBlank { "/v1/messages" }
@@ -97,6 +99,7 @@ data class AppConfig(
     val activeImageProfileId: String,
     val activeMangaAnalysisProfileId: String = activeChatProfileId,
     val activeSearchProfileId: String = activeChatProfileId,
+    val activeSuggestionProfileId: String = activeChatProfileId,
     val allowXSearch: Boolean = false,
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
     val themeMode: String = THEME_MODE_ASTER,
@@ -107,6 +110,7 @@ data class AppConfig(
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
     fun mangaAnalysisProfile(): ApiProfile = profiles.firstOrNull { it.id == activeMangaAnalysisProfileId } ?: chatProfile()
     fun searchProfile(): ApiProfile = profiles.firstOrNull { it.id == activeSearchProfileId } ?: chatProfile()
+    fun suggestionProfile(): ApiProfile = profiles.firstOrNull { it.id == activeSuggestionProfileId } ?: chatProfile()
 }
 
 class ConfigStore(context: Context) {
@@ -194,6 +198,7 @@ class ConfigStore(context: Context) {
         .put("activeImageProfileId", config.activeImageProfileId)
         .put("activeMangaAnalysisProfileId", config.activeMangaAnalysisProfileId)
         .put("activeSearchProfileId", config.activeSearchProfileId)
+        .put("activeSuggestionProfileId", config.activeSuggestionProfileId)
         .put("allowXSearch", config.allowXSearch)
         .put("systemPrompt", config.systemPrompt)
         .put("themeMode", config.themeMode)
@@ -223,6 +228,7 @@ class ConfigStore(context: Context) {
                     .put("imageModel", profile.imageModel)
                     .put("mangaAnalysisModel", profile.mangaAnalysisModel)
                     .put("searchModel", profile.searchModel)
+                    .put("suggestionModel", profile.suggestionModel)
                     .put("apiFormat", profile.apiFormat)
                     .put("messagesPath", profile.messagesPath)
                     .put("extraHeaders", profile.extraHeaders)
@@ -264,6 +270,7 @@ class ConfigStore(context: Context) {
                     imageModel = item.optString("imageModel"),
                     mangaAnalysisModel = item.optString("mangaAnalysisModel"),
                     searchModel = item.optString("searchModel"),
+                    suggestionModel = item.optString("suggestionModel"),
                     extraHeaders = item.optString("extraHeaders"),
                     apiFormat = item.optString("apiFormat").ifBlank { API_FORMAT_OPENAI },
                     messagesPath = item.optString("messagesPath").ifBlank { "/v1/messages" },
@@ -281,6 +288,10 @@ class ConfigStore(context: Context) {
                 ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
                 ?: profiles.first().id,
             activeSearchProfileId = root.optString("activeSearchProfileId")
+                .takeIf { id -> profiles.any { it.id == id } }
+                ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
+                ?: profiles.first().id,
+            activeSuggestionProfileId = root.optString("activeSuggestionProfileId")
                 .takeIf { id -> profiles.any { it.id == id } }
                 ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
                 ?: profiles.first().id,
