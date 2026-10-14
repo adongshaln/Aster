@@ -46,11 +46,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     companion object {
         // 按红米 Turbo 5 Max（density=3.25）实测校准：挖孔宽 66px ≈ 20.3dp，
         // 挖孔中心距屏幕顶部 76px ≈ 23.4dp；圆环外径只比挖孔大一圈。
-        /** 圆环外径：挖孔约 20dp，只比它大一圈。 */
-        private const val PILL_SIZE_DP = IslandGlowView.RING_OUTER_DP
         /** 挖孔中心距屏幕顶部的距离（dp），圆环与挖孔中心重合。 */
         private const val CUTOUT_CENTER_Y_DP = 25.5f
-        /** 悬浮窗边长：光圈外径 + 光晕 + 黑垫，按涟漪最大范围定。 */
+        /** 悬浮窗边长：光圈外径 + 光晕余量；圆环画在窗口中心，y 按此对中。 */
         private const val WINDOW_SIZE_DP = IslandGlowView.WINDOW_SIZE_DP
         private const val CARD_HEIGHT_RATIO = 0.2f
         private const val CARD_TIMEOUT_MS = 12_000L
@@ -473,7 +471,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (attached) return
         val params = baseParams(dp(WINDOW_SIZE_DP.toInt()), dp(WINDOW_SIZE_DP.toInt()))
         // 圆环中心与挖孔中心重合
-        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
+        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(WINDOW_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.addView(this, params) }
         windowParams = params
         attached = true
@@ -499,7 +497,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         params.width = dp(WINDOW_SIZE_DP.toInt())
         params.height = dp(WINDOW_SIZE_DP.toInt())
         // 圆环中心与挖孔中心重合
-        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(PILL_SIZE_DP.toInt()) / 2 - statusBarHeight()
+        params.y = dp(CUTOUT_CENTER_Y_DP.roundToInt()) - dp(WINDOW_SIZE_DP.toInt()) / 2 - statusBarHeight()
         runCatching { windowManager.updateViewLayout(this, params) }
         pillHost.visibility = View.VISIBLE
     }

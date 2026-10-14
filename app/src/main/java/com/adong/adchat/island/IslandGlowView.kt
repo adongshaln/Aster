@@ -43,7 +43,6 @@ class IslandGlowView(context: Context) : View(context) {
         private const val INNER_EDGE_DP = 11.5f
         private const val CORE_LINE_DP = 1.5f
         private const val FILAMENT_LINE_DP = 0.6f
-        private const val OUTER_PAD_DP = 2.5f
 
         // 待机调色板：橙（中心偏白 → 主体橙 → 光晕深橙）
         private const val COLOR_FILAMENT = 0xFFF3D6.toInt()
@@ -203,14 +202,14 @@ half4 main(float2 p) {
     override fun onDraw(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
-        val outerR = dp(RING_OUTER_DP) / 2f
         val innerEdge = dp(INNER_EDGE_DP)
         val coreWidth = dp(CORE_LINE_DP) * lineWidthScale
         // 内缘固定，形变只向外长（往里缩会被镜头孔“吃掉”）
         val ringR = innerEdge + coreWidth / 2f
 
-        // 1. 黑底：一个实心黑圆同时充当内间隙与外垫（半径 = 光圈外径 + 2.5dp）
-        canvas.drawCircle(cx, cy, outerR + dp(OUTER_PAD_DP), blackPaint)
+        // 1. 黑底：只保留内间隙（OLED 像素熄灭、与镜头孔融合）。
+        //    不画外垫黑圈——浅色界面上会显得孔大一圈，光晕直接叠在界面上。
+        canvas.drawCircle(cx, cy, innerEdge, blackPaint)
 
         val sweep = arcSweepDeg()
         val shader = agslShader
