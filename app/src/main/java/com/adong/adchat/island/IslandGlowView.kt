@@ -33,12 +33,12 @@ class IslandGlowView(context: Context) : View(context) {
 
     companion object {
         /** 光圈基准外径（dp）：严格保持原版 28dp。 */
-        const val RING_OUTER_DP = 28f
+        const val RING_OUTER_DP = 32f
         /** 悬浮窗边长（dp）：严格保持原版 44dp，确保圆心定位公式 100% 兼容。 */
-        const val WINDOW_SIZE_DP = 44f
+        const val WINDOW_SIZE_DP = 48f
 
         /** 圆环固定内缘半径（dp）：挖孔半径约 10dp + 1.5dp 纯黑消光间隙。 */
-        private const val INNER_EDGE_DP = 11.5f
+        private const val INNER_EDGE_DP = 13f
         /** 基础核心环线宽（dp）。 */
         private const val BASE_RING_WIDTH_DP = 1.6f
 

@@ -53,7 +53,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     companion object {
         // 严格采用原版实测校准的圆心定位参数（红米 Turbo 5 Max: density=3.25）
         /** 挖孔中心距屏幕顶部的距离（dp），圆环与挖孔中心重合。 */
-        private const val CUTOUT_CENTER_Y_DP = 23.4f
+        private const val CUTOUT_CENTER_Y_DP = 25.5f
         /** 悬浮窗边长（dp）：严格保持 44dp。 */
         private const val WINDOW_SIZE_DP = IslandGlowView.WINDOW_SIZE_DP
 
