@@ -3,7 +3,6 @@ package com.adong.adchat.ui.theme
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
@@ -34,43 +33,39 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 
 /**
- * Aster v1.0 — Apple Fluid Spring Physics & Tactile Interaction Engine
- * ====================================================================
- * 位于 `com.adong.adchat.ui.theme` 包下，任何导入 `com.adong.adchat.ui.theme.*` 的组件均可直接调用。
+ * Aster — Apple Fluid Spring Physics & Tactile Interaction Engine
  */
 object AsterSpring {
-    /** 空间与容器形变弹簧：用于灵动胶囊展开、页面切换、卡片展开（带微妙的 iOS 灵动回弹） */
+    /** 空间与容器形变弹簧：用于灵动胶囊展开、思考面板舒展、页面切换（带微妙 iOS 弹性） */
     fun <T> spatial(): SpringSpec<T> = spring(
-        dampingRatio = 0.78f,
+        dampingRatio = 0.76f,
         stiffness = 380f
     )
 
-    /** 敏捷微交互弹簧：用于按钮按压、SegmentedControl 滑块、模型切换胶囊 */
+    /** 敏捷微交互弹簧：用于按钮按压缩放、SegmentedControl 胶囊切换 */
     fun <T> snappy(): SpringSpec<T> = spring(
-        dampingRatio = 0.82f,
-        stiffness = 640f
+        dampingRatio = 0.80f,
+        stiffness = 620f
     )
 
-    /** 文学级舒展弹簧：用于思考面板折叠、列表高度自适应与颜色过渡（平滑无过冲） */
+    /** 文学级临界阻尼弹簧：用于色彩平滑过渡、焦点边框渐变（无过冲） */
     fun <T> editorial(): SpringSpec<T> = spring(
         dampingRatio = 0.92f,
         stiffness = 300f
     )
 
-    /** 灵动图标入场弹簧：用于欢迎页 Logo 与空状态徽章入场 */
+    /** 灵动弹跳弹簧：用于发送按钮浮现、回到底部胶囊弹出、欢迎页徽标弹入 */
     fun <T> gentleBounce(): SpringSpec<T> = spring(
-        dampingRatio = 0.68f,
-        stiffness = 260f
+        dampingRatio = 0.64f,
+        stiffness = 420f
     )
 }
 
 /**
- * Apple iOS 风格弹性按压修饰符：
- * - 手指按下时以 [AsterSpring.snappy] 物理曲线平滑缩放到 [pressedScale] 并触发微弱的 CLOCK_TICK 触觉反馈；
- * - 手指抬起或滑出时带着手势初速度自然回弹。
+ * Apple iOS 风格弹性按压修饰符（支持手势中途打断与微触觉反馈）
  */
 fun Modifier.appleSpringPressable(
-    pressedScale: Float = 0.96f,
+    pressedScale: Float = 0.95f,
     enabled: Boolean = true,
     enableHaptics: Boolean = true
 ): Modifier = composed {
@@ -104,13 +99,12 @@ fun Modifier.appleSpringPressable(
 }
 
 /**
- * Apple 瀑布流错峰弹簧入场修饰符（Staggered Spring Entrance）：
- * 让欢迎页卡片、列表项按索引依次以弹簧物理曲线上浮并淡入。
+ * Apple 瀑布流错峰弹簧入场修饰符
  */
 fun Modifier.appleStaggeredEntrance(
     index: Int,
     stepDelayMillis: Long = 55L,
-    initialOffsetY: Dp = 18.dp
+    initialOffsetY: Dp = 20.dp
 ): Modifier = composed {
     var triggered by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -132,7 +126,7 @@ fun Modifier.appleStaggeredEntrance(
         label = "StaggerOffsetY"
     )
     val scale by animateFloatAsState(
-        targetValue = if (triggered) 1f else 0.94f,
+        targetValue = if (triggered) 1f else 0.92f,
         animationSpec = AsterSpring.spatial(),
         label = "StaggerScale"
     )
@@ -146,7 +140,7 @@ fun Modifier.appleStaggeredEntrance(
 }
 
 /**
- * 呼吸悬浮微动效修饰符：用于 Claude 星标徽章与空状态图标
+ * 呼吸悬浮微动效修饰符
  */
 fun Modifier.claudeBreathingFloat(
     amplitudeDp: Dp = 3.dp,
@@ -170,8 +164,7 @@ fun Modifier.claudeBreathingFloat(
 }
 
 /**
- * iOS Stage Manager 景深缩放容器：
- * 当侧边栏或模态弹窗打开时，主画布自动后退缩放到 0.94f 并呈现 26.dp 圆角景深。
+ * iOS Stage Manager 景深后退缩放容器
  */
 @Composable
 fun AsterStageDepthContainer(

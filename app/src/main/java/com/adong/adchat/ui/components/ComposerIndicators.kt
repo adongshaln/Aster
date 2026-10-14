@@ -1,9 +1,10 @@
 package com.adong.adchat.ui.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Psychology
@@ -23,8 +24,11 @@ import com.adong.adchat.data.ModelContextLimits
 import com.adong.adchat.ui.theme.*
 
 /**
- * 输入框左侧的上下文进度圈。外圈实时反映本次请求预计占用的输入预算，
- * 中间是百分比；没有为该模型配置上下文长度时显示为未知状态。
+ * Aster v2.0 — Apple Control-Center Style Context Ring & Reasoning Capsule
+ * ========================================================================
+ * 1. `ComposerContextRing` 升级为带 `AsterSpring.spatial()` 阻尼圆弧动画与弹性按压的精致进度环；
+ * 2. `ComposerReasoningButton` 从原本拥挤的上下堆叠小字改造为 **Claude 陶土胶囊开关**，开启深度思考时呈现醒目的暖陶土底色与边框；
+ * 3. `ComposerContextSheet` 预设档位卡片全部接入 `appleSpringPressable` 弹性缩放手感。
  */
 @Composable
 fun ComposerContextRing(
@@ -34,43 +38,53 @@ fun ComposerContextRing(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val tint = when {
+    val targetTint = when {
         !configured -> MutedInk
         overflow -> Danger
         percent >= 85 -> Accent
         else -> Sage
     }
-    // 流式/打字时 percent 每个 token 都在变，220ms 的动画永远追不上目标，
-    // 数字和圆弧长期不同步。输入先经 250ms 节流，只在值稳定下来后才平滑过渡。
+    val tint by animateColorAsState(
+        targetValue = targetTint,
+        animationSpec = AsterSpring.editorial(),
+        label = "ContextRingTint"
+    )
     val settledPercent by produceState(initialValue = percent, percent) {
-        kotlinx.coroutines.delay(250)
+        kotlinx.coroutines.delay(220)
         value = percent
     }
     val progress by animateFloatAsState(
         targetValue = if (configured) (settledPercent / 100f).coerceIn(0f, 1f) else 0f,
-        animationSpec = tween(220),
+        animationSpec = AsterSpring.spatial(),
         label = "context-ring"
     )
-    IconButton(onClick = onClick, modifier = modifier.size(48.dp)) {
-        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .size(44.dp)
+            .appleSpringPressable(pressedScale = 0.88f)
+    ) {
+        Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.size(30.dp),
                 color = tint,
-                trackColor = Hairline.copy(alpha = .55f),
-                strokeWidth = 3.dp
+                trackColor = SurfaceInset,
+                strokeWidth = 2.8.dp
             )
             Text(
                 if (configured) "$percent%" else "--",
                 color = tint,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold
             )
         }
     }
 }
 
-/** 输入框上的思考强度按钮：图标 + 当前档位短名，点开按模型匹配的选项。 */
+/**
+ * 思考强度按钮：重构为横向舒展的 Claude 陶土胶囊（开启深度思考时高亮为 AccentSoft 胶囊）
+ */
 @Composable
 fun ComposerReasoningButton(
     label: String,
@@ -78,22 +92,45 @@ fun ComposerReasoningButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val tint = if (detailed) Accent else MutedInk
-    IconButton(onClick = onClick, modifier = modifier.size(48.dp)) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Rounded.Psychology, null, Modifier.size(21.dp), tint = tint)
-            // 档位名是功能状态，不能小于 labelSmall(11sp)：读错就会选错思考强度。
-            Text(label, color = tint, fontSize = 11.sp, maxLines = 1)
+    val bg by animateColorAsState(
+        targetValue = if (detailed) AccentSoft else SurfaceInset.copy(alpha = 0.65f),
+        animationSpec = AsterSpring.editorial(),
+        label = "ReasoningChipBg"
+    )
+    val tint by animateColorAsState(
+        targetValue = if (detailed) Accent else MutedInk,
+        animationSpec = AsterSpring.editorial(),
+        label = "ReasoningChipTint"
+    )
+    Surface(
+        onClick = onClick,
+        color = bg,
+        shape = CircleShape,
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (detailed) Accent.copy(alpha = 0.35f) else Hairline.copy(alpha = 0.6f)
+        ),
+        modifier = modifier
+            .height(34.dp)
+            .appleSpringPressable(pressedScale = 0.92f)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Icon(Icons.Rounded.Psychology, null, Modifier.size(16.dp), tint = tint)
+            Text(
+                label,
+                color = tint,
+                fontSize = 11.5.sp,
+                fontWeight = if (detailed) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1
+            )
         }
     }
 }
 
-/**
- * 上下文详情：本次请求预计占用、预算构成、模型实际用量，并可直接改上下文长度。
- * [onCustomize] 打开精确数值对话框，[onReset] 恢复默认（不设上限时的服务端行为）。
- *
- * 点选窗口档位由调用方负责立即生效并收起面板，这里只负责把选中态如实反映出来。
- */
 @Composable
 fun ComposerContextSheet(
     model: String,
@@ -113,16 +150,26 @@ fun ComposerContextSheet(
     onDismiss: () -> Unit
 ) {
     val budget = limits?.inputTokens ?: 0
-    val progress = if (budget > 0) (totalTokens.toFloat() / budget).coerceIn(0f, 1f) else 0f
+    val rawProgress = if (budget > 0) (totalTokens.toFloat() / budget).coerceIn(0f, 1f) else 0f
+    val progress by animateFloatAsState(
+        targetValue = rawProgress,
+        animationSpec = AsterSpring.spatial(),
+        label = "SheetContextBar"
+    )
     val overflow = budget > 0 && totalTokens > budget
     AsterOptionsSheet(
-        title = "上下文",
+        title = "上下文预算",
         subtitle = model.ifBlank { "未选择模型" },
         onDismiss = onDismiss,
         headerIcon = Icons.Rounded.Tune
     ) {
-        Surface(color = Surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Surface(
+            color = Surface,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, Hairline),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         if (budget > 0) "$totalTokens / $budget" else "$totalTokens",
@@ -137,13 +184,16 @@ fun ComposerContextSheet(
                 }
                 LinearProgressIndicator(
                     progress = { progress },
-                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(4.dp)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(4.dp)),
                     color = if (overflow) Danger else Accent,
-                    trackColor = Hairline.copy(alpha = .5f)
+                    trackColor = SurfaceInset
                 )
                 Text(
                     if (limits == null) "未设上下文长度" else
-                        "窗口 ${ContextWindowPresets.label(limits.windowTokens)} · 输出上限 ${limits.outputTokens} · 余量 ${limits.safetyTokens}",
+                        "窗口 ${ContextWindowPresets.label(limits.windowTokens)} · 输出上限 ${limits.outputTokens}",
                     color = MutedInk,
                     style = MaterialTheme.typography.labelMedium
                 )
@@ -178,21 +228,34 @@ fun ComposerContextSheet(
             onSelect = onSelectWindow
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = onCustomize, enabled = model.isNotBlank(), modifier = Modifier.weight(1f)) {
+            OutlinedButton(
+                onClick = onCustomize,
+                enabled = model.isNotBlank(),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .appleSpringPressable(pressedScale = 0.96f, enabled = model.isNotBlank())
+            ) {
                 Text("自定义数值")
             }
-            OutlinedButton(onClick = onReset, enabled = limits != null, modifier = Modifier.weight(1f)) {
+            OutlinedButton(
+                onClick = onReset,
+                enabled = limits != null,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .appleSpringPressable(pressedScale = 0.96f, enabled = limits != null)
+            ) {
                 Text("恢复默认")
             }
         }
     }
 }
 
-/** 面板里直接铺开四档窗口，不用再点一层展开。 */
 @Composable
 private fun ModelContextPresetsInline(limits: ModelContextLimits?, onSelect: (Int) -> Unit) {
     val haptics = LocalHapticFeedback.current
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         ContextWindowPresets.values.forEach { (window, label) ->
             val selected = limits?.windowTokens == window
             Surface(
@@ -200,22 +263,31 @@ private fun ModelContextPresetsInline(limits: ModelContextLimits?, onSelect: (In
                     haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onSelect(window)
                 },
-                color = if (selected) AccentSoft else Canvas,
+                color = if (selected) AccentSoft else Surface,
                 contentColor = if (selected) Accent else Ink,
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(16.dp),
                 border = BorderStroke(
                     1.dp,
-                    if (selected) Accent.copy(alpha = .35f) else Hairline.copy(alpha = .6f)
+                    if (selected) Accent.copy(alpha = 0.45f) else Hairline
                 ),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .appleSpringPressable(pressedScale = 0.97f)
             ) {
                 Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                    Text(label, style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                     if (selected) {
-                        Text("当前", color = Accent, style = MaterialTheme.typography.labelMedium)
+                        Surface(color = Accent, shape = CircleShape) {
+                            Text(
+                                "当前",
+                                color = androidx.compose.ui.graphics.Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -230,7 +302,8 @@ private fun ContextBreakLine(label: String, tokens: Int) {
         Text(
             "$tokens",
             color = if (tokens > 0) Ink else MutedInk,
-            style = MaterialTheme.typography.bodyMedium
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (tokens > 0) FontWeight.SemiBold else FontWeight.Normal
         )
     }
 }
