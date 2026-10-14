@@ -25,6 +25,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -165,12 +166,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     var isChatLoading by mutableStateOf(false)
         private set
+    var inputSuggestion by mutableStateOf<String?>(null)
+        private set
     var pendingQuestion by mutableStateOf<AskUserPrompt?>(null)
         private set
     var questionDraft by mutableStateOf("")
         private set
     private var questionAwaiting: CompletableDeferred<String>? = null
     private var chatJob: Job? = null
+    private var suggestionJob: Job? = null
     private var chatStopRequested = false
     private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
     private val imageTaskJobs = linkedMapOf<String, Job>()
@@ -700,6 +704,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun updateChatInput(value: String) {
         chatInput = value
+        // 建议只服务于空输入框：一旦用户动手改输入内容，预测即作废（含在途请求）。
+        if (inputSuggestion != null) clearInputSuggestion()
         val key = currentChatKey()
         if (value.isBlank()) chatDrafts.remove(key) else chatDrafts[key] = value
         scheduleSessionSave()
@@ -776,6 +782,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val fromComposer = textOverride == null
         val text = (textOverride ?: chatInput).trim()
         if ((text.isEmpty() && (textOverride != null || chatAttachments.isEmpty())) || isChatLoading || isChatAttachmentLoading) return
+        // 发送即作废上一条建议：在途请求直接取消，建议条也不能撑到新回复生成期间。
+        suggestionJob?.cancel()
+        inputSuggestion = null
         val profile = chatProfile
         val model = profile.chatModel
         val attachments = if (fromComposer) chatAttachments.toList() else emptyList()
@@ -1011,9 +1020,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 chatStopRequested = false
                 chatJob = null
                 persistCurrentConversation(clearRecoveryMessageId = assistantId)
-                if (summarizeTitle) scheduleTitleSummary()
+                // 只在流式请求自然跑完时预测下一句；出错、停止、取消的收尾不触发。
+                if (summarizeTitle) {
+                    scheduleInputSuggestion()
+                    scheduleTitleSummary()
+                }
             }
         }
+    }
+
+    /** 回复结束后后台预测用户的下一句输入；切换会话/再次发送时旧的预测直接作废。 */
+    private fun scheduleInputSuggestion() {
+        suggestionJob?.cancel()
+        val job = viewModelScope.launch {
+            val history = InputSuggester.buildSuggestHistory(messages.toList())
+            if (history.isEmpty()) {
+                inputSuggestion = null
+                return@launch
+            }
+            val result = runCatching { repository.suggestNextMessage(chatProfile, history) }.getOrNull()
+            // runCatching 会吞掉取消异常：被换掉后回来的旧任务不能再覆盖新建议。
+            if (!isActive) return@launch
+            inputSuggestion = InputSuggester.cleanSuggestion(result)
+        }
+        suggestionJob = job
+    }
+
+    /** 点建议条：只在输入框为空时填入，填过即消失（建议预测的是空输入框场景）。 */
+    fun acceptSuggestion() {
+        val suggestion = inputSuggestion ?: return
+        if (!chatInput.isBlank()) return
+        updateChatInput(suggestion)
+        inputSuggestion = null
+    }
+
+    private fun clearInputSuggestion() {
+        suggestionJob?.cancel()
+        inputSuggestion = null
     }
 
     fun exportGeneratedFile(file: ChatFileAttachment, target: Uri) {
@@ -1100,6 +1143,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val content = messages[index].content
         val images = messages[index].attachments
         stashCurrentDraft()
+        clearInputSuggestion()
         messages.removeRange(index, messages.size)
         chatInput = content
         // 原消息带的图一起载回输入框：只搬正文的话，重发后模型看不到图，
@@ -1148,6 +1192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val alreadyOnNewConversation = activeConversationId == null
         stashCurrentDraft()
+        clearInputSuggestion()
         activeConversationId = null
         lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
         messages.clear()
@@ -1182,6 +1227,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         conversations.firstOrNull { it.id == id }?.let { conversation ->
             stashCurrentDraft()
+            clearInputSuggestion()
             activeConversationId = id
             lastActiveChatKey = id
             messages.clear()
@@ -1212,6 +1258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
             messages.clear()
             chatInput = ""
+            clearInputSuggestion()
         }
         scheduleConversationSave(conversations.toList())
         scheduleSessionSave(immediate = true)

@@ -416,6 +416,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     skillScope = "adchat-${vm.activeConversationId ?: "new"}",
                     focusRequester = composerFocusRequester,
                     value = vm.chatInput,
+                    suggestion = vm.inputSuggestion,
+                    onSuggestionClick = { vm.acceptSuggestion() },
                     attachments = vm.chatAttachments,
                     profileName = vm.chatProfile.name,
                     model = vm.chatProfile.chatModel,
@@ -2058,6 +2060,8 @@ private fun ChatComposer(
     skillScope: String,
     focusRequester: FocusRequester,
     value: String,
+    suggestion: String?,
+    onSuggestionClick: () -> Unit,
     attachments: List<ChatImageAttachment>,
     profileName: String,
     model: String,
@@ -2094,6 +2098,7 @@ private fun ChatComposer(
         value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentLoading,
         onValueChange = onValueChange, onOptionsClick = { showToolsSheet = true }, onRemoveImage = onRemoveImage,
         onSend = onSend, onStop = onStop, onFocusChange = onFocusChange,
+        suggestion = suggestion, onSuggestionClick = onSuggestionClick,
         focusRequester = focusRequester, modifier = modifier,
         contextAction = {
             ComposerContextRing(
