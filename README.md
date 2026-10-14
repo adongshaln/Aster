@@ -10,17 +10,18 @@
 
 Aster（原 ADChat）使用 Kotlin 与 Jetpack Compose 构建。对话与绘图可以分别路由到不同的 API 服务，模型、推理、工具调用、故事资料与历史任务都在统一界面中管理。
 
-> 当前稳定版本：**3.2.0** · `versionCode 74` · 完整历史见 [CHANGELOG.md](CHANGELOG.md)
+> 当前稳定版本：**3.3.0** · `versionCode 75` · 完整历史见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 功能版图
 
 | 功能 | 说明 |
 | --- | --- |
 | [对话](#对话) | OpenAI Responses / Chat Completions 双协议，SSE 流式输出，思考过程独立面板，思考强度与上下文预算 |
+| [输入建议](#输入建议)（3.3 新增） | 回复完成后预测你的下一句输入，点按填入；预测模型独立配置 |
 | [故事模式](docs/STORY_MODE_ACCEPTANCE.md) | 长篇叙事工作区，自动整理人物、关系与剧情事实，完整支持 SillyTavern 预设 |
 | [联网搜索](#联网搜索) | Anthropic Messages 网页搜索后端，可委托独立的 Web / X 搜索模型 |
 | [Skill 包](docs/SKILLS.md) | 从 GitHub 或 ZIP 安装，按工作区启用，内置失控循环保护 |
-| [文件与预览](docs/DOCUMENT_GENERATION.md) | 真实生成 PDF / DOCX / XLSX / PPTX 二进制，HTML 在受限离线 WebView 中预览 |
+| [文件与预览](docs/DOCUMENT_GENERATION.md) | 真实生成 PDF / DOCX / XLSX / PPTX / SVG，HTML 与 Mermaid 图在受限离线 WebView 中预览 |
 | [绘图](#绘图) | OpenAI Images / Gemini / NovelAI 协议，多任务并发生成，漫画翻译流水线 |
 | [媒体工作台](#媒体工作台) | 抖音 / B站链接解析，Range 分段下载与断点续传 |
 | **制卡工作台**（3.1 新增） | 面向角色卡与酒馆预设的制作流程 |
@@ -32,6 +33,13 @@ Aster（原 ADChat）使用 Kotlin 与 Jetpack Compose 构建。对话与绘图�
 - 推理模型的思考过程实时回传，在正文上方独立成面板，不与正文混排，也不再回传给服务端。
 - 输入框常驻上下文进度圈与思考强度按钮：前者实时显示输入预算占用，可切换 128K / 256K / 512K / 1M 或自定义数值；后者按模型家族匹配真实参数档位。
 - 支持最多 4 张图片的多模态对话；流式中断时保留已生成内容并提供安全续传。
+- 模型持续回传思考时不会被主动中断；回复结束后可预测你的下一句输入（可在设置中配置预测模型）。
+
+### 输入建议
+
+- 模型回复完成后，后台用独立的快速模型预测你下一句最可能输入的话，以建议条显示在输入框上方。
+- 点按建议即填入输入框，可修改后再发送；开始打字或发送消息建议自动作废。
+- 预测模型在设置中独立选择（API + 模型），留空即关闭；思考强度自动使用所选模型的最低档。
 
 ### 联网搜索
 
@@ -56,6 +64,7 @@ Aster（原 ADChat）使用 Kotlin 与 Jetpack Compose 构建。对话与绘图�
 - 3.0 — 阅读重排、Anthropic 联网搜索后端
 - 3.1 — 制卡工作台与手势交互优化
 - 3.2 — 链接灵动岛
+- 3.3 — 输入建议、SVG / Mermaid 渲染、灵动岛光圈重设计
 
 ## 技术栈
 
