@@ -65,7 +65,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     companion object {
         // 默认挖孔校准参数（红米 Turbo 5 Max: density=3.25，挖孔中心距屏幕顶约 25.5dp）
-        private const val DEFAULT_CUTOUT_CENTER_Y_DP = 25.5f
+        private const val DEFAULT_CUTOUT_CENTER_Y_DP = 23.4f
         private const val WINDOW_SIZE_DP = IslandGlowView.WINDOW_SIZE_DP
 
         // 展开态灵动胶囊卡尺寸与超时
