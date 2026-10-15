@@ -128,7 +128,7 @@ private fun configureClawdWebView(view: ClawdHostWebView) {
     view.addJavascriptInterface(view, "AsterClawd")
     view.webChromeClient = object : WebChromeClient() {
         override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
-            Log.d("ClawdHost", "${msg.line()}: ${msg.message()}")
+            Log.d("ClawdHost", "${msg.sourceId()}:${msg.lineNumber()}: ${msg.message()}")
             return true
         }
     }
