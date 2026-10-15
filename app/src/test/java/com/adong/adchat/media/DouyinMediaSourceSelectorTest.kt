@@ -7,20 +7,23 @@ import org.junit.Test
 
 class DouyinMediaSourceSelectorTest {
     @Test
-    fun playwmKeptAsIsAndBecomesCompatibilityFallback() {
-        // aweme.snssdk.com 重写已移除：该老接口对客户端请求失效（假 ID 返回 200
-        // text/plain 空内容），重写只会把 WebView 抓到的有效 CDN URL 换成死域名。
-        // playwm URL 原样作为主源，同时保留为兼容备选。
+    fun playwmRewrittenToWatermarkFreePrimaryWithFallback() {
+        // playwm → play 改写经实测（2026-10-15）已恢复可用：play 端点对浏览器
+        // UA 正常 302 到 douyinvod 直链，产物无水印（体积小约 37%）。
+        // playwm 原样保留为兼容备选，play 再失效时 probe 回退兜底。
         val source = DouyinMediaSourceSelector.preferWatermarkFree(
-            "https://m.douyin.com/aweme/v1/playwm/?video_id=abc123&ratio=720p&line=0"
+            "https://aweme.snssdk.com/aweme/v1/playwm/?video_id=abc123&ratio=720p&line=0"
         )
 
-        assertFalse(source.watermarkFreePreferred)
+        assertTrue(source.watermarkFreePreferred)
         assertEquals(
-            "https://m.douyin.com/aweme/v1/playwm/?video_id=abc123&ratio=720p&line=0",
+            "https://aweme.snssdk.com/aweme/v1/play/?video_id=abc123&ratio=720p&line=0",
             source.primaryUrl
         )
-        assertTrue(source.compatibilityUrl.contains("/playwm/"))
+        assertEquals(
+            "https://aweme.snssdk.com/aweme/v1/playwm/?video_id=abc123&ratio=720p&line=0",
+            source.compatibilityUrl
+        )
     }
 
     @Test
@@ -29,6 +32,16 @@ class DouyinMediaSourceSelectorTest {
         val source = DouyinMediaSourceSelector.preferWatermarkFree(direct)
 
         assertEquals(direct, source.primaryUrl)
+        assertFalse(source.watermarkFreePreferred)
+        assertEquals("", source.compatibilityUrl)
+    }
+
+    @Test
+    fun playUrlAlreadyWatermarkFreeNeedsNoRewrite() {
+        val play = "https://aweme.snssdk.com/aweme/v1/play/?video_id=abc123&ratio=720p"
+        val source = DouyinMediaSourceSelector.preferWatermarkFree(play)
+
+        assertEquals(play, source.primaryUrl)
         assertFalse(source.watermarkFreePreferred)
         assertEquals("", source.compatibilityUrl)
     }
