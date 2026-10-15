@@ -7,28 +7,20 @@ import org.junit.Test
 
 class DouyinMediaSourceSelectorTest {
     @Test
-    fun convertsMobilePlaywmToCleanAwemeEndpoint() {
+    fun playwmKeptAsIsAndBecomesCompatibilityFallback() {
+        // aweme.snssdk.com 重写已移除：该老接口对客户端请求失效（假 ID 返回 200
+        // text/plain 空内容），重写只会把 WebView 抓到的有效 CDN URL 换成死域名。
+        // playwm URL 原样作为主源，同时保留为兼容备选。
         val source = DouyinMediaSourceSelector.preferWatermarkFree(
             "https://m.douyin.com/aweme/v1/playwm/?video_id=abc123&ratio=720p&line=0"
         )
 
-        assertTrue(source.watermarkFreePreferred)
+        assertFalse(source.watermarkFreePreferred)
         assertEquals(
-            "https://aweme.snssdk.com/aweme/v1/play/?video_id=abc123&ratio=1080p&line=0",
+            "https://m.douyin.com/aweme/v1/playwm/?video_id=abc123&ratio=720p&line=0",
             source.primaryUrl
         )
         assertTrue(source.compatibilityUrl.contains("/playwm/"))
-    }
-
-    @Test
-    fun keepsIesdouyinHostWhenItSupportsCleanPlay() {
-        val source = DouyinMediaSourceSelector.preferWatermarkFree(
-            "https://www.iesdouyin.com/aweme/v1/playwm/?line=0&video_id=abc123"
-        )
-
-        assertEquals("www.iesdouyin.com", URI(source.primaryUrl).host)
-        assertTrue(source.primaryUrl.contains("/aweme/v1/play/"))
-        assertTrue(source.primaryUrl.contains("ratio=1080p"))
     }
 
     @Test
@@ -40,6 +32,4 @@ class DouyinMediaSourceSelectorTest {
         assertFalse(source.watermarkFreePreferred)
         assertEquals("", source.compatibilityUrl)
     }
-
-    private fun URI(value: String) = java.net.URI(value)
 }
