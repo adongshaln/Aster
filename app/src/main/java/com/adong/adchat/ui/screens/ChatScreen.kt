@@ -67,7 +67,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
 import com.adong.adchat.ui.clawd.ClawdLoader
-import com.adong.adchat.ui.clawd.ClawdPileLayer
+import com.adong.adchat.ui.clawd.ClawdPileOverlay
 import com.adong.adchat.ui.clawd.ClawdPilePositionStore
 import com.adong.adchat.ui.clawd.ClawdPileState
 import com.adong.adchat.ui.clawd.PileData
