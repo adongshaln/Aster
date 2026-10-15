@@ -48,7 +48,7 @@ class ClawdPileState(
         val walkBase: Int = 0,
     )
 
-    private class Inner {
+    private class Inner(val name: String) {
         var x = 0
         var on: MutableList<String> = mutableListOf()
         var eyes = PileEyes.SHUT
@@ -143,7 +143,7 @@ class ClawdPileState(
     private fun grounded(except: String? = null): List<Inner> =
         actors.values.filter { it.name != except && it.on.isEmpty() && it.mode != Mode.HELD }
 
-    private fun posX(o: Inner): Int = o.walk?.base?.plus(o.walk.off) ?: o.x
+    private fun posX(o: Inner): Int = o.walk?.let { it.base + it.off } ?: o.x
 
     private fun freeAt(x: Int, except: String): Boolean {
         val b = bounds()
@@ -196,7 +196,7 @@ class ClawdPileState(
         if (laid || w <= 0) return
         width = w
         centerX = w / 2
-        for (n in data.names) actors[n] = Inner()
+        for (n in data.names) actors[n] = Inner(n)
         val saved = store.load()
         atHome = saved == null
         val layout = saved ?: homeLayout()
@@ -607,7 +607,7 @@ class ClawdPileState(
     fun actorAt(px: Float): String? {
         val x = px.toInt()
         return actors.values.firstOrNull { k ->
-            val left = k.walk?.base?.plus(k.walk.off) ?: k.x
+            val left = k.walk?.let { it.base + it.off } ?: k.x
             x >= left && x < left + bodyW
         }?.name
     }
