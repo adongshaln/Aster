@@ -1,7 +1,5 @@
 package com.adong.adchat.media
 
-import java.net.URI
-
 internal data class DouyinPreferredMediaSource(
     val primaryUrl: String,
     val compatibilityUrl: String = "",
@@ -9,49 +7,19 @@ internal data class DouyinPreferredMediaSource(
 )
 
 internal object DouyinMediaSourceSelector {
+    /**
+     * 无水印源选择。aweme.snssdk.com / aweme/v1/play 老接口已对客户端请求失效
+     * （伪造 ID 返回 200 text/plain 空内容，真 ID 不再 302），重写只会把 WebView
+     * 抓到的有效 CDN URL 换成死域名。现在只做安全归一：原样返回，playwm URL
+     * 作为兼容备选（下载器 probe 失败时回退）。
+     */
     fun preferWatermarkFree(url: String): DouyinPreferredMediaSource {
         val normalized = url.trim()
-        if (!normalized.contains("/aweme/v1/playwm/", ignoreCase = true)) {
-            return DouyinPreferredMediaSource(primaryUrl = normalized)
-        }
-        val uri = runCatching { URI(normalized) }.getOrNull()
-            ?: return DouyinPreferredMediaSource(primaryUrl = normalized)
-        val originalHost = uri.host?.lowercase().orEmpty()
-        val cleanHost = when {
-            originalHost == "iesdouyin.com" || originalHost.endsWith(".iesdouyin.com") -> originalHost
-            else -> "aweme.snssdk.com"
-        }
-        val cleanPath = uri.path.replace("/playwm/", "/play/", ignoreCase = true)
-        var ratioFound = false
-        val cleanQuery = buildList {
-            uri.rawQuery.orEmpty().split('&').filter(String::isNotBlank).forEach { item ->
-                if (item.substringBefore('=').equals("ratio", ignoreCase = true)) {
-                    add("ratio=1080p")
-                    ratioFound = true
-                } else {
-                    add(item)
-                }
-            }
-            if (!ratioFound) add("ratio=1080p")
-        }.joinToString("&")
-        val cleanUri = runCatching {
-            URI(
-                "https",
-                uri.userInfo,
-                cleanHost,
-                -1,
-                cleanPath,
-                cleanQuery,
-                uri.fragment
-            ).toASCIIString()
-        }.getOrNull().orEmpty()
-        if (cleanUri.isBlank() || cleanUri == normalized) {
-            return DouyinPreferredMediaSource(primaryUrl = normalized)
-        }
+        val isPlaywm = normalized.contains("/aweme/v1/playwm/", ignoreCase = true)
         return DouyinPreferredMediaSource(
-            primaryUrl = cleanUri,
-            compatibilityUrl = normalized,
-            watermarkFreePreferred = true
+            primaryUrl = normalized,
+            compatibilityUrl = if (isPlaywm) normalized else "",
+            watermarkFreePreferred = false
         )
     }
 }

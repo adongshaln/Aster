@@ -396,7 +396,7 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private companion object {
-        const val MAX_AUTOMATIC_REFRESHES = 1
+        const val MAX_AUTOMATIC_REFRESHES = 2
         const val BILIBILI_RESOLVE_ATTEMPTS = 3
         const val BILIBILI_RETRY_DELAY_MS = 650L
     }

@@ -83,19 +83,28 @@ class MediaFileDownloader(context: Context) {
         }
 
         var activeMedia = media
-        val probe = try {
-            probe(activeMedia)
-        } catch (error: Exception) {
-            val canUseCompatibility = media.compatibilityMediaUrl.isNotBlank() &&
-                (error is MediaSourceUnavailableException || error is ExpiredMediaUrlException)
-            if (!canUseCompatibility) throw error
-            activeMedia = media.copy(
-                mediaUrl = media.compatibilityMediaUrl,
-                compatibilityMediaUrl = "",
-                prefersWatermarkFree = false
-            )
-            probe(activeMedia)
+        val probe = run probeRun@{
+            // 三级回退：原 URL → 兼容 URL → 无 Range 的宽容探测。
+            // 有些 CDN 只拒绝 Range 试探但放行完整 GET；最后一搏避免误判「地址失效」。
+            val candidates = listOfNotNull(
+                media,
+                media.compatibilityMediaUrl.takeIf(String::isNotBlank)
+            ).distinctBy { it.mediaUrl }
+            for (candidate in candidates) {
+                try {
+                    return@probeRun probe(candidate)
+                } catch (error: Exception) {
+                    val isLastCandidate = candidate === candidates.last()
+                    if (!isLastCandidate) continue
+                    val refreshable = error is MediaSourceUnavailableException || error is ExpiredMediaUrlException
+                    if (!refreshable) throw error
+                    return@probeRun probeLenient(candidate)
+                }
+            }
+            throw IllegalStateException("无可用的下载源")
         }
+        // 探测成功的 URL 决定后续下载源（回退后 activeMedia 跟着换）
+        activeMedia = probe.media
 
         if (probe.totalBytes > 0L && partialFile.length() > probe.totalBytes) {
             partialFile.delete()
@@ -151,8 +160,45 @@ class MediaFileDownloader(context: Context) {
                 rejectNonVideoResponse(response)
                 val total = parseContentRangeTotal(response)
                 return DownloadProbe(
+                    media = media,
                     totalBytes = total,
                     supportsRanges = response.code == 206 && total > 0L
+                )
+            }
+        } catch (error: IOException) {
+            translateCancellation(call, error)
+        } finally {
+            activeCalls -= call
+        }
+    }
+
+    /**
+     * 宽容探测：不带 Range 完整 GET。部分抖音 CDN 对 Range 试探返回 403/HTML，
+     * 但放行普通 GET；此时流式读完代价太高，只读前几 KB 判头——足够确认是视频。
+     */
+    private suspend fun probeLenient(media: ResolvedMedia): DownloadProbe {
+        val request = requestBuilder(media).build()
+        val call = client.newCall(request)
+        activeCalls += call
+        try {
+            call.execute().use { response ->
+                throwForStatus(response)
+                if (!response.isSuccessful) throw MediaSourceUnavailableException(response.code)
+                rejectNonVideoResponse(response)
+                val body = response.body ?: throw IOException("服务器没有返回视频内容")
+                val sample = ByteArray(16)
+                body.byteStream().use { input ->
+                    val read = input.read(sample)
+                    val isMp4 = read >= 12 &&
+                        sample.indices.any { i -> i + 3 < read &&
+                            sample[i] == 'f'.code.toByte() && sample[i + 1] == 't'.code.toByte() &&
+                            sample[i + 2] == 'y'.code.toByte() && sample[i + 3] == 'p'.code.toByte() }
+                    if (!isMp4) throw ExpiredMediaUrlException("解析到了网页资源，正在重新获取视频源")
+                }
+                return DownloadProbe(
+                    media = media,
+                    totalBytes = body.contentLength().coerceAtLeast(0L),
+                    supportsRanges = false
                 )
             }
         } catch (error: IOException) {
@@ -388,19 +434,21 @@ class MediaFileDownloader(context: Context) {
         onProgress(MediaDownloadProgress(downloadedBytes, totalBytes.takeIf { it > 0L } ?: downloadedBytes, smoothedSpeed, 1))
     }
 
-    private fun requestBuilder(media: ResolvedMedia): Request.Builder = Request.Builder()
-        .url(media.mediaUrl)
-        .header("User-Agent", media.userAgent)
-        .header("Referer", media.referer)
-        .header("Accept", "video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,*/*;q=0.4")
-        .header("Accept-Encoding", "identity")
-        .apply {
-            if (media.cookieHeader.isNotBlank()) header("Cookie", media.cookieHeader)
-            MediaDownloadPolicy.originHeader(media.platform).takeIf(String::isNotBlank)?.let { origin ->
-                header("Origin", origin)
-                header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
-            }
+    private fun requestBuilder(media: ResolvedMedia): Request.Builder {
+        val builder = Request.Builder()
+            .url(media.mediaUrl)
+            .header("User-Agent", media.userAgent.ifBlank { DEFAULT_VIDEO_USER_AGENT })
+            .header("Accept", "video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,*/*;q=0.4")
+            .header("Accept-Encoding", "identity")
+        if (media.referer.isNotBlank()) builder.header("Referer", media.referer)
+        if (media.cookieHeader.isNotBlank()) builder.header("Cookie", media.cookieHeader)
+        // B 站 CDN 校验 Origin；其余平台不发（抖音 Referer ACL 只看 Referer，多余 Origin 反而可能被拒）
+        if (media.platform == MediaPlatform.Bilibili) {
+            builder.header("Origin", MediaDownloadPolicy.originHeader(media.platform))
+            builder.header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
         }
+        return builder
+    }
 
     private fun buildSegments(
         partialFile: File,
@@ -526,6 +574,7 @@ class MediaFileDownloader(context: Context) {
     )
 
     private data class DownloadProbe(
+        val media: ResolvedMedia,
         val totalBytes: Long = 0L,
         val supportsRanges: Boolean = false
     )
@@ -553,6 +602,9 @@ class MediaFileDownloader(context: Context) {
         const val SEGMENT_RETRIES = 3
         const val MIN_MEDIA_HEADER_BYTES = 12L
         const val MEDIA_SCAN_BYTES = 4 * 1024
+        // WebView 缺省 UA 兜底：与解析时浏览器环境一致，抖音 CDN 校验客户端指纹
+        const val DEFAULT_VIDEO_USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     }
 }
 
