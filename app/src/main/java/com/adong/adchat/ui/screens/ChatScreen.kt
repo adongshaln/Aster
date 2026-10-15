@@ -51,6 +51,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -66,12 +68,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
-import com.adong.adchat.ui.clawd.ClawdLoader
-import com.adong.adchat.ui.clawd.ClawdPileBandHeight
-import com.adong.adchat.ui.clawd.ClawdPileOverlay
-import com.adong.adchat.ui.clawd.ClawdPilePositionStore
-import com.adong.adchat.ui.clawd.ClawdPileState
-import com.adong.adchat.ui.clawd.PileData
+import com.adong.adchat.ui.clawd.ClawdPileWebView
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -193,6 +190,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val imageFrames = remember { mutableMapOf<String, Pair<Int, Int>>() }
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeightPx by remember { mutableIntStateOf(0) }
+    var formAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
     val fileExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val file = pendingFileExport
@@ -409,9 +407,6 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .navigationBarsPadding()
             ) {
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
-                    // 三只小 Clawd 活动带：真实占位、底边=地面=composer 顶边（原版 .clawd-pile
-                    // 挂在表单上 bottom:100%）。消息从带后面滚过，空白处触摸穿透到列表
-                    ClawdPileLayer(Modifier.fillMaxWidth().height(ClawdPileBandHeight))
                     vm.pendingQuestion?.let { prompt ->
                         AskUserCard(
                             prompt = prompt,
@@ -457,10 +452,15 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
                     onFocusChange = { composerFocused = it },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { formAnchor = it.boundsInWindow() }
                 )
                 }
             }
+            // 三只小 Clawd：全屏透明 WebView 盖在聊天内容之上，跑未经修改的原版 clawd-pile.js。
+            // 原版里它们也允许浮到整个页面上（position:absolute 覆盖层、pointer-events:none）
+            ClawdPileLayer(Modifier.matchParentSize(), formAnchor)
         }
     }
     pendingEditResend?.let { candidate ->
@@ -503,21 +503,14 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
 }
 
-/** 输入框上的三只小 Clawd：数据加载一次，状态机活在与 ChatScreen 同级的 scope 里 */
+/** 输入框上的三只小 Clawd：全屏透明 WebView 跑未经修改的原版 clawd-pile.js。
+ *  formAnchor = 输入框在 Window 内的像素矩形（由调用方 onGloballyPositioned 量），
+ *  JS 侧 #send_form 镜像该矩形，原版 bottom:100% 几何使爪子精确落在输入框上端；
+ *  触摸由 JS 推送的爪子矩形过滤——命中爪子归 WebView，空白穿透到 Compose。 */
 @Composable
-private fun ClawdPileLayer(modifier: Modifier = Modifier) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+private fun ClawdPileLayer(modifier: Modifier = Modifier, formAnchor: androidx.compose.ui.geometry.Rect?) {
     val dark = com.adong.adchat.ui.theme.LocalThemeDark.current
-    val data = remember { runCatching { loadClawdData(context) }.getOrNull() } ?: return
-    val store = remember { ClawdPilePositionStore(context) }
-    val scope = rememberCoroutineScope()
-    val pile = remember(data, store) { ClawdPileState(data, store, scope) }
-    ClawdPileOverlay(pile = pile, modifier = modifier, night = dark)
-}
-
-private fun loadClawdData(context: android.content.Context): PileData {
-    val json = context.assets.open("clawd/clawd_data.json").bufferedReader().use { it.readText() }
-    return ClawdLoader.loadPileData(json)
+    ClawdPileWebView(formAnchor = formAnchor, night = dark, modifier = modifier)
 }
 
 @Composable

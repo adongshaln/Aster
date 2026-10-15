@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  /* 宿主只提供定位锚：#send_form 是真实 Compose 输入框的镜像（位置由宿主同步）。
+     clawd-pile.js 内部会给它 append .clawd-pile（position:absolute; bottom:100%）。 */
+  #send_form { position: absolute; }
+</style>
+</head>
+<body>
+<div id="send_form"></div>
+<script>
+/* ===== 原版 clawd-pile.js（一字不改，内联自 claudenoshujin/claude-web） ===== */
+{{CLAWD_PILE_JS}}
+</script>
+<script>
+'use strict';
+const win = window, doc = document;
+const bridge = {
+  pile: null,
+  rects: [],          // 爪子屏幕矩形 [{l,t,r,b}]，供宿主命中测试
+  formRect: null,
+  reportTimer: 0,
+};
+
+function layoutForm(x, y, w, h) {
+  // 坐标是宿主物理 px；#send_form 用 CSS px 定位，除以 dpr
+  const dpr = win.devicePixelRatio || 1;
+  const f = doc.getElementById('send_form');
+  f.style.left = (x / dpr) + 'px';
+  f.style.top = (y / dpr) + 'px';
+  f.style.width = (w / dpr) + 'px';
+  f.style.height = (h / dpr) + 'px';
+  bridge.formRect = { x, y, w, h };
+  bridge.pile?.restack?.();
+  reportRects();
+}
+
+function reportRects() {
+  // 用爪子元素的 getBoundingClientRect（WebView 全屏、视口=窗口坐标）换算成宿主物理像素。
+  // MotionEvent.x/y 是物理 px；CSS rect 乘 devicePixelRatio 对齐。
+  const dpr = win.devicePixelRatio || 1;
+  const out = [];
+  if (bridge.pile) {
+    doc.querySelectorAll('.clawd-pile-c').forEach(el => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) out.push([r.left * dpr, r.top * dpr, r.right * dpr, r.bottom * dpr]);
+    });
+  }
+  bridge.rects = out;
+  if (win.AsterClawd) { try { win.AsterClawd.pushRects(JSON.stringify(out)); } catch (e) {} }
+}
+
+/* 爪子会走会跳：布局变化之外也要持续汇报（1 帧 16ms 太频，60ms≈每 4 帧足够命中测试） */
+function startReporting() {
+  if (bridge.reportTimer) return;
+  bridge.reportTimer = win.setInterval(reportRects, 60);
+  win.addEventListener('resize', reportRects);
+}
+
+function hitTest(x, y) {
+  for (const [l, t, r, b] of bridge.rects) {
+    if (x >= l && x < r && y >= t && y < b) return true;
+  }
+  return false;
+}
+
+/* 宿主桥：Android 端 addJavascriptInterface 的对象名 */
+function init() {
+  try {
+    bridge.pile = createClawdPile({ doc, win, big: null });
+    bridge.pile.ensure();
+    startReporting();
+  } catch (e) {
+    // 吉祥物失败不影响宿主
+  }
+}
+
+/* Android 侧 evaluateJavascript 调这些全局函数 */
+win.__clawdLayout = layoutForm;
+win.__clawdHit = hitTest;
+win.__clawdRects = () => JSON.stringify(bridge.rects);
+win.__clawdNight = on => {
+  doc.documentElement.setAttribute('data-claude-integrated-theme', on ? 'night' : '');
+};
+
+if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', init);
+else init();
+</script>
+</body>
+</html>
