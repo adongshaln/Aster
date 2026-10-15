@@ -75,8 +75,9 @@ fun ClawdPileOverlay(
     }
     val actors = remember(version) { pile.snapshot() }
 
-    // 拖拽中的手指位置（name → 身体左上角在 overlay 里的 dp 坐标）
+    // 拖拽中的手指位置（name → 身体左上角在 overlay 里的 px 坐标）
     var heldPos by remember { mutableStateOf<Pair<String, Offset>?>(null) }
+    var overlayHeight by remember { mutableIntStateOf(0) }
 
     // 被拎着的两帧蹬腿
     var dangleFrame by remember { mutableIntStateOf(0) }
@@ -93,6 +94,7 @@ fun ClawdPileOverlay(
         modifier
             .fillMaxSize()
             .onSizeChanged { size ->
+                overlayHeight = size.height
                 val wDp = with(density) { size.width.toDp().roundToPx() }
                 if (pile.width == 0) pile.ensureLaid(wDp) else pile.relayout(wDp)
             }
@@ -108,33 +110,35 @@ fun ClawdPileOverlay(
                             groundY - pile.actorHeightPx - lift <= down.position.y &&
                             down.position.y < groundY - lift
                     } ?: return@awaitEachGesture
+                    val hitName = hit.name
+                    val hitLeft0 = hit.x.toFloat()
 
                     var dragging = false
                     var grabOffset = Offset.Zero
-                    drag(down.position) { change ->
+                    drag(down.id) { change ->
                         if (!dragging && (change.position - down.position).getDistance() > 8f) {
                             dragging = true
-                            val lift = pile.liftOf(hit)
+                            val lift = pile.liftOf(hitName)
                             // 抓取偏移：手指相对身体左上角（dangle 状态身体挂在手指下）
                             grabOffset = Offset(
-                                down.position.x - pile.snapshot().first { it.name == hit }.x,
+                                down.position.x - hitLeft0,
                                 down.position.y - (groundY - pile.actorHeightPx - lift),
                             )
-                            pile.pickUp(hit)
+                            pile.pickUp(hitName)
                         }
                         if (dragging) {
-                            heldPos = hit to (change.position - grabOffset)
+                            heldPos = hitName to (change.position - grabOffset)
                             change.consume()
                         }
                     }
                     if (!dragging) {
-                        pile.poke(hit)
+                        pile.poke(hitName)
                     } else {
                         val bodyLeft = (heldPos?.second?.x ?: down.position.x)
                         val cx = bodyLeft + pile.actorWidthPx / 2f
                         val releaseY = (heldPos?.second?.y ?: 0f)
                         val target = pile.snapshot()
-                            .filter { it.name != hit && it.mode != ClawdPileState.Mode.HELD }
+                            .filter { it.name != hitName && it.mode != ClawdPileState.Mode.HELD }
                             .filter { a ->
                                 abs(a.x + pile.actorWidthPx / 2 - cx) < pile.actorWidthPx * 0.6f &&
                                     releaseY < groundY - pile.actorHeightPx / 2f - pile.liftOf(a.name)
@@ -142,12 +146,12 @@ fun ClawdPileOverlay(
                             .minByOrNull { a -> abs(a.x + pile.actorWidthPx / 2 - cx) }
                             ?.name
                         heldPos = null
-                        pile.drop(hit, (cx - pile.actorWidthPx / 2f).roundToInt(), target)
+                        pile.drop(hitName, (cx - pile.actorWidthPx / 2f).roundToInt(), target)
                     }
                 }
             }
     ) {
-        val groundY = size.height.toFloat()
+        val groundY = overlayHeight.toFloat()
         val breath = rememberInfiniteTransition(label = "clawdBreath")
         for (actor in actors) {
             val held = heldPos?.first == actor.name && heldPos != null
