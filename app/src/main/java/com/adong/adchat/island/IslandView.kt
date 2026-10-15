@@ -28,6 +28,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.adong.adchat.media.MediaPlatform
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.max
@@ -728,7 +729,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             val vibrator = getVibrator() ?: return
             if (!vibrator.hasVibrator()) return
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                val attrs = VibrationAttributes.forUsage(VibrationAttributes.USAGE_TOUCH)
+                val attrs = VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH)
                 vibrator.vibrate(effect, attrs)
             } else {
                 @Suppress("DEPRECATION")
