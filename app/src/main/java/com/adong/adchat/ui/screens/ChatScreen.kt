@@ -67,6 +67,7 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
 import com.adong.adchat.ui.clawd.ClawdLoader
+import com.adong.adchat.ui.clawd.ClawdPileBandHeight
 import com.adong.adchat.ui.clawd.ClawdPileOverlay
 import com.adong.adchat.ui.clawd.ClawdPilePositionStore
 import com.adong.adchat.ui.clawd.ClawdPileState
@@ -407,8 +408,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .onSizeChanged { composerHeightPx = it.height }
                     .navigationBarsPadding()
             ) {
-                ClawdPileLayer()
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    // 三只小 Clawd 活动带：真实占位、底边=地面=composer 顶边（原版 .clawd-pile
+                    // 挂在表单上 bottom:100%）。消息从带后面滚过，空白处触摸穿透到列表
+                    ClawdPileLayer(Modifier.fillMaxWidth().height(ClawdPileBandHeight))
                     vm.pendingQuestion?.let { prompt ->
                         AskUserCard(
                             prompt = prompt,

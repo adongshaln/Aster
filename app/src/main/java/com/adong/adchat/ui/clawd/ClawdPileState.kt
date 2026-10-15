@@ -69,6 +69,8 @@ class ClawdPileState(
         private set
     var width = 0
         private set
+    /** 原版 data-unlaid：量到宽度、摆好之前先藏着（build() 571 行） */
+    val isLaid: Boolean get() = laid
     private var laid = false
     private var atHome = false
     private var lastW = 0

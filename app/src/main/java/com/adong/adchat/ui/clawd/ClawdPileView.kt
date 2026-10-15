@@ -12,10 +12,14 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -24,28 +28,43 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
+ * 活动带高度：身体 36dp + 叠放 14dp + 帽尖/闪光余量。真实占位（不遮列表滚动：
+ * 空白处没有 pointerInput，触摸直接落到后面的消息列表上）。
+ */
+val ClawdPileBandHeight = 56.dp
+
+/**
  * 三只小 Clawd 的渲染层。对照原版 clawd-pile.js：
  * - 形态位图 = sheet()/cells()（原版 48–72 行），Kotlin 由 ClawdPixels.pileCells 出像素画进 22x18 ImageBitmap
- * - 睡姿果冻呼吸 = CSS clawd-pile-breathe（3.1s，三只相位错开 -1.2s / -0.6s）
- * - 被拎着蹬腿 = dangleA/dangleB 两帧 720ms 交替（原版 Web Animations steps(2)）
- * - 影子 = 26x3 椭圆（原版 13px * 2px/格），叠在别人头上时隐藏
+ * - 触摸 = 原版容器 pointer-events:none、爪子本体 auto（451/453 行）：每只一个真实小 Box（画布 44x36dp
+ *   全区域可点），空白处穿透到消息列表
+ * - 睡姿果冻呼吸 = CSS transform-origin:8*PX 100%（455 行）：绕"脚底、身体中心"缩放；
+ *   三只独立时长+负相位（473–476 行：3.1s / shades 3.5s -1.2s / wizard 2.8s -0.6s）
+ * - 被拎着蹬腿 = dangleA/dangleB 两帧 720ms 交替（原版 145 行 steps(2,jump-none)，360ms 换帧）
+ * - 影子 = 13*PX x 3 椭圆、贴地线上 2dp（原版 471 行 top:-2px），叠在别人头上时隐藏
+ * - 拖拽 = 原版 bindPointer（309–330 行）：阈值 4 CSS px、松手 drop(左缘, 手指高度)；
+ *   叠头判定要求对方头顶空着（390 行 !carriers(o).length）
  *
- * 挂载：放进输入框容器 Box，align(BottomCenter)。overlay 底边 = "地面"。
- * 原版 1 CSS px = 这边 1 dp；渲染时 1 美术格 = data.px dp。
+ * 几何：overlay 是一条真实高度的活动带，**底边 = 地面**（调用方把它放在表单区上沿）。
+ * 坐标约定：状态机的 x/lift 全是 CSS px（Android 上 1 CSS px = 1 dp）；带宽以 dp 报给
+ * 状态机，绘制/定位前 dp x density 转 px。1 美术格 = data.px dp。x = 44dp 画布左缘（原版 el.left）。
+ * 拖拽中手指可超出带的范围：事件在按下时已捕获给爪子的 Box，绘制不裁剪，身体可画到带外。
  */
 @Composable
 fun ClawdPileOverlay(
@@ -75,9 +94,11 @@ fun ClawdPileOverlay(
     }
     val actors = remember(version) { pile.snapshot() }
 
-    // 拖拽中的手指位置（name → 身体左上角在 overlay 里的 px 坐标）
-    var heldPos by remember { mutableStateOf<Pair<String, Offset>?>(null) }
-    var overlayHeight by remember { mutableIntStateOf(0) }
+    /** 拎起会话：origin = 拎起瞬间画布左上角（触摸 Box 冻结在此不动） */
+    var dragInfo by remember { mutableStateOf<DragInfo?>(null) }
+    /** 拎着时画布左上角（dp，跟手）；手指位置 = heldPos + grab */
+    var heldPos by remember { mutableStateOf<Offset?>(null) }
+    var bandHeightDp by remember { mutableFloatStateOf(0f) }
 
     // 被拎着的两帧蹬腿
     var dangleFrame by remember { mutableIntStateOf(0) }
@@ -88,100 +109,50 @@ fun ClawdPileOverlay(
         }
     }
 
-    val density = LocalDensity.current
+    val density = LocalDensity.current.density
+    val sheetWDp = data.w * data.px
+    val sheetHDp = data.h * data.px
 
     Box(
         modifier
-            .fillMaxSize()
             .onSizeChanged { size ->
-                overlayHeight = size.height
-                val wDp = with(density) { size.width.toDp().roundToPx() }
-                if (pile.width == 0) pile.ensureLaid(wDp) else pile.relayout(wDp)
-            }
-            .pointerInput(pile) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    val groundY = size.height.toFloat()
-                    val ordered = pile.snapshot().sortedByDescending { pile.liftOf(it.name) }
-                    val hit = ordered.firstOrNull { actor ->
-                        val lift = pile.liftOf(actor.name)
-                        val left = actor.x.toFloat()
-                        left <= down.position.x && down.position.x < left + pile.actorWidthPx &&
-                            groundY - pile.actorHeightPx - lift <= down.position.y &&
-                            down.position.y < groundY - lift
-                    } ?: return@awaitEachGesture
-                    val hitName = hit.name
-                    val hitLeft0 = hit.x.toFloat()
-
-                    var dragging = false
-                    var grabOffset = Offset.Zero
-                    drag(down.id) { change ->
-                        if (!dragging && (change.position - down.position).getDistance() > 8f) {
-                            dragging = true
-                            val lift = pile.liftOf(hitName)
-                            // 抓取偏移：手指相对身体左上角（dangle 状态身体挂在手指下）
-                            grabOffset = Offset(
-                                down.position.x - hitLeft0,
-                                down.position.y - (groundY - pile.actorHeightPx - lift),
-                            )
-                            pile.pickUp(hitName)
-                        }
-                        if (dragging) {
-                            heldPos = hitName to (change.position - grabOffset)
-                            change.consume()
-                        }
-                    }
-                    if (!dragging) {
-                        pile.poke(hitName)
-                    } else {
-                        val bodyLeft = (heldPos?.second?.x ?: down.position.x)
-                        val cx = bodyLeft + pile.actorWidthPx / 2f
-                        val releaseY = (heldPos?.second?.y ?: 0f)
-                        val target = pile.snapshot()
-                            .filter { it.name != hitName && it.mode != ClawdPileState.Mode.HELD }
-                            .filter { a ->
-                                abs(a.x + pile.actorWidthPx / 2 - cx) < pile.actorWidthPx * 0.6f &&
-                                    releaseY < groundY - pile.actorHeightPx / 2f - pile.liftOf(a.name)
-                            }
-                            .minByOrNull { a -> abs(a.x + pile.actorWidthPx / 2 - cx) }
-                            ?.name
-                        heldPos = null
-                        pile.drop(hitName, (cx - pile.actorWidthPx / 2f).roundToInt(), target)
-                    }
-                }
+                bandHeightDp = size.height / density
+                val w = (size.width / density).roundToInt()
+                if (pile.width == 0) pile.ensureLaid(w) else pile.relayout(w)
             }
     ) {
-        val groundY = overlayHeight.toFloat()
+        val heldName = dragInfo?.name
+
+        // 原版 data-unlaid：量到宽度、摆好之前先藏着
+        if (pile.isLaid) {
+
+        // ===== 绘制层：后画的在上（lift 高的盖住低的；拎着的最后画） =====
         val breath = rememberInfiniteTransition(label = "clawdBreath")
-        for (actor in actors) {
-            val held = heldPos?.first == actor.name && heldPos != null
-            if (held) {
-                // 被拎着：跟手指，dangle 两帧交替，无影子
-                val pos = heldPos!!.second
-                val pose = if (dangleFrame == 0) PilePose.DANGLE_A else PilePose.DANGLE_B
-                val bmp = bitmapFor(actor.name, PileEyes.OPEN, pose, 0)
-                Canvas(Modifier.fillMaxSize()) {
-                    drawClawd(bmp, pos.x, pos.y, data, filter = null)
-                }
-                continue
-            }
-
-            val lift = pile.liftOf(actor.name)
-            val visualX = if (actor.mode == ClawdPileState.Mode.WALK) actor.walkBase + actor.walkOff else actor.x
-            val sleeping = actor.mode == ClawdPileState.Mode.SLEEP && actor.pose == PilePose.CROUCH
+        for (actor in actors.sortedBy { if (it.name == heldName) Int.MAX_VALUE else pile.liftOf(it.name) }) {
+         key(actor.name) {
+            val isHeld = actor.name == heldName && heldPos != null
             val walking = actor.mode == ClawdPileState.Mode.WALK
+            val poseNow = when {
+                isHeld -> if (dangleFrame == 0) PilePose.DANGLE_A else PilePose.DANGLE_B
+                walking -> PilePose.RAISED
+                else -> actor.pose
+            }
+            val bmp = bitmapFor(actor.name, actor.eyes, poseNow, actor.face)
+            val visualX = visualXOf(actor)
+            val sleeping = !isHeld && actor.mode == ClawdPileState.Mode.SLEEP && actor.pose == PilePose.CROUCH
 
-            // 果冻呼吸（只对睡姿有形变）：三只相位错开
-            val breathPhase = when (actor.name) {
-                "shades" -> -1200
-                "wizard" -> -600
-                else -> 0
+            // 果冻呼吸（只对睡姿有形变）：三只各自独立时长+负相位错开
+            // （原版 473–476 行：3.1s；shades 3.5s/-1.2s；wizard 2.8s/-0.6s）
+            val (breathDurMs, breathDelayMs) = when (actor.name) {
+                "shades" -> 3500 to 1200
+                "wizard" -> 2800 to 600
+                else -> 3100 to 0
             }
             val breatheX by breath.animateFloat(
-                initialValue = if (sleeping) 1f else 1f,
+                initialValue = 1f,
                 targetValue = if (sleeping) 1.07f else 1f,
                 animationSpec = infiniteRepeatable(
-                    tween(1550, delayMillis = 0, easing = LinearEasing),
+                    tween(breathDurMs, delayMillis = breathDelayMs, easing = LinearEasing),
                     RepeatMode.Reverse,
                 ),
                 label = "bx-${actor.name}",
@@ -190,61 +161,153 @@ fun ClawdPileOverlay(
                 initialValue = 1f,
                 targetValue = if (sleeping) 0.91f else 1f,
                 animationSpec = infiniteRepeatable(
-                    tween(1550, delayMillis = breathPhase.coerceAtLeast(0), easing = LinearEasing),
+                    tween(breathDurMs, delayMillis = breathDelayMs, easing = LinearEasing),
                     RepeatMode.Reverse,
                 ),
                 label = "by-${actor.name}",
             )
 
-            val poseNow = if (walking) PilePose.RAISED else actor.pose
-            val bmp = bitmapFor(actor.name, actor.eyes, poseNow, actor.face)
-            val top = groundY - pile.actorHeightPx - lift
+            Canvas(Modifier.fillMaxSize()) {
+                val groundY = size.height
+                if (isHeld) {
+                    val pos = heldPos ?: return@Canvas
+                    drawClawdAt(bmp, pos.x, pos.y, data)
+                } else {
+                    val lift = pile.liftOf(actor.name).toFloat()
 
-            // 影子
-            if (actor.on.isEmpty()) {
-                Canvas(Modifier.fillMaxSize()) {
-                    drawOval(
-                        color = if (night) Color(0x59000000) else Color(0x24141313),
-                        topLeft = Offset(visualX + 1.5f * data.px, groundY - 3f),
-                        size = Size(13f * data.px, 3f),
-                    )
+                    // 影子贴地面（叠在别人头上时不画）
+                    if (actor.on.isEmpty()) {
+                        drawOval(
+                            color = if (night) Color(0x59000000) else Color(0x24141413),
+                            topLeft = Offset((visualX + 1.5f * data.px) * density, groundY - 2f * density),
+                            size = Size(13f * data.px * density, 3f * density),
+                        )
+                    }
+
+                    // 原版 transform-origin: 8*PX 100% —— 绕"脚底、身体中心"做果冻缩放
+                    val pivotX = (visualX + 8f * data.px) * density
+                    val pivotY = groundY - lift * density
+                    translate(pivotX, pivotY) {
+                        scale(breatheX, breatheY, pivot = Offset.Zero) {
+                            drawImage(
+                                bmp,
+                                dstOffset = IntOffset(
+                                    (-8f * data.px * density).roundToInt(),
+                                    (-sheetHDp * density).roundToInt(),
+                                ),
+                                dstSize = IntSize(
+                                    (sheetWDp * density).roundToInt(),
+                                    (sheetHDp * density).roundToInt(),
+                                ),
+                                filterQuality = FilterQuality.None,
+                            )
+                        }
+                    }
                 }
             }
+         }
+        }
 
-            // 身体
-            Canvas(
-                Modifier
-                    .fillMaxSize()
-                    .graphicsLayer {
-                        translationX = visualX.toFloat()
-                        translationY = 0f
-                        scaleX = breatheX
-                        scaleY = breatheY
-                        transformOrigin = TransformOrigin(0.5f, 1f)
-                    }
-            ) {
-                // 果冻形变以"脚底中心"为原点：先平移到脚底中心，缩放后再画
-                val cxp = visualX + pile.actorWidthPx / 2f
-                val byp = groundY - lift
-                drawClawd(bmp, cxp - pile.actorWidthPx / 2f, byp - pile.actorHeightPx, data, filter = null)
+        // ===== 触摸层：每只一个真实小 Box（画布 44x36dp 全区域），空白处穿透 =====
+        for (actor in actors.sortedBy { pile.liftOf(it.name) }) {
+            key(actor.name) {
+                val frozen = dragInfo?.takeIf { it.name == actor.name }?.origin
+                val originDp = frozen ?: Offset(
+                    visualXOf(actor),
+                    bandHeightDp - sheetHDp - pile.liftOf(actor.name),
+                )
+                Box(
+                    Modifier
+                        .offset {
+                            IntOffset(
+                                (originDp.x * density).roundToInt(),
+                                (originDp.y * density).roundToInt(),
+                            )
+                        }
+                        .size(sheetWDp.dp, sheetHDp.dp)
+                        .pointerInput(actor.name) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown()
+                                // 按下即消费：爪子矩形就是触摸区（原版 .clawd-pile-c pointer-events:auto
+                                // + stopPropagation），穿透会让戳 Clawd 同时聚焦下面的输入框
+                                down.consume()
+                                var dragging = false
+                                var grab = Offset.Zero
+                                drag(down.id) { change ->
+                                    if (!dragging && (change.position - down.position).getDistance() > 4f * density) {
+                                        dragging = true
+                                        // 拎起瞬间取最新位置（闭包里的 actor 可能过期）
+                                        val fresh = pile.snapshot().first { it.name == actor.name }
+                                        val origin0 = Offset(
+                                            visualXOf(fresh),
+                                            bandHeightDp - sheetHDp - pile.liftOf(actor.name),
+                                        )
+                                        grab = Offset(
+                                            down.position.x / density - origin0.x,
+                                            down.position.y / density - origin0.y,
+                                        )
+                                        pile.pickUp(actor.name)
+                                        heldPos = origin0
+                                        dragInfo = DragInfo(actor.name, origin0)
+                                    }
+                                    if (dragging) {
+                                        heldPos = Offset(
+                                            change.position.x / density - grab.x,
+                                            change.position.y / density - grab.y,
+                                        )
+                                        change.consume()
+                                    }
+                                }
+                                if (!dragging) {
+                                    pile.poke(actor.name)
+                                } else {
+                                    val release = heldPos
+                                    if (release != null) {
+                                        // 原版 drop 收 el.left + BODY_W/2（内部减回去），即画布左缘；
+                                        // 叠头 y 用手指高度（py = clientY 相对地面）
+                                        val fingerY = release.y + grab.y
+                                        val snap = pile.snapshot()
+                                        val target = snap
+                                            .filter { it.name != actor.name && it.mode != ClawdPileState.Mode.HELD }
+                                            // 原版 390 行 !carriers(o).length：头顶已有人就不能再放
+                                            .filter { a -> snap.none { o -> o.name != a.name && o.on.contains(a.name) } }
+                                            .filter { a ->
+                                                abs(visualXOf(a) - release.x) < pile.actorWidthPx * 0.6f &&
+                                                    fingerY < bandHeightDp - sheetHDp / 2f - pile.liftOf(a.name)
+                                            }
+                                            .minByOrNull { a -> abs(visualXOf(a) - release.x) }
+                                            ?.name
+                                        pile.drop(actor.name, release.x.roundToInt(), target)
+                                    }
+                                    heldPos = null
+                                    dragInfo = null
+                                }
+                            }
+                        }
+                )
             }
         }
+        } // if (pile.isLaid)
     }
 }
 
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawClawd(
-    bmp: ImageBitmap,
-    xDp: Float,
-    yDp: Float,
-    data: PileData,
-    filter: Unit?,
-) {
-    translate(xDp, yDp) {
+private data class DragInfo(val name: String, val origin: Offset)
+
+/** 走路中的视觉 x = base + off，否则 x（均为 dp，画布左缘） */
+private fun visualXOf(actor: ClawdPileState.Actor): Float =
+    if (actor.mode == ClawdPileState.Mode.WALK) (actor.walkBase + actor.walkOff).toFloat() else actor.x.toFloat()
+
+/** dp 坐标画形态位图（画布左上角对齐 x,y） */
+private fun DrawScope.drawClawdAt(bmp: ImageBitmap, xDp: Float, yDp: Float, data: PileData) {
+    translate(xDp * density, yDp * density) {
         drawImage(
             bmp,
-            dstSize = IntSize(data.w * data.px, data.h * data.px),
             dstOffset = IntOffset.Zero,
-            filterQuality = androidx.compose.ui.graphics.FilterQuality.None,
+            dstSize = IntSize(
+                (data.w * data.px * density).roundToInt(),
+                (data.h * data.px * density).roundToInt(),
+            ),
+            filterQuality = FilterQuality.None,
         )
     }
 }
