@@ -71,11 +71,14 @@ function hitTest(x, y) {
 /* 宿主桥：Android 端 addJavascriptInterface 的对象名 */
 function init() {
   try {
+    if (typeof createClawdPile !== 'function') { console.error('clawd-host: createClawdPile 未定义'); return; }
     bridge.pile = createClawdPile({ doc, win, big: null });
-    bridge.pile.ensure();
+    const el = bridge.pile.ensure();
+    if (!el) { console.error('clawd-host: ensure() 返回 null（#send_form 未找到）'); return; }
     startReporting();
+    console.log('clawd-host: ready,', doc.querySelectorAll('.clawd-pile-c').length, '只');
   } catch (e) {
-    // 吉祥物失败不影响宿主
+    console.error('clawd-host init:', e && e.message, e && e.stack);
   }
 }
 
@@ -86,6 +89,8 @@ win.__clawdRects = () => JSON.stringify(bridge.rects);
 win.__clawdNight = on => {
   doc.documentElement.setAttribute('data-claude-integrated-theme', on ? 'night' : '');
 };
+
+win.addEventListener('error', e => console.error('clawd-host:', e.message, e.filename, e.lineno));
 
 if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', init);
 else init();

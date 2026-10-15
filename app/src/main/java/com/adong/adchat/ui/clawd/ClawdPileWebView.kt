@@ -2,12 +2,12 @@ package com.adong.adchat.ui.clawd
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.util.Log
 import android.view.MotionEvent
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -19,22 +19,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import java.io.ByteArrayInputStream
 
 /**
  * 原版小 Clawd 宿主 WebView：全屏透明覆盖层，跑未经修改的原版 clawd-pile.js。
  *
- * - 定位：JS 侧 #send_form 镜像真实输入框的 Window 像素矩形（[formAnchor]，由调用方
- *   onGloballyPositioned 量出），原版 .clawd-pile{bottom:100%} 使爪子精确落在输入框上端；
- *   原版 position:absolute 覆盖层，允许浮在整个页面上
- * - 触摸：覆写 dispatchTouchEvent，用 JS 每 60ms 推送的爪子物理像素矩形做命中——
- *   命中爪子才把事件交给 WebView（原版戳/拖拽逻辑生效），空白处穿透给下面的 Compose
- * - 位置记忆：domStorageEnabled 开启，原版 localStorage 直接生效
+ * - 定位：JS 侧 #send_form 镜像真实输入框在本 WebView 视口内的像素矩形（[formAnchor]
+ *   是 Window 坐标，减去 WebView 自身的 Window 位置换算），原版
+ *   .clawd-pile{bottom:100%} 使爪子精确落在输入框上端；position:absolute 覆盖层
+ *   允许浮在整个页面上
+ * - 触摸：JS 每 60ms 推送爪子物理像素矩形，覆写 dispatchTouchEvent 做命中过滤——
+ *   命中爪子才把事件交给 WebView（原版戳/拖拽生效），空白处穿透给 Compose
+ * - 位置记忆：domStorageEnabled，原版 localStorage 直接生效
  */
 @Composable
 fun ClawdPileWebView(
@@ -45,12 +48,22 @@ fun ClawdPileWebView(
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     var webView by remember { mutableStateOf<ClawdHostWebView?>(null) }
+    // WebView 自身在 Window 里的位置：把 formAnchor（Window 坐标）换算进 WebView 视口
+    var viewPos by remember { mutableStateOf(Offset.Zero) }
 
-    LaunchedEffect(formAnchor, webView) {
+    val relRect = formAnchor?.let { f ->
+        Rect(
+            f.left - viewPos.x,
+            f.top - viewPos.y,
+            f.right - viewPos.x,
+            f.bottom - viewPos.y,
+        )
+    }
+
+    LaunchedEffect(relRect, webView) {
         val view = webView ?: return@LaunchedEffect
-        val rect = formAnchor ?: return@LaunchedEffect
-        val js = "window.__clawdLayout && window.__clawdLayout(${rect.left}, ${rect.top}, ${rect.width}, ${rect.height})"
-        view.evaluateJavascript(js, null)
+        val rect = relRect ?: return@LaunchedEffect
+        view.applyFormRect(rect)
     }
 
     LaunchedEffect(night, webView) {
@@ -78,7 +91,7 @@ fun ClawdPileWebView(
                 configureClawdWebView(view)
             }
         },
-        modifier = modifier,
+        modifier = modifier.onGloballyPositioned { viewPos = it.positionInWindow() },
         onRelease = { view ->
             view.stopLoading()
             view.webViewClient = WebViewClient()
@@ -99,6 +112,7 @@ private fun configureClawdWebView(view: ClawdHostWebView) {
         setAllowFileAccessFromFileURLs(false)
         @Suppress("DEPRECATION")
         setAllowUniversalAccessFromFileURLs(false)
+        // file:///android_asset 不受 allowFileAccess 影响，照常可加载；网络全禁
         blockNetworkLoads = true
         databaseEnabled = false
         javaScriptCanOpenWindowsAutomatically = false
@@ -112,12 +126,19 @@ private fun configureClawdWebView(view: ClawdHostWebView) {
     view.isFocusable = false
     view.isFocusableInTouchMode = false
     view.addJavascriptInterface(view, "AsterClawd")
-    view.webChromeClient = WebChromeClient()
+    view.webChromeClient = object : WebChromeClient() {
+        override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+            Log.d("ClawdHost", "${msg.line()}: ${msg.message()}")
+            return true
+        }
+    }
     view.webViewClient = object : WebViewClient() {
         override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean = true
-        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
-        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse =
-            WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+
+        // 页面加载完成前发出的布局会丢失（window.__clawdLayout 还不存在）：这里补发
+        override fun onPageFinished(view: WebView?, url: String?) {
+            (view as? ClawdHostWebView)?.resendFormRect()
+        }
     }
     view.loadUrl("file:///android_asset/clawd/clawd_host.html")
 }
@@ -125,12 +146,24 @@ private fun configureClawdWebView(view: ClawdHostWebView) {
 /** 触摸命中过滤的 WebView：事件起点落在爪子矩形内才自己消化，否则穿透给 Compose */
 private class ClawdHostWebView(context: Context) : WebView(context) {
 
+    private var lastRect: Rect? = null
+
     /** JS 推来的爪子物理像素矩形 [left, top, right, bottom] */
     @Volatile
     private var clawdRects: Array<FloatArray> = emptyArray()
 
     /** 拖拽进行中：DOWN 命中了爪子，整个手势期间事件都归 WebView（原版 pointer 捕获） */
     private var gestureClaimed = false
+
+    fun applyFormRect(rect: Rect) {
+        lastRect = rect
+        val js = "window.__clawdLayout && window.__clawdLayout(${rect.left}, ${rect.top}, ${rect.width}, ${rect.height})"
+        evaluateJavascript(js, null)
+    }
+
+    fun resendFormRect() {
+        lastRect?.let { applyFormRect(it) }
+    }
 
     @JavascriptInterface
     fun pushRects(json: String) {
