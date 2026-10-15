@@ -153,8 +153,18 @@ class MediaFileDownloader(context: Context) {
             .build()
         val call = client.newCall(request)
         activeCalls += call
+        Log.d(
+            "AsterMedia",
+            "probe: host=${runCatching { okhttp3.HttpUrl.Companion.toHttpUrlOrNull(media.mediaUrl)?.host }.getOrNull()} " +
+                "url=${media.mediaUrl.take(140)} ua=${media.userAgent.take(40)}"
+        )
         try {
             call.execute().use { response ->
+                Log.d(
+                    "AsterMedia",
+                    "probe resp: code=${response.code} type=${response.body?.contentType()} " +
+                        "range=${response.header("Content-Range")} loc=${response.header("Location")?.take(80)}"
+                )
                 throwForStatus(response)
                 if (!response.isSuccessful) throw MediaSourceUnavailableException(response.code)
                 rejectNonVideoResponse(response)
@@ -166,6 +176,7 @@ class MediaFileDownloader(context: Context) {
                 )
             }
         } catch (error: IOException) {
+            Log.d("AsterMedia", "probe fail: ${error.javaClass.simpleName}: ${error.message?.take(120)}")
             translateCancellation(call, error)
         } finally {
             activeCalls -= call

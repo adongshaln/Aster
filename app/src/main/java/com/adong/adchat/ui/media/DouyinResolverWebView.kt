@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -24,6 +25,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.adong.adchat.media.DouyinMediaSourceSelector
 import com.adong.adchat.media.DouyinResolveRequest
 import com.adong.adchat.media.DouyinUrlParser
+import com.adong.adchat.media.MediaVariant
 import com.adong.adchat.media.ResolvedMedia
 import org.json.JSONArray
 import org.json.JSONObject
@@ -83,6 +85,8 @@ private class DouyinResolverSession(
     private var canonicalized = request.link.videoId != null
     private var lastPageUrl = request.link.resolverUrl
     private var pollCount = 0
+    private var detailFetchInjected = false
+    private var lastSniffedUrl = ""
 
     @SuppressLint("SetJavaScriptEnabled")
     fun createWebView(context: Context): WebView {
@@ -135,6 +139,7 @@ private class DouyinResolverSession(
                         view.loadUrl("https://www.douyin.com/jingxuan?modal_id=$discoveredId")
                         return
                     }
+                    injectDetailFetch(view)
                     schedulePoll(220L)
                 }
 
@@ -183,6 +188,23 @@ private class DouyinResolverSession(
         webView = null
     }
 
+    /**
+     * 在页面上下文里调用官方 web detail 接口（同源免 CORS，Cookie/UA/Referer 由
+     * WebView 自动携带）。yt-dlp 证实该端点对新鲜 Cookie 不要求 a_bogus 签名。
+     * 结果写入 window.__asterDetail，由 DOUYIN_MEDIA_PROBE 读取后带回。
+     */
+    private fun injectDetailFetch(view: WebView) {
+        if (finished || detailFetchInjected) return
+        val videoId = DouyinUrlParser.extractVideoId(lastPageUrl)
+            ?: DouyinUrlParser.extractVideoId(view.url.orEmpty())
+            ?: request.link.videoId
+            ?: return
+        if (!view.url.orEmpty().contains("douyin.com")) return
+        detailFetchInjected = true
+        Log.d("AsterMedia", "inject detail fetch: videoId=$videoId page=${view.url.orEmpty().take(100)}")
+        view.evaluateJavascript(DOUYIN_DETAIL_FETCH.replace("__VIDEO_ID__", videoId), null)
+    }
+
     private fun schedulePoll(delayMs: Long) {
         if (finished || pollScheduled) return
         pollScheduled = true
@@ -196,13 +218,29 @@ private class DouyinResolverSession(
         val view = webView ?: return
         if (finished || pollInFlight) return
         pollInFlight = true
+        injectDetailFetch(view)
         pollCount += 1
         view.evaluateJavascript(DOUYIN_MEDIA_PROBE) { raw ->
             pollInFlight = false
             if (finished) return@evaluateJavascript
             val payload = decodeJavascriptResult(raw)
             val candidate = payload?.optString("url").orEmpty()
-            if (isLikelyVideoUrl(candidate)) {
+            val candidateLikely = isLikelyVideoUrl(candidate)
+            // API 直链优先（yt-dlp 路径，官方下发、附清晰度档位），嗅探 URL 兜底；
+            // 无论哪条路完成，都先记下嗅探结果作兼容备选
+            if (candidateLikely) lastSniffedUrl = normalizeCandidateUrl(candidate)
+            // 页面跳转会让注入的 JS 上下文连同 __asterDetail 一起销毁：
+            // 探针报 absent 且曾注入过 → 允许在当前页面重新注入
+            val detailState = payload?.optString("detailState").orEmpty()
+            if (detailState == "absent" && detailFetchInjected) detailFetchInjected = false
+            val apiDetail = payload?.optJSONObject("apiDetail")
+            if (apiDetail != null && finishWithApiDetail(apiDetail, view)) {
+                return@evaluateJavascript
+            }
+            if (apiDetail == null && detailState == "failed") {
+                Log.d("AsterMedia", "detail api failed (status/perm), relying on sniff fallback")
+            }
+            if (candidateLikely) {
                 finishWithPayload(candidate, payload ?: JSONObject(), view)
                 return@evaluateJavascript
             }
@@ -235,13 +273,137 @@ private class DouyinResolverSession(
     }
 
     private fun finishWithUrl(url: String, view: WebView) {
+        lastSniffedUrl = normalizeCandidateUrl(url)
         finishWithPayload(url, JSONObject(), view)
+    }
+
+    /**
+     * 官方 detail 接口数据 → ResolvedMedia。play.urls 是 CDN 直链（yt-dlp 同样
+     * 优先于 aweme/v1 包装链接），gears 提供各清晰度档位，填入
+     * availableVariants 供清晰度选择条使用；嗅探到的 URL 保留为兼容备选。
+     * 返回 true 表示已完成解析；false = detail 无可用直链，继续嗅探轮询。
+     */
+    private fun finishWithApiDetail(detail: JSONObject, view: WebView): Boolean {
+        val play = detail.optJSONObject("play")
+        val urls = play?.optJSONArray("urls")
+        var primary = ""
+        var secondary = ""
+        if (urls != null) {
+            val ranked = (0 until urls.length())
+                .asSequence()
+                .map { normalizeCandidateUrl(urls.optString(it)) }
+                .filter(::isLikelyVideoUrl)
+                .distinct()
+                .toList()
+                .sortedByDescending { candidateUrlScore(it) }
+            primary = ranked.firstOrNull().orEmpty()
+            secondary = ranked.getOrNull(1).orEmpty()
+        }
+        if (primary.isBlank()) {
+            // detail 到手但没有可用直链：不终止，回退到嗅探轮询路径
+            Log.d("AsterMedia", "api detail unusable: hasPlay=${play != null} urlCount=${urls?.length() ?: 0}")
+            return false
+        }
+
+        finished = true
+        handler.removeCallbacksAndMessages(null)
+        Log.d("AsterMedia", "api detail ok: primary=${primary.take(140)} gears=${detail.optJSONArray("gears")?.length() ?: 0}")
+        val currentUrl = view.url.orEmpty().ifBlank { lastPageUrl }
+        val resolvedId = detail.optString("aweme_id")
+            .ifBlank { request.link.videoId.orEmpty() }
+            .ifBlank { DouyinUrlParser.extractVideoId(currentUrl).orEmpty() }
+            .ifBlank { System.currentTimeMillis().toString() }
+        val title = detail.optString("desc")
+            .substringBefore(" - 抖音")
+            .substringBefore("_抖音")
+            .trim()
+            .ifBlank { "抖音视频 $resolvedId" }
+        val cookieHeader = CookieManager.getInstance().getCookie("https://www.douyin.com/").orEmpty()
+        val selectedSource = DouyinMediaSourceSelector.preferWatermarkFree(primary)
+        val variants = extractVariants(detail, primary)
+        val qualityLabel = variants.firstOrNull { it.mediaUrl == primary }?.label
+            ?: variants.firstOrNull()?.label
+            .orEmpty()
+        val thumbnailUrl = normalizeCandidateUrl(detail.optString("originCover"))
+            .takeIf { it.startsWith("http") }
+            .orEmpty()
+        val fallbackThumbnail = normalizeCandidateUrl(detail.optString("cover")).takeIf { it.startsWith("http") }.orEmpty()
+        onProgress("已找到视频源")
+        onResolved(
+            ResolvedMedia(
+                videoId = resolvedId,
+                title = title,
+                author = detail.optString("nickname").trim(),
+                thumbnailUrl = thumbnailUrl,
+                thumbnailFallbackUrl = fallbackThumbnail,
+                mediaUrl = selectedSource.primaryUrl,
+                sourceUrl = request.link.sourceUrl,
+                referer = currentUrl.ifBlank { "https://www.douyin.com/" },
+                userAgent = view.settings.userAgentString.orEmpty(),
+                cookieHeader = cookieHeader,
+                compatibilityMediaUrl = listOf(secondary, lastSniffedUrl, selectedSource.compatibilityUrl)
+                    .firstOrNull { it.isNotBlank() && it != selectedSource.primaryUrl }
+                    .orEmpty(),
+                prefersWatermarkFree = selectedSource.watermarkFreePreferred,
+                qualityLabel = qualityLabel,
+                availableVariants = variants
+            )
+        )
+        return true
+    }
+
+    /**
+     * yt-dlp 的做法：aweme/v1 包装链接可能被限流（"Downloads from API might
+     * get blocked"），douyinvod / video/tos 直链优先。
+     */
+    private fun candidateUrlScore(url: String): Int {
+        var score = 0
+        val lower = url.lowercase()
+        if (lower.contains("douyinvod")) score += 200
+        if (lower.contains("/video/tos/")) score += 180
+        if (lower.contains(".mp4")) score += 120
+        if (lower.contains("/aweme/v1/play")) score -= 100
+        return score
+    }
+
+    /** bit_rate 档位 → 清晰度变体；主档 URL 保底在列。 */
+    private fun extractVariants(detail: JSONObject, primaryUrl: String): List<MediaVariant> {
+        val variants = mutableListOf<MediaVariant>()
+        val gears = detail.optJSONArray("gears")
+        if (gears != null) {
+            val seenLabels = mutableSetOf<String>()
+            for (index in 0 until gears.length()) {
+                val entry = gears.optJSONObject(index) ?: continue
+                val urls = entry.optJSONArray("urls") ?: continue
+                val url = (0 until urls.length())
+                    .asSequence()
+                    .map { normalizeCandidateUrl(urls.optString(it)) }
+                    .filter(::isLikelyVideoUrl)
+                    .maxByOrNull(::candidateUrlScore)
+                    ?: continue
+                val gear = entry.optString("gear").trim()
+                if (gear.isBlank() || !seenLabels.add(gear)) continue
+                variants.add(
+                    MediaVariant(
+                        id = "gear-$index",
+                        label = gear,
+                        mediaUrl = url,
+                        fileSize = entry.optLong("size", 0L)
+                    )
+                )
+            }
+        }
+        if (variants.none { it.mediaUrl == primaryUrl }) {
+            variants.add(0, MediaVariant(id = "gear-primary", label = "默认", mediaUrl = primaryUrl))
+        }
+        return variants
     }
 
     private fun finishWithPayload(url: String, payload: JSONObject, view: WebView) {
         if (finished) return
         finished = true
         handler.removeCallbacksAndMessages(null)
+        Log.d("AsterMedia", "resolver finished: candidateUrl=${normalizeCandidateUrl(url).take(160)} candidateCount=${payload.optInt("candidateCount")} pageUrl=${view.url.orEmpty().take(120)}")
         val currentUrl = payload.optString("pageUrl").ifBlank { view.url.orEmpty() }.ifBlank { lastPageUrl }
         val videoId = payload.optString("videoId")
             .ifBlank { request.link.videoId.orEmpty() }
@@ -336,7 +498,6 @@ private class DouyinResolverSession(
             "bytedance.com",
             "bytedance.net"
         )
-
         val DOUYIN_MEDIA_PROBE = """
             (function () {
               function text(value) {
@@ -495,10 +656,72 @@ private class DouyinResolverSession(
                 pageUrl: pageUrl,
                 videoId: idMatch ? idMatch[1] : '',
                 challenge: challenge,
-                candidateCount: candidates.length
+                candidateCount: candidates.length,
+                detailState: (function () {
+                  var state = window.__asterDetail;
+                  if (!state) return 'absent';
+                  if (!state.ok) return 'failed';
+                  return state.detail ? 'ready' : 'pending';
+                })(),
+                apiDetail: (window.__asterDetail && window.__asterDetail.ok && window.__asterDetail.detail) ? window.__asterDetail.detail : null
               });
             })();
         """.trimIndent()
+
+    /**
+     * 页面上下文直调官方 detail 接口。端点对新鲜 Cookie 不要求 a_bogus（yt-dlp
+     * DouyinIE 同款调用）；同源 fetch 免 CORS，Cookie/UA 由 WebView 自带。
+     * 只跑一次；结果瘦身后存 window.__asterDetail 供探针读取，失败静默（嗅探兜底）。
+     */
+    const val DOUYIN_DETAIL_FETCH = """
+        (function () {
+          var videoId = '__VIDEO_ID__';
+          function done(ok, detail) {
+            window.__asterDetail = { ok: ok, detail: detail || null };
+          }
+          if (window.__asterDetail) { return; }
+          function slimAddr(addr) {
+            if (!addr || !addr.url_list || !addr.url_list.length) return null;
+            return { urls: addr.url_list.slice(0, 3), size: addr.data_size || 0 };
+          }
+          function slim(detail) {
+            var video = detail.video || {};
+            var gears = [];
+            (video.bit_rate || []).forEach(function (entry) {
+              var addr = slimAddr(entry.play_addr);
+              var gear = entry.gear_name || '';
+              if (!addr || !gear || entry.is_bytevc2) return;
+              gears.push({ gear: gear, urls: addr.urls, size: addr.size });
+            });
+            return {
+              aweme_id: detail.aweme_id || '',
+              desc: detail.desc || '',
+              nickname: (detail.author || {}).nickname || '',
+              play: slimAddr(video.play_addr),
+              gears: gears.slice(0, 5),
+              originCover: video.origin_cover || '',
+              cover: video.cover || ''
+            };
+          }
+          try {
+            fetch('/aweme/v1/web/aweme/detail/?aweme_id=' + videoId +
+                  '&device_platform=webapp&aid=6383&cookie_enabled=true&platform=PC&downlink=10&effective_type=4g',
+                  { method: 'GET', credentials: 'include', headers: { 'Accept': 'application/json' } })
+              .then(function (response) {
+                if (!response.ok) { done(false, null); return null; }
+                return response.json();
+              })
+              .then(function (json) {
+                var detail = json && (json.aweme_detail || (json.data && json.data.aweme_detail));
+                if (detail && detail.video) { done(true, slim(detail)); }
+                else { done(false, null); }
+              })
+              .catch(function () { done(false, null); });
+          } catch (error) {
+            done(false, null);
+          }
+        })();
+    """.trimIndent()
     }
 }
 
