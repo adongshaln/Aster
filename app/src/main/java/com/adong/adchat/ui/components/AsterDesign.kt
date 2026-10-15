@@ -116,137 +116,31 @@ fun AsterArtwork(
 }
 
 @Composable
-fun AsterWordmark(
-    modifier: Modifier = Modifier,
-    subtitle: String? = null
-) {
-    Row(
-        modifier = modifier,
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Surface(
-            color = AccentSoft,
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(0.8.dp, Accent.copy(alpha = 0.22f))
-        ) {
-            AsterMark(
-                modifier = Modifier
-                    .padding(7.dp)
-                    .size(18.dp),
-                tint = Accent
-            )
-        }
-        Column {
-            Text(
-                text = "Aster",
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontFamily = FontFamily.Serif,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = (-0.2).sp
-                ),
-                color = Ink
-            )
-            if (!subtitle.isNullOrBlank()) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MutedInk
-                )
-            }
-        }
-    }
+fun AsterWordmark(size: Int = 30, color: Color = Ink) {
+    Text("Aster", fontFamily = AsterFontFamily, fontSize = size.sp,
+        letterSpacing = (-0.4).sp, color = color, fontWeight = FontWeight.Medium)
 }
 
 @Composable
 fun AsterPageHeader(
-    title: String,
-    subtitle: String? = null,
-    onOpenDrawer: (() -> Unit)? = null,
-    modifier: Modifier = Modifier,
-    actions: @Composable RowScope.() -> Unit = {}
+    title: String, onOpenDrawer: () -> Unit,
+    modifier: Modifier = Modifier, actions: @Composable RowScope.() -> Unit = {}
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (onOpenDrawer != null) {
-            AsterIconButton(
-                icon = Icons.Rounded.Menu,
-                contentDescription = "打开侧栏",
-                onClick = onOpenDrawer
-            )
-        }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = if (onOpenDrawer != null) 6.dp else 8.dp, end = 6.dp)
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = Ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (!subtitle.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MutedInk,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            content = actions
-        )
+    Row(modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
+        AsterIconButton(Icons.Rounded.Menu, "打开侧栏", onOpenDrawer)
+        Text(title, Modifier.weight(1f).padding(start = 6.dp),
+            style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        actions()
     }
 }
 
 @Composable
-fun AsterSectionHeading(
-    title: String,
-    subtitle: String? = null,
-    modifier: Modifier = Modifier,
-    trailing: (@Composable () -> Unit)? = null
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelLarge,
-                color = Accent,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 0.4.sp
-            )
-            if (!subtitle.isNullOrBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MutedInk
-                )
-            }
-        }
-        if (trailing != null) {
-            Spacer(Modifier.width(8.dp))
-            trailing()
-        }
+fun AsterSectionHeading(title: String, detail: String? = null, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+        detail?.let { Text(it, color = MutedInk, style = MaterialTheme.typography.labelMedium) }
     }
 }
-// END_BRAND_AND_HEADER_COMPONENTS
 
 @Composable
 fun AsterIconButton(
