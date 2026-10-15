@@ -83,10 +83,10 @@ class MediaFileDownloader(context: Context) {
         }
 
         var activeMedia = media
-        val probe = run probeRun@{
+        val probe: DownloadProbe = run probeRun@{
             // 三级回退：原 URL → 兼容 URL → 无 Range 的宽容探测。
             // 有些 CDN 只拒绝 Range 试探但放行完整 GET；最后一搏避免误判「地址失效」。
-            val candidates = listOfNotNull(
+            val candidates: List<ResolvedMedia> = listOfNotNull(
                 media,
                 media.compatibilityMediaUrl.takeIf(String::isNotBlank)
             ).distinctBy { it.mediaUrl }
