@@ -66,6 +66,11 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
+import com.adong.adchat.ui.clawd.ClawdLoader
+import com.adong.adchat.ui.clawd.ClawdPileLayer
+import com.adong.adchat.ui.clawd.ClawdPilePositionStore
+import com.adong.adchat.ui.clawd.ClawdPileState
+import com.adong.adchat.ui.clawd.PileData
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -402,6 +407,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .onSizeChanged { composerHeightPx = it.height }
                     .navigationBarsPadding()
             ) {
+                ClawdPileLayer()
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
                     vm.pendingQuestion?.let { prompt ->
                         AskUserCard(
@@ -492,6 +498,23 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
         )
     }
+}
+
+/** 输入框上的三只小 Clawd：数据加载一次，状态机活在与 ChatScreen 同级的 scope 里 */
+@Composable
+private fun ClawdPileLayer(modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val dark = com.adong.adchat.ui.theme.LocalThemeDark.current
+    val data = remember { runCatching { loadClawdData(context) }.getOrNull() } ?: return
+    val store = remember { ClawdPilePositionStore(context) }
+    val scope = rememberCoroutineScope()
+    val pile = remember(data, store) { ClawdPileState(data, store, scope) }
+    ClawdPileOverlay(pile = pile, modifier = modifier, night = dark)
+}
+
+private fun loadClawdData(context: android.content.Context): PileData {
+    val json = context.assets.open("clawd/clawd_data.json").bufferedReader().use { it.readText() }
+    return ClawdLoader.loadPileData(json)
 }
 
 @Composable
