@@ -48,6 +48,7 @@ class ClawdPixelGoldenTest {
                 failures.add("$part.$name(mirror=$mirror): $diff")
             }
         }
+        failures.take(20).forEach { println("RIG-FRAME-DIFF $it") }
         assertTrue("共 ${failures.size}/${frames.length()} 组不一致，前 10 组:\n${failures.take(10).joinToString("\n")}", failures.isEmpty())
     }
 
@@ -111,6 +112,7 @@ class ClawdPixelGoldenTest {
                 }
             }
         }
+        failures.take(20).forEach { println("CLIP-SAMPLE-DIFF $it") }
         assertTrue("共 ${failures.size} 处采样不一致，前 10 处:\n${failures.take(10).joinToString("\n")}", failures.isEmpty())
     }
 
