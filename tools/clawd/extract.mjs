@@ -179,7 +179,9 @@ for (const name of pile.NAMES) {
   for (const eyes of ['shut', 'half', 'open']) {
     for (const pose of ['crouch', 'stand', 'raised', 'dangleA', 'dangleB']) {
       for (const face of [0, 1, -1]) {
-        const px = pileCells(name, eyes, pose, face).map(([x, y, ch]) => [x, y, PILE_PAL[ch]]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
+        const pxMap = new Map();
+        for (const [x, y, ch] of pileCells(name, eyes, pose, face)) pxMap.set(y + ',' + x, PILE_PAL[ch]);
+        const px = [...pxMap.entries()].map(([k, c]) => { const [y, x] = k.split(',').map(Number); return [x, y, c]; }).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
         pileGolden.push({ name, eyes, pose, face, px });
       }
     }
@@ -203,6 +205,7 @@ const golden = { version: 1, rig: { frames: framesGolden, clips: clipsGolden }, 
 mkdirSync(join(HERE, '../../app/src/main/assets/clawd'), { recursive: true });
 mkdirSync(join(HERE, '../../app/src/test/resources/clawd'), { recursive: true });
 writeFileSync(join(HERE, '../../app/src/main/assets/clawd/clawd_data.json'), JSON.stringify(data));
+writeFileSync(join(HERE, '../../app/src/test/resources/clawd/clawd_data.json'), JSON.stringify(data));
 writeFileSync(join(HERE, '../../app/src/test/resources/clawd/clawd_golden.json'), JSON.stringify(golden));
 
 console.log(`selfCheck: ${selfCheck}`);
