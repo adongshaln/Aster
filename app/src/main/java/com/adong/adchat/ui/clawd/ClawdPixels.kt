@@ -18,11 +18,12 @@ object ClawdPixels {
             ?: throw IllegalStateException("未知精灵表: ${rig.sheetOf(part)}")
         val fr = sheet[frame] ?: throw IllegalStateException("没有这一帧: $part.$frame")
         val origin = rig.origin[part] ?: throw IllegalStateException("未知部件: $part")
-        val out = ArrayList<ClawdPixel>(fr.rows.size * fr.rows.firstOrNull()?.length ?: 0)
+        val out = ArrayList<ClawdPixel>()
         for ((y, row) in fr.rows.withIndex()) {
             for ((x, ch) in row.withIndex()) {
                 if (ch == '.' || ch == ' ') continue
-                val colorSpec = rig.pal[ch] ?: throw IllegalStateException("调色板缺字符 '$ch' ($part.$frame)")
+                val colorSpec = rig.pal[ch.toString()]
+                    ?: throw IllegalStateException("调色板缺字符 '$ch' ($part.$frame)")
                 val cx = origin.first + fr.ox + x
                 val cy = origin.second + fr.oy + y
                 val fx = if (mirror) 15 - cx else cx
@@ -73,12 +74,13 @@ object ClawdPixels {
         val pal = pile.pal
         val merged = LinkedHashMap<Long, Int>()
         for ((x, y, ch) in cells) {
-            val colorSpec = pal[ch] ?: throw IllegalStateException("小只调色板缺字符 '$ch' ($name/$eyes/$pose/$face)")
+            val colorSpec = pal[ch.toString()]
+                ?: throw IllegalStateException("小只调色板缺字符 '$ch' ($name/$eyes/$pose/$face)")
             merged[(y.toLong() shl 32) or (x.toLong() and 0xFFFFFFFFL)] = ClawdLoader.colorArgb(colorSpec)
         }
         val out = merged.entries.map { (key, argb) ->
             ClawdPixel((key and 0xFFFFFFFFL).toInt(), (key shr 32).toInt(), argb)
-        }
+        }.toMutableList()
         out.sortWith(compareBy({ it.y }, { it.x }))
         return out
     }
