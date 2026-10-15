@@ -3,6 +3,7 @@ package com.adong.adchat.ui.components
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,19 +39,19 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * Aster v2.0 — Claude Floating Composer × Apple Spring Reasoning & Action System
- * ==============================================================================
- * 核心视觉与动效颠覆：
- * 1. `ConversationComposer`：
- *    - 3.3 预测建议条改造为「Apple 灵动悬浮胶囊」，以 `AsterSpring.spatial()` 从底部弹性上浮缩放弹出，带陶土色「✦ 填入」胶囊徽章；
- *    - 输入框聚焦时，触发 Apple 弹簧上浮阴影 (`2.dp -> 8.dp`)、微缩放 (`0.992f -> 1f`) 与 Claude 陶土色柔光描边；
- *    - 左下角 `+` 按钮升级为凹陷暖石圆形胶囊，发送按钮升级为 **Claude 陶土色弹簧变形按钮**（可发送时以欠阻尼弹簧放大浮现并变为 `#D97757` 陶土色，生成中平滑变形为绛红停止态）。
- * 2. `ConversationReasoningPanel`（深度思考面板）：
- *    - 告别原本灰扑扑的方框与普通菊花转圈，全面复刻 **Claude 3.7 Sonnet 原生深度思考卡片**：
- *    - 顶部左侧配备陶土色柔光呼吸徽章与字数/状态胶囊，右侧配备 `AsterSpring.snappy()` 180° 旋转箭头；
- *    - 展开时以 `AsterSpring.spatial()` 物理弹簧舒展，并在思考文本左侧绘制 **Claude 标志性 2.5dp 垂直陶土色时间轴引导线**。
- * 3. `ConversationThinkingIndicator` & `ConversationJumpToBottom`：
- *    - 思考指示器升级为悬浮胶囊卡片；回到底部按钮接入 `AsterSpring.gentleBounce()` 弹性缩放弹出与悬浮阴影。
+ * Aster v4.0 — Claude App 极简无框美学 × Apple 果冻阻尼物理交互
+ * ============================================================
+ * 核心颠覆性设计：
+ * 1. 彻底重做 `ConversationReasoningPanel`（思考面板）：
+ *    - 废除上一版沉重的卡片背景框、外描边、左侧圆底图标徽章与右侧药丸标签；
+ *    - 1:1 对齐 Claude 移动端原生极简设计：平时仅表现为一行轻盈无框的微光文字 `思考过程 ›`（流式时文字本身柔和呼吸脉动 `正在思考… ›`），
+ *      箭头紧贴文字右侧，点击时触发果冻形变并以 `90°` 果冻弹簧旋转；
+ *    - 展开时以高阻尼弹簧 (`AsterSpring.spatial()`) 丝滑垂落，左侧仅保留一条 `1.5.dp` 极细暖灰垂直引导线，克制、通透、零视觉负担。
+ * 2. 彻底简化 `ConversationThinkingIndicator`：
+ *    - 移除外层卡片框与双行累赘文案，让 `AsterArtwork` 星标直接悬浮在羊皮纸画布上做果冻呼吸，旁配单行微光小字。
+ * 3. `ConversationComposer` 输入舱与建议条：
+ *    - 3.3 预测建议条化繁为简，改为左对齐悬浮轻胶囊，以 Apple 果冻弹簧 (`AsterSpring.jelly()`) 从输入框上方Q弹浮现；
+ *    - 输入舱聚焦时产生细腻的阻尼抬升与果冻微张 (`scaleX/scaleY`)，发送按钮随输入状态以果冻弹簧 (`dampingRatio = 0.52f`) 灵动缩放。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -129,43 +130,50 @@ fun ConversationComposer(
     }
 
     val enabledToSend = value.isNotBlank() || attachments.isNotEmpty() || configureRequired
-    val cardShape = RoundedCornerShape(28.dp)
+    val cardShape = RoundedCornerShape(26.dp)
 
-    // Apple 焦点弹簧动画：聚焦时轻微上浮放大、阴影加深、边框渐变为 Claude 陶土色
-    val composerScale by animateFloatAsState(
+    // Apple 阻尼抬升 + 果冻微张感：聚焦时输入框轻微舒展并加深柔和阴影
+    val composerScaleX by animateFloatAsState(
         targetValue = if (isFocused) 1f else 0.992f,
+        animationSpec = AsterSpring.jelly(),
+        label = "ComposerScaleX"
+    )
+    val composerScaleY by animateFloatAsState(
+        targetValue = if (isFocused) 1f else 0.988f,
         animationSpec = AsterSpring.spatial(),
-        label = "ComposerFocusScale"
+        label = "ComposerScaleY"
     )
     val composerElevation by animateDpAsState(
-        targetValue = if (isFocused) 8.dp else 3.dp,
+        targetValue = if (isFocused) 6.dp else 2.dp,
         animationSpec = AsterSpring.spatial(),
         label = "ComposerElevation"
     )
     val composerBorderColor by animateColorAsState(
-        targetValue = if (isFocused) Accent.copy(alpha = 0.58f) else Hairline,
+        targetValue = if (isFocused) Ink.copy(alpha = 0.22f) else Hairline.copy(alpha = 0.85f),
         animationSpec = AsterSpring.editorial(),
-        label = "ComposerBorderColor"
+        label = "ComposerBorder"
     )
 
     Column(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .padding(top = 6.dp, bottom = 10.dp)
+            .padding(top = 4.dp, bottom = 10.dp)
     ) {
-        // 附件预览卡（带 Spring 入场）
+        // 附件预览条
         AnimatedVisibility(
             visible = attachments.isNotEmpty(),
-            enter = expandVertically(AsterSpring.spatial()) + fadeIn(AsterSpring.editorial()),
-            exit = shrinkVertically(AsterSpring.spatial()) + fadeOut(AsterSpring.editorial())
+            enter = expandVertically(animationSpec = AsterSpring.spatial()) +
+                fadeIn(animationSpec = AsterSpring.editorial()),
+            exit = shrinkVertically(animationSpec = AsterSpring.spatial()) +
+                fadeOut(animationSpec = AsterSpring.editorial())
         ) {
             Surface(
-                color = Surface,
-                shape = RoundedCornerShape(22.dp),
-                border = BorderStroke(1.dp, Hairline),
-                shadowElevation = 2.dp,
-                modifier = Modifier.padding(horizontal = 2.dp, vertical = 6.dp)
+                color = Surface.copy(alpha = 0.96f),
+                shape = RoundedCornerShape(20.dp),
+                border = BorderStroke(0.8.dp, Hairline),
+                shadowElevation = 1.dp,
+                modifier = Modifier.padding(horizontal = 2.dp, vertical = 5.dp)
             ) {
                 ConversationAttachmentPreview(
                     attachments = attachments,
@@ -175,7 +183,7 @@ fun ConversationComposer(
             }
         }
 
-        // 3.3 输入建议条：重构为 Apple 灵动悬浮胶囊（从底部弹性弹出）
+        // 3.3 输入建议条：极简 Claude 悬浮轻胶囊 + Apple 果冻弹簧弹出
         var shownSuggestion by remember { mutableStateOf<String?>(null) }
         if (suggestion != null) shownSuggestion = suggestion
         AnimatedVisibility(
@@ -184,87 +192,71 @@ fun ConversationComposer(
                 initialOffsetY = { it / 2 },
                 animationSpec = AsterSpring.spatial()
             ) + scaleIn(
-                initialScale = 0.90f,
-                animationSpec = AsterSpring.gentleBounce()
-            ) + fadeIn(AsterSpring.editorial()),
+                initialScale = 0.86f,
+                transformOrigin = TransformOrigin(0.15f, 1f),
+                animationSpec = AsterSpring.jelly()
+            ) + fadeIn(animationSpec = AsterSpring.editorial()),
             exit = slideOutVertically(
-                targetOffsetY = { it / 2 },
+                targetOffsetY = { it / 3 },
                 animationSpec = AsterSpring.snappy()
             ) + scaleOut(
-                targetScale = 0.92f,
+                targetScale = 0.90f,
+                transformOrigin = TransformOrigin(0.15f, 1f),
                 animationSpec = AsterSpring.snappy()
-            ) + fadeOut(tween(120))
+            ) + fadeOut(animationSpec = tween(110))
         ) {
             Surface(
                 onClick = onSuggestionClick,
-                color = Surface,
+                color = Surface.copy(alpha = 0.94f),
                 contentColor = Ink,
-                shape = RoundedCornerShape(999.dp),
-                border = BorderStroke(1.dp, Accent.copy(alpha = 0.35f)),
-                shadowElevation = 3.dp,
+                shape = CircleShape,
+                border = BorderStroke(0.8.dp, Hairline),
+                shadowElevation = 1.5.dp,
                 modifier = Modifier
-                    .padding(bottom = 8.dp)
-                    .fillMaxWidth()
-                    .appleSpringPressable(pressedScale = 0.96f)
+                    .padding(bottom = 7.dp)
+                    .appleSpringPressable(pressedScale = 0.95f)
             ) {
                 Row(
-                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    Modifier.padding(horizontal = 13.dp, vertical = 7.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        color = AccentSoft,
-                        shape = CircleShape
-                    ) {
-                        Row(
-                            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Rounded.AutoAwesome,
-                                "输入建议",
-                                Modifier.size(13.dp),
-                                tint = Accent
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text(
-                                "下一句",
-                                color = Accent,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(9.dp))
+                    Icon(
+                        Icons.Rounded.AutoAwesome,
+                        "输入建议",
+                        Modifier.size(14.dp),
+                        tint = Accent
+                    )
+                    Spacer(Modifier.width(7.dp))
                     Text(
                         shownSuggestion.orEmpty(),
-                        Modifier.weight(1f),
-                        color = Ink,
+                        Modifier.weight(1f, fill = false),
+                        color = Ink.copy(alpha = 0.88f),
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "填入 ↵",
-                        color = Accent,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        Icons.Rounded.NorthWest,
+                        null,
+                        Modifier.size(13.dp),
+                        tint = MutedInk.copy(alpha = 0.6f)
                     )
                 }
             }
         }
 
-        // Claude 风格悬浮主输入舱
+        // Claude 极简温润输入舱
         Surface(
             color = Surface,
             shape = cardShape,
-            border = BorderStroke(if (isFocused) 1.4.dp else 1.dp, composerBorderColor),
+            border = BorderStroke(0.8.dp, composerBorderColor),
             shadowElevation = composerElevation,
             modifier = Modifier
                 .fillMaxWidth()
                 .graphicsLayer {
-                    scaleX = composerScale
-                    scaleY = composerScale
+                    scaleX = composerScaleX
+                    scaleY = composerScaleY
                 }
                 .testTag("${testTag}-composer")
         ) {
@@ -276,8 +268,8 @@ fun ConversationComposer(
                         .fillMaxWidth()
                         .testTag("${testTag}-input")
                         .focusRequester(resolvedFocusRequester)
-                        .padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 4.dp)
-                        .heightIn(min = 26.dp, max = 136.dp)
+                        .padding(start = 18.dp, end = 18.dp, top = 15.dp, bottom = 2.dp)
+                        .heightIn(min = 24.dp, max = 132.dp)
                         .onFocusChanged { state ->
                             if (isFocused != state.isFocused) {
                                 isFocused = state.isFocused
@@ -306,7 +298,7 @@ fun ConversationComposer(
                             if (value.isEmpty()) {
                                 Text(
                                     placeholder,
-                                    color = MutedInk.copy(alpha = 0.78f),
+                                    color = MutedInk.copy(alpha = 0.72f),
                                     style = MaterialTheme.typography.bodyLarge,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -317,50 +309,44 @@ fun ConversationComposer(
                     }
                 )
 
-                // 底部控制栏
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .height(54.dp)
+                        .height(50.dp)
                         .padding(horizontal = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 左侧圆角暖石附件/工具按钮
-                    Surface(
+                    IconButton(
                         onClick = {
                             focus.clearFocus()
                             onOptionsClick()
                         },
                         enabled = !loading && !attachmentLoading,
-                        color = SurfaceInset.copy(alpha = 0.8f),
-                        shape = CircleShape,
                         modifier = Modifier
-                            .size(38.dp)
-                            .appleSpringPressable(pressedScale = 0.88f, enabled = !loading && !attachmentLoading)
+                            .size(42.dp)
+                            .appleSpringPressable(pressedScale = 0.86f, enabled = !loading && !attachmentLoading)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            if (attachmentLoading) {
-                                CircularProgressIndicator(
-                                    Modifier.size(18.dp),
-                                    color = Accent,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Rounded.Add,
-                                    "输入选项",
-                                    Modifier.size(22.dp),
-                                    tint = Ink
-                                )
-                            }
+                        if (attachmentLoading) {
+                            CircularProgressIndicator(
+                                Modifier.size(18.dp),
+                                color = Accent,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                Icons.Rounded.Add,
+                                "输入选项",
+                                Modifier.size(24.dp),
+                                tint = MutedInk
+                            )
                         }
                     }
 
                     Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
                             contextAction?.invoke()
                             reasoningAction?.invoke()
@@ -369,8 +355,14 @@ fun ConversationComposer(
 
                     AnimatedVisibility(
                         visible = isFocused,
-                        enter = scaleIn(initialScale = 0.8f, animationSpec = AsterSpring.snappy()) + fadeIn(AsterSpring.editorial()),
-                        exit = scaleOut(targetScale = 0.8f, animationSpec = AsterSpring.snappy()) + fadeOut(tween(90))
+                        enter = scaleIn(
+                            initialScale = 0.75f,
+                            animationSpec = AsterSpring.jelly()
+                        ) + fadeIn(animationSpec = AsterSpring.editorial()),
+                        exit = scaleOut(
+                            targetScale = 0.75f,
+                            animationSpec = AsterSpring.snappy()
+                        ) + fadeOut(animationSpec = tween(90))
                     ) {
                         IconButton(
                             onClick = {
@@ -383,11 +375,11 @@ fun ConversationComposer(
                                 .size(40.dp)
                                 .appleSpringPressable(pressedScale = 0.88f)
                         ) {
-                            Icon(Icons.Rounded.OpenInFull, "展开草稿", Modifier.size(19.dp), tint = MutedInk)
+                            Icon(Icons.Rounded.OpenInFull, "展开草稿", Modifier.size(18.dp), tint = MutedInk)
                         }
                     }
 
-                    // Claude 标志性陶土色发送按钮（带 Apple 弹簧缩放与颜色过渡）
+                    // Claude 极简陶土圆点发送按钮（带 Apple 果冻弹簧缩放）
                     val canTrigger = loading || (enabledToSend && !attachmentLoading)
                     val sendContainerColor by animateColorAsState(
                         targetValue = when {
@@ -399,14 +391,14 @@ fun ConversationComposer(
                         label = "SendBtnColor"
                     )
                     val sendContentColor by animateColorAsState(
-                        targetValue = if (canTrigger) Color.White else MutedInk.copy(alpha = 0.55f),
+                        targetValue = if (canTrigger) Color.White else MutedInk.copy(alpha = 0.45f),
                         animationSpec = AsterSpring.editorial(),
-                        label = "SendBtnContentColor"
+                        label = "SendContentColor"
                     )
                     val sendScale by animateFloatAsState(
-                        targetValue = if (canTrigger) 1f else 0.92f,
-                        animationSpec = AsterSpring.gentleBounce(),
-                        label = "SendBtnReadyScale"
+                        targetValue = if (canTrigger) 1f else 0.88f,
+                        animationSpec = AsterSpring.jelly(),
+                        label = "SendScale"
                     )
 
                     FilledIconButton(
@@ -421,31 +413,37 @@ fun ConversationComposer(
                         },
                         enabled = canTrigger,
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(38.dp)
                             .graphicsLayer {
                                 scaleX = sendScale
                                 scaleY = sendScale
                             }
-                            .appleSpringPressable(pressedScale = 0.86f, enabled = canTrigger),
+                            .appleSpringPressable(pressedScale = 0.84f, enabled = canTrigger),
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = sendContainerColor,
                             contentColor = sendContentColor,
                             disabledContainerColor = SurfaceInset,
-                            disabledContentColor = MutedInk.copy(alpha = 0.45f)
+                            disabledContentColor = MutedInk.copy(alpha = 0.4f)
                         )
                     ) {
                         AnimatedContent(
                             targetState = loading,
                             transitionSpec = {
-                                (scaleIn(initialScale = 0.65f, animationSpec = AsterSpring.gentleBounce()) + fadeIn(AsterSpring.editorial())) togetherWith
-                                    (scaleOut(targetScale = 0.65f, animationSpec = AsterSpring.snappy()) + fadeOut(tween(110)))
+                                (scaleIn(
+                                    initialScale = 0.55f,
+                                    animationSpec = AsterSpring.jelly()
+                                ) + fadeIn(animationSpec = AsterSpring.editorial())) togetherWith
+                                    (scaleOut(
+                                        targetScale = 0.55f,
+                                        animationSpec = AsterSpring.snappy()
+                                    ) + fadeOut(animationSpec = tween(100)))
                             },
                             label = "send-stop"
                         ) { isLoading ->
-                            if (isLoading) Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(20.dp))
-                            else if (configureRequired) Icon(Icons.Rounded.Settings, "选择模型", Modifier.size(20.dp))
-                            else Icon(Icons.Rounded.ArrowUpward, "发送", Modifier.size(21.dp))
+                            if (isLoading) Icon(Icons.Rounded.Stop, "停止生成", Modifier.size(18.dp))
+                            else if (configureRequired) Icon(Icons.Rounded.Settings, "选择模型", Modifier.size(18.dp))
+                            else Icon(Icons.Rounded.ArrowUpward, "发送", Modifier.size(19.dp))
                         }
                     }
                 }
@@ -454,6 +452,10 @@ fun ConversationComposer(
     }
 }
 
+/**
+ * Claude App 原生风格极简无框等待指示器：
+ * 星标直接呼吸悬浮在画布上，配合果冻弹性脉动，彻底去除冗余卡片边框。
+ */
 @Composable
 fun ConversationThinkingIndicator() {
     val density = LocalDensity.current
@@ -461,72 +463,56 @@ fun ConversationThinkingIndicator() {
     val float by transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(2600, easing = LinearEasing), repeatMode = RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(2400, easing = LinearEasing), repeatMode = RepeatMode.Restart),
         label = "aster-thinking-float"
     )
     val sway by transition.animateFloat(
-        initialValue = -10f,
-        targetValue = 10f,
-        animationSpec = infiniteRepeatable(tween(1900, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
+        initialValue = -12f,
+        targetValue = 12f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
         label = "aster-thinking-sway"
     )
-    val subtitleAlpha by transition.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1200, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
-        label = "aster-thinking-subtitle"
+    val pulseScale by transition.animateFloat(
+        initialValue = 0.90f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
+        label = "aster-thinking-scale"
     )
-    val lift = with(density) { 3.dp.toPx() } * sin(PI * float).toFloat()
+    val lift = with(density) { 2.5.dp.toPx() } * sin(PI * float).toFloat()
 
-    Surface(
-        color = Surface,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, Accent.copy(alpha = 0.28f)),
-        shadowElevation = 2.dp,
-        modifier = Modifier.padding(vertical = 4.dp)
+    Row(
+        Modifier
+            .heightIn(min = 38.dp)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            Modifier
-                .heightIn(min = 48.dp)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
+        Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) {
+            AsterArtwork(
                 Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(AccentSoft),
-                contentAlignment = Alignment.Center
-            ) {
-                AsterArtwork(
-                    Modifier
-                        .size(22.dp)
-                        .graphicsLayer {
-                            translationY = -lift
-                            rotationZ = sway
-                        }
-                )
-            }
-            Spacer(Modifier.width(11.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    "Aster 正在深度构思",
-                    color = Ink,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    "正在梳理上下文与逻辑链...",
-                    color = Accent.copy(alpha = subtitleAlpha),
-                    style = MaterialTheme.typography.labelSmall
-                )
-            }
+                    .size(22.dp)
+                    .graphicsLayer {
+                        translationY = -lift
+                        rotationZ = sway
+                        scaleX = pulseScale
+                        scaleY = pulseScale
+                    }
+            )
         }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            "正在思考…",
+            color = MutedInk,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.claudeStreamingPulse()
+        )
     }
 }
 
 /**
- * Claude 3.7 风格折叠式深度思考手风琴面板（带左侧陶土色垂直引导线与 Apple 弹簧展开）
+ * Claude App 原生极简无框思考面板 (Featherlight Minimalist Reasoning Panel)：
+ * - 零外框、零背景盒、零多余徽章：平时仅是一行轻巧的 `正在思考… ›` 或 `思考过程 ›`；
+ * - 箭头紧跟文字右侧，点击时整行产生 Apple 果冻形变，箭头以 `AsterSpring.jelly()` 旋转 90°；
+ * - 展开过程采用高粘滞阻尼弹簧 (`AsterSpring.spatial()`)，左侧仅一条 `1.5.dp` 极细暖灰导引线衬托思考文本。
  */
 @Composable
 fun ConversationReasoningPanel(
@@ -544,113 +530,83 @@ fun ConversationReasoningPanel(
     }
 
     val chevronRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
-        animationSpec = AsterSpring.snappy(),
-        label = "ReasoningChevron"
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = AsterSpring.jelly(),
+        label = "ReasoningChevronJelly"
     )
-    val borderColor by animateColorAsState(
-        targetValue = if (streaming) Accent.copy(alpha = 0.45f) else Hairline,
-        animationSpec = AsterSpring.editorial(),
-        label = "ReasoningBorder"
-    )
+    val interactionSource = remember { MutableInteractionSource() }
 
-    Surface(
-        onClick = { expanded = !expanded },
-        color = Surface,
-        contentColor = Ink,
-        shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, borderColor),
-        shadowElevation = 1.dp,
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 12.dp)
-            .appleSpringPressable(pressedScale = 0.985f)
+            .padding(bottom = 8.dp)
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 左侧 Claude 陶土柔光状态徽章
+        // 极简无框触发行（对齐 Claude App 原生 "Thought for X seconds ›"）
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = { expanded = !expanded }
+                )
+                .appleSpringPressable(pressedScale = 0.94f)
+                .padding(vertical = 4.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = if (streaming) "正在思考…" else "已思考 · ${reasoning.length} 字",
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
+                ),
+                color = MutedInk,
+                modifier = if (streaming) Modifier.claudeStreamingPulse() else Modifier
+            )
+            Spacer(Modifier.width(3.dp))
+            Icon(
+                imageVector = Icons.Rounded.ChevronRight,
+                contentDescription = if (expanded) "收起思考过程" else "展开思考过程",
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationZ = chevronRotation },
+                tint = MutedInk.copy(alpha = 0.72f)
+            )
+        }
+
+        // 粘滞阻尼展开正文：仅保留左侧 1.5dp 极细竖线，彻底告别笨重卡片感
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(animationSpec = AsterSpring.editorial()) +
+                expandVertically(
+                    expandFrom = Alignment.Top,
+                    animationSpec = AsterSpring.spatial()
+                ),
+            exit = fadeOut(animationSpec = tween(120)) +
+                shrinkVertically(
+                    shrinkTowards = Alignment.Top,
+                    animationSpec = AsterSpring.spatial()
+                )
+        ) {
+            Row(
+                modifier = Modifier
+                    .padding(top = 6.dp, start = 4.dp, bottom = 4.dp)
+                    .height(IntrinsicSize.Min)
+            ) {
                 Box(
                     modifier = Modifier
-                        .size(26.dp)
+                        .width(1.5.dp)
+                        .fillMaxHeight()
                         .clip(CircleShape)
-                        .background(if (streaming) AccentSoft else SurfaceInset),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (streaming) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            color = Accent,
-                            trackColor = Accent.copy(alpha = 0.18f),
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(
-                            Icons.Rounded.Psychology,
-                            null,
-                            Modifier.size(16.dp),
-                            tint = Accent
-                        )
-                    }
-                }
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    if (streaming) "正在深度思考..." else "已深度思考 · ${reasoning.length} 字",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = if (streaming) Accent else Ink.copy(alpha = 0.85f),
-                    modifier = Modifier.weight(1f)
+                        .background(Hairline)
                 )
-                Surface(
-                    color = SurfaceInset.copy(alpha = 0.75f),
-                    shape = CircleShape
-                ) {
-                    Row(
-                        Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            if (expanded) "收起" else "展开",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MutedInk
-                        )
-                        Spacer(Modifier.width(2.dp))
-                        Icon(
-                            Icons.Rounded.ExpandMore,
-                            null,
-                            Modifier
-                                .size(15.dp)
-                                .graphicsLayer { rotationZ = chevronRotation },
-                            tint = MutedInk
-                        )
-                    }
-                }
-            }
-
-            AnimatedVisibility(
-                visible = expanded,
-                enter = fadeIn(AsterSpring.editorial()) + expandVertically(animationSpec = AsterSpring.spatial()),
-                exit = fadeOut(tween(110)) + shrinkVertically(animationSpec = AsterSpring.snappy())
-            ) {
-                Row(
-                    modifier = Modifier
-                        .padding(top = 10.dp, start = 4.dp)
-                        .height(IntrinsicSize.Min)
-                ) {
-                    // Claude 标志性左侧垂直思考时间轴线
-                    Box(
-                        modifier = Modifier
-                            .width(2.5.dp)
-                            .fillMaxHeight()
-                            .clip(CircleShape)
-                            .background(Accent.copy(alpha = 0.48f))
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        reasoning,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MutedInk,
-                        lineHeight = 20.sp
-                    )
-                }
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = reasoning,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MutedInk.copy(alpha = 0.85f),
+                    lineHeight = 20.sp
+                )
             }
         }
     }
@@ -665,15 +621,15 @@ fun ConversationMessageAction(
 ) {
     Surface(
         onClick = onClick,
-        color = if (accent) AccentSoft else Color.Transparent,
-        contentColor = if (accent) Accent else Ink.copy(alpha = 0.72f),
-        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        contentColor = if (accent) Accent else MutedInk.copy(alpha = 0.82f),
+        shape = RoundedCornerShape(10.dp),
         modifier = Modifier
             .size(44.dp)
-            .appleSpringPressable(pressedScale = 0.88f)
+            .appleSpringPressable(pressedScale = 0.86f)
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Icon(icon, contentDescription = label, modifier = Modifier.size(19.dp))
+            Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp))
         }
     }
 }
@@ -690,8 +646,7 @@ fun ConversationImages(attachments: List<ChatImageAttachment>) {
             Surface(
                 color = Surface,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Hairline),
-                shadowElevation = 1.dp
+                border = BorderStroke(0.8.dp, Hairline)
             ) {
                 AsyncImage(
                     model = attachment.uri,
@@ -718,25 +673,25 @@ fun ConversationAttachmentPreview(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         attachments.forEach { attachment ->
-            Box(Modifier.size(76.dp)) {
+            Box(Modifier.size(74.dp)) {
                 AsyncImage(
                     model = attachment.uri,
                     contentDescription = attachment.name,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(15.dp))
                 )
                 Surface(
                     onClick = { onRemove(attachment.id) },
                     enabled = !loading,
-                    color = Night.copy(alpha = 0.82f),
+                    color = Night.copy(alpha = 0.78f),
                     contentColor = Color.White,
                     shape = CircleShape,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .size(48.dp)
-                        .appleSpringPressable(pressedScale = 0.88f, enabled = !loading)
+                        .appleSpringPressable(pressedScale = 0.86f, enabled = !loading)
                 ) {
                     Icon(Icons.Rounded.Close, "移除 ${attachment.name}", Modifier.padding(15.dp).size(18.dp))
                 }
@@ -760,26 +715,17 @@ fun ConversationSheetAction(
         color = Surface,
         contentColor = if (enabled) Ink else MutedInk,
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, Hairline),
-        shadowElevation = 1.dp,
-        modifier = modifier.appleSpringPressable(pressedScale = 0.95f, enabled = enabled)
+        border = BorderStroke(0.8.dp, Hairline),
+        modifier = modifier.appleSpringPressable(pressedScale = 0.94f, enabled = enabled)
     ) {
         Column(
             Modifier
-                .heightIn(min = 86.dp)
+                .heightIn(min = 84.dp)
                 .padding(horizontal = 10.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(if (enabled) AccentSoft else SurfaceInset),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, null, Modifier.size(20.dp), tint = if (enabled) Accent else MutedInk)
-            }
-            Spacer(Modifier.height(8.dp))
+            Icon(icon, null, Modifier.size(22.dp), tint = if (enabled) Accent else MutedInk)
+            Spacer(Modifier.height(7.dp))
             Text(label, style = MaterialTheme.typography.labelLarge)
             detail?.let {
                 Text(it, style = MaterialTheme.typography.labelSmall, color = MutedInk, textAlign = TextAlign.Center)
@@ -855,30 +801,34 @@ fun ConversationJumpToBottom(
     AnimatedVisibility(
         visible = visible,
         modifier = modifier,
-        enter = scaleIn(initialScale = 0.72f, animationSpec = AsterSpring.gentleBounce()) +
-            slideInVertically(AsterSpring.spatial()) { it / 2 } +
-            fadeIn(tween(fadeMillisIn)),
-        exit = scaleOut(targetScale = 0.78f, animationSpec = AsterSpring.snappy()) +
-            slideOutVertically(AsterSpring.snappy()) { it / 3 } +
-            fadeOut(tween(fadeMillisOut))
+        enter = scaleIn(
+            initialScale = 0.65f,
+            animationSpec = AsterSpring.jelly()
+        ) + slideInVertically(animationSpec = AsterSpring.spatial()) { it / 2 } +
+            fadeIn(animationSpec = tween(fadeMillisIn)),
+        exit = scaleOut(
+            targetScale = 0.72f,
+            animationSpec = AsterSpring.snappy()
+        ) + slideOutVertically(animationSpec = AsterSpring.snappy()) { it / 3 } +
+            fadeOut(animationSpec = tween(fadeMillisOut))
     ) {
         Surface(
             onClick = onClick,
             color = Surface,
-            contentColor = Accent,
+            contentColor = Ink,
             shape = CircleShape,
-            border = BorderStroke(1.dp, Accent.copy(alpha = 0.35f)),
-            tonalElevation = 2.dp,
-            shadowElevation = 6.dp,
+            border = BorderStroke(0.8.dp, Hairline),
+            tonalElevation = 0.dp,
+            shadowElevation = 4.dp,
             modifier = Modifier
-                .size(46.dp)
-                .appleSpringPressable(pressedScale = 0.88f)
+                .size(44.dp)
+                .appleSpringPressable(pressedScale = 0.86f)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Rounded.KeyboardArrowDown,
                     if (loading) "跟随生成" else "回到底部",
-                    Modifier.size(23.dp)
+                    Modifier.size(22.dp)
                 )
             }
         }

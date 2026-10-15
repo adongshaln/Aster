@@ -22,12 +22,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adong.adchat.ui.theme.*
 
+/**
+ * 严格保持仓库原始字段顺序：(title, detail, icon, prompt)
+ * 确保 ChatScreen / StoryScreen 共 6 处位置传参调用 100% 正常编译。
+ */
 data class ConversationStarter(
     val title: String,
     val detail: String,
@@ -35,13 +40,6 @@ data class ConversationStarter(
     val prompt: String
 )
 
-/**
- * Aster v1.0 — Claude Editorial Salon 欢迎页 × Apple 错峰弹簧卡片流
- * =================================================================
- * 1. 顶部 `AsterMark` 搭载 Apple 欠阻尼弹簧入场 (`AsterSpring.gentleBounce`) 与呼吸悬浮 (`claudeBreathingFloat`)；
- * 2. 顶部标签采用 Claude 胶囊微章设计，主标题使用 `FontFamily.Serif` 文学衬线体；
- * 3. 预设卡片 (`ConversationStarter`) 搭载 `appleStaggeredEntrance` 错峰弹簧瀑布流入场与 `appleSpringPressable` 触感回弹。
- */
 @Composable
 fun ConversationWelcome(
     label: String,
@@ -67,11 +65,11 @@ fun ConversationWelcome(
         AnimatedVisibility(
             visible = revealed,
             enter = fadeIn(animationSpec = AsterSpring.editorial()) +
-                    scaleIn(initialScale = 0.78f, animationSpec = AsterSpring.gentleBounce()) +
-                    slideInVertically(
-                        initialOffsetY = { it / 2 },
-                        animationSpec = AsterSpring.spatial()
-                    )
+                scaleIn(initialScale = 0.78f, animationSpec = AsterSpring.gentleBounce()) +
+                slideInVertically(
+                    initialOffsetY = { it / 2 },
+                    animationSpec = AsterSpring.spatial()
+                )
         ) {
             Surface(
                 color = AccentSoft.copy(alpha = 0.85f),
@@ -86,7 +84,6 @@ fun ConversationWelcome(
 
         Spacer(Modifier.height(16.dp))
 
-        // Claude 风格顶部微胶囊标签
         Surface(
             color = SurfaceInset.copy(alpha = 0.85f),
             shape = CircleShape,
@@ -214,7 +211,7 @@ fun ConversationAuthor(error: Boolean = false) {
         Text(
             text = "Aster",
             modifier = Modifier.padding(start = 8.dp),
-            style = MaterialTheme.typography.titleSmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Serif),
+            style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif),
             color = if (error) Danger else Ink.copy(alpha = 0.88f)
         )
     }
