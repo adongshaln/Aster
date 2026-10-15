@@ -79,12 +79,16 @@ object ClawdSampler {
     }
 
     /**
-     * raw：保留 3 位小数。原版用 JS toFixed(3)——half away from zero；
-     * kotlin.math.round 同语义，不能用 java.lang.Math.round（floor(x+0.5)，负数差 1/1000）。
+     * raw：保留 3 位小数。原版用 JS toFixed(3)——half away from zero（-2.3125 → -2.313）。
+     * kotlin.math.round 和 java.lang.Math.round 都是 ties-toward-+inf（-2.3125 → -2.312），
+     * 必须手写 sign * floor(abs + 0.5)。
      * 非 raw：取整到整格。原版用 JS Math.round——floor(x+0.5)，与 java.lang.Math.round 一致。
      */
     private fun maybeRound(v: Double, raw: Boolean): Double =
-        if (raw) kotlin.math.round(v * 1000.0) / 1000.0 else Math.round(v).toDouble()
+        if (raw) {
+            val x = v * 1000.0
+            (if (x >= 0) Math.floor(x + 0.5) else Math.ceil(x - 0.5)) / 1000.0
+        } else Math.round(v).toDouble()
 
     /** 字符串属性（f 帧 / att 挂载）的采样：step 语义，取 t 之前最近的关键帧值 */
     fun sampleStrKey(rig: RigData, clip: RigClip, part: String, prop: String, t: Int): String? {
@@ -191,5 +195,8 @@ object ClawdSampler {
         )
     }
 
-    private fun m3(v: Double): Double = kotlin.math.round(v * 1000.0) / 1000.0
+    private fun m3(v: Double): Double {
+        val x = v * 1000.0
+        return (if (x >= 0) Math.floor(x + 0.5) else Math.ceil(x - 0.5)) / 1000.0
+    }
 }

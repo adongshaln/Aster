@@ -124,30 +124,29 @@ class ClawdPixelGoldenTest {
     private fun numEq(want: Double, got: Double, isFloat: Boolean): Boolean =
         if (isFloat) Math.abs(want - got) < 1e-6 else want == got
 
-    /** golden 的 [[x,y,"颜色"],...] -> Pair<坐标键, ARGB> 有序列表 */
-    private fun JSONArray.toPixels(): List<Pair<Long, Int>> {
+    /** golden 的 [[x,y,"颜色"],...] -> (y, x, ARGB) 有序列表。直接用 (y,x) 元组排序——
+     *  位压缩键 (y shl 32)|(x and 0xFFFFFFFF) 对负 x 不保序（-1 → 0xFFFFFFFF 排到组尾）。 */
+    private fun JSONArray.toPixels(): List<Triple<Int, Int, Int>> {
         val list = (0 until length()).map { i ->
             val e = getJSONArray(i)
-            val key = (e.getInt(1).toLong() shl 32) or (e.getInt(0).toLong() and 0xFFFFFFFFL)
-            key to ClawdLoader.colorArgb(e.getString(2))
+            Triple(e.getInt(1), e.getInt(0), ClawdLoader.colorArgb(e.getString(2)))
         }
-        return list.sortedBy { it.first }
+        return list.sortedWith(compareBy({ it.first }, { it.second }))
     }
 
-    private fun firstDiff(want: List<Pair<Long, Int>>, got: List<ClawdPixel>): String? {
-        val gotKeys = got.map { (it.y.toLong() shl 32) or (it.x.toLong() and 0xFFFFFFFFL) }
-        if (want.map { it.first } != gotKeys) {
-            val wantSet = want.map { it.first }.toSet()
-            val gotSet = gotKeys.toSet()
+    private fun firstDiff(want: List<Triple<Int, Int, Int>>, got: List<ClawdPixel>): String? {
+        val gotPairs = got.map { Triple(it.y, it.x, it.argb) }.sortedWith(compareBy({ it.first }, { it.second }))
+        if (want.map { it.first to it.second } != gotPairs.map { it.first to it.second }) {
+            val wantSet = want.map { it.first to it.second }.toSet()
+            val gotSet = gotPairs.map { it.first to it.second }.toSet()
             val missing = wantSet - gotSet
             val extra = gotSet - wantSet
-            fun fmt(k: Long) = "(${k and 0xFFFFFFFFL},${k shr 32})"
-            return "像素集不同: 缺 ${missing.take(5).joinToString { fmt(it) }} 多 ${extra.take(5).joinToString { fmt(it) }} (want ${want.size} got ${got.size})"
+            return "像素集不同: 缺 ${missing.take(5).joinToString()} 多 ${extra.take(5).joinToString()} (want ${want.size} got ${got.size})"
         }
         for ((i, w) in want.withIndex()) {
-            val g = got[i]
-            if (w.second != g.argb) {
-                return "颜色不同 @(${g.x},${g.y}): want #${Integer.toHexString(w.second)} got #${Integer.toHexString(g.argb)}"
+            val g = gotPairs[i]
+            if (w.third != g.third) {
+                return "颜色不同 @(${g.second},${g.first}): want #${Integer.toHexString(w.third)} got #${Integer.toHexString(g.third)}"
             }
         }
         return null

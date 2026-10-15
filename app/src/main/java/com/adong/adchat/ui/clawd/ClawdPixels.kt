@@ -72,14 +72,16 @@ object ClawdPixels {
             cells.addAll(spans(wand, 15, by))
         }
         val pal = pile.pal
-        val merged = LinkedHashMap<Long, Int>()
+        // 同格后写覆盖先写；键用 "y,x" 字符串——位压缩 (y shl 32)|x 对负 x 不保序且无必要
+        val merged = LinkedHashMap<String, Int>()
         for ((x, y, ch) in cells) {
             val colorSpec = pal[ch.toString()]
                 ?: throw IllegalStateException("小只调色板缺字符 '$ch' ($name/$eyes/$pose/$face)")
-            merged[(y.toLong() shl 32) or (x.toLong() and 0xFFFFFFFFL)] = ClawdLoader.colorArgb(colorSpec)
+            merged["$y,$x"] = ClawdLoader.colorArgb(colorSpec)
         }
         val out = merged.entries.map { (key, argb) ->
-            ClawdPixel((key and 0xFFFFFFFFL).toInt(), (key shr 32).toInt(), argb)
+            val parts = key.split(',')
+            ClawdPixel(parts[1].toInt(), parts[0].toInt(), argb)
         }.toMutableList()
         out.sortWith(compareBy({ it.y }, { it.x }))
         return out
