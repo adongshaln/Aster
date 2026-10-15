@@ -19,45 +19,59 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * 镜头星冕光环视图（Liquid Chrono-Corona Halo）——「渲染是状态的纯函数」。
+ * 镜头星冕光环视图（Liquid Chrono-Corona Halo v2）——「渲染是状态的纯函数」。
  *
- * 视觉层级设计：
- * 1. 光学消光暗舱（Optical Pitch Chamber）：内缘 11.5dp 纯黑遮罩，与挖孔无缝融为一体；
- * 2. 微米级精密倒角（Micro-Chamfer Bezel）：紧贴内孔的 0.5dp 各向异性金属高光圈；
- * 3. 双折射流光主环（Birefringent Liquid Ring）：香槟钛金 + 冷月银 + 冰川青的温润色温散射；
- * 4. 柔雾光冕与边缘消隐（Atmospheric Corona & Vignette）：非对称指数光晕 + 窗口边缘平滑归零，
- *    绝不在 44dp 悬浮窗边界产生方形裁切痕；
- * 5. 事件触发特效（Corona Ignition）：双侧流光星轨对称攀升 -> 顶点碰撞聚变闪光 -> 双层同心光波涟漪。
+ * 视觉与反馈强化设计：
+ * 1. 光学消光暗舱（Optical Pitch Chamber）：内缘 13dp 纯黑遮罩，与挖孔无缝融为一体；
+ * 2. 微米级精密倒角（Micro-Chamfer Bezel）：紧贴内孔的高亮金属高光圈；
+ * 3. 双折射流光主环（Birefringent Liquid Ring）：基础线宽增至 2.1dp，支持按压大幅外扩至指尖外缘；
+ * 4. 宽幅柔雾光冕与冲击波画布（64dp 窗口）：为按压波纹、空点双闪与星冕聚变留足扩散空间，
+ *    外缘平滑归零，绝不在窗口边界产生方形裁切痕；
+ * 5. 三态色彩叙事：
+ *    - 常驻态：香槟钛金 & 冷月铂金；
+ *    - 识链触发态（colorShift -> 1）：极光冰青 & 翡翠星冕 + 双侧星轨聚变 + 双层同心冲击波；
+ *    - 空点/重复提醒态（nudgeShift -> 1）：流光琥珀 & 珊瑚暖金 + 双脉冲外扩光环。
  */
 class IslandGlowView(context: Context) : View(context) {
 
     companion object {
-        /** 光圈基准外径（dp）：严格保持原版 28dp。 */
-        const val RING_OUTER_DP = 32f
-        /** 悬浮窗边长（dp）：严格保持原版 44dp，确保圆心定位公式 100% 兼容。 */
-        const val WINDOW_SIZE_DP = 48f
+        /** 光圈基准外径（dp）。 */
+        const val RING_OUTER_DP = 34f
+        /**
+         * 悬浮窗边长（dp）：扩大至 64dp（半径 32dp），让按压外扩光环与同心冲击波能突破指尖遮挡，
+         * 同时配合浮点圆心定位公式，保证圆心与挖孔中心 100% 重合。
+         */
+        const val WINDOW_SIZE_DP = 64f
 
-        /** 圆环固定内缘半径（dp）：挖孔半径约 10dp + 1.5dp 纯黑消光间隙。 */
+        /** 圆环固定内缘半径（dp）：挖孔半径约 11.5dp + 1.5dp 纯黑消光间隙。 */
         private const val INNER_EDGE_DP = 13f
-        /** 基础核心环线宽（dp）。 */
-        private const val BASE_RING_WIDTH_DP = 1.6f
+        /** 基础核心环线宽（dp）：由 1.6dp 提升至 2.1dp，增强日常与按压辨识度。 */
+        private const val BASE_RING_WIDTH_DP = 2.1f
+        /** 常驻态基准光冕辉度。 */
+        const val BASE_GLOW_INTENSITY = 0.38f
 
-        // 常驻态调色板：香槟钛金 & 冷月铂金（高定腕表/镜头圈质感）
-        private const val COL_IDLE_CORE = 0xFFFFF9EE.toInt()     // 暖白铂金灯丝
-        private const val COL_IDLE_PRIMARY = 0xFFE5C384.toInt()  // 香槟钛金主体
-        private const val COL_IDLE_SECONDARY = 0xFF94A3B8.toInt()// 冷月银灰偏光
-        private const val COL_IDLE_GLOW = 0xFFD99B4E.toInt()     // 暖金柔雾光晕
+        // 常驻态调色板：香槟钛金 & 冷月铂金
+        private const val COL_IDLE_CORE = 0xFFFFFBF2.toInt()     // 暖白高光灯丝
+        private const val COL_IDLE_PRIMARY = 0xFFF0CB85.toInt()  // 高亮香槟钛金主体
+        private const val COL_IDLE_SECONDARY = 0xFFA8B8D0.toInt()// 冷月银蓝偏光
+        private const val COL_IDLE_GLOW = 0xFFE5A450.toInt()     // 暖金柔雾光晕
 
         // 事件触发调色板：极光冰青 & 翡翠星冕
-        private const val COL_EVENT_CORE = 0xFFECFEFF.toInt()    // 极光冰白核心
+        private const val COL_EVENT_CORE = 0xFFF0FDFF.toInt()    // 极光冰白核心
         private const val COL_EVENT_PRIMARY = 0xFF38BDF8.toInt() // 冰川天青主光
         private const val COL_EVENT_SECONDARY = 0xFF34D399.toInt()// 翡翠流光副色
         private const val COL_EVENT_GLOW = 0xFF0EA5E9.toInt()    // 深海蓝青光冕
 
+        // 空点/重复链接反馈调色板：流光琥珀 & 珊瑚暖橙（明确提示用户已点中但无新链接）
+        private const val COL_NUDGE_CORE = 0xFFFFF7ED.toInt()    // 暖白核心
+        private const val COL_NUDGE_PRIMARY = 0xFFFB923C.toInt() // 琥珀珊瑚橙主光
+        private const val COL_NUDGE_SECONDARY = 0xFFFBBF24.toInt()// 灿金副色
+        private const val COL_NUDGE_GLOW = 0xFFF97316.toInt()    // 熔岩琥珀光晕
+
         /**
          * AGSL 物理级光学着色器（API 33+）：
          * - 严格限制在 u_maxR 半径内自然消隐，绝不触碰方形窗口边界；
-         * - 包含各向异性金属光泽、双侧聚拢星轨、顶点聚变闪光与双层扩散光波。
+         * - 包含各向异性金属光泽、按压冲击波、双侧聚拢星轨、顶点聚变闪光与双层扩散光波。
          */
         private const val AGSL_SRC = """
 uniform float2 u_center;
@@ -68,6 +82,7 @@ uniform float u_maxR;
 uniform float u_glow;
 uniform float u_orbitDeg;
 uniform float u_colorShift;
+uniform float u_nudgeShift;
 uniform float u_convergeT;
 uniform float u_flash;
 uniform float u_rippleT;
@@ -81,6 +96,11 @@ layout(color) uniform half4 u_eventCore;
 layout(color) uniform half4 u_eventPrimary;
 layout(color) uniform half4 u_eventSecondary;
 layout(color) uniform half4 u_eventGlow;
+
+layout(color) uniform half4 u_nudgeCore;
+layout(color) uniform half4 u_nudgePrimary;
+layout(color) uniform half4 u_nudgeSecondary;
+layout(color) uniform half4 u_nudgeGlow;
 
 float hash12(float2 p) {
     float3 p3 = fract(float3(p.xyx) * 0.1031);
@@ -100,24 +120,24 @@ half4 main(float2 p) {
         return half4(0.0, 0.0, 0.0, 0.0);
     }
     float innerMask = smoothstep(u_innerEdge - 0.7, u_innerEdge + 0.35, r);
-    // 窗口外缘安全柔化遮罩：确保光晕和涟漪在到达 44dp 窗口边界前平滑归零
-    float outerVignette = 1.0 - smoothstep(u_maxR - 3.2, u_maxR - 0.3, r);
+    // 窗口外缘安全柔化遮罩：确保光晕和涟漪在到达窗口边界前平滑归零
+    float outerVignette = 1.0 - smoothstep(u_maxR - 4.0, u_maxR - 0.4, r);
 
     // 2. 非对称距离场：内侧陡峭防侵蚀镜头，外侧丝滑扩散
     float signedD = r - u_ringR;
     float d = abs(signedD);
-    float asymD = signedD < 0.0 ? d * 1.9 : d;
+    float asymD = signedD < 0.0 ? d * 1.85 : d;
 
     // 核心环与中心高光灯丝
     float body = 1.0 - smoothstep(0.0, u_halfW, asymD);
-    float filament = 1.0 - smoothstep(0.0, u_halfW * 0.42, asymD);
+    float filament = 1.0 - smoothstep(0.0, u_halfW * 0.48, asymD);
 
     // 紧贴内缘的微米级精密金属倒角线
-    float bezelD = abs(r - (u_innerEdge + 0.55));
-    float bezel = (1.0 - smoothstep(0.0, max(0.8, u_halfW * 0.35), bezelD)) * 0.45;
+    float bezelD = abs(r - (u_innerEdge + 0.6));
+    float bezel = (1.0 - smoothstep(0.0, max(0.9, u_halfW * 0.38), bezelD)) * 0.55;
 
     // 指数衰减柔雾光冕
-    float glowFalloff = exp(-asymD / max(1.5, u_halfW * 2.6));
+    float glowFalloff = exp(-asymD / max(2.0, u_halfW * 3.1));
     float halo = glowFalloff * u_glow * innerMask * outerVignette;
 
     // 3. 各向异性角度偏光（模拟金属拉丝与光学镀膜双峰反射）
@@ -132,68 +152,72 @@ half4 main(float2 p) {
     half3 secCol = mix(u_idleSecondary.rgb, u_eventSecondary.rgb, half(u_colorShift));
     half3 haloCol = mix(u_idleGlow.rgb, u_eventGlow.rgb, half(u_colorShift));
 
+    coreCol = mix(coreCol, u_nudgeCore.rgb, half(u_nudgeShift));
+    priCol = mix(priCol, u_nudgePrimary.rgb, half(u_nudgeShift));
+    secCol = mix(secCol, u_nudgeSecondary.rgb, half(u_nudgeShift));
+    haloCol = mix(haloCol, u_nudgeGlow.rgb, half(u_nudgeShift));
+
     half3 ringTint = mix(secCol, priCol, half(spec1));
-    ringTint = mix(ringTint, coreCol, half(filament * 0.82 + spec2 * 0.22));
+    ringTint = mix(ringTint, coreCol, half(filament * 0.88 + spec2 * 0.26));
     half3 baseCol = mix(haloCol, ringTint, half(clamp(body + bezel, 0.0, 1.0)));
 
-    float orbitalMod = 0.78 + 0.22 * (0.65 * spec1 + 0.35 * spec2);
-    float alpha = clamp((body * 0.96 + bezel + halo * 0.52) * orbitalMod, 0.0, 1.0);
+    float orbitalMod = 0.82 + 0.18 * (0.65 * spec1 + 0.35 * spec2);
+    float alpha = clamp((body * 0.98 + bezel + halo * 0.66) * orbitalMod, 0.0, 1.0);
     half3 rgb = baseCol * half(alpha);
 
     // 4. 事件第一幕：双侧流光星轨从底部(90°)对称向上(-90°)聚拢
     if (u_convergeT > 0.001 && u_convergeT < 0.999) {
-        // 将角度变换为相对于底部(90°)的对称夹角 sym in [0, 180°]
         float fromBottom = angDeg - 90.0;
         fromBottom -= floor((fromBottom + 180.0) / 360.0) * 360.0;
         float symDeg = abs(fromBottom);
         float headDeg = u_convergeT * 180.0;
         float distBehind = headDeg - symDeg;
-        float tailLen = 95.0;
-        if (distBehind >= -6.0 && distBehind < tailLen) {
+        float tailLen = 110.0;
+        if (distBehind >= -8.0 && distBehind < tailLen) {
             float trail = distBehind < 0.0
-                ? (1.0 + distBehind / 6.0)
+                ? (1.0 + distBehind / 8.0)
                 : (1.0 - distBehind / tailLen);
             trail = clamp(trail, 0.0, 1.0);
-            float radialMask = 1.0 - smoothstep(0.0, u_halfW * 1.75, asymD);
-            float boost = trail * trail * radialMask;
-            half3 streamCol = mix(u_eventPrimary.rgb, half3(1.0), half(trail * 0.7));
-            rgb += streamCol * half(boost * 1.15);
-            alpha = clamp(alpha + boost * 0.9, 0.0, 1.0);
+            float radialMask = 1.0 - smoothstep(0.0, u_halfW * 2.2, asymD);
+            float boost = trail * (0.4 + 0.6 * trail) * radialMask;
+            half3 streamCol = mix(priCol, half3(1.0), half(trail * 0.78));
+            rgb += streamCol * half(boost * 1.45);
+            alpha = clamp(alpha + boost * 0.95, 0.0, 1.0);
         }
     }
 
-    // 5. 事件第二幕：顶点碰撞聚变闪光（Zenith Starburst & Full-Ring Ignition）
+    // 5. 高光聚变闪光（按压瞬间爆发 / 顶点碰撞聚变闪光）
     if (u_flash > 0.001) {
         float topDist = abs(angDeg + 90.0);
         topDist = min(topDist, 360.0 - topDist);
-        float zenithSpot = exp(-topDist / 38.0) * exp(-asymD / (u_halfW * 3.2));
-        float ringFlash = exp(-asymD / (u_halfW * 2.4)) * 0.75;
+        float zenithSpot = exp(-topDist / 46.0) * exp(-asymD / (u_halfW * 3.8));
+        float ringFlash = exp(-asymD / (u_halfW * 2.9)) * 0.88;
         float totalFlash = (zenithSpot * 0.85 + ringFlash) * u_flash * innerMask * outerVignette;
-        half3 flashCol = mix(u_eventCore.rgb, half3(1.0), half(0.65));
-        rgb += flashCol * half(totalFlash);
-        alpha = clamp(alpha + totalFlash * 0.85, 0.0, 1.0);
+        half3 flashCol = mix(coreCol, half3(1.0), half(0.72));
+        rgb += flashCol * half(totalFlash * 1.25);
+        alpha = clamp(alpha + totalFlash * 0.92, 0.0, 1.0);
     }
 
-    // 6. 事件第三幕：双重同心冲击波光环（一快一慢向外扩散消散）
+    // 6. 双重同心冲击波光环（按压扩散波 & 识链事件冲击波）
     if (u_rippleT > 0.001 && u_rippleT < 0.999) {
-        float span = max(2.0, (u_maxR - 1.2) - u_ringR);
-        // 主波纹
+        float span = max(3.0, (u_maxR - 1.5) - u_ringR);
+        // 主冲击波纹
         float r1 = u_ringR + u_rippleT * span;
-        float w1 = max(1.0, u_halfW * (1.15 - 0.65 * u_rippleT));
-        float env1 = (1.0 - u_rippleT) * (1.0 - u_rippleT);
+        float w1 = max(1.3, u_halfW * (1.35 - 0.65 * u_rippleT));
+        float env1 = (1.0 - u_rippleT) * (1.0 - 0.65 * u_rippleT);
         float wave1 = (1.0 - smoothstep(0.0, w1, abs(r - r1))) * env1;
 
         // 次级回响波纹（延迟触发）
-        float t2 = clamp((u_rippleT - 0.18) / 0.82, 0.0, 1.0);
-        float r2 = u_ringR + t2 * span * 0.78;
-        float w2 = max(0.8, u_halfW * (0.85 - 0.5 * t2));
-        float env2 = (1.0 - t2) * (1.0 - t2) * step(0.18, u_rippleT);
-        float wave2 = (1.0 - smoothstep(0.0, w2, abs(r - r2))) * env2 * 0.55;
+        float t2 = clamp((u_rippleT - 0.16) / 0.84, 0.0, 1.0);
+        float r2 = u_ringR + t2 * span * 0.80;
+        float w2 = max(1.0, u_halfW * (1.0 - 0.5 * t2));
+        float env2 = (1.0 - t2) * (1.0 - t2) * step(0.16, u_rippleT);
+        float wave2 = (1.0 - smoothstep(0.0, w2, abs(r - r2))) * env2 * 0.72;
 
         float waveTotal = (wave1 + wave2) * innerMask * outerVignette;
-        half3 waveCol = mix(u_eventSecondary.rgb, u_eventCore.rgb, half(0.45));
-        rgb += waveCol * half(waveTotal * 0.9);
-        alpha = clamp(alpha + waveTotal * 0.75, 0.0, 1.0);
+        half3 waveCol = mix(priCol, coreCol, half(0.52));
+        rgb += waveCol * half(waveTotal * 1.15);
+        alpha = clamp(alpha + waveTotal * 0.88, 0.0, 1.0);
     }
 
     // 7. 内孔边缘纯黑过渡 + 蓝噪抖动消除暗部色带
@@ -208,7 +232,7 @@ half4 main(float2 p) {
 
     // ---------- 响应式视觉状态参数（由外部物理动画器驱动） ----------
 
-    /** 弹簧缩放因子：1.0 为基准；按下时弹性外扩至 ~1.45，释放后带阻尼回弹。 */
+    /** 弹簧缩放因子：1.0 为基准；按下时弹性外扩至 ~1.68，突破指尖遮挡。 */
     var springScale: Float = 1f
         set(value) {
             if (field != value) {
@@ -217,8 +241,8 @@ half4 main(float2 p) {
             }
         }
 
-    /** 光冕辉度（0..1）：常驻态 ~0.26，按压或触发事件时升至 0.95。 */
-    var glowIntensity: Float = 0.26f
+    /** 光冕辉度（0..1.2）：常驻态 0.38，按压或触发事件时升至 1.0+。 */
+    var glowIntensity: Float = BASE_GLOW_INTENSITY
         set(value) {
             if (field != value) {
                 field = value
@@ -237,6 +261,15 @@ half4 main(float2 p) {
 
     /** 调色板混合度：0 = 香槟钛金（常驻），1 = 极光冰青（事件触发）。 */
     var colorShift: Float = 0f
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
+
+    /** 空点/重复链接调色板混合度：0 = 常驻色，1 = 琥珀珊瑚橙（提示已点中但无新链接）。 */
+    var nudgeShift: Float = 0f
         set(value) {
             if (field != value) {
                 field = value
@@ -274,9 +307,10 @@ half4 main(float2 p) {
     /** 恢复至常驻静谧状态。 */
     fun reset() {
         springScale = 1f
-        glowIntensity = 0.26f
+        glowIntensity = BASE_GLOW_INTENSITY
         orbitAngle = -45f
         colorShift = 0f
+        nudgeShift = 0f
         convergeT = 0f
         flashIntensity = 0f
         rippleProgress = 0f
@@ -320,6 +354,7 @@ half4 main(float2 p) {
     private var cachedCy = -1f
     private var idleSweep: SweepGradient? = null
     private var eventSweep: SweepGradient? = null
+    private var nudgeSweep: SweepGradient? = null
 
     private val agslShader: RuntimeShader? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -332,9 +367,9 @@ half4 main(float2 p) {
         val maxR = min(cx, cy)
         val innerEdge = dp(INNER_EDGE_DP)
 
-        // 内缘固定不缩进，弹簧形变仅向外生长
+        // 内缘固定不缩进，弹簧形变向外大幅生长（放大径向膨胀系数至 2.4dp，突破指肚遮挡）
         val coreWidth = dp(BASE_RING_WIDTH_DP) * springScale
-        val extraExpand = max(0f, springScale - 1f) * dp(0.85f)
+        val extraExpand = max(0f, springScale - 1f) * dp(2.4f)
         val ringR = innerEdge + coreWidth / 2f + extraExpand
 
         val shader = agslShader
@@ -366,6 +401,7 @@ half4 main(float2 p) {
         shader.setFloatUniform("u_glow", glowIntensity)
         shader.setFloatUniform("u_orbitDeg", orbitAngle)
         shader.setFloatUniform("u_colorShift", colorShift.coerceIn(0f, 1f))
+        shader.setFloatUniform("u_nudgeShift", nudgeShift.coerceIn(0f, 1f))
         shader.setFloatUniform("u_convergeT", convergeT.coerceIn(0f, 1f))
         shader.setFloatUniform("u_flash", flashIntensity.coerceIn(0f, 1f))
         shader.setFloatUniform("u_rippleT", rippleProgress.coerceIn(0f, 1f))
@@ -379,6 +415,11 @@ half4 main(float2 p) {
         shader.setColorUniform("u_eventPrimary", COL_EVENT_PRIMARY)
         shader.setColorUniform("u_eventSecondary", COL_EVENT_SECONDARY)
         shader.setColorUniform("u_eventGlow", COL_EVENT_GLOW)
+
+        shader.setColorUniform("u_nudgeCore", COL_NUDGE_CORE)
+        shader.setColorUniform("u_nudgePrimary", COL_NUDGE_PRIMARY)
+        shader.setColorUniform("u_nudgeSecondary", COL_NUDGE_SECONDARY)
+        shader.setColorUniform("u_nudgeGlow", COL_NUDGE_GLOW)
 
         shaderPaint.shader = shader
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shaderPaint)
@@ -395,16 +436,29 @@ half4 main(float2 p) {
         maxR: Float
     ) {
         ensureFallbackShaders(cx, cy)
-        val isEvent = colorShift > 0.5f
-        val glowCol = if (isEvent) COL_EVENT_GLOW else COL_IDLE_GLOW
-        val coreCol = if (isEvent) COL_EVENT_CORE else COL_IDLE_CORE
-        val priCol = if (isEvent) COL_EVENT_PRIMARY else COL_IDLE_PRIMARY
+        val isEvent = colorShift > 0.45f
+        val isNudge = !isEvent && nudgeShift > 0.35f
+        val glowCol = when {
+            isEvent -> COL_EVENT_GLOW
+            isNudge -> COL_NUDGE_GLOW
+            else -> COL_IDLE_GLOW
+        }
+        val coreCol = when {
+            isEvent -> COL_EVENT_CORE
+            isNudge -> COL_NUDGE_CORE
+            else -> COL_IDLE_CORE
+        }
+        val priCol = when {
+            isEvent -> COL_EVENT_PRIMARY
+            isNudge -> COL_NUDGE_PRIMARY
+            else -> COL_IDLE_PRIMARY
+        }
 
         // 1. 三层柔雾光晕
-        val totalGlow = (glowIntensity + flashIntensity * 0.6f).coerceIn(0f, 1.3f)
+        val totalGlow = (glowIntensity + flashIntensity * 0.75f).coerceIn(0f, 1.5f)
         if (totalGlow > 0.01f) {
-            val widths = floatArrayOf(2.8f, 5.0f, 7.6f)
-            val alphas = floatArrayOf(0.32f, 0.16f, 0.07f)
+            val widths = floatArrayOf(3.4f, 6.2f, 9.6f)
+            val alphas = floatArrayOf(0.38f, 0.20f, 0.09f)
             glowPaint.color = glowCol
             for (i in widths.indices) {
                 glowPaint.strokeWidth = dp(widths[i])
@@ -414,7 +468,11 @@ half4 main(float2 p) {
         }
 
         // 2. 各向异性流光主环
-        val sweep = if (isEvent) eventSweep else idleSweep
+        val sweep = when {
+            isEvent -> eventSweep
+            isNudge -> nudgeSweep
+            else -> idleSweep
+        }
         if (sweep != null) {
             shaderMatrix.reset()
             shaderMatrix.setRotate(orbitAngle, cx, cy)
@@ -427,33 +485,41 @@ half4 main(float2 p) {
 
         // 3. 高色温灯丝内芯
         filamentPaint.color = coreCol
-        filamentPaint.strokeWidth = dp(0.6f) * (1f + flashIntensity * 0.5f)
-        filamentPaint.alpha = (210 + (flashIntensity * 45f).toInt()).coerceIn(0, 255)
+        filamentPaint.strokeWidth = dp(0.85f) * (1f + flashIntensity * 0.65f)
+        filamentPaint.alpha = (225 + (flashIntensity * 30f).toInt()).coerceIn(0, 255)
         canvas.drawCircle(cx, cy, ringR, filamentPaint)
 
         // 4. 双侧对称聚拢星轨
         if (convergeT in 0.01f..0.99f) {
             arcRect.set(cx - ringR, cy - ringR, cx + ringR, cy + ringR)
             val spanDeg = convergeT * 180f
-            val tailDeg = min(spanDeg, 85f)
-            arcPaint.strokeWidth = coreWidth * 1.35f
+            val tailDeg = min(spanDeg, 100f)
+            arcPaint.strokeWidth = coreWidth * 1.5f
             arcPaint.color = COL_EVENT_CORE
-            arcPaint.alpha = 240
-            // 右侧上行弧 (从 90° 逆时针到 90° - spanDeg)
+            arcPaint.alpha = 250
             canvas.drawArc(arcRect, 90f - spanDeg, tailDeg, false, arcPaint)
-            // 左侧上行弧 (从 90° 顺时针到 90° + spanDeg)
             canvas.drawArc(arcRect, 90f + spanDeg - tailDeg, tailDeg, false, arcPaint)
         }
 
         // 5. 双层扩散光波涟漪
         if (rippleProgress in 0.01f..0.99f) {
-            val span = max(dp(2f), (maxR - dp(1.5f)) - ringR)
+            val span = max(dp(3f), (maxR - dp(1.8f)) - ringR)
             val r1 = ringR + rippleProgress * span
-            val env1 = (1f - rippleProgress) * (1f - rippleProgress)
+            val env1 = (1f - rippleProgress) * (1f - 0.65f * rippleProgress)
             ripplePaint.color = priCol
-            ripplePaint.strokeWidth = dp(1.3f) * (1f - 0.5f * rippleProgress)
-            ripplePaint.alpha = (env1 * 190f).toInt().coerceIn(0, 255)
+            ripplePaint.strokeWidth = dp(1.8f) * (1f - 0.45f * rippleProgress)
+            ripplePaint.alpha = (env1 * 230f).toInt().coerceIn(0, 255)
             canvas.drawCircle(cx, cy, r1, ripplePaint)
+
+            if (rippleProgress > 0.16f) {
+                val t2 = ((rippleProgress - 0.16f) / 0.84f).coerceIn(0f, 1f)
+                val r2 = ringR + t2 * span * 0.80f
+                val env2 = (1f - t2) * (1f - t2)
+                ripplePaint.color = coreCol
+                ripplePaint.strokeWidth = dp(1.2f) * (1f - 0.5f * t2)
+                ripplePaint.alpha = (env2 * 165f).toInt().coerceIn(0, 255)
+                canvas.drawCircle(cx, cy, r2, ripplePaint)
+            }
         }
 
         // 6. 压紧内孔纯黑消光圆
@@ -486,6 +552,18 @@ half4 main(float2 p) {
                 COL_EVENT_SECONDARY,
                 COL_EVENT_CORE,
                 COL_EVENT_PRIMARY
+            ),
+            pos
+        )
+        nudgeSweep = SweepGradient(
+            cx,
+            cy,
+            intArrayOf(
+                COL_NUDGE_PRIMARY,
+                COL_NUDGE_CORE,
+                COL_NUDGE_SECONDARY,
+                COL_NUDGE_CORE,
+                COL_NUDGE_PRIMARY
             ),
             pos
         )
