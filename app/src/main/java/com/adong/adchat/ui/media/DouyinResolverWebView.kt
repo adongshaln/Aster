@@ -673,7 +673,7 @@ private class DouyinResolverSession(
      * DouyinIE 同款调用）；同源 fetch 免 CORS，Cookie/UA 由 WebView 自带。
      * 只跑一次；结果瘦身后存 window.__asterDetail 供探针读取，失败静默（嗅探兜底）。
      */
-    const val DOUYIN_DETAIL_FETCH = """
+    val DOUYIN_DETAIL_FETCH = """
         (function () {
           var videoId = '__VIDEO_ID__';
           function done(ok, detail) {

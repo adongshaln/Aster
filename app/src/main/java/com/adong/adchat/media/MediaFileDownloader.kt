@@ -2,6 +2,7 @@ package com.adong.adchat.media
 
 import android.content.Context
 import android.os.storage.StorageManager
+import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -155,7 +156,7 @@ class MediaFileDownloader(context: Context) {
         activeCalls += call
         Log.d(
             "AsterMedia",
-            "probe: host=${runCatching { okhttp3.HttpUrl.Companion.toHttpUrlOrNull(media.mediaUrl)?.host }.getOrNull()} " +
+            "probe: host=${runCatching { java.net.URI(media.mediaUrl).host }.getOrNull()} " +
                 "url=${media.mediaUrl.take(140)} ua=${media.userAgent.take(40)}"
         )
         try {
