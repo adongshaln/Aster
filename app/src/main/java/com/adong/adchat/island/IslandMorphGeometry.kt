@@ -57,8 +57,9 @@ internal class IslandMorphGeometry {
         radius = (seedRadius + (expandedRadius - seedRadius) * progress)
             .coerceIn(0f, minOf(halfWidth, halfHeight))
         val recoil = (-progress / IslandSpring.OVERSHOOT).coerceIn(0f, 1f)
-        // Quadratic handoff has zero entry/exit slope, without a second clock or oscillation.
-        haloRecoil = 0.10f * recoil * recoil
+        // The visible handoff is zero at both endpoints: one gentle recoil, then zero at the
+        // exact idle frame. It is derived from the master curve, not a second animation clock.
+        haloRecoil = 0.10f * 4f * recoil * (1f - recoil)
     }
 
     fun contains(x: Float, y: Float): Boolean =

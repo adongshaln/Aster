@@ -548,6 +548,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val fromOrbit = glowView.orbitAngle
         cardHost.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         morphAnimator = springAnimation(if (expanding) IslandSpring.EXPAND_MS else IslandSpring.COLLAPSE_MS, { p ->
+            // Body bounds reverse from expanded to idle during collapse; p itself is the
+            // forward wall-clock progress, so every visual channel reaches its idle target once.
             applyMorph(lerp(from, target, p))
             glowView.alpha = lerp(fromAlpha, if (expanding) 0f else 1f, p).coerceIn(0f, 1f)
             val closingRecoil = if (!expanding) surface.geometry.haloRecoil else 0f
