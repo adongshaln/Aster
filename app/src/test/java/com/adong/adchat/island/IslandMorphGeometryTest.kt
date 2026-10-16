@@ -6,7 +6,7 @@ import org.junit.Test
 
 class IslandMorphGeometryTest {
     private fun geometry(width: Float = 400f) = IslandMorphGeometry().apply {
-        configure(width, 64f, 13f, width - 28f, 250f, 32f)
+        configure(width / 2f, 32f, 13f, 14f, 19f, width - 14f, 250f, 26f)
     }
 
     @Test fun seedIsExactlyTheOriginalBlackHole() {
@@ -33,24 +33,48 @@ class IslandMorphGeometryTest {
         assertEquals(14f, g.left, 0f)
         assertEquals(386f, g.right, 0f)
         assertEquals(250f, g.bottom, 0f)
-        assertEquals(32f, g.radius, 0f)
+        assertEquals(26f, g.radius, 0f)
     }
 
-    @Test fun bothOpeningAndClosingReboundsAreNotClampedAway() {
+    @Test fun cardShapeStaysAtTheSeedWhileClosingTailReboundsOnlyTheHalo() {
         val g = geometry()
         g.update(1.02f)
         assertTrue(g.left < 14f)
         assertTrue(g.right > 386f)
         assertTrue(g.bottom > 250f)
-        g.update(-0.02f)
-        assertTrue(g.left > 187f)
-        assertTrue(g.right < 213f)
-        assertTrue(g.bottom < 45f)
-        assertTrue(g.bottom > g.top)
-        assertTrue(g.radius > 0f)
+
+        g.update(0f)
+        assertEquals(187f, g.left, 0f)
+        assertEquals(213f, g.right, 0f)
+        assertEquals(19f, g.top, 0f)
+        assertEquals(45f, g.bottom, 0f)
         assertEquals(0f, g.haloRecoil, 0f)
+
         g.update(-IslandSpring.OVERSHOOT / 2f)
-        assertEquals(0.10f, g.haloRecoil, 0.0001f)
+        assertEquals(187f, g.left, 0f)
+        assertEquals(213f, g.right, 0f)
+        assertEquals(19f, g.top, 0f)
+        assertEquals(45f, g.bottom, 0f)
+        assertEquals(0.05f, g.haloRecoil, 0.0001f)
+
+        g.update(-IslandSpring.OVERSHOOT)
+        assertEquals(0f, g.haloRecoil, 0f)
+    }
+
+    @Test fun collapseTailProducesExactlyOneHaloRecoilPeak() {
+        val g = geometry()
+        val samples = (0..1_000).map { index ->
+            val closingProgress = 1f - IslandSpring.progress(index / 1_000f)
+            g.update(closingProgress)
+            g.haloRecoil
+        }
+        var peaks = 0
+        for (i in 1 until samples.lastIndex) {
+            if (samples[i] > samples[i - 1] && samples[i] > samples[i + 1]) peaks++
+        }
+        assertEquals(1, peaks)
+        assertEquals(0f, samples.first(), 0f)
+        assertEquals(0f, samples.last(), 0f)
     }
 
     @Test fun samplingOrderAndReverseFromCurrentPositionHaveNoPositionJump() {

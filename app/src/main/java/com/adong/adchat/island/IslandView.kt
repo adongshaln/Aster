@@ -148,7 +148,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         addView(glowView, LayoutParams(dpF(WINDOW_SIZE_DP).roundToInt(), dpF(WINDOW_SIZE_DP).roundToInt()).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         })
-        cardHost.alpha = 0f
+        cardHost.alpha = 1f
+        cardHost.scaleX = 0f
+        cardHost.scaleY = 0f
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 
@@ -237,10 +239,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(12), dp(18), dp(16))
-            // The outer black body is shared with the halo; keep the existing card skin for the
-            // content portion so expansion changes geometry, not the established visual language.
-            background = cardDrawable(0xFF38BDF8.toInt())
-            elevation = dpF(12f)
+            // The morphing surface is the only card background. Keeping this content host
+            // transparent makes the text/actions emerge from the same ring-centred silhouette.
         }
         val grabber = View(context).apply { background = grabberDrawable(0xFF38BDF8.toInt()) }
         host.addView(grabber, LinearLayout.LayoutParams(dp(38), dp(4)).apply {
@@ -582,10 +582,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun applyMorph(value: Float) {
         morphProgress = value
         surface.setProgress(value)
-        // Content has no independent popup/scale-in animator. It follows the same spring geometry.
-        cardHost.alpha = ((value - 0.3f) / 0.7f).coerceIn(0f, 1f)
-        cardHost.translationY = -dpF(14f) * (1f - value)
-        val scale = 1f - 0.04f * (1f - value)
+        // Map the entire measured card directly to/from the resident halo centre. No slide,
+        // partial scale, or early fade: at zero all content converges to the ring's exact centre.
+        val scale = IslandCardMorph.scale(value)
         cardHost.scaleX = scale
         cardHost.scaleY = scale
         val actionable = state is State.Card && value >= 0.9f
@@ -647,18 +646,18 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         // Equal parity keeps Gravity.CENTER's integer rounding from moving the ring half a pixel.
         val viewportWidth = requestedWidth - ((requestedWidth - haloWidth) and 1)
         val contentWidth = (viewportWidth - dp(28)).coerceAtLeast(1)
-        val contentTop = dpF(WINDOW_SIZE_DP).roundToInt() + dp(4)
+        val bodyTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(13f)).roundToInt()
+        // The card is redesigned as one surface; keep a compact inset from its new top edge.
+        cardHost.setPadding(dp(18), dp(12), dp(18), dp(16))
         cardHost.layoutParams = LayoutParams(contentWidth, LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            topMargin = contentTop
+            topMargin = bodyTop
         }
         cardHost.measure(
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
-        cardHost.pivotX = contentWidth / 2f
-        cardHost.pivotY = 0f
-        val bodyBottom = contentTop + cardHost.measuredHeight.toFloat()
+        val bodyBottom = bodyTop + cardHost.measuredHeight.toFloat()
         // Geometry is configured in onLayout from ACTUAL bounds, atomically with the centred halo.
         // Reserve room for 2% overshoot so it never clips at the surface's lower/right edge.
         val viewportHeight = (bodyBottom * 1.04f + dp(8)).roundToInt()
@@ -680,9 +679,17 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
         if (expandedViewport) {
+            val anchorX = glowView.left + glowView.width / 2f
+            val anchorY = glowView.top + glowView.height / 2f
+            val cardLeft = cardHost.left.toFloat()
+            val cardTop = cardHost.top.toFloat()
+            val cardRight = cardHost.right.toFloat()
+            val cardBottom = cardHost.bottom.toFloat()
+            cardHost.pivotX = anchorX - cardLeft
+            cardHost.pivotY = anchorY - cardTop
             surface.geometry.configure(
-                width.toFloat(), glowView.height.toFloat(), dpF(13f),
-                cardHost.width.toFloat(), cardHost.bottom.toFloat(), dpF(32f)
+                anchorX, anchorY, dpF(13f),
+                cardLeft, cardTop, cardRight, cardBottom, dpF(26f)
             )
             surface.active = true
             applyMorph(morphProgress)
@@ -735,6 +742,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
         if (renderedPlatform != link.platform) {
             renderedPlatform = link.platform
+            surface.setAccentColor(accent)
             grabberView.background = grabberDrawable(accent)
             platformTag.text = tag
             platformTag.background = tagDrawable(accent)
@@ -830,14 +838,6 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             if (composed) return
         }
         dispatchVibration(VibrationEffect.createWaveform(longArrayOf(0, 12, 50, 12), intArrayOf(0, 190, 0, 130), -1))
-    }
-
-    private fun cardDrawable(accentColor: Int): GradientDrawable = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        setColor(0xF710131A.toInt())
-        cornerRadius = dpF(26f)
-        val borderColor = (accentColor and 0x00FFFFFF) or (0x66 shl 24)
-        setStroke(max(1, (density * 1.2f).roundToInt()), borderColor)
     }
 
     private fun grabberDrawable(accent: Int) = GradientDrawable().apply {

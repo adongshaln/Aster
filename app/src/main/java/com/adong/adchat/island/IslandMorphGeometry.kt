@@ -25,41 +25,47 @@ internal class IslandMorphGeometry {
         private set
 
     private var seedRadius = 0f
-    private var expandedWidth = 0f
+    private var expandedLeft = 0f
+    private var expandedTop = 0f
+    private var expandedRight = 0f
     private var expandedBottom = 0f
     private var expandedRadius = 0f
 
     fun configure(
-        viewportWidth: Float,
-        haloSize: Float,
+        centerX: Float,
+        centerY: Float,
         seedRadius: Float,
-        expandedWidth: Float,
+        expandedLeft: Float,
+        expandedTop: Float,
+        expandedRight: Float,
         expandedBottom: Float,
         expandedRadius: Float
     ) {
-        centerX = viewportWidth / 2f
-        centerY = haloSize / 2f
+        this.centerX = centerX
+        this.centerY = centerY
         this.seedRadius = seedRadius
-        this.expandedWidth = expandedWidth
+        this.expandedLeft = expandedLeft
+        this.expandedTop = expandedTop
+        this.expandedRight = expandedRight
         this.expandedBottom = expandedBottom
         this.expandedRadius = expandedRadius
     }
 
     fun update(progress: Float) {
-        // Keep the 2% overshoot. Clamping progress to 0..1 would erase the requested rebound.
-        val halfWidth = (seedRadius + (expandedWidth / 2f - seedRadius) * progress)
-            .coerceAtLeast(seedRadius * 0.5f)
-        left = centerX - halfWidth
-        right = centerX + halfWidth
-        top = centerY - seedRadius
-        bottom = centerY + seedRadius + (expandedBottom - centerY - seedRadius) * progress
-        val halfHeight = ((bottom - top) / 2f).coerceAtLeast(0f)
-        radius = (seedRadius + (expandedRadius - seedRadius) * progress)
+        // The card silhouette follows the same circle-to-card path in reverse. Closing-tail
+        // overshoot belongs to the resident halo; never extrapolate the card through zero size.
+        val shapeProgress = progress.coerceIn(0f, 1.02f)
+        left = centerX - seedRadius + (expandedLeft - (centerX - seedRadius)) * shapeProgress
+        right = centerX + seedRadius + (expandedRight - (centerX + seedRadius)) * shapeProgress
+        top = centerY - seedRadius + (expandedTop - (centerY - seedRadius)) * shapeProgress
+        bottom = centerY + seedRadius + (expandedBottom - (centerY + seedRadius)) * shapeProgress
+        val halfWidth = (right - left) / 2f
+        val halfHeight = (bottom - top) / 2f
+        radius = (seedRadius + (expandedRadius - seedRadius) * shapeProgress)
             .coerceIn(0f, minOf(halfWidth, halfHeight))
         val recoil = (-progress / IslandSpring.OVERSHOOT).coerceIn(0f, 1f)
-        // The visible handoff is zero at both endpoints: one gentle recoil, then zero at the
-        // exact idle frame. It is derived from the master curve, not a second animation clock.
-        haloRecoil = 0.10f * 4f * recoil * (1f - recoil)
+        // |closing progress| rises to one peak then returns to zero with the same master curve.
+        haloRecoil = 0.10f * recoil
     }
 
     fun contains(x: Float, y: Float): Boolean =

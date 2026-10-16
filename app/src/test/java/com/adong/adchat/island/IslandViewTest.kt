@@ -118,6 +118,56 @@ class IslandViewTest {
         assertEquals(1, events.dismissed)
     }
 
+    @Test fun cardCornersScaleAroundTheMeasuredRingCenterIntoTheSharedShell() {
+        view.attach()
+        layoutWindow()
+        val glow = view.getChildAt(1) as IslandGlowView
+        view.show(first)
+        layoutWindow()
+
+        val surface = view.getChildAt(0) as IslandSurfaceView
+        val card = surface.getChildAt(0)
+        val anchorX = glow.left + glow.width / 2f
+        val anchorY = glow.top + glow.height / 2f
+        assertEquals(anchorX - card.left, card.pivotX, 0f)
+        assertEquals(anchorY - card.top, card.pivotY, 0f)
+        assertEquals(0f, card.scaleX, 0f)
+        assertEquals(anchorX, surface.geometry.left + 13f, 0.001f)
+        assertEquals(anchorY - 13f, surface.geometry.top, 0.001f)
+
+        fun assertCardInsideShell() {
+            val scale = card.scaleX
+            assertEquals(scale, card.scaleY, 0.0001f)
+            assertEquals(IslandCardMorph.scale(view.expansionProgress), scale, 0.0001f)
+            val mappedLeft = anchorX + (card.left - anchorX) * scale
+            val mappedTop = anchorY + (card.top - anchorY) * scale
+            val mappedRight = anchorX + (card.right - anchorX) * scale
+            val mappedBottom = anchorY + (card.bottom - anchorY) * scale
+            assertTrue(surface.geometry.left <= mappedLeft + 0.01f)
+            assertTrue(surface.geometry.top <= mappedTop + 0.01f)
+            assertTrue(surface.geometry.right >= mappedRight - 0.01f)
+            assertTrue(surface.geometry.bottom >= mappedBottom - 0.01f)
+        }
+
+        advance(300)
+        assertCardInsideShell()
+        advance(IslandSpring.EXPAND_MS)
+        assertEquals(1f, view.expansionProgress, 0f)
+        assertEquals(card.left.toFloat(), surface.geometry.left, 0.01f)
+        assertEquals(card.top.toFloat(), surface.geometry.top, 0.01f)
+        assertEquals(card.right.toFloat(), surface.geometry.right, 0.01f)
+        assertEquals(card.bottom.toFloat(), surface.geometry.bottom, 0.01f)
+
+        view.collapse()
+        advance(300)
+        assertCardInsideShell()
+        advance(IslandSpring.COLLAPSE_MS)
+        assertEquals(0f, view.expansionProgress, 0f)
+        assertEquals(0f, card.scaleX, 0f)
+        assertEquals(anchorX, surface.geometry.left + 13f, 0.001f)
+        assertEquals(anchorY - 13f, surface.geometry.top, 0.001f)
+    }
+
     @Test fun shortLinkUpdateNeverReopensDismissedOrDifferentCard() {
         view.updateCard(first.copy(cleanedUrl = "https://www.douyin.com/video/1"))
         assertNull(view.displayedLink)
