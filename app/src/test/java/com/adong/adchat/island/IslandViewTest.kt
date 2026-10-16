@@ -1,6 +1,11 @@
 package com.adong.adchat.island
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Looper
+import android.os.SystemClock
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import org.junit.After
@@ -13,6 +18,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowViewRootImpl
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
@@ -41,6 +48,8 @@ class IslandViewTest {
 
     private fun layoutWindow() {
         val params = view.layoutParams as WindowManager.LayoutParams
+        // Repeated show may keep the same viewport size, but still needs a layout traversal.
+        view.forceLayout()
         view.measure(
             View.MeasureSpec.makeMeasureSpec(params.width, View.MeasureSpec.EXACTLY),
             View.MeasureSpec.makeMeasureSpec(params.height, View.MeasureSpec.EXACTLY)
@@ -126,6 +135,89 @@ class IslandViewTest {
         assertEquals(1f, view.expansionProgress, 0f)
         assertEquals(second, view.displayedLink)
         assertEquals("cancelled close must not shrink window/call dismissed", 0, events.dismissed)
+    }
+
+    @Test fun collapseBeforeExpandedLayoutCancelsPendingOpen() {
+        view.attach()
+        layoutWindow()
+        val idleSize = (view.layoutParams as WindowManager.LayoutParams).width
+        view.show(first)
+        assertEquals(0f, view.expansionProgress, 0f)
+        view.collapse() // Cancels the open callback before the requested expanded layout.
+        layoutWindow()
+        advance(900)
+        layoutWindow()
+        assertNull(view.displayedLink)
+        assertEquals(0f, view.expansionProgress, 0f)
+        assertEquals(idleSize, (view.layoutParams as WindowManager.LayoutParams).width)
+        assertEquals(1, events.dismissed)
+        assertEquals(1, events.shown.size)
+        // A cancelled pending open cannot fire on a later, unrelated layout traversal.
+        layoutWindow()
+        advance(200)
+        assertNull(view.displayedLink)
+        assertEquals(0f, view.expansionProgress, 0f)
+        assertEquals(1, events.dismissed)
+    }
+
+    @Test fun repeatedShowDuringOvershootKeepsCurrentGeometryAndSettles() {
+        view.show(first)
+        layoutWindow()
+        // The tail peak is near 86% of the 600ms clock; allow vsync quantisation around it.
+        advance(520)
+        val overshoot = view.expansionProgress
+        assertTrue("must exercise the overshoot, not the main phase", overshoot > 1f)
+        view.show(second)
+        layoutWindow()
+        assertEquals(overshoot, view.expansionProgress, 0.00001f)
+        assertEquals(second, view.displayedLink)
+        advance(350)
+        assertEquals(1f, view.expansionProgress, 0f)
+        assertEquals(0, events.dismissed)
+        assertEquals(2, events.shown.size)
+    }
+
+    @Test fun quickTapReleaseDoesNotCancelReadWhileWaitingForWindowFocus() {
+        view.attach()
+        layoutWindow()
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("link", first.originalUrl))
+        val halo = view.getChildAt(1)
+        val downAt = SystemClock.uptimeMillis()
+        fun dispatch(action: Int) {
+            val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, halo.width / 2f, halo.height / 2f, 0)
+            try { assertTrue(halo.dispatchTouchEvent(event)) } finally { event.recycle() }
+        }
+        dispatch(MotionEvent.ACTION_DOWN)
+        dispatch(MotionEvent.ACTION_UP)
+        // WM focus delivery is delayed beyond the release runnable's 150ms hold.
+        val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
+        root.callWindowFocusChanged(false)
+        advance(200)
+        assertNull(view.displayedLink)
+        root.callWindowFocusChanged(true)
+        advance(50)
+        assertEquals(first.originalUrl, view.displayedLink?.originalUrl)
+        assertEquals(1, events.shown.size)
+    }
+
+    @Test fun accessibilityClickUsesTheSameFocusReadyReadPath() {
+        view.attach()
+        layoutWindow()
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("link", first.originalUrl))
+        val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
+        root.callWindowFocusChanged(false)
+        // TalkBack invokes performClick without a preceding touch/down/up gesture.
+        assertTrue(view.getChildAt(1).performClick())
+        root.callWindowFocusChanged(false)
+        advance(200)
+        assertNull(view.displayedLink)
+        root.callWindowFocusChanged(true)
+        advance(50)
+        assertEquals(first.originalUrl, view.displayedLink?.originalUrl)
+        assertEquals(1, events.shown.size)
+        assertTrue("clipboard focus is released after reading", (view.layoutParams as WindowManager.LayoutParams).flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0)
     }
 
     @Test fun destroyingCancelsPendingLayoutAndAnimationCallbacks() {

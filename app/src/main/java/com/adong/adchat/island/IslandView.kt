@@ -89,17 +89,17 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var gestureDownX = 0f
     private var gestureDownY = 0f
     private var swipeDismissed = false
-    private val hideRunnable = Runnable { collapse() }
+    private val hideRunnable: Runnable = Runnable { collapse() }
     private val releaseSpringRunnable = Runnable { animateSpringPress(pressed = false) }
     private var clipboardReadPending = false
-    private val readClipboardRunnable = Runnable {
+    private val readClipboardRunnable: Runnable = Runnable {
         if (clipboardReadPending && hasWindowFocus()) {
             clipboardReadPending = false
             mainHandler.removeCallbacks(clipboardFocusTimeout)
             readClipboardAndHandle()
         }
     }
-    private val clipboardFocusTimeout = Runnable {
+    private val clipboardFocusTimeout: Runnable = Runnable {
         if (clipboardReadPending) {
             clipboardReadPending = false
             setWindowFocusable(false)
@@ -152,10 +152,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 
-    fun attach() = onMain { ensureAttached() }
+    fun attach(): Unit = onMain { ensureAttached() }
 
     /** Keep the existing trigger entry point, but start expansion immediately (no 740ms prelude). */
-    fun show(link: IslandLink) = onMain {
+    fun show(link: IslandLink): Unit = onMain {
         if (!ensureAttached()) return@onMain
         val previous = displayedLink
         deferredCardLink = null
@@ -181,7 +181,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     /** Late or stale short-link results must NEVER reopen or replace a dismissed/different island. */
-    fun updateCard(link: IslandLink) = onMain {
+    fun updateCard(link: IslandLink): Unit = onMain {
         val shown = displayedLink ?: return@onMain
         if (shown.originalUrl != link.originalUrl) return@onMain
         state = State.Card(link)
@@ -190,7 +190,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         else renderCard(link)
     }
 
-    fun collapse() = onMain {
+    fun collapse(): Unit = onMain {
         setWindowFocusable(false)
         if (state == State.Hidden) return@onMain
         state = State.Hidden
@@ -203,7 +203,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         animateMorph(expanding = false)
     }
 
-    fun destroy() = onMain {
+    fun destroy(): Unit = onMain {
         destroyed = true
         pendingMorph = null
         state = State.Hidden
@@ -583,9 +583,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val actionable = state is State.Card && value >= 0.9f
         parseButton.isEnabled = actionable
         cancelButton.isEnabled = actionable
-        glowView.isClickable = !expandedViewport
-        glowView.importantForAccessibility = if (expandedViewport) IMPORTANT_FOR_ACCESSIBILITY_NO
-        else IMPORTANT_FOR_ACCESSIBILITY_YES
+        val idle = !expandedViewport
+        if (glowView.isClickable != idle) glowView.isClickable = idle
+        val accessibility = if (idle) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO
+        if (glowView.importantForAccessibility != accessibility) glowView.importantForAccessibility = accessibility
     }
 
     private fun springAnimation(durationMs: Long, update: (Float) -> Unit, finished: () -> Unit): ValueAnimator =
