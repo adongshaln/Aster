@@ -236,8 +236,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun buildCard(): CardParts {
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(12), dp(18), dp(18))
-            // Background belongs to the shared morphing surface, NOT this content layout.
+            setPadding(dp(18), dp(12), dp(18), dp(16))
+            // The outer black body is shared with the halo; keep the existing card skin for the
+            // content portion so expansion changes geometry, not the established visual language.
+            background = cardDrawable(0xFF38BDF8.toInt())
+            elevation = dpF(12f)
         }
         val grabber = View(context).apply { background = grabberDrawable(0xFF38BDF8.toInt()) }
         host.addView(grabber, LinearLayout.LayoutParams(dp(38), dp(4)).apply {
@@ -670,7 +673,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun afterViewportLayout(start: () -> Unit) {
         val params = windowParams ?: return
-        if (width == params.width && height == params.height && !isLayoutRequested) start()
+        if (width == params.width && height == params.height && !isLayoutRequested && surface.active) start()
         else pendingMorph = start
     }
 
@@ -824,6 +827,14 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             if (composed) return
         }
         dispatchVibration(VibrationEffect.createWaveform(longArrayOf(0, 12, 50, 12), intArrayOf(0, 190, 0, 130), -1))
+    }
+
+    private fun cardDrawable(accentColor: Int): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(0xF710131A.toInt())
+        cornerRadius = dpF(26f)
+        val borderColor = (accentColor and 0x00FFFFFF) or (0x66 shl 24)
+        setStroke(max(1, (density * 1.2f).roundToInt()), borderColor)
     }
 
     private fun grabberDrawable(accent: Int) = GradientDrawable().apply {
