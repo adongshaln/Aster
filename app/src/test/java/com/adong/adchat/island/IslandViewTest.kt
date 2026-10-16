@@ -195,8 +195,10 @@ class IslandViewTest {
         layoutWindow()
         assertEquals(overshoot, view.expansionProgress, 0.00001f)
         assertEquals(second, view.displayedLink)
-        advance(350)
-        assertEquals(1f, view.expansionProgress, 0f)
+        // Retargeting keeps the same 600ms 80/20 clock; wait for that clock, not an arbitrary
+        // shorter wall time, before asserting the exact endpoint.
+        advance(IslandSpring.EXPAND_MS + 32L)
+        assertEquals("retargeted overshoot must settle to the expanded endpoint", 1f, view.expansionProgress, 0f)
         assertEquals(0, events.dismissed)
         assertEquals(2, events.shown.size)
     }
