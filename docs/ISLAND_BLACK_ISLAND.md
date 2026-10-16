@@ -1,5 +1,7 @@
 # 链接灵动岛：单一黑色岛体
 
+> 外观与动效已由 [ISLAND_CLAUDE_INK.md](ISLAND_CLAUDE_INK.md)（墨线扣眼与纸签）取代；本文保留作为上一版记录。
+
 开发分支：`feature/island-black-island`（基于 `feature/island-spring-morph`）。不改版本号。
 本文取代 `ISLAND_SPRING_MORPH.md` 中的卡片外观与开合路径；`IslandSpring` 的 80/20 曲线、窗口/焦点/短链/绘制预算规则仍按原文执行。
 

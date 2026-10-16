@@ -106,9 +106,10 @@ class IslandService : Service(), IslandView.Callbacks {
         val previous = viewConfiguration
         viewConfiguration = Configuration(newConfig)
         if (previous == null || (previous.densityDpi == newConfig.densityDpi &&
-                previous.fontScale == newConfig.fontScale && previous.locales == newConfig.locales)) return
-        // A service overlay is not Activity-recreated. Rebuild density-dependent paints, text sizes
-        // and layout together instead of mixing stale px values with new display metrics.
+                previous.fontScale == newConfig.fontScale && previous.locales == newConfig.locales &&
+                IslandPalette.isNight(previous) == IslandPalette.isNight(newConfig))) return
+        // A service overlay is not Activity-recreated. Rebuild density-dependent paints, text sizes,
+        // layout and the light/dark paper together instead of mixing stale values with new ones.
         val current = islandView ?: return
         val link = current.displayedLink
         invalidateLinkResolution()

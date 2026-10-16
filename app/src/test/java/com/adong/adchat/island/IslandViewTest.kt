@@ -24,6 +24,7 @@ import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.shadows.ShadowViewRootImpl
 import java.time.Duration
 import kotlin.math.max
+import kotlin.math.min
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -85,38 +86,40 @@ class IslandViewTest {
         assertEquals("advance($ms) must not auto-run extra animation time", startedAt + ms, SystemClock.uptimeMillis())
     }
 
-    @Test fun openingAndClosingKeepWindowOriginAndHaloSize() {
+    private val ring get() = view.getChildAt(1) as IslandInkRingView
+    private val surface get() = view.getChildAt(0) as IslandSurfaceView
+
+    @Test fun openingAndClosingKeepWindowOriginAndRingSize() {
         view.attach()
         layoutWindow()
         val idle = view.layoutParams as WindowManager.LayoutParams
         val y = idle.y
         val size = idle.width
-        val halo = view.getChildAt(1)
-        val haloHeight = halo.height
+        val ringHeight = ring.height
         view.show(first)
         layoutWindow()
         val expanded = view.layoutParams as WindowManager.LayoutParams
         val width = expanded.width
         val height = expanded.height
         assertEquals(y, expanded.y)
-        assertEquals(size, halo.width)
-        assertEquals(haloHeight, halo.height)
-        // All frames stay in a fixed-size buffer. The geometry, not WindowManager, is animated.
+        assertEquals(size, ring.width)
+        assertEquals(ringHeight, ring.height)
+        // All frames stay in a fixed-size buffer. The springs, not WindowManager, are animated.
         repeat(8) {
             advance(50)
             assertEquals(width, expanded.width)
             assertEquals(height, expanded.height)
             assertEquals(y, expanded.y)
         }
-        advance(400)
+        advance(1_200)
         assertEquals(1f, view.expansionProgress, 0f)
         view.collapse()
-        advance(800)
+        advance(1_200)
         layoutWindow()
         assertEquals(y, expanded.y)
         assertEquals(size, expanded.width)
         assertEquals(size, expanded.height)
-        assertEquals(0f, view.expansionProgress, 0f)
+        assertEquals(0f, view.expansionProgress, 1e-4f)
         assertEquals(1, events.dismissed)
     }
 
@@ -132,91 +135,134 @@ class IslandViewTest {
         assertTrue(privateFlags.getInt(view.layoutParams as WindowManager.LayoutParams) and 0x00000040 != 0)
     }
 
-    @Test fun islandStretchesSidewaysThenGrowsDownWithAFixedTop() {
+    @Test fun tagStretchesSidewaysThenDropsWithOneBounce() {
         view.attach()
         layoutWindow()
-        val glow = view.getChildAt(1) as IslandGlowView
         view.show(first)
         layoutWindow()
-        val surface = view.getChildAt(0) as IslandSurfaceView
         val card = surface.getChildAt(0)
-        val g = surface.geometry
-        val anchorX = glow.left + glow.width / 2f
-        val anchorY = glow.top + glow.height / 2f
+        val b = surface.body
+        val anchorX = ring.left + ring.width / 2f
+        val anchorY = ring.top + ring.height / 2f
         assertEquals(anchorX - card.left, card.pivotX, 0f)
         assertEquals(0f, card.pivotY, 0f)
         assertEquals(0f, card.alpha, 0f)
-        assertEquals(anchorX - 13f, g.left, 0.001f)
-        assertEquals(anchorY - 13f, g.top, 0.001f)
-        assertEquals(anchorY + 13f, g.bottom, 0.001f)
+        // Before the first frame the tag is hidden inside the ring's black core.
+        assertEquals(anchorX - 13f, b.left, 0.01f)
+        assertEquals(anchorY - 13f, b.top, 0.01f)
+        assertEquals(anchorY + 13f, b.bottom, 0.01f)
 
-        // Spring progress stays below HEIGHT_START for the first 150ms of the 600ms clock.
-        advance(150)
-        assertTrue("must already stretch sideways; width=${g.right - g.left}", g.right - g.left > 60f)
-        assertEquals(anchorY + 13f, g.bottom, 0.001f)
-        assertEquals(anchorX, (g.left + g.right) / 2f, 0.5f)
-        assertEquals(0f, card.alpha, 0f)
+        // The height waits 60ms: only the width has moved so far.
+        advance(48)
+        assertTrue("must already stretch sideways; width=${b.right - b.left}", b.right - b.left > 30f)
+        assertEquals(26f, b.bottom - b.top, 0.01f)
+        assertEquals(anchorX, (b.left + b.right) / 2f, 0.5f)
 
-        // By 300ms the width has settled; only the height is still growing.
-        advance(150)
-        assertEquals(card.left.toFloat(), g.left, 0.01f)
-        assertEquals(card.right.toFloat(), g.right, 0.01f)
-        assertTrue("height must be growing; bottom=${g.bottom}", g.bottom > anchorY + 13f + 20f)
-        assertTrue(g.bottom < card.bottom)
-        assertEquals(anchorY - 13f, g.top, 1f)
-
-        advance(IslandSpring.EXPAND_MS)
+        var maxBottom = 0f
+        repeat(100) {
+            advance(16)
+            maxBottom = max(maxBottom, b.bottom)
+        }
+        assertTrue("the drop must bounce past the card; max=$maxBottom card=${card.bottom}", maxBottom > card.bottom + 2f)
         assertEquals(1f, view.expansionProgress, 0f)
-        assertEquals(card.left.toFloat(), g.left, 0.01f)
-        assertEquals(card.top.toFloat(), g.top, 0.01f)
-        assertEquals(card.right.toFloat(), g.right, 0.01f)
-        assertEquals(card.bottom.toFloat(), g.bottom, 0.01f)
+        assertEquals(card.left.toFloat(), b.left, 0.01f)
+        assertEquals(card.top.toFloat(), b.top, 0.01f)
+        assertEquals(card.right.toFloat(), b.right, 0.01f)
+        assertEquals(card.bottom.toFloat(), b.bottom, 0.01f)
         assertEquals(1f, card.alpha, 0f)
         assertEquals(1f, card.scaleX, 0f)
-        assertEquals(0f, glow.alpha, 0f)
+        // The ring stays in place as the tag's eyelet.
+        assertEquals(1f, ring.alpha, 0f)
+    }
 
+    @Test fun closingTucksTheTagBackIntoTheRingAndTheInkGulpsOnce() {
+        view.attach()
+        layoutWindow()
+        view.show(first)
+        layoutWindow()
+        advance(1_500)
+        val b = surface.body
         view.collapse()
-        advance(IslandSpring.COLLAPSE_MS + 32L)
-        assertEquals(0f, view.expansionProgress, 0f)
-        assertEquals(0f, card.alpha, 0f)
+        var minWidth = Float.MAX_VALUE
+        var minHeight = Float.MAX_VALUE
+        var peakInk = 0f
+        repeat(70) {
+            advance(16)
+            if (surface.active) {
+                minWidth = min(minWidth, b.right - b.left)
+                minHeight = min(minHeight, b.bottom - b.top)
+            }
+            peakInk = max(peakInk, view.ringInk)
+        }
+        assertTrue("width=$minWidth", minWidth >= 26f - 0.01f)
+        assertTrue("height=$minHeight", minHeight >= 26f - 0.01f)
+        assertTrue("the ink must gulp once the tag is back; peak=$peakInk", peakInk > 1.15f)
+        assertEquals(1f, view.ringInk, 1e-3f)
+        layoutWindow()
+        assertEquals(1, events.dismissed)
+        assertEquals(ring.width, (view.layoutParams as WindowManager.LayoutParams).width)
+    }
+
+    @Test fun emptyClipboardBouncesTheRingTwiceWithoutOpening() {
+        view.attach()
+        layoutWindow()
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("note", "no link here"))
+        val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
+        root.callWindowFocusChanged(true)
+        val size = ring.width
+        assertTrue(ring.performClick())
+        val samples = mutableListOf<Float>()
+        repeat(40) {
+            advance(16)
+            samples += view.ringBounce
+            assertEquals(size, ring.width)
+        }
+        var peaks = 0
+        for (i in 1 until samples.lastIndex) {
+            if (samples[i] > samples[i - 1] && samples[i] >= samples[i + 1] && samples[i] > 1.03f) peaks++
+        }
+        assertEquals("two bounces; samples=$samples", 2, peaks)
+        assertEquals(1f, view.ringBounce, 1e-3f)
+        assertNull(view.displayedLink)
+        assertEquals(0, events.shown.size)
+    }
+
+    @Test fun ringKeepsItsSizeAndCentreThroughOpenAndClose() {
+        view.attach()
+        layoutWindow()
+        val size = ring.width
+        view.show(first)
+        layoutWindow()
+        fun assertRingFixed() {
+            assertEquals(size, ring.width)
+            assertEquals(size, ring.height)
+            assertEquals(0, ring.top)
+            assertEquals(view.width / 2f, ring.left + ring.width / 2f, 0.5f)
+            assertEquals(1f, ring.bounce, 0f)
+        }
+        repeat(80) {
+            advance(16)
+            assertRingFixed()
+            assertEquals("the ring stays visible as the eyelet", 1f, ring.alpha, 0f)
+        }
+        view.collapse()
+        repeat(80) {
+            advance(16)
+            assertRingFixed()
+        }
+        layoutWindow()
+        assertRingFixed()
         assertEquals(1, events.dismissed)
     }
 
-    @Test fun residentHaloKeepsItsSizeAndCentreThroughOpenAndClose() {
-        view.attach()
-        layoutWindow()
-        val glow = view.getChildAt(1) as IslandGlowView
-        val size = glow.width
-        view.show(first)
-        layoutWindow()
-        val surface = view.getChildAt(0) as IslandSurfaceView
-        fun assertHaloFixed() {
-            assertEquals(1f, glow.springScale, 0f)
-            assertEquals(size, glow.width)
-            assertEquals(size, glow.height)
-            assertEquals(0, glow.top)
-            assertEquals(view.width / 2f, glow.left + glow.width / 2f, 0.5f)
-        }
-        repeat((IslandSpring.EXPAND_MS / 16 + 2).toInt()) {
-            advance(16)
-            assertHaloFixed()
-        }
-        assertEquals(0f, glow.alpha, 0f)
-        view.collapse()
-        var peakGlow = 0f
-        var ringVisibleWhileWide = false
-        repeat((IslandSpring.COLLAPSE_MS / 16).toInt()) {
-            advance(16)
-            assertHaloFixed()
-            peakGlow = max(peakGlow, glow.glowIntensity)
-            if (surface.geometry.right - surface.geometry.left > 200f && glow.alpha > 0f) ringVisibleWhileWide = true
-        }
-        assertFalse("the ring must only reappear once the island is nearly back in the core", ringVisibleWhileWide)
-        assertTrue("closing tail must pulse the glow once; peak=$peakGlow", peakGlow > IslandGlowView.BASE_GLOW_INTENSITY + 0.1f)
-        advance(64)
-        layoutWindow()
-        assertEquals(1, events.dismissed)
-        assertHaloFixed()
+    @Test fun dayModeUsesIvoryPaper() {
+        assertEquals(IslandPalette.Light, view.islandPalette)
+    }
+
+    @Config(qualifiers = "night")
+    @Test fun nightModeUsesWarmCharcoalPaper() {
+        assertEquals(IslandPalette.Dark, view.islandPalette)
     }
 
     @Test fun cardShowsPlatformTitleAndOneLineLinkSummary() {
@@ -224,10 +270,10 @@ class IslandViewTest {
         layoutWindow()
         assertEquals("抖音视频", view.cardTitleText.toString())
         assertEquals("v.douyin.com/one", view.cardSummaryText.toString())
-        val card = (view.getChildAt(0) as IslandSurfaceView).getChildAt(0) as ViewGroup
+        val card = surface.getChildAt(0) as ViewGroup
         // Header + action row only: no grabber bar, no nested link capsule.
         assertEquals(2, card.childCount)
-        advance(IslandSpring.EXPAND_MS + 32L)
+        advance(1_500)
         view.updateCard(first.copy(cleanedUrl = "https://www.douyin.com/video/1"))
         assertEquals("douyin.com/video/1", view.cardSummaryText.toString())
     }
@@ -249,30 +295,35 @@ class IslandViewTest {
         view.collapse()
         view.updateCard(resolvedSecond)
         assertNull(view.displayedLink)
-        advance(800)
+        advance(1_200)
         assertNull(view.displayedLink)
         assertEquals(1, events.dismissed)
     }
 
-    @Test fun rapidReverseStartsAtRenderedPositionAndCancelsOldCompletion() {
+    @Test fun rapidReverseKeepsMomentumAndCancelsOldCompletion() {
         view.show(first)
         layoutWindow()
-        advance(350)
-        val openingPosition = view.expansionProgress
-        assertTrue("opening must still be in flight after 350ms; progress=$openingPosition", openingPosition > 0f && openingPosition < 1f)
+        advance(200)
+        val b = surface.body
+        val opening = view.expansionProgress
+        assertTrue("opening must still be in flight after 200ms; progress=$opening", opening > 0f && opening < 1f)
+        val heightAtReversal = b.bottom - b.top
+        val leftAtReversal = b.left
         view.collapse()
-        assertEquals(openingPosition, view.expansionProgress, 0.00001f)
-        advance(100)
-        val closingPosition = view.expansionProgress
-        assertTrue("closing must still be in flight after 100ms; opening=$openingPosition closing=$closingPosition dismissed=${events.dismissed}", closingPosition > 0f && closingPosition < openingPosition)
-        assertEquals("close must not finish before reversal; progress=$closingPosition", 0, events.dismissed)
+        advance(16)
+        assertTrue("no jump on reversal", kotlin.math.abs(b.left - leftAtReversal) < 25f)
+        advance(80)
+        assertTrue(
+            "closing retracts the height first; before=$heightAtReversal now=${b.bottom - b.top}",
+            b.bottom - b.top < heightAtReversal
+        )
+        assertEquals("close must not finish before reversal", 0, events.dismissed)
         view.show(second)
         layoutWindow()
-        assertEquals(closingPosition, view.expansionProgress, 0.00001f)
-        advance(900)
+        advance(1_500)
         assertEquals(1f, view.expansionProgress, 0f)
         assertEquals(second, view.displayedLink)
-        assertEquals("cancelled close must not shrink window/call dismissed; progress=${view.expansionProgress} link=${view.displayedLink?.originalUrl}", 0, events.dismissed)
+        assertEquals("a cancelled close must not shrink the window or report dismissal", 0, events.dismissed)
     }
 
     @Test fun collapseBeforeExpandedLayoutCancelsPendingOpen() {
@@ -301,18 +352,16 @@ class IslandViewTest {
     @Test fun repeatedShowDuringOvershootKeepsCurrentGeometryAndSettles() {
         view.show(first)
         layoutWindow()
-        // The tail peak is near 86% of the 600ms clock; allow vsync quantisation around it.
-        advance(520)
+        // Width and height both overshoot around 350–450ms.
+        advance(400)
         val overshoot = view.expansionProgress
-        assertTrue("must exercise the overshoot, not the main phase; progress=$overshoot", overshoot > 1f)
+        assertTrue("must exercise the overshoot; progress=$overshoot", overshoot > 1f)
         view.show(second)
         layoutWindow()
-        assertEquals(overshoot, view.expansionProgress, 0.00001f)
+        assertEquals(overshoot, view.expansionProgress, 0.01f)
         assertEquals(second, view.displayedLink)
-        // Retargeting keeps the same 600ms 80/20 clock; wait for that clock, not an arbitrary
-        // shorter wall time, before asserting the exact endpoint.
-        advance(IslandSpring.EXPAND_MS + 32L)
-        assertEquals("retargeted overshoot must settle to the expanded endpoint", 1f, view.expansionProgress, 0f)
+        advance(1_500)
+        assertEquals("retargeted overshoot must settle on the card", 1f, view.expansionProgress, 0f)
         assertEquals(0, events.dismissed)
         assertEquals(2, events.shown.size)
     }
@@ -322,13 +371,14 @@ class IslandViewTest {
         layoutWindow()
         val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("link", first.originalUrl))
-        val halo = view.getChildAt(1)
+        val target = ring
         val downAt = SystemClock.uptimeMillis()
         fun dispatch(action: Int) {
-            val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, halo.width / 2f, halo.height / 2f, 0)
-            try { assertTrue(halo.dispatchTouchEvent(event)) } finally { event.recycle() }
+            val event = MotionEvent.obtain(downAt, SystemClock.uptimeMillis(), action, target.width / 2f, target.height / 2f, 0)
+            try { assertTrue(target.dispatchTouchEvent(event)) } finally { event.recycle() }
         }
         dispatch(MotionEvent.ACTION_DOWN)
+        assertTrue("the ink presses heavier under the finger", run { advance(64); view.ringInk > 1.1f })
         dispatch(MotionEvent.ACTION_UP)
         // WM focus delivery is delayed beyond the release runnable's 150ms hold.
         val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
@@ -349,7 +399,7 @@ class IslandViewTest {
         val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
         root.callWindowFocusChanged(false)
         // TalkBack invokes performClick without a preceding touch/down/up gesture.
-        assertTrue(view.getChildAt(1).performClick())
+        assertTrue(ring.performClick())
         root.callWindowFocusChanged(false)
         advance(200)
         assertNull(view.displayedLink)
@@ -357,7 +407,10 @@ class IslandViewTest {
         advance(50)
         assertEquals(first.originalUrl, view.displayedLink?.originalUrl)
         assertEquals(1, events.shown.size)
-        assertTrue("clipboard focus is released after reading", (view.layoutParams as WindowManager.LayoutParams).flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0)
+        assertTrue(
+            "clipboard focus is released after reading",
+            (view.layoutParams as WindowManager.LayoutParams).flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0
+        )
     }
 
     @Test fun destroyingCancelsPendingLayoutAndAnimationCallbacks() {
