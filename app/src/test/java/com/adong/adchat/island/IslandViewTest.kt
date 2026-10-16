@@ -120,6 +120,18 @@ class IslandViewTest {
         assertEquals(1, events.dismissed)
     }
 
+    @Test fun overlayResizeNeverPlaysTheWindowMoveAnimation() {
+        view.attach()
+        layoutWindow()
+        val params = view.layoutParams as WindowManager.LayoutParams
+        val privateFlags = WindowManager.LayoutParams::class.java.getField("privateFlags")
+        // PRIVATE_FLAG_NO_MOVE_ANIMATION: the resize to/from the card must not slide the ring.
+        assertTrue(privateFlags.getInt(params) and 0x00000040 != 0)
+        view.show(first)
+        layoutWindow()
+        assertTrue(privateFlags.getInt(view.layoutParams as WindowManager.LayoutParams) and 0x00000040 != 0)
+    }
+
     @Test fun islandStretchesSidewaysThenGrowsDownWithAFixedTop() {
         view.attach()
         layoutWindow()

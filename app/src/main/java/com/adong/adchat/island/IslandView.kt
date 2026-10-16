@@ -648,12 +648,28 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = calcWindowY()
         }
+        disableMoveAnimation(params)
         if (runCatching { windowManager.addView(this, params) }.isFailure) return false
         windowParams = params
         attached = true
         glowView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         startBreathing()
         return true
+    }
+
+    /**
+     * Opening/closing resizes this TOP|CENTER overlay, which moves its frame's left edge. By default
+     * WindowManager then slides the surface from the old position (~150ms): the island flew in from
+     * the right on open and the ring flew back from the left after closing. Jump instead.
+     */
+    private fun disableMoveAnimation(params: WindowManager.LayoutParams) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            params.setCanPlayMoveAnimation(false)
+        } else runCatching {
+            // PRIVATE_FLAG_NO_MOVE_ANIMATION (1 << 6): the pre-34 equivalent of the public setter.
+            val field = WindowManager.LayoutParams::class.java.getField("privateFlags")
+            field.setInt(params, field.getInt(params) or 0x00000040)
+        }
     }
 
     private fun prepareExpandedViewport() {
