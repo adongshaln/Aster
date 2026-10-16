@@ -18,3 +18,7 @@ fun String.isStepModel(): Boolean = trim().substringAfterLast('/').startsWith("s
  * 以实际请求模型判定，因为它可能与 Profile 默认模型不同；模型切换后无需重新配置。
  */
 fun ApiProfile.usesResponses(model: String = chatModel): Boolean = model.isGptModel() || model.isGrokModel()
+
+/** 配置显式选 Anthropic 格式、且模型不是 GPT/Grok（它们固定走 Responses）时，对话走 Messages API。 */
+fun ApiProfile.usesAnthropicMessages(model: String = chatModel): Boolean =
+    apiFormat == API_FORMAT_ANTHROPIC && !usesResponses(model)

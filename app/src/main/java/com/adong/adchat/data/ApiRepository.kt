@@ -174,7 +174,20 @@ class ApiRepository internal constructor(
             deltaSink: suspend (String) -> Unit
         ): ChatCompletionResult {
             val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory = false)
-            return if (profile.usesResponses(model)) {
+            return if (profile.usesAnthropicMessages(model)) {
+                streamAnthropicMessages(
+                    profile, model, systemPrompt, prepared.history, cacheKey,
+                    skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
+                    requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
+                    searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
+                    generationOptions = requestGenerationOptions,
+                    askUserEnabled = askUserEnabled,
+                    onToolActivity = onToolActivity,
+                    onReasoning = onReasoning,
+                    onAskUser = onAskUser,
+                    onDelta = deltaSink
+                )
+            } else if (profile.usesResponses(model)) {
                 streamResponses(
                     profile, model, systemPrompt, prepared.history, cacheKey,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
@@ -288,6 +301,336 @@ class ApiRepository internal constructor(
         resumedResult.copy(
             text = combined.toString(),
             usage = resumedResult.usage.copy(streamRecoveryCount = recoveryAttempt)
+        )
+    }
+
+    /**
+     * Anthropic Messages 对话路径。与 streamChatCompletions 同一份工具执行语义，
+     * 差异只在协议：system 提升为顶层字段、工具结果是 user 角色的 tool_result 块、
+     * SSE 按 content_block 事件解析。Step 等 Anthropic 兼容网关也走这里。
+     */
+    private suspend fun streamAnthropicMessages(
+        profile: ApiProfile,
+        model: String,
+        systemPrompt: String,
+        history: List<ChatMessage>,
+        cacheKey: String,
+        skillSelectors: List<String>,
+        requestSkillLoader: SkillLoader,
+        requireSkillLoad: Boolean,
+        searchBackend: SearchBackendConfig?,
+        generationOptions: ChatGenerationOptions,
+        askUserEnabled: Boolean,
+        onToolActivity: suspend (ChatToolActivity) -> Unit,
+        onReasoning: suspend (String) -> Unit,
+        onAskUser: suspend (AskUserPrompt) -> String,
+        onDelta: suspend (String) -> Unit
+    ): ChatCompletionResult {
+        val skillLoadingEnabled = skillSelectors.isNotEmpty()
+        val delegatedSearchEnabled = profile.webSearchEnabled && searchBackend != null
+        val effectiveSystemPrompt = listOf(
+            systemPrompt,
+            ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
+            SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
+        ).filter(String::isNotBlank).joinToString("\n\n")
+        val messages = JSONArray()
+        val catalog = skillCatalog(requestSkillLoader.listInstalled())
+        if (catalog.isNotBlank()) messages.put(JSONObject().put("role", "user").put("content", catalog))
+        history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }.forEach { message ->
+            messages.put(JSONObject()
+                .put("role", message.role)
+                .put("content", AnthropicMessages.messageContent(message)))
+        }
+        val started = System.nanoTime()
+        var firstDeltaAt: Long? = null
+        var usage = TokenUsage()
+        val full = StringBuilder()
+        var afterThought = false
+        val reasoningTotal = StringBuilder()
+        var outputComplete = false
+        val generatedFiles = mutableListOf<GeneratedFileDraft>()
+        val citations = linkedMapOf<String, ChatCitation>()
+        val activities = linkedMapOf<String, ChatToolActivity>()
+        var cacheBreakpointsEnabled = profile.promptCacheEnabled
+
+        suspend fun recordActivity(activity: ChatToolActivity) {
+            activities[activity.id] = activity
+            onToolActivity(activity)
+        }
+
+        /** 思考内容单独累计，绝不混入正文；没有增量时保持静默避免打扰。 */
+        suspend fun emitReasoning(text: String) {
+            if (text.isBlank()) return
+            reasoningTotal.append(text)
+            onReasoning(text)
+        }
+
+        fun buildBody(forceSkill: Boolean, forceNoTools: Boolean): JSONObject {
+            val body = JSONObject()
+                .put("model", model)
+                .put("messages", messages)
+                .put("stream", true)
+            if (effectiveSystemPrompt.isNotBlank()) {
+                body.put("system", if (cacheBreakpointsEnabled) {
+                    PromptCache.markClaudeSystem(effectiveSystemPrompt)
+                } else {
+                    effectiveSystemPrompt
+                })
+            }
+            val toolPolicy = resolveChatToolPolicy(
+                // Anthropic 对话不直挂服务端搜索；联网一律走委托搜索工具。
+                webSearchEnabled = false,
+                fileCreationEnabled = profile.fileCreationEnabled
+            )
+            val tools = AnthropicMessages.tools(buildChatTools(
+                toolPolicy.fileCreationEnabled,
+                skillLoadingEnabled,
+                skillSelectors,
+                delegatedSearchEnabled = delegatedSearchEnabled,
+                allowXSearch = searchBackend?.allowXSearch == true,
+                askUserEnabled = askUserEnabled
+            ))
+            if (tools.length() > 0) {
+                body.put("tools", tools)
+                body.put("tool_choice", AnthropicMessages.toolChoice(forceSkill, forceNoTools))
+            }
+            if (cacheBreakpointsEnabled) PromptCache.markClaudeMessages(messages)
+            ModelContextPolicy.applyToRequest(body, profile.contextLimits(model), responses = false)
+            applyGenerationOptions(body, generationOptions, responsesApi = false, model = model)
+            AnthropicMessages.ensureMaxTokens(body, profile.contextLimits(model)?.outputTokens)
+            applyReasoningPolicy(body, profile, model, responsesApi = false)
+            // Anthropic 拒收这些 OpenAI 采样参数；applyGenerationOptions 对非 Responses 会写入，这里清掉。
+            listOf("frequency_penalty", "presence_penalty", "seed", "stop", "stream_options").forEach(body::remove)
+            return body
+        }
+
+        fun requestFor(body: JSONObject): Request =
+            requestBuilder(profile, resolveUrl(profile.baseUrl, profile.messagesPath), anthropic = true)
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close")
+                .post(body.toString().toRequestBody(jsonMedia)).build()
+
+        suspend fun executeRound(forceSkill: Boolean, forceNoTools: Boolean): ProtocolRoundResult {
+            outputComplete = false
+            var body = buildBody(forceSkill, forceNoTools)
+            val reasoningMark = reasoningTotal.length
+            var retriedWithoutCache = false
+            while (true) {
+                val call = streamingClient.newCall(requestFor(body))
+                val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
+                    try { awaitCancellation() } finally { call.cancel() }
+                }
+                val roundText = StringBuilder()
+                var roundUsage = TokenUsage()
+                var inputUsage = TokenUsage()
+                val roundCitations = linkedMapOf<String, ChatCitation>()
+                val toolCalls = mutableListOf<PendingToolCall>()
+                var stopReason = ""
+                try {
+                    call.execute().use { response ->
+                        if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                        val contentType = response.header("Content-Type").orEmpty()
+                        if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                            val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
+                            val blocks = mutableMapOf<Int, AnthropicMessages.BlockState>()
+                            var completed = false
+                            readSsePayloads(source) { payload ->
+                                when (val event = AnthropicMessages.parseEvent(payload, blocks)) {
+                                    is AnthropicMessages.Event.Start -> inputUsage = event.usage
+                                    is AnthropicMessages.Event.Text -> {
+                                        if (event.delta.isNotEmpty()) {
+                                            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                                            val piece = textAfterThought(full, event.delta, afterThought)
+                                            afterThought = false
+                                            roundText.append(piece)
+                                            full.append(piece)
+                                            onDelta(piece)
+                                        }
+                                    }
+                                    is AnthropicMessages.Event.Thinking -> {
+                                        emitReasoning(event.delta)
+                                        if (full.isNotEmpty()) afterThought = true
+                                    }
+                                    is AnthropicMessages.Event.ToolCall -> toolCalls += event.call
+                                    is AnthropicMessages.Event.MessageDone -> {
+                                        stopReason = event.stopReason
+                                        // message_start 与 message_delta 都带 output_tokens（后者为最终值），
+                                        // 输入侧只取 message_start，输出侧只取 message_delta，避免双计。
+                                        roundUsage = inputUsage.copy(outputTokens = 0) + event.usage
+                                        completed = true
+                                    }
+                                    is AnthropicMessages.Event.Failure -> throw IOException(event.message)
+                                    AnthropicMessages.Event.Ignored -> Unit
+                                }
+                                true
+                            }
+                            if (!completed) throw IOException("Streaming connection ended before completion")
+                        } else {
+                            val text = response.body?.string().orEmpty()
+                            if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
+                            val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
+                            val parsed = AnthropicMessages.parseContent(root)
+                            toolCalls += parsed.second
+                            stopReason = AnthropicMessages.stopReason(root)
+                            roundUsage = parseUsage(root)
+                            if (parsed.first.isNotEmpty()) {
+                                if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                                val piece = textAfterThought(full, parsed.first, afterThought)
+                                afterThought = false
+                                roundText.append(piece)
+                                full.append(piece)
+                                onDelta(piece)
+                            }
+                        }
+                    }
+                } catch (error: Throwable) {
+                    // 网关不认 cache_control 时去掉断点重试一次；其他错误直接抛。
+                    val retryWithoutCache = cacheBreakpointsEnabled && !retriedWithoutCache &&
+                        error !is CancellationException && error.isCacheCompatibilityError()
+                    if (!retryWithoutCache) throw error
+                    retriedWithoutCache = true
+                    cacheBreakpointsEnabled = false
+                    stripCacheControl(messages)
+                    body = buildBody(forceSkill, forceNoTools)
+                    continue
+                } finally {
+                    cancellationWatcher.cancel()
+                }
+                outputComplete = stopReason != "max_tokens" && stopReason != "tool_use"
+                val producedReasoning = reasoningTotal.substring(reasoningMark)
+                if (shouldContinueAfterReasoningOnly(roundText.toString(), toolCalls.size, producedReasoning)) {
+                    return ProtocolRoundResult(
+                        text = "",
+                        usage = roundUsage,
+                        toolCalls = toolCalls,
+                        citations = roundCitations.values.toList(),
+                        reasoningOnly = true,
+                        reasoningText = producedReasoning
+                    )
+                }
+                if (roundText.isBlank() && toolCalls.isEmpty()) {
+                    throw IllegalStateException("No recognizable message content or tool call in API response")
+                }
+                return ProtocolRoundResult(roundText.toString(), roundUsage, toolCalls, roundCitations.values.toList())
+            }
+        }
+
+        var completedNormally = false
+        var forceNoToolsNextRound = false
+        var executedToolCalls = 0
+        var delegatedSearchCalls = 0
+        val delegatedSearchCache = linkedMapOf<String, DelegatedSearchResult>()
+        val skillToolReuseGuard = SkillToolReuseGuard()
+        for (roundIndex in 0 until MAX_TOOL_ROUNDS) {
+            skillToolReuseGuard.beginRound()
+            val forceSkill = skillLoadingEnabled && requireSkillLoad && roundIndex == 0
+            val forceNoTools = forceNoToolsNextRound
+            forceNoToolsNextRound = false
+            if (roundIndex > 0 && full.isNotEmpty()) afterThought = true
+            val round = executeRound(forceSkill, forceNoTools)
+            if (forceSkill && round.toolCalls.none { it.name == LOAD_SKILL_TOOL }) {
+                throw IllegalStateException("模型未执行强制 load_skill 工具调用；Aster 不会伪装 Skill 已加载")
+            }
+            usage = usage + round.usage
+            round.citations.forEach { citations[it.url] = it }
+            if (round.reasoningOnly) {
+                // Messages API 不回写伪装的助手思考轮；以用户提示让模型继续输出正文。
+                messages.put(JSONObject().put("role", "user").put("content", REASONING_CONTINUE_PROMPT))
+                continue
+            }
+            if (round.toolCalls.isEmpty()) {
+                completedNormally = true
+                break
+            }
+            val orderedToolCalls = orderToolCalls(round.toolCalls)
+            executedToolCalls += orderedToolCalls.size
+            if (executedToolCalls > MAX_TOOL_CALLS) {
+                throw IllegalStateException("工具调用已达到安全上限（${MAX_TOOL_CALLS} 次），请重试或减少需要读取的资料")
+            }
+            messages.put(AnthropicMessages.assistantToolUseMessage(round.text, orderedToolCalls))
+            val results = mutableListOf<Pair<String, String>>()
+            var usedDelegatedSearchThisRound = false
+            orderedToolCalls.forEach { call ->
+                currentCoroutineContext().ensureActive()
+                require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
+                val execution = if (call.name == ASK_USER_TOOL) {
+                    executeAskUser(call, onAskUser) { recordActivity(it) }
+                } else if (call.name == DELEGATED_WEB_SEARCH_TOOL) {
+                    usedDelegatedSearchThisRound = true
+                    val backend = searchBackend ?: throw IllegalStateException("联网搜索后端尚未配置")
+                    val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
+                    val query = args.optString("query").trim()
+                    val source = args.optString("source").ifBlank { "web" }.lowercase()
+                    val searchKey = source + "\n" + query.lowercase().replace(Regex("\\s+"), " ")
+                    val cached = delegatedSearchCache[searchKey]
+                    val search = when {
+                        query.isBlank() -> DelegatedSearchResult(
+                            JSONObject().put("ok", false).put("error", "search_query_empty").toString(),
+                            emptyList(), ChatToolActivity(call.callId, call.name, "搜索查询为空", TOOL_STATUS_FAILED)
+                        )
+                        cached != null -> cached.copy(
+                            output = delegatedSearchToolOutput(query, source, backend.model, JSONObject(cached.output).optString("research"), cached.citations, reused = true),
+                            activity = ChatToolActivity(call.callId, call.name, "已复用联网搜索结果", TOOL_STATUS_COMPLETED)
+                        )
+                        delegatedSearchCalls >= MAX_DELEGATED_SEARCH_CALLS -> DelegatedSearchResult(
+                            JSONObject().put("ok", false).put("error", "search_call_limit_reached").put("limit", MAX_DELEGATED_SEARCH_CALLS).toString(),
+                            emptyList(), ChatToolActivity(call.callId, call.name, "联网搜索已达到本轮上限", TOOL_STATUS_FAILED)
+                        )
+                        else -> {
+                            delegatedSearchCalls += 1
+                            recordActivity(ChatToolActivity(call.callId, call.name, "正在通过 ${backend.model} 搜索", TOOL_STATUS_RUNNING))
+                            executeDelegatedSearch(backend, call.callId, query, source)
+                        }
+                    }
+                    if (cached == null && runCatching { JSONObject(search.output).optBoolean("ok") }.getOrDefault(false)) {
+                        delegatedSearchCache[searchKey] = search
+                    }
+                    search.citations.forEach { citations[it.url] = it }
+                    ToolExecutionResult(search.output, activity = search.activity)
+                } else {
+                    val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
+                    recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
+                    skillToolReuseGuard.execute(call, requestSkillLoader, skillSelectors.toSet())
+                }
+                execution.generatedFile?.let(generatedFiles::add)
+                recordActivity(execution.activity)
+                if (call.name == LOAD_SKILL_TOOL && !runCatching { JSONObject(execution.output).optBoolean("ok") }.getOrDefault(false)) {
+                    throw IllegalStateException(runCatching { JSONObject(execution.output).optString("error") }.getOrDefault("Skill 加载失败"))
+                }
+                results += call.callId to execution.output
+            }
+            messages.put(AnthropicMessages.toolResultMessage(results))
+            forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
+        }
+        if (!completedNormally) {
+            throw IllegalStateException("请求未在 ${MAX_TOOL_ROUNDS} 轮内完成。若模型连续多轮只输出思考没有正文，可能是输出预算（max_tokens）被思考耗尽，请提高输出上限或降低思考强度后重试。")
+        }
+        val duration = elapsedMs(started)
+        val finalUsage = usage.copy(
+            timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
+            durationMs = duration,
+            cacheRequested = PromptCache.requested(profile.promptCacheEnabled, model),
+            cacheKey = cacheKey.take(64),
+            cacheStrategy = if (cacheBreakpointsEnabled) {
+                PromptCache.strategy(profile.promptCacheEnabled, model, responsesApi = false)
+            } else {
+                "off"
+            }
+        )
+        val resultText = full.toString().ifBlank {
+            generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
+                ?: throw IllegalStateException("Streaming response contained no text")
+        }
+        return ChatCompletionResult(
+            text = resultText,
+            reasoning = reasoningTotal.toString(),
+            usage = finalUsage,
+            citations = citations.values.toList(),
+            generatedFiles = generatedFiles,
+            toolActivities = activities.values.toList(),
+            outputComplete = outputComplete
         )
     }
 
@@ -959,20 +1302,31 @@ class ApiRepository internal constructor(
             val instruction = "根据对话写一个不超过16个字的中文标题。只输出标题本身，不要引号、句号或解释。"
             val clipped = transcript.take(4000)
             val responsesApi = quietProfile.usesResponses(model)
-            val body = if (responsesApi) {
-                JSONObject().put("model", model).put("instructions", instruction).put("input", clipped).put("max_output_tokens", 2048)
-            } else {
-                JSONObject().put("model", model).put("max_tokens", 2048).put("messages", JSONArray()
+            val anthropicApi = quietProfile.usesAnthropicMessages(model)
+            val body = when {
+                anthropicApi -> JSONObject().put("model", model).put("max_tokens", 2048)
+                    .put("system", instruction)
+                    .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", clipped)))
+                responsesApi -> JSONObject().put("model", model).put("instructions", instruction).put("input", clipped).put("max_output_tokens", 2048)
+                else -> JSONObject().put("model", model).put("max_tokens", 2048).put("messages", JSONArray()
                     .put(JSONObject().put("role", "system").put("content", instruction))
                     .put(JSONObject().put("role", "user").put("content", clipped)))
             }
             applyReasoningPolicy(body, quietProfile, model, responsesApi)
-            val path = if (responsesApi) quietProfile.responsesPath else quietProfile.chatPath
-            val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path))
+            val path = when {
+                anthropicApi -> quietProfile.messagesPath
+                responsesApi -> quietProfile.responsesPath
+                else -> quietProfile.chatPath
+            }
+            val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path), anthropicApi)
                 .post(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("标题接口返回的不是有效 JSON") }
-            val text = if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+            val text = when {
+                anthropicApi -> AnthropicMessages.parseContent(root).first
+                responsesApi -> parseResponsesText(root)
+                else -> parseMessageContent(root)
+            }
             sanitizeConversationTitle(text).ifBlank { throw IllegalStateException("标题为空") }
         }
 
@@ -984,20 +1338,31 @@ class ApiRepository internal constructor(
                 ?: ReasoningPolicy.DEFAULT
             val quietProfile = profile.copy(reasoningEffort = quietEffort)
             val responsesApi = quietProfile.usesResponses(model)
-            val body = if (responsesApi) {
-                JSONObject().put("model", model).put("instructions", instruction).put("input", user).put("max_output_tokens", 4096)
-            } else {
-                JSONObject().put("model", model).put("max_tokens", 4096).put("messages", JSONArray()
+            val anthropicApi = quietProfile.usesAnthropicMessages(model)
+            val body = when {
+                anthropicApi -> JSONObject().put("model", model).put("max_tokens", 4096)
+                    .put("system", instruction)
+                    .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", user)))
+                responsesApi -> JSONObject().put("model", model).put("instructions", instruction).put("input", user).put("max_output_tokens", 4096)
+                else -> JSONObject().put("model", model).put("max_tokens", 4096).put("messages", JSONArray()
                     .put(JSONObject().put("role", "system").put("content", instruction))
                     .put(JSONObject().put("role", "user").put("content", user)))
             }
             applyReasoningPolicy(body, quietProfile, model, responsesApi)
-            val path = if (responsesApi) quietProfile.responsesPath else quietProfile.chatPath
-            val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path))
+            val path = when {
+                anthropicApi -> quietProfile.messagesPath
+                responsesApi -> quietProfile.responsesPath
+                else -> quietProfile.chatPath
+            }
+            val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path), anthropicApi)
                 .post(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("设定接口返回的不是有效 JSON") }
-            if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+            when {
+                anthropicApi -> AnthropicMessages.parseContent(root).first
+                responsesApi -> parseResponsesText(root)
+                else -> parseMessageContent(root)
+            }
         }
 
     /**
@@ -1011,7 +1376,15 @@ class ApiRepository internal constructor(
         return withContext(Dispatchers.IO) {
             validateProfile(profile)
             val responsesApi = profile.usesResponses(model)
-            val body = if (responsesApi) {
+            val anthropicApi = profile.usesAnthropicMessages(model)
+            val body = if (anthropicApi) {
+                val messages = JSONArray()
+                history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
+                messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
+                JSONObject().put("model", model).put("max_tokens", 60)
+                    .put("system", InputSuggester.SUGGESTION_INSTRUCTION)
+                    .put("messages", messages)
+            } else if (responsesApi) {
                 val input = JSONArray()
                 history.forEach { message ->
                     input.put(JSONObject().put("role", message.role).put("content", message.content))
@@ -1027,12 +1400,20 @@ class ApiRepository internal constructor(
                 JSONObject().put("model", model).put("max_tokens", 60).put("messages", messages)
             }
             ReasoningPolicy.write(body, model, ReasoningPolicy.minimalEffort(model), responsesApi, outputTokenLimit = 60)
-            val path = if (responsesApi) profile.responsesPath else profile.chatPath
-            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path))
+            val path = when {
+                anthropicApi -> profile.messagesPath
+                responsesApi -> profile.responsesPath
+                else -> profile.chatPath
+            }
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path), anthropicApi)
                 .post(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("输入建议接口返回的不是有效 JSON") }
-            if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
+            when {
+                anthropicApi -> AnthropicMessages.parseContent(root).first
+                responsesApi -> parseResponsesText(root)
+                else -> parseMessageContent(root)
+            }
         }
     }
 
@@ -1262,10 +1643,23 @@ $query"""
     }
 
     private fun Throwable.isCacheCompatibilityError(): Boolean {
-        val value = message.orEmpty().lowercase()
+        val value = generateSequence(this) { it.cause }.joinToString(" ") { it.message.orEmpty() }.lowercase()
         return value.contains("prompt_cache") || value.contains("cache breakpoint") ||
-            value.contains("unsupported parameter") || value.contains("http 404") ||
-            value.contains("接口不存在")
+            value.contains("cache_control") || value.contains("unsupported parameter") ||
+            value.contains("http 404") || value.contains("接口不存在")
+    }
+
+    /** 缓存兼容性重试时剥掉消息数组里已写入的所有 cache_control 断点。 */
+    private fun stripCacheControl(messages: JSONArray) {
+        for (index in 0 until messages.length()) {
+            val message = messages.optJSONObject(index) ?: continue
+            when (val content = message.opt("content")) {
+                is JSONObject -> content.remove("cache_control")
+                is JSONArray -> for (block in 0 until content.length()) {
+                    content.optJSONObject(block)?.remove("cache_control")
+                }
+            }
+        }
     }
 
     private suspend fun readSsePayloads(
@@ -1677,9 +2071,16 @@ $query"""
         }
     }
 
-    private fun requestBuilder(profile: ApiProfile, url: String): Request.Builder {
+    private fun requestBuilder(profile: ApiProfile, url: String, anthropic: Boolean = false): Request.Builder {
         val builder = Request.Builder().url(url).header("Accept", "application/json")
-        if (profile.apiKey.isNotBlank()) builder.header("Authorization", "Bearer ${profile.apiKey.trim()}")
+        if (profile.apiKey.isNotBlank()) {
+            if (anthropic) {
+                builder.header("x-api-key", profile.apiKey.trim())
+                builder.header(AnthropicMessages.VERSION_HEADER, AnthropicMessages.VERSION)
+            } else {
+                builder.header("Authorization", "Bearer ${profile.apiKey.trim()}")
+            }
+        }
         profile.extraHeaders.lineSequence().forEach { line ->
             val index = line.indexOf(':')
             if (index > 0) {

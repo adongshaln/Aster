@@ -50,6 +50,12 @@ internal object PromptCache {
         enabled && model.promptCacheFamily() != PromptCacheFamily.None
 
     /**
+     * Messages API 的顶层 system 字段（字符串或块数组）打同一个断点。
+     * system 是最稳定的前缀，断点放这里，长系统提示词跨轮整体命中。
+     */
+    internal fun markClaudeSystem(system: Any?): Any = withBreakpoint(system)
+
+    /**
      * Claude 只缓存断点之前的稳定前缀。系统提示词、上一轮、以及本轮末尾各放一个断点，
      * 下一轮追加消息时前缀仍能命中。ttl 用 1h，避免 5 分钟默认过期后长对话全部失效。
      */

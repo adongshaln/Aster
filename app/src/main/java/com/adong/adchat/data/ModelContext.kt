@@ -93,7 +93,7 @@ object ModelContextPolicy {
     // Count actual payload content, including tool schemas/results, without counting base64 as text.
     fun wireCost(value: Any?): Long = when (value) {
         null, JSONObject.NULL -> 0L
-        is JSONObject -> if (value.optString("type") in setOf("input_image", "image_url")) ContextTokenEstimate.IMAGE_TOKENS.toLong()
+        is JSONObject -> if (value.optString("type") in setOf("input_image", "image_url", "image")) ContextTokenEstimate.IMAGE_TOKENS.toLong()
             else 8L + value.keys().asSequence().sumOf { key -> ContextTokenEstimate.text(key).toLong() + wireCost(value.opt(key)) }
         is org.json.JSONArray -> (0 until value.length()).sumOf { wireCost(value.opt(it)) }
         is String -> ContextTokenEstimate.text(value).toLong()
@@ -103,7 +103,8 @@ object ModelContextPolicy {
         if (limits == null) return 0
         limits.validate()
         val inputCost = wireCost(body.opt(if (responses) "input" else "messages")) +
-            wireCost(body.opt("instructions")) + wireCost(body.opt("tools")) + 128 + carriedTokens
+            wireCost(body.opt("instructions")) + wireCost(body.opt("system")) +
+            wireCost(body.opt("tools")) + 128 + carriedTokens
         require(inputCost <= limits.inputTokens) { "包含工具结果的请求超过模型上下文预算，已停止发送。请提高上下文长度或减少输入。" }
         body.put(if (responses) "max_output_tokens" else "max_tokens", limits.outputTokens)
         return inputCost

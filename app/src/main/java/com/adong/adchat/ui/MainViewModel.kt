@@ -1005,8 +1005,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     else -> {
-                        val protocol = if (profile.usesResponses(model)) "Responses" else "Chat Completions"
-                        val endpoint = if (profile.usesResponses(model)) profile.responsesPath else profile.chatPath
+                        val anthropicApi = profile.usesAnthropicMessages(model)
+                        val protocol = when {
+                            anthropicApi -> "Messages"
+                            profile.usesResponses(model) -> "Responses"
+                            else -> "Chat Completions"
+                        }
+                        val endpoint = when {
+                            anthropicApi -> profile.messagesPath
+                            profile.usesResponses(model) -> profile.responsesPath
+                            else -> profile.chatPath
+                        }
                         replaceMessage(assistantId) {
                             it.copy(
                                 content = friendlyError(error) + "\n\n[$model · $protocol · ${profile.baseUrl.trimEnd('/')}$endpoint]",

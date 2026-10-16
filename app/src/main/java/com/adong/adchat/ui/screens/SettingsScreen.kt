@@ -71,6 +71,7 @@ import com.adong.adchat.data.IMAGE_API_MODE_GEMINI
 import com.adong.adchat.data.IMAGE_API_MODE_OPENAI
 import com.adong.adchat.data.hasValidBaseUrl
 import com.adong.adchat.data.invalidExtraHeaderLines
+import com.adong.adchat.data.usesAnthropicMessages
 import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.resolveConversationRoute
 import com.adong.adchat.data.normalized
@@ -917,7 +918,12 @@ private fun ProfileEditor(
             }
             item {
                 EditorSection("默认模型", "切换到此 API 时，会恢复这里保存的模型。") {
-                    Text(if (draft.usesResponses()) "GPT / Grok · Responses" else "其他模型 · Chat Completions",
+                    Text(
+                        when {
+                            draft.usesResponses() -> "GPT / Grok · Responses"
+                            draft.usesAnthropicMessages() -> "Claude 等 · Anthropic Messages"
+                            else -> "其他模型 · Chat Completions"
+                        },
                         color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("对话模型", draft.chatModel, models.filterNot { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
                     val limits = draft.modelContexts[draft.chatModel.trim()]
@@ -1029,9 +1035,9 @@ private fun ProfileEditor(
                     }
                     Text(
                         if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
-                            "对话仍走上方的 OpenAI 兼容路径。把这个配置选为联网搜索后端时，搜索改走 Messages API 的 web_search。"
+                            "非 GPT/Grok 模型的对话改走 Messages API（含工具调用与提示缓存）；GPT/Grok 仍走 Responses。选为联网搜索后端时用 Messages 的 web_search。"
                         } else {
-                            "GPT 与 Grok 的对话和默认搜索走 Responses。Anthropic 格式只在作为搜索后端时使用。"
+                            "GPT 与 Grok 的对话和默认搜索走 Responses；其他模型走 Chat Completions。"
                         },
                         color = MutedInk,
                         style = MaterialTheme.typography.bodySmall
