@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aster 链接岛：墨线扣眼与纸签</title>
+<style>
+  @font-face {
+    font-family: "Aster Serif";
+    src: url("../app/src/main/res/font/noto_serif_sc_variable.ttf") format("truetype");
+    font-weight: 200 900;
+    font-display: swap;
+  }
+  :root {
+    --serif: "Aster Serif", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+    --sans: Roboto, "MiSans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  /* Claude light / Claude dark: the island follows the system theme. */
+  .phone {
+    --app-bg: #F4F3EE; --app-ink: #141413; --app-bubble: #EAE7DF;
+    --paper: #FAF9F5; --edge: #E3E0D6; --ink: #141413; --muted: #6B6860;
+    --well: #F0EEE6; --clay: #D97757; --on-clay: #141413;
+    --shadow: 0 12px 30px rgba(20, 20, 19, 0.16), 0 2px 6px rgba(20, 20, 19, 0.06);
+  }
+  .phone.dark {
+    --app-bg: #141413; --app-ink: #F0EFEA; --app-bubble: #282724;
+    --paper: #262624; --edge: #3A3936; --ink: #F5F4EE; --muted: #A6A39A;
+    --well: #30302E; --clay: #E28769; --on-clay: #141413;
+    --shadow: 0 14px 34px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: #E8E6DC; color: #141413;
+    font: 14px/1.5 var(--sans);
+    display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; align-items: flex-start;
+    padding: 28px 16px 48px;
+  }
+
+  /* ---------- Phone ---------- */
+  .phone {
+    position: relative; width: 392px; height: 620px; border-radius: 46px; overflow: hidden;
+    background: var(--app-bg); color: var(--app-ink);
+    box-shadow: 0 0 0 9px #111, 0 24px 60px rgba(20, 20, 19, 0.28);
+    flex: none; user-select: none;
+  }
+  .status {
+    position: absolute; inset: 0 0 auto 0; height: 40px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 30px 0; font: 600 14px var(--sans);
+  }
+  .status .icons { display: flex; gap: 6px; align-items: center; }
+  .app { position: absolute; inset: 52px 0 0 0; padding: 8px 20px; }
+  .app header { height: 52px; display: flex; align-items: center; font: 560 22px var(--serif); letter-spacing: -0.4px; }
+  .app .msg { margin: 14px 0; max-width: 300px; font: 400 15px/1.75 var(--serif); }
+  .app .me { margin-left: auto; max-width: 240px; padding: 10px 14px; border-radius: 18px; background: var(--app-bubble); }
+
+  /* ---------- Island: a paper tag pulled out of the camera ---------- */
+  .island {
+    position: absolute; z-index: 3; overflow: hidden;
+    background: var(--paper);
+    box-shadow: var(--shadow), inset 0 0 0 1px var(--edge);
+  }
+  .card { position: absolute; top: 0; width: 364px; padding: 47px 18px 18px; transform-origin: 182px 0; color: var(--ink); }
+  .head { display: flex; align-items: center; gap: 12px; }
+  .glyph { width: 38px; height: 38px; border-radius: 50%; background: var(--well); display: grid; place-items: center; flex: none; }
+  .glyph svg { width: 20px; height: 20px; fill: var(--ink); opacity: 0.86; }
+  .texts { min-width: 0; flex: 1; }
+  .title { font: 560 16px/1.3 var(--serif); letter-spacing: 0.2px; }
+  .summary { margin-top: 3px; font: 400 13px/1.3 var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  .actions button {
+    flex: 1; height: 44px; border: 0; border-radius: 22px; font: 500 14px var(--sans); cursor: pointer;
+    transition: transform 180ms cubic-bezier(.3, 1.6, .5, 1);
+  }
+  .actions button:active { transform: scale(0.95); }
+  .actions .quiet { background: var(--well); color: var(--ink); }
+  .actions .primary { background: var(--clay); color: var(--on-clay); }
+  .actions button:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
+
+  canvas.eyelet { position: absolute; z-index: 4; cursor: pointer; }
+  .haptic {
+    position: absolute; z-index: 6; top: 52px; left: 50%; transform: translateX(-50%);
+    font: 500 12px var(--sans); color: var(--muted, #6B6860); opacity: 0; pointer-events: none;
+  }
+  .haptic.on { animation: haptic 420ms ease-out; }
+  @keyframes haptic { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+  .camera {
+    position: absolute; z-index: 5; width: 23px; height: 23px; border-radius: 50%; pointer-events: none;
+    background: radial-gradient(circle at 38% 36%, #1d2733 0 18%, #05070a 46%, #000 70%);
+  }
+
+  /* ---------- Review panel ---------- */
+  .panel { width: 360px; max-width: 100%; }
+  .panel h1 { font: 560 22px/1.3 var(--serif); margin: 4px 0 6px; }
+  .panel p { margin: 0 0 18px; color: #5E5B53; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .row button {
+    height: 38px; padding: 0 14px; border-radius: 19px; border: 1px solid #CFCBBE;
+    background: #FAF9F5; color: #141413; font: 500 13px var(--sans); cursor: pointer;
+  }
+  .row button.on { background: #141413; color: #FAF9F5; border-color: #141413; }
+  .row button:focus-visible { outline: 2px solid #D97757; outline-offset: 2px; }
+  details { margin-top: 18px; border-top: 1px solid #CFCBBE; padding-top: 12px; }
+  summary { cursor: pointer; font-weight: 600; }
+  label { display: grid; grid-template-columns: 96px 1fr 44px; align-items: center; gap: 8px; margin: 10px 0; font-size: 13px; }
+  input[type=range] { width: 100%; accent-color: #D97757; }
+  output { font-variant-numeric: tabular-nums; text-align: right; color: #5E5B53; }
+  pre { background: #F4F3EE; border-radius: 10px; padding: 10px 12px; font-size: 12px; white-space: pre-wrap; word-break: break-all; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+
+<div class="phone" id="phone">
+  <div class="status">
+    <span>16:42</span>
+    <span class="icons" aria-hidden="true">
+      <svg width="17" height="11" viewBox="0 0 17 11"><g fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></g></svg>
+      <svg width="24" height="11" viewBox="0 0 24 11"><rect x="0.5" y="0.5" width="20" height="10" rx="3" fill="none" stroke="currentColor" opacity=".45"/><rect x="2" y="2" width="14" height="7" rx="1.6" fill="currentColor"/><rect x="21.5" y="3.5" width="1.6" height="4" rx=".8" fill="currentColor" opacity=".45"/></svg>
+    </span>
+  </div>
+  <div class="app">
+    <header>Aster</header>
+    <div class="me">帮我把这条抖音视频存下来</div>
+    <div class="msg">复制链接后，点一下摄像头外的那圈墨线就能识别。我会帮你取出无水印的视频。</div>
+    <div class="me">好，刚复制了</div>
+  </div>
+
+  <div class="island" id="island">
+    <div class="card" id="card">
+      <div class="head">
+        <div class="glyph" id="glyph"></div>
+        <div class="texts">
+          <div class="title" id="title">抖音视频</div>
+          <div class="summary" id="summaryText">v.douyin.com/iRNBjGp</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="quiet" id="btnCollapse">收起</button>
+        <button class="primary" id="btnParse">解析链接</button>
+      </div>
+    </div>
+  </div>
+  <canvas class="eyelet" id="eyelet" aria-label="链接岛，点按读取剪贴板" role="button" tabindex="0"></canvas>
+  <div class="camera" id="camera"></div>
+  <div class="haptic" id="haptic" aria-hidden="true">震动 ×2</div>
+</div>
+
+<div class="panel">
+  <h1>链接岛：墨线扣眼与纸签</h1>
+  <p>摄像头外是一笔画成的墨线圈；识别到链接时，一张纸签从扣眼里抽出来。点墨线圈或下面的按钮试试。</p>
+  <div class="row">
+    <button id="tapLink">点按（剪贴板有链接）</button>
+    <button id="tapEmpty">点按（剪贴板为空）</button>
+    <button id="close">收起</button>
+  </div>
+  <div class="row">
+    <button id="slow">慢放 ¼</button>
+    <button id="dark">深色模式</button>
+    <button id="rapid">快速连按：开→收→开</button>
+  </div>
+  <details open>
+    <summary>弹簧参数</summary>
+    <label>宽度响应<input type="range" id="respW" min="0.25" max="0.8" step="0.01"><output></output></label>
+    <label>宽度阻尼<input type="range" id="dampW" min="0.4" max="0.95" step="0.01"><output></output></label>
+    <label>高度响应<input type="range" id="respH" min="0.25" max="0.9" step="0.01"><output></output></label>
+    <label>高度阻尼<input type="range" id="dampH" min="0.4" max="0.95" step="0.01"><output></output></label>
+    <label>高度延迟<input type="range" id="delayH" min="0" max="0.25" step="0.005"><output></output></label>
+    <label>挤压强度<input type="range" id="squash" min="0" max="1.6" step="0.05"><output></output></label>
+    <pre id="params"></pre>
+  </details>
+</div>
+
+<script>
+"use strict";
+// ---------- Geometry (1 CSS px = 1 dp) ----------
+const PHONE_W = 392;
+const CAM_X = PHONE_W / 2, CAM_Y = 25.5;
+const CORE_R = 13;                 // black grommet around the lens
+const SEED = CORE_R * 2;           // the tag starts as the hidden core
+const TAG_TOP_INSET = 22.5;        // expanded tag top sits 22.5dp above the lens centre
+const RADIUS = 40;
+const CARD_W = Math.min(PHONE_W, 440) - 28;
+const RING_R = 16.8, RING_W = 2.1; // pen-drawn ink ring
+const P = { respW: 0.44, dampW: 0.76, respH: 0.52, dampH: 0.64, delayH: 0.06, squash: 0.8 };
+
+// ---------- Analytic damped spring: frame-rate independent, keeps velocity on retarget ----------
+class Spring {
+  constructor(value, resp, damp) { this.target = value; this.x0 = 0; this.v0 = 0; this.t0 = 0; this.resp = resp; this.damp = damp; this.pending = null; }
+  _offset(dt) {
+    const w0 = 2 * Math.PI / this.resp, z = Math.min(this.damp, 0.999);
+    const a = z * w0, wd = w0 * Math.sqrt(1 - z * z), e = Math.exp(-a * dt), c = Math.cos(wd * dt), s = Math.sin(wd * dt);
+    return { x: e * (this.x0 * c + (this.v0 + a * this.x0) / wd * s), v: e * (this.v0 * c - (a * this.v0 + w0 * w0 * this.x0) / wd * s) };
+  }
+  _advance(t) { if (this.pending && t >= this.pending.at) this._apply(this.pending); }
+  _apply(p) {
+    const o = this._offset(p.at - this.t0), x = this.target + o.x;
+    this.target = p.target; if (p.resp) this.resp = p.resp; if (p.damp) this.damp = p.damp;
+    this.x0 = x - this.target; this.v0 = o.v; this.t0 = p.at; this.pending = null;
+  }
+  set(target, t, delay = 0, resp, damp) { this._advance(t); const p = { target, at: t + delay, resp, damp }; if (delay <= 0) this._apply(p); else this.pending = p; }
+  jump(value, t) { this.pending = null; this.target = value; this.x0 = 0; this.v0 = 0; this.t0 = t; }
+  kick(velocity, t) { this._advance(t); const o = this._offset(t - this.t0); this.x0 = o.x; this.v0 = o.v + velocity; this.t0 = t; }
+  value(t) { this._advance(t); return this.target + this._offset(t - this.t0).x; }
+  velocity(t) { this._advance(t); return this._offset(t - this.t0).v; }
+  settled(t, eps = 0.3) { this._advance(t); if (this.pending) return false; const o = this._offset(t - this.t0); return Math.abs(o.x) < eps && Math.abs(o.v) < eps * 20; }
+}
+
+// ---------- DOM ----------
+const $ = (id) => document.getElementById(id);
+const phone = $("phone"), island = $("island"), card = $("card"), eyelet = $("eyelet"), camera = $("camera");
+const ctx = eyelet.getContext("2d");
+const BOX = 56, dpr = +new URLSearchParams(location.search).get("dpr") || window.devicePixelRatio || 1;
+eyelet.width = BOX * dpr; eyelet.height = BOX * dpr;
+Object.assign(eyelet.style, { width: BOX + "px", height: BOX + "px", left: (CAM_X - BOX / 2) + "px", top: (CAM_Y - BOX / 2) + "px" });
+Object.assign(camera.style, { left: (CAM_X - 11.5) + "px", top: (CAM_Y - 11.5) + "px" });
+
+const PLATFORMS = [
+  { title: "抖音视频", summary: "v.douyin.com/iRNBjGp",
+    path: "M12 5v8.55c-.94-.54-2.1-.75-3.33-.32-1.34.48-2.37 1.67-2.61 3.07-.46 2.74 1.86 5.08 4.59 4.65 1.96-.31 3.35-2.11 3.35-4.1V7h2c1.1 0 2-.9 2-2s-.9-2-2-2h-2c-1.1 0-2 .9-2 2z" },
+  { title: "B 站视频", summary: "bilibili.com/video/BV1GJ411x7h7",
+    path: "M20,4H4C2.9,4,2,4.9,2,6v12c0,1.1,0.9,2,2,2h16c1.1,0,2-0.9,2-2V6C22,4.9,21.1,4,20,4z M9.5,14.67V9.33c0-0.79,0.88-1.27,1.54-0.84l4.15,2.67c0.61,0.39,0.61,1.29,0,1.68l-4.15,2.67C10.38,15.94,9.5,15.46,9.5,14.67z" },
+  { title: "X 媒体", summary: "x.com/AnthropicAI/status/1846928197932548195",
+    path: "M12.72 2.03C6.63 1.6 1.6 6.63 2.03 12.72 2.39 18.01 7.01 22 12.31 22H16c.55 0 1-.45 1-1s-.45-1-1-1h-3.67c-3.73 0-7.15-2.42-8.08-6.03-1.49-5.8 3.91-11.21 9.71-9.71C17.58 5.18 20 8.6 20 12.33v1.1c0 .79-.71 1.57-1.5 1.57s-1.5-.78-1.5-1.57v-1.25c0-2.51-1.78-4.77-4.26-5.12-3.4-.49-6.27 2.45-5.66 5.87.34 1.91 1.83 3.49 3.72 3.94 1.84.43 3.59-.16 4.74-1.33.89 1.22 2.67 1.86 4.3 1.21 1.34-.53 2.16-1.9 2.16-3.34v-1.09c0-5.31-3.99-9.93-9.28-10.29zM12 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z" },
+];
+let platformIndex = -1;
+function showPlatform(i) {
+  const p = PLATFORMS[i];
+  $("title").textContent = p.title;
+  $("summaryText").textContent = p.summary;
+  $("glyph").innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${p.path}"/></svg>`;
+}
+
+// ---------- State ----------
+let simT = 0, lastNow = performance.now(), speed = 1;
+let phase = "idle";            // idle | open | closing
+let gulped = true;
+let cardH = 158;
+const W = new Spring(SEED, P.respW, P.dampW);
+const H = new Spring(SEED, P.respH, P.dampH);
+const C = new Spring(0.9, 0.42, 0.62);     // content scale lags the paper
+const INK = new Spring(1, 0.3, 0.5);       // stroke weight: press, and the closing gulp
+const BOUNCE = new Spring(1, 0.22, 0.45);  // ring scale: two quick bounces for "nothing new"
+const BOUNCE_GAP = 0.16, BOUNCE_KICK = 5;
+let secondBounceAt = null;
+
+function measure() {
+  const shown = island.style.display;
+  island.style.display = "block"; cardH = card.offsetHeight; island.style.display = shown;
+}
+
+function expand() {
+  const t = simT;
+  if (phase !== "closing") { platformIndex = (platformIndex + 1) % PLATFORMS.length; showPlatform(platformIndex); measure(); }
+  phase = "open"; gulped = false;
+  W.set(CARD_W, t, 0, P.respW, P.dampW);
+  H.set(cardH, t, P.delayH, P.respH, P.dampH);
+  C.set(1, t, P.delayH + 0.06, 0.42, 0.62);
+  INK.set(1, t, 0, 0.3, 0.6);
+}
+
+function collapse() {
+  if (phase !== "open") return;
+  const t = simT;
+  phase = "closing";
+  H.set(SEED, t, 0, P.respH * 0.78, Math.min(0.95, P.dampH + 0.12));
+  W.set(SEED, t, P.delayH * 0.8, P.respW * 0.9, Math.min(0.95, P.dampW + 0.06));
+  C.set(0.9, t, 0, 0.3, 0.9);
+}
+
+function press(down) {
+  if (phase !== "idle") return;
+  INK.set(down ? 1.45 : 1, simT, 0, down ? 0.24 : 0.34, down ? 0.6 : 0.42);
+}
+
+function nudge() {
+  if (phase !== "idle") return;
+  INK.set(1, simT, 0, 0.34, 0.5);
+  BOUNCE.set(1, simT, 0, 0.22, 0.45);
+  BOUNCE.kick(BOUNCE_KICK, simT);          // bounce once now, once more in 160ms; a haptic tick lands on each peak
+  secondBounceAt = simT + BOUNCE_GAP;
+  hapticFlash();
+}
+function hapticFlash() {
+  const el = document.getElementById("haptic");
+  el.classList.remove("on"); void el.offsetWidth; el.classList.add("on");
+}
+
+// ---------- Render ----------
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastNow) / 1000) * speed;
+  lastNow = now; simT += dt;
+  const t = simT;
+
+  const w = W.value(t), h = H.value(t);
+  const vwN = W.velocity(t) * P.respW / (CARD_W - SEED);
+  const vhN = H.velocity(t) * P.respH / Math.max(1, cardH - SEED);
+  // Volume-preserving squash: surging sideways thins the tag, dropping down narrows it.
+  let hr = h - P.squash * clamp(vwN, -1, 1) * 0.12 * Math.max(0, h - SEED * 0.6);
+  let wr = w - P.squash * clamp(vhN, -1, 1) * 0.05 * Math.max(0, w - SEED);
+  hr = Math.max(SEED, hr); wr = Math.max(SEED, wr);
+  const hp = clamp((h - SEED) / Math.max(1, cardH - SEED), 0, 1);
+
+  const visible = phase !== "idle" || w > SEED + 0.5;
+  island.style.display = visible ? "block" : "none";
+  if (visible) {
+    // The tag slides out of the grommet as a seed-high strip, then its top lifts to clear the ring.
+    const lift = (TAG_TOP_INSET - CORE_R) * hp;
+    const bodyH = hr;
+    island.style.top = (CAM_Y - CORE_R - lift) + "px";
+    island.style.width = wr + "px";
+    island.style.height = bodyH + "px";
+    island.style.left = (CAM_X - wr / 2) + "px";
+    island.style.borderRadius = Math.min(RADIUS, bodyH / 2, wr / 2) + "px";
+    const alpha = smooth(0.34, 0.84, hp);
+    card.style.left = ((wr - CARD_W) / 2) + "px";
+    card.style.opacity = alpha;
+    card.style.transform = `scale(${C.value(t)})`;
+    card.style.filter = alpha < 0.99 ? `blur(${((1 - alpha) * 6).toFixed(2)}px)` : "none";
+    card.style.pointerEvents = alpha > 0.9 && phase === "open" ? "auto" : "none";
+  }
+
+  if (secondBounceAt !== null && t >= secondBounceAt) { BOUNCE.kick(BOUNCE_KICK, secondBounceAt); secondBounceAt = null; }
+
+  // Closing: the tag slips back into the grommet and the ink swallows once.
+  if (phase === "closing" && !gulped && wr < 40) {
+    gulped = true;
+    INK.jump(1, t); INK.set(1, t, 0, 0.3, 0.42); INK.kick(7, t);
+  }
+  if (phase === "closing" && gulped && W.settled(t) && H.settled(t) && INK.settled(t, 0.01)) phase = "idle";
+
+  const breathe = phase === "idle" ? 0.9 + 0.1 * (0.5 + 0.5 * Math.cos(2 * Math.PI * t / 5)) : 1;
+  drawRing(t, breathe);
+  requestAnimationFrame(frame);
+}
+
+// One pen stroke: tapered start, fuller middle, tapered end, a small overlap at the join,
+// and a slight hand wobble in radius. Ink weight only grows outward. Never glows.
+function drawRing(t, alpha) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, BOX, BOX);
+  const c = BOX / 2;
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#000";
+  ctx.beginPath(); ctx.arc(c, c, CORE_R, 0, Math.PI * 2); ctx.fill();
+
+  const ink = Math.max(0.6, INK.value(t));
+  const scale = Math.max(1, BOUNCE.value(t));   // bounces only grow outward from the lens
+  const start = -58 * Math.PI / 180;
+  const sweep = (372 * Math.PI) / 180;
+  const N = 120, outer = [], inner = [];
+  for (let i = 0; i <= N; i++) {
+    const u = i / N, a = start + sweep * u;
+    const taper = smooth(0, 0.1, u) * (1 - smooth(0.86, 1, u));
+    const pressure = 0.78 + 0.22 * Math.sin(Math.PI * u);
+    const weight = RING_W * pressure * (0.18 + 0.82 * taper);
+    const rin = RING_R - weight / 2 + 0.32 * Math.sin(3 * a + 0.7) + 0.18 * Math.sin(5 * a);
+    const rout = rin + weight * ink;
+    outer.push([c + Math.cos(a) * rout * scale, c + Math.sin(a) * rout * scale]);
+    inner.push([c + Math.cos(a) * rin * scale, c + Math.sin(a) * rin * scale]);
+  }
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = getComputedStyle(phone).getPropertyValue("--clay").trim();
+  ctx.beginPath();
+  outer.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+  for (let i = inner.length - 1; i >= 0; i--) ctx.lineTo(inner[i][0], inner[i][1]);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+
+// ---------- Input ----------
+eyelet.addEventListener("pointerdown", () => press(true));
+eyelet.addEventListener("pointerup", () => { press(false); if (phase !== "open") expand(); });
+eyelet.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (phase !== "open") expand(); } });
+$("btnCollapse").addEventListener("click", collapse);
+$("btnParse").addEventListener("click", collapse);
+$("tapLink").addEventListener("click", () => {
+  if (phase === "open") return;
+  if (phase === "closing") { expand(); return; }
+  press(true); setTimeout(() => { press(false); expand(); }, 130 / speed);
+});
+$("tapEmpty").addEventListener("click", () => { if (phase !== "idle") return; press(true); setTimeout(nudge, 130 / speed); });
+$("close").addEventListener("click", collapse);
+$("slow").addEventListener("click", (e) => { speed = speed === 1 ? 0.25 : 1; e.target.classList.toggle("on", speed !== 1); });
+$("dark").addEventListener("click", (e) => { phone.classList.toggle("dark"); e.target.classList.toggle("on"); });
+$("rapid").addEventListener("click", () => {
+  if (phase !== "idle") return;
+  expand(); setTimeout(collapse, 260 / speed); setTimeout(expand, 420 / speed);
+});
+
+// ---------- Tuning ----------
+for (const key of Object.keys(P)) {
+  const input = $(key); if (!input) continue;
+  const out = input.nextElementSibling;
+  input.value = P[key]; out.textContent = (+P[key]).toFixed(2);
+  input.addEventListener("input", () => { P[key] = +input.value; out.textContent = (+input.value).toFixed(2); dumpParams(); });
+}
+function dumpParams() { $("params").textContent = JSON.stringify(P); }
+dumpParams();
+
+showPlatform(0);
+document.fonts.ready.then(measure);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
