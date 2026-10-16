@@ -518,6 +518,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appConfig = appConfig.copy(systemPrompt = value); persist()
     }
 
+    /** 首启询问称呼的填写；标记弹窗完成，之后不再打扰。 */
+    fun setUserName(value: String) {
+        appConfig = appConfig.copy(userName = value.trim().take(24), userNamePromptDone = true); persist()
+    }
+
+    /** 跳过首启称呼弹窗。 */
+    fun skipUserNamePrompt() {
+        if (!appConfig.userNamePromptDone) {
+            appConfig = appConfig.copy(userNamePromptDone = true); persist()
+        }
+    }
+
     /** 切换主题；未知取值一律回到浅色，与持久化解码规则一致。 */
     fun setThemeMode(mode: String) {
         val normalized = mode.takeIf { it == THEME_MODE_DARK || it == THEME_MODE_SYSTEM } ?: THEME_MODE_ASTER
