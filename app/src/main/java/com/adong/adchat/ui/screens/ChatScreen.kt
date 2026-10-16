@@ -51,6 +51,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -66,6 +68,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
+import com.adong.adchat.ui.clawd.ClawdPileWebView
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -187,6 +190,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val imageFrames = remember { mutableMapOf<String, Pair<Int, Int>>() }
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeightPx by remember { mutableIntStateOf(0) }
+    var formAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var chatAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
     val fileExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val file = pendingFileExport
@@ -332,7 +337,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().onGloballyPositioned { chatAnchor = it.boundsInWindow() },
                         contentPadding = PaddingValues(
                             start = 22.dp,
                             end = 22.dp,
@@ -448,10 +453,23 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
                     onFocusChange = { composerFocused = it },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onGloballyPositioned { formAnchor = it.boundsInWindow() }
                 )
                 }
             }
+            // 三只小 Clawd + 大 Clawd：全屏透明 WebView 盖在聊天内容之上，跑未经修改的原版 JS。
+            // 原版里它们也允许浮到整个页面上（position:absolute 覆盖层、pointer-events:none）
+            ClawdPileLayer(
+                modifier = Modifier.matchParentSize(),
+                formAnchor = formAnchor,
+                chatAnchor = chatAnchor,
+                inputText = vm.chatInput,
+                inputFocused = composerFocused,
+                generating = vm.isChatLoading,
+                lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
+            )
         }
     }
     pendingEditResend?.let { candidate ->
@@ -492,6 +510,33 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
         )
     }
+}
+
+/** 输入框上的三只小 Clawd + 大 Clawd：全屏透明 WebView 跑未经修改的原版
+ *  clawd-pile.js + clawd-rig.js + clawd-rhythm.js。
+ *  formAnchor/chatAnchor = 输入框与聊天区在 Window 内的像素矩形（调用方量），
+ *  JS 侧镜像为 #send_form/#sheld；输入文本、焦点、生成状态推给 JS 驱动动作。 */
+@Composable
+private fun ClawdPileLayer(
+    modifier: Modifier = Modifier,
+    formAnchor: androidx.compose.ui.geometry.Rect?,
+    chatAnchor: androidx.compose.ui.geometry.Rect?,
+    inputText: String,
+    inputFocused: Boolean,
+    generating: Boolean,
+    lastText: String,
+) {
+    val dark = com.adong.adchat.ui.theme.LocalThemeDark.current
+    ClawdPileWebView(
+        formAnchor = formAnchor,
+        chatAnchor = chatAnchor,
+        inputText = inputText,
+        inputFocused = inputFocused,
+        generating = generating,
+        lastText = lastText,
+        night = dark,
+        modifier = modifier,
+    )
 }
 
 @Composable
