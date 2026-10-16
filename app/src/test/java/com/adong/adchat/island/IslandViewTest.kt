@@ -19,6 +19,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.shadows.ShadowViewRootImpl
 import java.time.Duration
 
@@ -40,11 +41,23 @@ class IslandViewTest {
     private val second get() = checkNotNull(IslandLinkParser.parse("https://v.douyin.com/two/"))
 
     @Before fun create() {
+        // PAUSED Looper does not itself pause Robolectric's auto-advancing vsync clock.
+        // Without this, draining one frame can run an entire spring before idleFor returns.
+        ShadowChoreographer.setPaused(true)
+        ShadowChoreographer.setFrameDelay(Duration.ofMillis(16))
         events = Events()
         view = IslandView(RuntimeEnvironment.getApplication(), events)
     }
 
-    @After fun destroy() { view.destroy() }
+    @After fun destroy() {
+        try {
+            view.destroy()
+        } finally {
+            // Restore Robolectric 4.14.1 defaults after all view animators are cancelled.
+            ShadowChoreographer.setFrameDelay(Duration.ofMillis(1))
+            ShadowChoreographer.setPaused(false)
+        }
+    }
 
     private fun layoutWindow() {
         val params = view.layoutParams as WindowManager.LayoutParams
@@ -58,7 +71,16 @@ class IslandViewTest {
     }
 
     private fun advance(ms: Long) {
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
+        val startedAt = SystemClock.uptimeMillis()
+        var remaining = ms
+        // Paused vsync is delivered by clock listeners, not scheduled as a future Looper task.
+        // Step through each frame; one large idleFor jump would produce only one animation frame.
+        while (remaining > 0L) {
+            val step = minOf(16L, remaining)
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(step))
+            remaining -= step
+        }
+        assertEquals("advance($ms) must not auto-run extra animation time", startedAt + ms, SystemClock.uptimeMillis())
     }
 
     @Test fun openingAndClosingKeepWindowOriginAndHaloSize() {
@@ -123,18 +145,20 @@ class IslandViewTest {
         layoutWindow()
         advance(350)
         val openingPosition = view.expansionProgress
-        assertTrue(openingPosition > 0f)
+        assertTrue("opening must still be in flight after 350ms; progress=$openingPosition", openingPosition > 0f && openingPosition < 1f)
         view.collapse()
         assertEquals(openingPosition, view.expansionProgress, 0.00001f)
         advance(100)
         val closingPosition = view.expansionProgress
+        assertTrue("closing must still be in flight after 100ms; opening=$openingPosition closing=$closingPosition dismissed=${events.dismissed}", closingPosition > 0f && closingPosition < openingPosition)
+        assertEquals("close must not finish before reversal; progress=$closingPosition", 0, events.dismissed)
         view.show(second)
         layoutWindow()
         assertEquals(closingPosition, view.expansionProgress, 0.00001f)
         advance(900)
         assertEquals(1f, view.expansionProgress, 0f)
         assertEquals(second, view.displayedLink)
-        assertEquals("cancelled close must not shrink window/call dismissed", 0, events.dismissed)
+        assertEquals("cancelled close must not shrink window/call dismissed; progress=${view.expansionProgress} link=${view.displayedLink?.originalUrl}", 0, events.dismissed)
     }
 
     @Test fun collapseBeforeExpandedLayoutCancelsPendingOpen() {
@@ -166,7 +190,7 @@ class IslandViewTest {
         // The tail peak is near 86% of the 600ms clock; allow vsync quantisation around it.
         advance(520)
         val overshoot = view.expansionProgress
-        assertTrue("must exercise the overshoot, not the main phase", overshoot > 1f)
+        assertTrue("must exercise the overshoot, not the main phase; progress=$overshoot", overshoot > 1f)
         view.show(second)
         layoutWindow()
         assertEquals(overshoot, view.expansionProgress, 0.00001f)

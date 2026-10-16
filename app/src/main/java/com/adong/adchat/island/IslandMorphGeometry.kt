@@ -20,6 +20,9 @@ internal class IslandMorphGeometry {
         private set
     var radius = 0f
         private set
+    /** Transfer the closing tail out of the camera's opaque core so its single recoil is visible. */
+    var haloRecoil = 0f
+        private set
 
     private var seedRadius = 0f
     private var expandedWidth = 0f
@@ -53,6 +56,9 @@ internal class IslandMorphGeometry {
         val halfHeight = ((bottom - top) / 2f).coerceAtLeast(0f)
         radius = (seedRadius + (expandedRadius - seedRadius) * progress)
             .coerceIn(0f, minOf(halfWidth, halfHeight))
+        val recoil = (-progress / IslandSpring.OVERSHOOT).coerceIn(0f, 1f)
+        // Quadratic handoff has zero entry/exit slope, without a second clock or oscillation.
+        haloRecoil = 0.10f * recoil * recoil
     }
 
     fun contains(x: Float, y: Float): Boolean =

@@ -48,6 +48,7 @@ class IslandMorphGeometryTest {
         assertTrue(g.bottom < 45f)
         assertTrue(g.bottom > g.top)
         assertTrue(g.radius > 0f)
+        assertEquals(0.10f, g.haloRecoil, 0.0001f)
     }
 
     @Test fun samplingOrderAndReverseFromCurrentPositionHaveNoPositionJump() {

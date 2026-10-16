@@ -166,7 +166,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         cancelIdleFeedback()
         setWindowFocusable(false)
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
-        val restartMorph = previous == null || morphProgress < 1f
+        // A new link arriving during the 2% tail must settle the current overshoot to 1;
+        // otherwise the old animator is cancelled by show() and the island can remain at >1.
+        val restartMorph = previous == null || morphProgress != 1f
         if (restartMorph) morphAnimator?.cancel()
         prepareExpandedViewport()
         if (restartMorph) {
@@ -548,7 +550,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         morphAnimator = springAnimation(if (expanding) IslandSpring.EXPAND_MS else IslandSpring.COLLAPSE_MS, { p ->
             applyMorph(lerp(from, target, p))
             glowView.alpha = lerp(fromAlpha, if (expanding) 0f else 1f, p).coerceIn(0f, 1f)
-            glowView.springScale = lerp(fromScale, if (expanding) 1.28f else 1f, p)
+            val closingRecoil = if (!expanding) surface.geometry.haloRecoil else 0f
+            glowView.springScale = lerp(fromScale, if (expanding) 1.28f else 1f, p) + closingRecoil
             glowView.glowIntensity = lerp(fromGlow, IslandGlowView.BASE_GLOW_INTENSITY, p)
             glowView.colorShift = lerp(fromColor, if (expanding) 1f else 0f, p).coerceIn(0f, 1f)
             glowView.nudgeShift = lerp(fromNudge, 0f, p).coerceIn(0f, 1f)
@@ -581,8 +584,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         cardHost.scaleX = scale
         cardHost.scaleY = scale
         val actionable = state is State.Card && value >= 0.9f
-        parseButton.isEnabled = actionable
-        cancelButton.isEnabled = actionable
+        if (parseButton.isEnabled != actionable) parseButton.isEnabled = actionable
+        if (cancelButton.isEnabled != actionable) cancelButton.isEnabled = actionable
         val idle = !expandedViewport
         if (glowView.isClickable != idle) glowView.isClickable = idle
         val accessibility = if (idle) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO
