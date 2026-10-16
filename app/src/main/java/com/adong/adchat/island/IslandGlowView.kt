@@ -356,9 +356,27 @@ half4 main(float2 p) {
     private var eventSweep: SweepGradient? = null
     private var nudgeSweep: SweepGradient? = null
 
-    private val agslShader: RuntimeShader? =
+    private val fallbackGlowWidths = floatArrayOf(3.4f, 6.2f, 9.6f)
+    private val fallbackGlowAlphas = floatArrayOf(0.38f, 0.20f, 0.09f)
+    private var agslShader: RuntimeShader? =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            runCatching { RuntimeShader(AGSL_SRC) }.getOrNull()
+            runCatching {
+                RuntimeShader(AGSL_SRC).apply {
+                    // Palette is immutable: upload once, not twelve times per frame.
+                    setColorUniform("u_idleCore", COL_IDLE_CORE)
+                    setColorUniform("u_idlePrimary", COL_IDLE_PRIMARY)
+                    setColorUniform("u_idleSecondary", COL_IDLE_SECONDARY)
+                    setColorUniform("u_idleGlow", COL_IDLE_GLOW)
+                    setColorUniform("u_eventCore", COL_EVENT_CORE)
+                    setColorUniform("u_eventPrimary", COL_EVENT_PRIMARY)
+                    setColorUniform("u_eventSecondary", COL_EVENT_SECONDARY)
+                    setColorUniform("u_eventGlow", COL_EVENT_GLOW)
+                    setColorUniform("u_nudgeCore", COL_NUDGE_CORE)
+                    setColorUniform("u_nudgePrimary", COL_NUDGE_PRIMARY)
+                    setColorUniform("u_nudgeSecondary", COL_NUDGE_SECONDARY)
+                    setColorUniform("u_nudgeGlow", COL_NUDGE_GLOW)
+                }
+            }.getOrNull()
         } else null
 
     override fun onDraw(canvas: Canvas) {
@@ -378,6 +396,9 @@ half4 main(float2 p) {
                 drawWithAgsl(canvas, shader, cx, cy, innerEdge, ringR, coreWidth / 2f, maxR)
             }.isSuccess
             if (ok) return
+            // Disable a broken driver path once instead of allocating an exception every vsync.
+            agslShader = null
+            shaderPaint.shader = null
         }
         drawWithCanvasFallback(canvas, cx, cy, innerEdge, ringR, coreWidth, maxR)
     }
@@ -405,21 +426,6 @@ half4 main(float2 p) {
         shader.setFloatUniform("u_convergeT", convergeT.coerceIn(0f, 1f))
         shader.setFloatUniform("u_flash", flashIntensity.coerceIn(0f, 1f))
         shader.setFloatUniform("u_rippleT", rippleProgress.coerceIn(0f, 1f))
-
-        shader.setColorUniform("u_idleCore", COL_IDLE_CORE)
-        shader.setColorUniform("u_idlePrimary", COL_IDLE_PRIMARY)
-        shader.setColorUniform("u_idleSecondary", COL_IDLE_SECONDARY)
-        shader.setColorUniform("u_idleGlow", COL_IDLE_GLOW)
-
-        shader.setColorUniform("u_eventCore", COL_EVENT_CORE)
-        shader.setColorUniform("u_eventPrimary", COL_EVENT_PRIMARY)
-        shader.setColorUniform("u_eventSecondary", COL_EVENT_SECONDARY)
-        shader.setColorUniform("u_eventGlow", COL_EVENT_GLOW)
-
-        shader.setColorUniform("u_nudgeCore", COL_NUDGE_CORE)
-        shader.setColorUniform("u_nudgePrimary", COL_NUDGE_PRIMARY)
-        shader.setColorUniform("u_nudgeSecondary", COL_NUDGE_SECONDARY)
-        shader.setColorUniform("u_nudgeGlow", COL_NUDGE_GLOW)
 
         shaderPaint.shader = shader
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), shaderPaint)
@@ -457,12 +463,10 @@ half4 main(float2 p) {
         // 1. 三层柔雾光晕
         val totalGlow = (glowIntensity + flashIntensity * 0.75f).coerceIn(0f, 1.5f)
         if (totalGlow > 0.01f) {
-            val widths = floatArrayOf(3.4f, 6.2f, 9.6f)
-            val alphas = floatArrayOf(0.38f, 0.20f, 0.09f)
             glowPaint.color = glowCol
-            for (i in widths.indices) {
-                glowPaint.strokeWidth = dp(widths[i])
-                glowPaint.alpha = (alphas[i] * totalGlow * 255f).toInt().coerceIn(0, 255)
+            for (i in fallbackGlowWidths.indices) {
+                glowPaint.strokeWidth = dp(fallbackGlowWidths[i])
+                glowPaint.alpha = (fallbackGlowAlphas[i] * totalGlow * 255f).toInt().coerceIn(0, 255)
                 canvas.drawCircle(cx, cy, ringR, glowPaint)
             }
         }

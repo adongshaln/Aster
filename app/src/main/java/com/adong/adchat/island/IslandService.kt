@@ -7,11 +7,13 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -46,16 +48,17 @@ class IslandService : Service(), IslandView.Callbacks {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var islandView: IslandView? = null
-    private var pendingLink: IslandLink? = null
-
-    /** 已处理过的短链，避免同一 URL 反复展开导致卡片死循环弹出。 */
-    private val handledUrls = HashSet<String>()
+    private var resolveJob: Job? = null
+    private var shownUrl: String? = null
+    private var linkGeneration = 0L
+    private var viewConfiguration: Configuration? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                invalidateLinkResolution()
                 islandView?.destroy()
                 islandView = null
                 stopSelf()
@@ -70,27 +73,57 @@ class IslandService : Service(), IslandView.Callbacks {
     }
 
     private fun expandShortLink(link: IslandLink) {
+        resolveJob?.cancel()
+        shownUrl = link.originalUrl
+        val generation = ++linkGeneration
         if (!IslandLinkParser.isShortLink(link.originalUrl)) return
-        if (!handledUrls.add(link.originalUrl)) return
-        scope.launch {
-            val expanded = IslandLinkResolver.expand(link.originalUrl)
-            if (expanded != null) {
-                IslandLinkParser.resolveExpanded(link, expanded)?.let { resolved ->
-                    pendingLink = resolved
-                    islandView?.updateCard(resolved)
-                }
+        resolveJob = scope.launch {
+            val expanded = IslandLinkResolver.expand(link.originalUrl) ?: return@launch
+            if (generation != linkGeneration || shownUrl != link.originalUrl) return@launch
+            IslandLinkParser.resolveExpanded(link, expanded)?.let { resolved ->
+                islandView?.updateCard(resolved)
             }
         }
     }
 
+    private fun invalidateLinkResolution() {
+        linkGeneration++
+        shownUrl = null
+        resolveJob?.cancel()
+        resolveJob = null
+    }
+
     private fun obtainView(): IslandView {
         islandView?.let { return it }
-        return IslandView(this, this).also { islandView = it }
+        return IslandView(this, this).also {
+            islandView = it
+            viewConfiguration = Configuration(resources.configuration)
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val previous = viewConfiguration
+        viewConfiguration = Configuration(newConfig)
+        if (previous == null || (previous.densityDpi == newConfig.densityDpi &&
+                previous.fontScale == newConfig.fontScale && previous.locales == newConfig.locales)) return
+        // A service overlay is not Activity-recreated. Rebuild density-dependent paints, text sizes
+        // and layout together instead of mixing stale px values with new display metrics.
+        val current = islandView ?: return
+        val link = current.displayedLink
+        invalidateLinkResolution()
+        current.destroy()
+        islandView = null
+        obtainView().also { replacement ->
+            replacement.attach()
+            if (link != null) replacement.show(link)
+        }
     }
 
     // ---------- IslandView.Callbacks ----------
 
     override fun onParseRequested(link: IslandLink) {
+        invalidateLinkResolution()
         // 显式唤起 MainActivity，走已有的分享路由：下载页自动填入链接
         val intent = Intent(this, com.adong.adchat.MainActivity::class.java).apply {
             action = Intent.ACTION_SEND
@@ -107,10 +140,12 @@ class IslandService : Service(), IslandView.Callbacks {
     }
 
     override fun onDismissed() {
+        invalidateLinkResolution()
         updateIdleNotification()
     }
 
     override fun onDestroy() {
+        invalidateLinkResolution()
         islandView?.destroy()
         islandView = null
         scope.cancel()
