@@ -29,47 +29,78 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
 /**
- * 原版小 Clawd 宿主 WebView：全屏透明覆盖层，跑未经修改的原版 clawd-pile.js。
+ * Clawd 宿主 WebView：全屏透明覆盖层，跑未经修改的原版 clawd-pile.js + clawd-rig.js
+ * + clawd-rhythm.js（三只小爪子 + 可拖拽的大 Clawd）。
  *
- * - 定位：JS 侧 #send_form 镜像真实输入框在本 WebView 视口内的像素矩形（[formAnchor]
- *   是 Window 坐标，减去 WebView 自身的 Window 位置换算），原版
- *   .clawd-pile{bottom:100%} 使爪子精确落在输入框上端；position:absolute 覆盖层
- *   允许浮在整个页面上
+ * - 定位：JS 侧 #send_form / #sheld 镜像真实 Compose 输入框与聊天区的像素矩形
+ *   （[formAnchor]/[chatAnchor] 是 Window 坐标，减去 WebView 自身的 Window 位置换算），
+ *   原版 .clawd-pile{bottom:100%} 使爪子精确落在输入框上端
  * - 触摸：JS 每 60ms 推送爪子物理像素矩形，覆写 dispatchTouchEvent 做命中过滤——
  *   命中爪子才把事件交给 WebView（原版戳/拖拽生效），空白处穿透给 Compose
- * - 位置记忆：domStorageEnabled，原版 localStorage 直接生效
+ * - 状态：输入框文本/焦点（compose/tilt/wow/蹲字）、生成状态（think/stream/done）、
+ *   最后一条消息文本（write 倍速跟出字）都从 Compose 侧推给 JS 镜像 DOM
  */
 @Composable
 fun ClawdPileWebView(
     formAnchor: Rect?,
+    chatAnchor: Rect?,
+    inputText: String,
+    inputFocused: Boolean,
+    generating: Boolean,
+    lastText: String,
     night: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     var webView by remember { mutableStateOf<ClawdHostWebView?>(null) }
-    // WebView 自身在 Window 里的位置：把 formAnchor（Window 坐标）换算进 WebView 视口
+    // WebView 自身在 Window 里的位置：把 anchor（Window 坐标）换算进 WebView 视口
     var viewPos by remember { mutableStateOf(Offset.Zero) }
 
-    val relRect = formAnchor?.let { f ->
-        Rect(
-            f.left - viewPos.x,
-            f.top - viewPos.y,
-            f.right - viewPos.x,
-            f.bottom - viewPos.y,
-        )
+    fun rel(f: Rect) = Rect(
+        f.left - viewPos.x,
+        f.top - viewPos.y,
+        f.right - viewPos.x,
+        f.bottom - viewPos.y,
+    )
+    val relForm = formAnchor?.let(::rel)
+    val relChat = chatAnchor?.let(::rel)
+
+    LaunchedEffect(relForm, webView) {
+        val view = webView ?: return@LaunchedEffect
+        val rect = relForm ?: return@LaunchedEffect
+        view.applyFormRect(rect)
     }
 
-    LaunchedEffect(relRect, webView) {
+    LaunchedEffect(relChat, webView) {
         val view = webView ?: return@LaunchedEffect
-        val rect = relRect ?: return@LaunchedEffect
-        view.applyFormRect(rect)
+        val rect = relChat ?: return@LaunchedEffect
+        view.applyChatRect(rect)
+    }
+
+    LaunchedEffect(inputText, webView) {
+        val view = webView ?: return@LaunchedEffect
+        view.js("window.__clawdInput && window.__clawdInput(${inputText.toJsonLiteral()})")
+    }
+    LaunchedEffect(inputFocused, webView) {
+        val view = webView ?: return@LaunchedEffect
+        view.js("window.__clawdFocus && window.__clawdFocus(${if (inputFocused) "true" else "false"})")
+    }
+    LaunchedEffect(generating, lastText, webView) {
+        val view = webView ?: return@LaunchedEffect
+        if (generating) {
+            view.js("window.__clawdGen && window.__clawdGen(true, ${lastText.isNotEmpty().toString()}, '')")
+            view.js("window.__clawdLastText && window.__clawdLastText(${lastText.toJsonLiteral()})")
+        } else {
+            // 生成结束：按错误/正常收尾由最后一条消息的 isError 决定，这里统一 done
+            view.js("window.__clawdGen && window.__clawdGen(false, false, 'done')")
+        }
     }
 
     LaunchedEffect(night, webView) {
         val view = webView ?: return@LaunchedEffect
         val js = "window.__clawdNight && window.__clawdNight(${if (night) "true" else "false"})"
-        view.evaluateJavascript(js, null)
+        view.js(js)
     }
 
     DisposableEffect(lifecycle, webView) {
@@ -99,6 +130,25 @@ fun ClawdPileWebView(
             view.destroy()
         },
     )
+}
+
+private fun String?.toJsonLiteral(): String {
+    if (this == null) return "''"
+    val sb = StringBuilder(length + 8)
+    sb.append('"')
+    for (ch in this) {
+        when (ch) {
+            '"' -> sb.append("\\\"")
+            '\\' -> sb.append("\\\\")
+            '\n' -> sb.append("\\n")
+            '\r' -> sb.append("\\r")
+            '\t' -> sb.append("\\t")
+            '<' -> sb.append("\\u003c")
+            else -> if (ch < ' ') sb.append("\\u%04x".format(ch.code)) else sb.append(ch)
+        }
+    }
+    sb.append('"')
+    return sb.toString()
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -147,6 +197,7 @@ private fun configureClawdWebView(view: ClawdHostWebView) {
 private class ClawdHostWebView(context: Context) : WebView(context) {
 
     private var lastRect: Rect? = null
+    private var lastChatRect: Rect? = null
 
     /** JS 推来的爪子物理像素矩形 [left, top, right, bottom] */
     @Volatile
@@ -155,14 +206,23 @@ private class ClawdHostWebView(context: Context) : WebView(context) {
     /** 拖拽进行中：DOWN 命中了爪子，整个手势期间事件都归 WebView（原版 pointer 捕获） */
     private var gestureClaimed = false
 
+    fun js(script: String) {
+        evaluateJavascript(script, null)
+    }
+
     fun applyFormRect(rect: Rect) {
         lastRect = rect
-        val js = "window.__clawdLayout && window.__clawdLayout(${rect.left}, ${rect.top}, ${rect.width}, ${rect.height})"
-        evaluateJavascript(js, null)
+        js("window.__clawdLayout && window.__clawdLayout(${rect.left}, ${rect.top}, ${rect.width}, ${rect.height})")
+    }
+
+    fun applyChatRect(rect: Rect) {
+        lastChatRect = rect
+        js("window.__clawdChat && window.__clawdChat(${rect.left}, ${rect.top}, ${rect.width}, ${rect.height})")
     }
 
     fun resendFormRect() {
         lastRect?.let { applyFormRect(it) }
+        lastChatRect?.let { applyChatRect(it) }
     }
 
     @JavascriptInterface

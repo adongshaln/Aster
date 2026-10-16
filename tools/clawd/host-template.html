@@ -5,29 +5,1524 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <style>
   html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
-  /* 宿主只提供定位锚：#send_form 是真实 Compose 输入框的镜像（位置由宿主同步）。
-     clawd-pile.js 内部会给它 append .clawd-pile（position:absolute; bottom:100%）。 */
+  /* ── 宿主主题变量：原版 custom_css 里 rig / gen-timer 用到的最小集 ── */
+  :root {
+    --cl-ink: #121212;
+    --cl-clawd-eye: #000000;
+    --cl-sans: system-ui, -apple-system, sans-serif;
+    --cw-text-body: #37362f;
+    --cw-surface-raised: #ffffff;
+    --cw-rule-hairline: rgba(31,31,30,.15);
+    --cw-mark: #c6613f;
+  }
+  html[data-claude-integrated-theme="night"] {
+    --cl-ink: #f8f8f6;
+    --cw-text-body: #c3c2b7;
+    --cw-surface-raised: #2c2c2a;
+    --cw-rule-hairline: rgba(226,225,218,.15);
+    --cw-mark: #e6a58c;
+  }
+  /* ── 镜像 DOM：#send_form 是真实输入框的锚（位置由宿主同步）。
+     #send_textarea / #chat 是给原版代码读状态的替身（透明、只读、不接管键盘）。 ── */
   #send_form { position: absolute; }
+  /* 用户校准「下降大约一毫米」：原版 .clawd-pile 自带 margin-bottom:-1px（≈0.26mm），
+     这里覆盖为 -5px，净再降 4 CSS px ≈ 1mm。 */
+  html .clawd-pile { margin-bottom: -5px !important; }
+  #send_textarea {
+    position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+    opacity: 0; pointer-events: none; border: 0; padding: 0; margin: 0;
+    resize: none; outline: 0;
+  }
+  #sheld { position: absolute; left: 0; top: 0; width: 0; height: 0; overflow: hidden; visibility: hidden; }
+  #chat .mes_text { visibility: hidden; }
+  /* ── 大 Clawd 按钮：原版 button.clawd-signoff-button 基础外观（2.0.135，42x34） ── */
+  button.clawd-signoff-button {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -webkit-tap-highlight-color: transparent !important;
+    position: relative !important;
+    isolation: isolate !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 42px !important;
+    min-width: 42px !important;
+    max-width: 42px !important;
+    height: 34px !important;
+    min-height: 34px !important;
+    max-height: 34px !important;
+    margin: 14px 0 1px !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    color: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    background-repeat: no-repeat !important;
+    background-position: left bottom !important;
+    background-size: 42px 42px !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    filter: none;
+    cursor: pointer !important;
+    image-rendering: pixelated;
+    line-height: 0 !important;
+    transform: translateY(0) scale(1) rotate(0);
+    transform-origin: center bottom;
+    transition: transform 150ms cubic-bezier(.2,.8,.25,1.25), filter 150ms ease !important;
+  }
+  button.clawd-signoff-button:hover { filter: saturate(1.08); }
+  /* composer 大 Clawd：钉在 #send_form 内、底边 calc(100% - 1px)（和装饰爪
+     bottom:100%+margin-bottom:-1px 完全等价，两只并排同一条线）。 */
+  html body #send_form > button.clawd-signoff-button.clawd-composer-clawd {
+    position: absolute !important;
+    inset: auto auto calc(100% - 1px) 18px !important;
+    z-index: 4 !important;
+    display: block !important;
+    margin: 0 !important;
+    touch-action: none !important;
+  }
+  /* 生成计时徽标（原版 .clawd-gen-timer，色值取自日/夜主题变量） */
+  .clawd-gen-timer {
+    position: fixed;
+    right: 16px;
+    bottom: 84px;
+    z-index: 10015;
+    padding: 4px 10px;
+    border-radius: 10px;
+    font-family: var(--cl-sans);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--cw-text-body);
+    background: var(--cw-surface-raised);
+    border: 1px solid var(--cw-rule-hairline);
+    box-shadow: 0 6px 18px rgba(0,0,0,.18);
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 200ms ease, transform 200ms ease;
+    pointer-events: none;
+  }
+  .clawd-gen-timer.clawd-gen-timer-visible { opacity: .92; transform: translateY(0); }
+  .clawd-gen-timer.clawd-gen-timer-done { color: var(--cw-mark); }
 </style>
 </head>
 <body>
-<div id="send_form"></div>
+<div id="send_form"><textarea id="send_textarea" readonly inputmode="none" tabindex="-1" aria-hidden="true"></textarea></div>
+<div id="sheld"><div id="chat"><div class="mes last_mes" is_user="false"><div class="mes_text"></div></div></div></div>
 <script>
 /* ===== 原版 clawd-pile.js（一字不改，内联自 claudenoshujin/claude-web） ===== */
 {{CLAWD_PILE_JS}}
 </script>
 <script>
+/* ===== 原版 clawd-rig.js（一字不改，内联自 claudenoshujin/claude-web） ===== */
+{{CLAWD_RIG_JS}}
+</script>
+<script>
+/* ===== 原版 clawd-rhythm.js（一字不改，内联自 claudenoshujin/claude-web） ===== */
+{{CLAWD_RHYTHM_JS}}
+</script>
+<script>
 'use strict';
+/* ═══════════════════════════════════════════════════════════════════════
+   宿主桥：从原版 index.js 移植的大 Clawd 行为层。
+   骨架与动作 CSS 由原版 clawd-rig.js 生成（buildClawdRig）；这里只保留
+   驱动它的状态机/物理/调度。与原版的差异（其余逐行同源）：
+   - isTypingActive() → generationEventActive（Aster 无 typing_indicator）
+   - handleClawdComposerEdit 去掉 isTrusted 检查（Android 桥合成的事件）
+   - ccSleeping / clawdLetterPending / clawdReadingGate 无事件源，剪除
+   - 眼睛跟随（mousemove look）手机端无 hover，剪除
+   ═══════════════════════════════════════════════════════════════════════ */
 const win = window, doc = document;
 const bridge = {
-  pile: null,
+  pile: null,         // 小爪子实例
+  pileAPI: null,      // pile 对外 API（seats/blocks/peek/...）
   rects: [],          // 爪子屏幕矩形 [{l,t,r,b}]，供宿主命中测试
   formRect: null,
+  chatRect: null,
   reportTimer: 0,
+  rhythm: null,
 };
 
+/* ── 基础设施（index.js 1388-1406） ── */
+const clawdFrames = new Set, clawdTimers = new Set;
+function requestClawdFrame(fn) {
+  const id = win.requestAnimationFrame(now => {
+    clawdFrames.delete(id);
+    fn(now);
+  });
+  clawdFrames.add(id);
+  return id;
+}
+function clawdLater(fn, ms) {
+  const id = win.setTimeout(() => {
+    clawdTimers.delete(id);
+    fn();
+  }, ms);
+  clawdTimers.add(id);
+  return id;
+}
+function cancelClawdLater(id) {
+  clawdTimers.delete(id);
+  win.clearTimeout(id);
+}
+const clawdPrefersReducedMotion = () => {
+  try { return Boolean(win.matchMedia?.('(prefers-reduced-motion: reduce)').matches); } catch { return false; }
+};
+
+/* ── 常量与状态（index.js 1310, 1474-1618） ── */
+const BUTTON_CLASS = 'clawd-signoff-button';
+const CLAWD_RIG = buildClawdRig();
+const CLAWD_RIG_STYLE_ID = 'claude-clawd-rig-style';
+const clawdTracks = {
+  A: null, B: 'idle', C: null,
+  aStartedAt: 0, aUntil: 0, bUntil: 0, cUntil: 0,
+  round: 0, activeRound: 0, settledRound: 0, genStartedAt: 0
+};
+const CLAWD_RIG_POOL = Object.freeze([
+  { id: 'polish', weight: 3, cool: 24e4 },
+  { id: 'walk', weight: 3, cool: 12e4 },
+  { id: 'butterfly', weight: 1, cool: 6e5 },
+  { id: 'plant', weight: 1, cool: 6e5 },
+  { id: 'eat', weight: .3, mealWeight: 3, cool: 18e5 },
+  { id: 'onFire', weight: .5, cool: 9e5 },
+  { id: 'glowstick', weight: .5, cool: 6e5 },
+  { id: 'glowstick2', weight: .5, cool: 6e5 },
+  { id: 'rickroll', weight: .3, cool: 3e5 },
+  { id: 'siren', weight: .25, cool: 9e5 },
+  { id: 'sirenBlue', weight: .25, cool: 9e5 }
+]);
+const clawdRigLastPlayed = {};
+const CLAWD_RIG_FORMS = Object.freeze({
+  glowstick: ['glowstick', 'glowstickPump'],
+  glowstick2: ['glowstick2', 'glowstick2Pump', 'glowstick2Alt']
+});
+const CLAWD_RIG_A = Object.freeze({ think: 'write', stream: 'write', sit: 'sitWrite', done: 'done', stopped: 'stopped', error: 'error' });
+const CLAWD_RIG_A_HELD = Object.freeze({ think: 'writeHeld', stream: 'writeHeld', sit: 'writeHeld', done: 'doneHeld', stopped: 'stoppedHeld', error: 'errorHeld' });
+const CLAWD_RIG_B = Object.freeze({
+  compose: 'compose', tilt: 'tilt', wow: 'wow', wake: 'wake', drowsy: 'drowsy', sleep: 'sleep',
+  neglected: 'neglected', around: 'around', spin: 'spin', lean: 'lean', hide: 'hide', tramp: 'tramp',
+  scratch: 'scratch', crouch: 'crouch', heart: 'heart', point: 'point', facepalm: 'facepalm', peek: 'peek'
+});
+const CLAWD_RIG_C = Object.freeze({
+  press: 'press', grab: 'grab', drag: 'drag', fly: 'fly', land: 'land', stomp: 'stomp', pet: 'pet',
+  t2: 'poke2', t3: 'poke3', t4: 'poke4', turn: 'sulk', t5: 'sulk', face: 'sulk', rage: 'rage'
+});
+let clawdRigPokeT1 = 'poke1';
+const CLAWD_RIG_VARIANTS = Object.freeze({ drag: ['drag', 'dragSwing'], stomp: ['stomp', 'stompSlap'], sulk: ['sulk', 'rage'] });
+const clawdRigVariant = { drag: 'drag', stomp: 'stomp', sulk: 'sulk' };
+function clawdRigPickVariant(key) {
+  const pool = CLAWD_RIG_VARIANTS[key].filter(id => CLAWD_RIG.clips[id]);
+  clawdRigVariant[key] = pool[Math.floor(Math.random() * pool.length)] || key;
+  return clawdRigVariant[key];
+}
+let clawdRigUntiltUntil = 0;
+const clawdRigInjected = new Set;
+const A2_TIER = ['t1', 't2', 't3', 't4', 't5'];
+const A2_TMS = [600, 700, 700, 1100, 0];
+const A2_RICH_TIER = 1;
+const A2_DRAG_THRESHOLD = 5;
+const A2_EDGE = 6;
+const A2_FORM_INSET = 8;
+const A2_FALLBACK_CEILING = 240;
+const A2_BOUNDS_TTL = 800;
+const CLAWD_RIG_CELL = 3;
+
+/* ── A2 状态（index.js 1619-1680） ── */
+const A2 = {
+  petTimer: 0, petting: false,
+  x: 0, fy: 0, homeX: 0, floor: 0,
+  feel: .64, irr: 0, throws: 0, lastThrow: 0, lastDec: 0,
+  lockUntil: 0, lockName: '', seqRun: 0, seqOwned: false,
+  flying: 0, dragging: false, moved: false, held: false, pointerId: null,
+  bndReady: false, bndRaf: 0,
+  sx: 0, sy: 0, ox: 0, oy: 0, vx: 0, vy: 0, lx: 0, ly: 0, lt: 0,
+  rot: 0, sqx: 1, sqy: 1,
+  bnd: { minx: -9e9, maxx: 9e9, maxxHome: 9e9, minxHome: -9e9, miny: -A2_FALLBACK_CEILING, maxy: 0 },
+  bndAt: 0, tookPointer: false, squashTimer: 0
+};
+let clawdRuntimeTimer = 0;
+let clawdLastIdleTickAt = 0;
+let generationEventActive = false;
+let suppressManualScrollUntil = 0;
+let clawdScrollHolding = false;
+let clawdScrollRestTimer = 0;
+let clawdPileRestTimer = 0;
+
+/* ── 作息（index.js 3496-3600，ccSleeping/hasChatActivity 无事件源，剪除） ── */
+const IDLE_SLEEP_MS = 18e4;
+let lastActivityAt = Date.now();
+let idleAsleep = false;
+const NEGLECT_POKE_MS = 6e4;
+let lastPokeAt = Date.now();
+let neglected = false;
+let ccDrowsy = false;
+const CLAWD_NEGLECT_SHOW_MS = 6800;
+const CLAWD_NEGLECT_REPEAT_MS = 24e4;
+let clawdNeglectShownAt = -1 / 0;
+const DOZE_OFF_MS = 1900;
+let dozeTimer = 0;
+
+/* ── DOM 查询 ── */
+const composerClawd = () => doc.querySelector(`#send_form > button.${BUTTON_CLASS}.clawd-composer-clawd`);
+const clawdVisualNodes = () => doc.querySelectorAll(`button.${BUTTON_CLASS}`);
+const clawdVisibleState = () => clawdTracks.C || clawdTracks.A || clawdTracks.B || 'idle';
+const isTypingActive = () => generationEventActive;
+
+/* ── 渲染（index.js 1742-1834） ── */
+function renderClawdTracks() {
+  const visible = clawdVisibleState();
+  const owner = clawdTracks.C ? 'C' : clawdTracks.A ? 'A' : 'B';
+  const generationInFlight = clawdTracks.A === 'think' || clawdTracks.A === 'stream' || clawdTracks.A === 'sit';
+  clawdVisualNodes().forEach(button => {
+    const isComposer = button.classList.contains('clawd-composer-clawd');
+    const state = {
+      clawdA: clawdTracks.A || '',
+      clawdB: clawdTracks.B || '',
+      clawdC: clawdTracks.C || '',
+      clawdState: visible,
+      clawdOwner: owner,
+      clawdRole: isComposer ? 'composer' : 'signoff'
+    };
+    for (const [key, value] of Object.entries(state)) button.dataset[key] !== value && (button.dataset[key] = value);
+    const display = isComposer || !generationInFlight ? 'block' : 'none';
+    button.style.getPropertyValue('display') === display && button.style.getPropertyPriority('display') === 'important' || button.style.setProperty('display', display, 'important');
+    isComposer && syncClawdRig(button, owner);
+  });
+}
+function installClawdRigStyle() {
+  doc.getElementById(CLAWD_RIG_STYLE_ID)?.remove();
+  const RB = `#send_form > button.${BUTTON_CLASS}.clawd-composer-clawd`;
+  const style = doc.createElement('style');
+  style.id = CLAWD_RIG_STYLE_ID;
+  style.textContent = `
+      ${RB} > .clawd-rig { display: none; position: absolute; left: -4px; top: -14px; width: 3px; height: 3px;
+        transform-origin: 24px 48px; pointer-events: none; }
+      ${RB}[data-clawd-rig="on"] > .clawd-rig { display: block; }
+      ${RB} .clr-root { position: absolute; left: 0; top: 0; }
+      ${RB} .clr-p { position: absolute; left: 0; top: 0; width: 3px; height: 3px; }
+      @media (prefers-reduced-motion: reduce) {
+        ${RB} .clawd-rig, ${RB} .clawd-rig * { animation: none !important; }
+      }
+    ` + CLAWD_RIG.css;
+  doc.head.append(style);
+  clawdRigSchedulePrewarm();
+}
+const CLAWD_RIG_PREWARM = ['press', 'grab', 'drag', 'dragSwing', 'fly', 'land', 'stomp', 'stompSlap', 'pet', 'poke1', 'poke1Shy', 'poke2', 'poke3', 'poke4', 'rage'];
+let clawdRigPrewarmTimer = 0;
+let clawdRigPrewarmIsIdle = false;
+function clawdRigSchedulePrewarm() {
+  if (clawdRigPrewarmTimer) return;
+  const run = () => {
+    clawdRigPrewarmTimer = 0;
+    const style = doc.getElementById(CLAWD_RIG_STYLE_ID);
+    if (!style) return;
+    const composer = composerClawd();
+    composer && clawdRigGhostHostFor(composer);
+    const ids = CLAWD_RIG_PREWARM.filter(id => CLAWD_RIG.clips[id]).flatMap(id => [id, id + '-m']).filter(id => !clawdRigInjected.has(id));
+    if (!ids.length) return;
+    style.append(doc.createTextNode(ids.map(id => CLAWD_RIG.cssFor(id)).join('\n')));
+    ids.forEach(id => clawdRigInjected.add(id));
+  };
+  clawdRigPrewarmIsIdle = typeof win.requestIdleCallback === 'function';
+  clawdRigPrewarmTimer = clawdRigPrewarmIsIdle ? win.requestIdleCallback(run, { timeout: 4e3 }) : clawdLater(run, 1500);
+}
+function ensureClawdRigClipCss(id) {
+  if (clawdRigInjected.has(id)) return;
+  const style = doc.getElementById(CLAWD_RIG_STYLE_ID);
+  if (!style) return;
+  style.append(doc.createTextNode(CLAWD_RIG.cssFor(id)));
+  clawdRigInjected.add(id);
+}
+function ensureClawdRig(button) {
+  if (button.querySelector(':scope > .clawd-rig')) return;
+  const rig = doc.createElement('span');
+  rig.className = 'clawd-rig';
+  rig.setAttribute('aria-hidden', 'true');
+  const root = doc.createElement('span');
+  root.className = 'clr-root';
+  const flex = doc.createElement('span');
+  flex.className = 'clr-flex';
+  CLAWD_RIG.parts.forEach(part => {
+    const node = doc.createElement('i');
+    node.className = `clr-p clr-p-${part}`;
+    (part === 'shadow' ? root : flex).append(node);
+  });
+  root.append(flex);
+  rig.append(root);
+  button.append(rig);
+}
+function clawdRigClipFor(owner) {
+  if (owner === 'C') {
+    if (clawdTracks.C === 't1') return clawdRigPokeT1;
+    if (clawdTracks.C in clawdRigVariant) return clawdRigVariant[clawdTracks.C];
+    return CLAWD_RIG_C[clawdTracks.C] || '';
+  }
+  if (owner === 'A') return (A2.floor ? CLAWD_RIG_A_HELD : CLAWD_RIG_A)[clawdTracks.A] || '';
+  const b = clawdTracks.B || 'idle';
+  if (b.startsWith('rig:')) {
+    const id = b.slice(4);
+    return CLAWD_RIG.clips[id.replace(/-m$/, '')] ? id : '';
+  }
+  return CLAWD_RIG_B[b] || '';
+}
+function clawdRigContinues(base, curBase) {
+  const meta = CLAWD_RIG.clips[base], cur = CLAWD_RIG.clips[curBase];
+  if (!meta || !cur) return false;
+  return meta.from === curBase || meta.after === curBase || cur.next === base || cur.from === base || Boolean(meta.from && meta.from === cur.from);
+}
+function clawdRigShouldMirror(button, base) {
+  const ext = CLAWD_RIG.extentFor(base);
+  if (!ext.l && !ext.r) return false;
+  const now = Date.now();
+  if (!A2.bndReady || now - A2.bndAt > A2_BOUNDS_TTL) {
+    A2.bnd = a2Walls(button);
+    A2.bndAt = now;
+    A2.bndReady = true;
+  }
+  const left = A2.x - Math.max(A2.bnd.minx, A2.bnd.minxHome), right = A2.bnd.maxxHome - A2.x;
+  const over = (l, r) => Math.max(0, r * CLAWD_RIG_CELL - right) + Math.max(0, l * CLAWD_RIG_CELL - left);
+  return over(ext.r, ext.l) < over(ext.l, ext.r);
+}
+const CLAWD_RIG_INTERRUPT = Object.freeze({ plant: 'wither', plantWilt: 'wither', butterfly: 'fly', onFire: 'fade', siren: 'fade', sirenBlue: 'fade' });
+let clawdRigGhostHost = null;
+const clawdRigGhostJobs = new Map;
+function removeClawdRigGhost(layer) {
+  const job = clawdRigGhostJobs.get(layer);
+  if (job) {
+    cancelClawdLater(job.timer);
+    job.animations.forEach(animation => animation.cancel());
+    clawdRigGhostJobs.delete(layer);
+  }
+  layer.remove();
+}
+function clawdRigGhostHostFor(button) {
+  if (!clawdRigGhostHost || !clawdRigGhostHost.isConnected) {
+    clawdRigGhostHost = doc.createElement('span');
+    clawdRigGhostHost.className = 'clr-ghost-host';
+    clawdRigGhostHost.setAttribute('aria-hidden', 'true');
+    clawdRigGhostHost.style.cssText = 'position:fixed;display:block;left:0;top:0;width:0;height:0;margin:0;padding:0;pointer-events:none;overflow:visible;contain:layout style;z-index:5';
+    doc.body.append(clawdRigGhostHost);
+  }
+  return clawdRigGhostHost;
+}
+function clawdRigReadProps(button) {
+  const rig = button.querySelector(':scope > .clawd-rig');
+  const flex = rig && rig.querySelector('.clr-flex');
+  if (!flex || !button.dataset.clawdClip) return null;
+  const props = [];
+  for (const node of flex.querySelectorAll('.clr-p-propA, .clr-p-propB')) {
+    const cs = win.getComputedStyle(node);
+    const o = Number(cs.opacity);
+    if (!cs.boxShadow || cs.boxShadow === 'none' || o === 0) continue;
+    props.push({ shadow: cs.boxShadow, left: cs.left, top: cs.top, z: cs.zIndex, o: o });
+  }
+  if (!props.length) return null;
+  const rcs = win.getComputedStyle(rig);
+  const root = rig.querySelector('.clr-root');
+  const rootCs = root ? win.getComputedStyle(root) : null;
+  const rect = rig.getBoundingClientRect();
+  return {
+    props: props, rect: rect,
+    rootT: rootCs ? rootCs.transform : 'none',
+    rootL: rootCs ? rootCs.left : '0px',
+    rootT2: rootCs ? rootCs.top : '0px',
+    origin: rcs.transformOrigin.split(' ').map(v => parseFloat(v) || 0)
+  };
+}
+let clawdRigSnap = null;
+function clawdRigSnapshotProps(button) {
+  clawdRigSnap = null;
+  if (!button.dataset.clawdClip || clawdPrefersReducedMotion()) return;
+  clawdRigSnap = { clip: button.dataset.clawdClip, at: Date.now(), data: clawdRigReadProps(button) };
+}
+function clawdRigDropProps(button, clipBase) {
+  if (clawdPrefersReducedMotion()) { clawdRigSnap = null; return; }
+  const cur = button.dataset.clawdClip || '';
+  const snap = clawdRigSnap && clawdRigSnap.clip === cur && Date.now() - clawdRigSnap.at < 150 ? clawdRigSnap : null;
+  clawdRigSnap = null;
+  const data = snap ? snap.data : clawdRigReadProps(button);
+  if (!data) return;
+  const { props: props, rect: rect, rootT: rootT, rootL: rootL, rootT2: rootT2 } = data;
+  const [ox, oy] = data.origin;
+  const kind = CLAWD_RIG_INTERRUPT[clipBase] || 'drop';
+  const scale = rect.width / 3 || 1;
+  const host = clawdRigGhostHostFor(button);
+  const layer = doc.createElement('span');
+  layer.style.cssText = `position:absolute;display:block;width:3px;height:3px;left:${rect.left - ox * (1 - scale)}px;top:${rect.top - oy * (1 - scale)}px;transform:scale(${scale});transform-origin:${ox}px ${oy}px`;
+  const inner = doc.createElement('span');
+  inner.style.cssText = `position:absolute;display:block;left:${rootL};top:${rootT2};transform:${rootT}`;
+  layer.append(inner);
+  const jobs = props.map(p => {
+    const pts = [...p.shadow.matchAll(/(-?[\d.]+)px (-?[\d.]+)px 0px/g)].map(m => [Number(m[1]), Number(m[2])]);
+    const ax = pts.length ? pts.reduce((sum, pt) => sum + pt[0], 0) / pts.length : 24;
+    const ay = pts.length ? pts.reduce((sum, pt) => sum + pt[1], 0) / pts.length : 0;
+    const by = pts.length ? Math.max(...pts.map(pt => pt[1])) : 0;
+    const dir = ax + (parseFloat(p.left) || 0) < 24 ? -1 : 1;
+    const o = p.o;
+    const ghost = doc.createElement('i');
+    ghost.className = 'clr-ghost';
+    ghost.style.cssText = `position:absolute;display:block;width:3px;height:3px;box-shadow:${p.shadow};left:${p.left};top:${p.top};z-index:${p.z};opacity:${o};transform-origin:${ax}px ${kind === 'wither' ? by : ay}px`;
+    inner.append(ghost);
+    const frames = kind === 'fade' ? [
+      { opacity: o, easing: 'ease-out' }, { opacity: 0 }
+    ] : kind === 'wither' ? [
+      { scale: '1 1', filter: 'none', opacity: o, easing: 'ease-out' },
+      { scale: '1 .7', filter: 'grayscale(1)', opacity: o * .7, offset: .35, easing: 'ease-in' },
+      { scale: '1 .15', filter: 'grayscale(1)', opacity: 0 }
+    ] : kind === 'fly' ? [
+      { translate: '0 0', opacity: o, easing: 'ease-out' },
+      { translate: dir * 15 + 'px -15px', opacity: o, offset: .35 },
+      { translate: dir * 36 + 'px -42px', opacity: 0 }
+    ] : [
+      { translate: '0 0', rotate: '0deg', opacity: o, easing: 'cubic-bezier(.2,.7,.4,1)' },
+      { translate: dir * 15 + 'px -12px', rotate: dir * 30 + 'deg', opacity: o, offset: .25, easing: 'cubic-bezier(.55,0,.85,.5)' },
+      { translate: dir * 36 + 'px 24px', rotate: dir * 110 + 'deg', opacity: 0 }
+    ];
+    return [ghost, frames];
+  });
+  host.append(layer);
+  const job = {
+    timer: clawdLater(() => removeClawdRigGhost(layer), 1200),
+    animations: []
+  };
+  clawdRigGhostJobs.set(layer, job);
+  for (const [ghost, frames] of jobs) try {
+    job.animations.push(ghost.animate(frames, { duration: kind === 'drop' ? 800 : 900, easing: 'linear', fill: 'forwards' }));
+  } catch (error) {
+    ghost.remove();
+  }
+}
+function syncClawdRig(button, owner) {
+  ensureClawdRig(button);
+  button.dataset.clawdRig !== 'on' && (button.dataset.clawdRig = 'on');
+  const current = button.dataset.clawdClip || '';
+  const curBase = current.replace(/-m$/, '');
+  owner === 'C' && clawdTracks.C === 't1' && curBase !== 'poke1' && curBase !== 'poke1Shy' && (clawdRigPokeT1 = Math.random() < .34 ? 'poke1Shy' : 'poke1');
+  let clip = clawdRigClipFor(owner);
+  if (clip.replace(/-m$/, '') !== 'tilt') {
+    const now = Date.now();
+    if (curBase === 'tilt') {
+      clawdRigUntiltUntil = now + CLAWD_RIG.clips.untilt.dur;
+      clawdLater(() => renderClawdTracks(), CLAWD_RIG.clips.untilt.dur + 20);
+      clip = 'untilt';
+    } else curBase === 'untilt' && now < clawdRigUntiltUntil && (clip = 'untilt');
+  }
+  const base = clip.replace(/-m$/, '');
+  const continues = Boolean(base && curBase && clawdRigContinues(base, curBase));
+  if (base && !clip.endsWith('-m') && base !== 'walkLoop') {
+    if (base === curBase) return;
+    const mirror = continues ? current.endsWith('-m') : clawdRigShouldMirror(button, base);
+    clip = mirror ? base + '-m' : base;
+  }
+  if (clip === current) return;
+  current && !continues && clawdRigDropProps(button, curBase);
+  button.removeAttribute('data-clawd-clip');
+  if (clip) {
+    base.startsWith('glowstick') && clawdRigPickStickColors(button);
+    ensureClawdRigClipCss(clip);
+    button.dataset.clawdClip = clip;
+  }
+}
+const CLAWD_STICK_COLORS = Object.freeze(['#7dff9b', '#ff6bd6', '#6be4ff', '#fff36b', '#ff9b4a', '#b18cff', '#ff5c6c']);
+function clawdRigPickStickColors(button) {
+  const n = CLAWD_STICK_COLORS.length;
+  const a = Math.floor(Math.random() * n);
+  const b = (a + 1 + Math.floor(Math.random() * (n - 1))) % n;
+  button.style.setProperty('--stick-a', CLAWD_STICK_COLORS[a]);
+  button.style.setProperty('--stick-b', CLAWD_STICK_COLORS[b]);
+}
+
+/* ── 轨道设置（index.js 2145-2176） ── */
+function setClawdA(value, duration = 0) {
+  a2CancelSeq();
+  value !== clawdTracks.A && clawdShakeRiders(value);
+  value && clawdCancelTransientB();
+  const now = Date.now();
+  clawdTracks.A = value || null;
+  clawdTracks.aStartedAt = value ? now : 0;
+  value !== 'think' || duration || (duration = 16e3);
+  value !== 'stream' || duration || (duration = 2e4);
+  clawdTracks.aUntil = value && duration ? now + duration : 0;
+  renderClawdTracks();
+  if (!value && clawdTracks.B === 'idle') syncClawdBState();
+}
+function setClawdB(value, duration = 0) {
+  (value || 'idle') !== clawdTracks.B && clawdShakeRiders(value);
+  clawdTracks.B = value || 'idle';
+  clawdTracks.bUntil = value && duration ? Date.now() + duration : 0;
+  renderClawdTracks();
+}
+function setClawdC(value, duration = 0) {
+  if (a2Locked() && !A2.seqOwned) return;
+  value && clawdCancelTransientB();
+  value !== 'grab' && value !== 'drag' && value !== clawdTracks.C && clawdShakeRiders(value);
+  clawdTracks.C = value || null;
+  clawdTracks.cUntil = value && duration ? Date.now() + duration : 0;
+  renderClawdTracks();
+  if (!value && clawdTracks.B === 'idle') syncClawdBState();
+}
+function beginClawdGeneration() {
+  clawdTracks.round += 1;
+  clawdTracks.activeRound = clawdTracks.round;
+  clawdTracks.genStartedAt = Date.now();
+  setClawdA('think');
+}
+function settleClawdGeneration(outcome = 'done') {
+  const round = clawdTracks.activeRound;
+  if (!round || clawdTracks.settledRound === round) return;
+  clawdTracks.settledRound = round;
+  setClawdA(outcome, CLAWD_RIG.clips[outcome]?.dur || 1400);
+}
+function clawdCancelTransientB() {
+  if (!clawdTracks.bUntil) return;
+  clawdTracks.B = 'idle';
+  clawdTracks.bUntil = 0;
+}
+const CLAWD_QUIET_WITH_RIDERS = new Set(['idle', 'peek', 'peekOut', 'walkLoop', 'around', 'point', 'scratch', 'facepalm', 'press', 'neglected', 'drowsy', 'sleep', 'compose', 'think', 'stream', 'sit', 'stopped', 'error']);
+function clawdShakeRiders(value) {
+  if (!value) return;
+  const base = String(value).replace(/^rig:/, '').replace(/-m$/, '');
+  if (CLAWD_QUIET_WITH_RIDERS.has(base)) return;
+  bridge.pileAPI?.unloadBig('hop');
+}
+
+/* ── 打字反应（index.js 2181-2236；去 isTrusted：Android 桥合成事件） ── */
+function createClawdComposerReaction(duration, blocked, now = Date.now) {
+  let before = null, composition = null, reaction = null, serial = 0;
+  const snapshot = box => ({ box, value: box.value, start: box.selectionStart, end: box.selectionEnd });
+  const reset = () => { before = null; composition = null; reaction = null; };
+  const inserted = (old, box) => {
+    if (!old || old.box !== box || old.value === box.value) return '';
+    const prefix = old.value.slice(0, old.start), suffix = old.value.slice(old.end);
+    if (!box.value.startsWith(prefix) || !box.value.endsWith(suffix) || box.value.length < prefix.length + suffix.length) return '';
+    return box.value.slice(prefix.length, box.value.length - suffix.length);
+  };
+  const commit = (old, box, expected) => {
+    const addition = inserted(old, box);
+    if (expected != null && addition !== expected) return false;
+    const mark = (addition.match(/[?？!！](?=[^?？!！]*$)/) || [''])[0];
+    if (mark && !blocked()) {
+      const state = /[!！]/.test(mark) ? 'wow' : 'tilt';
+      reaction = { state, until: now() + duration(state), serial: ++serial };
+    }
+    return true;
+  };
+  const handle = event => {
+    const box = event.target;
+    if (box?.id !== 'send_textarea') return;
+    if (event.type === 'beforeinput') {
+      before = /^(insertText|insertFromPaste|insertFromDrop|insertCompositionText|insertFromComposition)$/.test(event.inputType || '') ? snapshot(box) : null;
+      return;
+    }
+    if (event.type !== 'input') return;
+    if (/^(insertText|insertFromPaste|insertFromDrop|insertCompositionText|insertFromComposition)$/.test(event.inputType || '')) commit(before, box);
+    before = null;
+  };
+  const current = () => { if (reaction && (blocked() || now() >= reaction.until)) reaction = null; return reaction; };
+  return { handle, current, reset };
+}
+const clawdComposerReaction = createClawdComposerReaction(
+  state => CLAWD_RIG.clips[state].dur,
+  () => !!(clawdTracks.A || clawdTracks.C || a2Locked() || idleAsleep || ccDrowsy));
+const handleClawdComposerEdit = event => {
+  if (event.target?.id !== 'send_textarea') return;
+  clawdComposerReaction.handle(event);
+  if (event.type === 'compositionend') syncClawdBState();
+};
+const handleClawdComposerInput = event => {
+  if (event.target?.id !== 'send_textarea') return;
+  clawdComposerReaction.handle(event);
+  noteActivity();
+  syncClawdBState();
+};
+
+/* ── B 轨状态同步（index.js 2237-2255） ── */
+function syncClawdBState() {
+  const box = doc.querySelector('#send_textarea');
+  const focused = Boolean(box && doc.activeElement === box);
+  const text = box?.value?.trim() || '';
+  const reaction = focused ? clawdComposerReaction.current() : null;
+  if (!focused) clawdComposerReaction.reset();
+  const next = idleAsleep ? 'sleep' : ccDrowsy ? 'drowsy'
+    : reaction ? reaction.state : focused && text ? 'compose' : neglected ? 'neglected' : 'idle';
+  if (reaction) {
+    const replay = reaction.serial !== reactionSerial && clawdTracks.B === next;
+    reactionSerial = reaction.serial;
+    setClawdB(next, Math.max(1, reaction.until - Date.now()));
+    if (replay) for (const animation of composerClawd()?.querySelector('.clawd-rig')?.getAnimations?.({ subtree: true }) || []) animation.currentTime = 0;
+    return;
+  }
+  if (clawdTracks.bUntil > Date.now()
+    && (next === 'idle' || next === 'neglected' || next === 'drowsy' || next === 'sleep')) {
+    renderClawdTracks(); return;
+  }
+  setClawdB(next);
+}
+let reactionSerial = 0;
+
+/* ── 空闲调度（index.js 2255-2354） ── */
+const CLAWD_B_AMBIENT_POSES = Object.freeze([
+  { state: 'around', duration: CLAWD_RIG.clips.around.dur },
+  { state: 'spin', duration: CLAWD_RIG.clips.spin.dur },
+  { state: 'lean', duration: CLAWD_RIG.clips.lean.dur },
+  { state: 'hide', duration: CLAWD_RIG.clips.hide.dur },
+  { state: 'tramp', duration: CLAWD_RIG.clips.tramp.dur },
+  { state: 'scratch', duration: CLAWD_RIG.clips.scratch.dur },
+  { state: 'crouch', duration: CLAWD_RIG.clips.crouch.dur },
+  { state: 'heart', duration: CLAWD_RIG.clips.heart.dur },
+  { state: 'point', duration: CLAWD_RIG.clips.point.dur },
+  { state: 'facepalm', duration: CLAWD_RIG.clips.facepalm.dur }
+]);
+let clawdBAmbientNextAt = Date.now() + 18e3;
+let clawdBLastAmbient = '';
+function scheduleClawdBAmbient(now = Date.now(), retry = false) {
+  clawdBAmbientNextAt = now + (retry ? 5e3 : 22e3 + Math.round(Math.random() * 14e3));
+}
+function maybePlayClawdBAmbient(now) {
+  if (now < clawdBAmbientNextAt) return;
+  const box = doc.querySelector('#send_textarea');
+  const blocked = doc.hidden || clawdPrefersReducedMotion() || !composerClawd() || clawdTracks.A || clawdTracks.C || clawdTracks.B !== 'idle' || clawdTracks.bUntil || Boolean(box && doc.activeElement === box) || Boolean(box?.value?.trim()) || isTypingActive() || now < 0;
+  if (blocked) {
+    scheduleClawdBAmbient(now, true);
+    return;
+  }
+  if (bridge.pileAPI?.riderCount()) {
+    if (Math.random() < .35 && clawdWalk(now)) {
+      clawdBLastAmbient = 'rig:walk';
+      scheduleClawdBAmbient(now + 6e3);
+      return;
+    }
+    const quiet = CLAWD_B_AMBIENT_POSES.filter(pose => ['around', 'point', 'scratch', 'facepalm'].includes(pose.state) && pose.state !== clawdBLastAmbient);
+    const pose = quiet[Math.floor(Math.random() * quiet.length)];
+    if (pose) {
+      clawdBLastAmbient = pose.state;
+      setClawdB(pose.state, pose.duration);
+    }
+    scheduleClawdBAmbient(now);
+    return;
+  }
+  if (Math.random() < .3) {
+    const id = pickClawdRigClip(now);
+    if (id === 'walk') {
+      clawdRigLastPlayed.walk = now;
+      const ms = clawdWalk(now);
+      if (ms) {
+        clawdBLastAmbient = 'rig:walk';
+        scheduleClawdBAmbient(now + ms);
+        return;
+      }
+    } else if (id) {
+      clawdRigLastPlayed[id] = now;
+      const forms = CLAWD_RIG_FORMS[id];
+      const play = forms ? forms[Math.floor(Math.random() * forms.length)] : id === 'plant' && Math.random() < .5 ? 'plantWilt' : id;
+      clawdBLastAmbient = 'rig:' + play;
+      setClawdB('rig:' + play, CLAWD_RIG.clips[play].dur);
+      scheduleClawdBAmbient(now + CLAWD_RIG.clips[play].dur);
+      return;
+    }
+  }
+  const choices = CLAWD_B_AMBIENT_POSES.filter(pose => pose.state !== clawdBLastAmbient);
+  const pose = choices[Math.floor(Math.random() * choices.length)] || CLAWD_B_AMBIENT_POSES[0];
+  clawdBLastAmbient = pose.state;
+  setClawdB(pose.state, pose.duration);
+  scheduleClawdBAmbient(now);
+}
+let clawdWalkRun = 0;
+let clawdWalkNudge = null;
+function clawdWalk(now = Date.now()) {
+  const button = composerClawd();
+  if (!button || A2.held || A2.fy !== 0 || A2.floor !== 0) return 0;
+  if (!A2.bndReady || now - A2.bndAt > A2_BOUNDS_TTL) {
+    A2.bnd = a2Walls(button);
+    A2.bndAt = now;
+    A2.bndReady = true;
+  }
+  const lo = Math.max(A2.bnd.minx, A2.bnd.minxHome), hi = A2.bnd.maxxHome;
+  if (!(hi - lo > 40 && hi - lo < 1e5)) return 0;
+  const roomL = A2.x - lo, roomR = hi - A2.x;
+  const want = (hi - lo) * (.2 + Math.random() * .2);
+  let dir = roomR > roomL + 20 ? 1 : roomL > roomR + 20 || Math.random() < .5 ? -1 : 1;
+  let dist = Math.min(want, dir > 0 ? roomR : roomL);
+  if (dist < 24) {
+    dir = -dir;
+    dist = Math.min(want, dir > 0 ? roomR : roomL);
+  }
+  if (roomL < 0) {
+    dir = 1;
+    dist = Math.min(hi - A2.x, want / 2 - roomL);
+  } else if (roomR < 0) {
+    dir = -1;
+    dist = Math.min(A2.x - lo, want / 2 - roomR);
+  }
+  const rigR = button.querySelector(':scope > .clawd-rig')?.getBoundingClientRect();
+  if (rigR?.width) {
+    const bl = rigR.left, br = rigR.left + 48;
+    for (const b of (bridge.pileAPI?.blocks() || [])) {
+      dir > 0 && b.l >= br - 1 && (dist = Math.min(dist, b.l - br - 4));
+      dir < 0 && b.r <= bl + 1 && (dist = Math.min(dist, bl - b.r - 4));
+    }
+  }
+  if (dist < 24) return 0;
+  const steps = Math.max(2, Math.floor(dist / CLAWD_RIG_CELL));
+  const walkMs = steps * 300;
+  const intro = CLAWD_RIG.clips.walkLoop.intro || 0;
+  let from = A2.x, to = from + dir * steps * CLAWD_RIG_CELL;
+  const state = dir > 0 ? 'rig:walkLoop-m' : 'rig:walkLoop';
+  const run = ++clawdWalkRun;
+  setClawdB(state, intro + walkMs + 50);
+  button.style.setProperty('transition', 'none', 'important');
+  const t0 = Date.now() + intro;
+  const end = () => {
+    clawdWalkNudge = null;
+    A2.homeX = A2.x;
+    button.style.removeProperty('transition');
+    bridge.pileAPI?.followEnd();
+    scheduleA2BoundsWarm(button);
+  };
+  clawdWalkNudge = d => {
+    from += d;
+    to += d;
+  };
+  const step = () => {
+    if (run !== clawdWalkRun) return;
+    if (clawdTracks.B !== state || clawdTracks.A || clawdTracks.C || A2.held || A2.fy !== 0) {
+      end();
+      return;
+    }
+    bridge.pileAPI?.follow(A2.x - from);
+    const k = Math.min(1, Math.max(0, (Date.now() - t0) / walkMs));
+    A2.x = from + (to - from) * k;
+    a2Place(button);
+    k < 1 ? requestClawdFrame(step) : end();
+  };
+  requestClawdFrame(step);
+  return intro + walkMs + 50;
+}
+
+/* ── 输入框宽度跟随（index.js 2417-2450；宽度由 Kotlin 推送） ── */
+let clawdFormW = 0;
+function clawdShiftWithForm(d) {
+  const button = composerClawd();
+  if (!button || !A2.x && !A2.floor && !A2.held) return;
+  A2.x += d;
+  A2.homeX += d;
+  A2.held && (A2.ox += d);
+  clawdWalkNudge?.(d);
+  const walking = !!clawdWalkNudge;
+  walking || button.style.setProperty('transition', 'none', 'important');
+  a2Place(button);
+  bridge.pileAPI?.restack();
+  walking || requestClawdFrame(() => {
+    clawdWalkNudge || A2.held || button.style.removeProperty('transition');
+  });
+  scheduleA2BoundsWarm(button);
+}
+function ensureComposerClawd() {
+  const form = doc.querySelector('#send_form');
+  if (!form) return null;
+  let button = composerClawd();
+  if (!button) {
+    button = createButton('composer');
+    form.append(button);
+    scheduleA2BoundsWarm(button);
+  }
+  bridge.pileAPI?.ensure();
+  syncClawdBState();
+  return button;
+}
+
+/* ── 运行时心跳（index.js 2467-2503） ── */
+const CLAWD_TIRED_SIT_MS = 12e3;
+const CLAWD_GEN_MAX_MS = 3e5;
+function clawdRuntimeTick() {
+  const now = Date.now();
+  const inGeneration = clawdTracks.A === 'think' || clawdTracks.A === 'stream' || clawdTracks.A === 'sit';
+  if (inGeneration && generationEventActive && now - clawdTracks.genStartedAt >= CLAWD_GEN_MAX_MS) settleClawdGeneration('stopped');
+  else if (clawdTracks.A === 'think' && generationEventActive && now - clawdTracks.aStartedAt >= 900) setClawdA('stream');
+  else if (clawdTracks.A === 'stream' && generationEventActive && now - clawdTracks.aStartedAt >= CLAWD_TIRED_SIT_MS) {
+    clawdTracks.A = 'sit';
+    renderClawdTracks();
+  } else clawdTracks.aUntil && now >= clawdTracks.aUntil && (clawdTracks.A === 'think' || clawdTracks.A === 'stream' || clawdTracks.A === 'sit' ? generationEventActive || settleClawdGeneration('done') : setClawdA(null));
+  if (clawdTracks.bUntil && now >= clawdTracks.bUntil) {
+    clawdTracks.bUntil = 0;
+    syncClawdBState();
+  }
+  clawdTracks.cUntil && now >= clawdTracks.cUntil && setClawdC(null);
+  if (A2.irr > 0 && now - A2.lastDec > 1e3 && !a2Locked()) {
+    A2.lastDec = now;
+    A2.irr = Math.max(0, A2.irr - 1);
+  }
+  if (A2.lockUntil && !a2Locked()) {
+    A2.lockUntil = 0;
+    A2.lockName = '';
+  }
+  A2.throws > 0 && now - A2.lastThrow > 15e3 && (A2.throws = 0);
+  if (now - clawdLastIdleTickAt >= 5e3 && now >= 0) {
+    clawdLastIdleTickAt = now;
+    refreshIdleSleep();
+  }
+  maybePlayClawdBAmbient(now);
+}
+
+/* ── 生成计时徽标（index.js 2503-2546） ── */
+let genTimerEl = null;
+let genTimerStartedAt = 0;
+let genTimerTickTimer = 0;
+let genTimerLingerTimer = 0;
+function ensureGenTimerEl() {
+  if (genTimerEl && genTimerEl.isConnected) return genTimerEl;
+  genTimerEl = doc.createElement('div');
+  genTimerEl.className = 'clawd-gen-timer';
+  genTimerEl.setAttribute('aria-hidden', 'true');
+  doc.body.append(genTimerEl);
+  return genTimerEl;
+}
+function tickGenTimer() {
+  if (!genTimerEl || !genTimerStartedAt) return;
+  const elapsed = (win.performance.now() - genTimerStartedAt) / 1e3;
+  const nextText = elapsed.toFixed(1) + 's';
+  genTimerEl.textContent !== nextText && (genTimerEl.textContent = nextText);
+}
+function startGenTimer() {
+  const el = ensureGenTimerEl();
+  if (genTimerLingerTimer) {
+    win.clearTimeout(genTimerLingerTimer);
+    genTimerLingerTimer = 0;
+  }
+  genTimerStartedAt = win.performance.now();
+  el.classList.remove('clawd-gen-timer-done');
+  el.classList.add('clawd-gen-timer-visible');
+  tickGenTimer();
+  genTimerTickTimer || (genTimerTickTimer = win.setInterval(tickGenTimer, 200));
+}
+function stopGenTimer() {
+  win.clearInterval(genTimerTickTimer);
+  genTimerTickTimer = 0;
+  if (!genTimerStartedAt || !genTimerEl) return;
+  const elapsed = (win.performance.now() - genTimerStartedAt) / 1e3;
+  genTimerEl.textContent = '用时 ' + elapsed.toFixed(1) + 's';
+  genTimerEl.classList.add('clawd-gen-timer-done');
+  genTimerStartedAt = 0;
+  genTimerLingerTimer && win.clearTimeout(genTimerLingerTimer);
+  genTimerLingerTimer = win.setTimeout(() => {
+    genTimerEl?.classList.remove('clawd-gen-timer-visible');
+    genTimerLingerTimer = 0;
+  }, 4e3);
+}
+function setGeneratingFlag(on) {
+  if (on) doc.documentElement.dataset.cwGenerating = '1'; else delete doc.documentElement.dataset.cwGenerating;
+}
+
+/* ── 大 Clawd 摆位与物理（index.js 3012-3147） ── */
+function a2Place(button) {
+  const move = `translate3d(${A2.x.toFixed(1)}px, ${A2.fy.toFixed(1)}px, 0)`;
+  const home = !A2.x && !A2.fy;
+  if (home && !A2.rot && A2.sqx === 1 && A2.sqy === 1) {
+    button.style.removeProperty('transform');
+    return;
+  }
+  let value = move;
+  A2.rot && (value += ` rotate(${A2.rot.toFixed(1)}deg)`);
+  A2.sqx === 1 && A2.sqy === 1 || (value += ` scale(${A2.sqx.toFixed(3)}, ${A2.sqy.toFixed(3)})`);
+  button.style.setProperty('transform', value, 'important');
+}
+function a2CancelSeq() {
+  if (!A2.lockUntil) {
+    A2.seqRun += 1;
+    return;
+  }
+  A2.seqRun += 1;
+  A2.lockUntil = 0;
+  A2.lockName = '';
+  A2.seqOwned = true;
+  setClawdC(null);
+  A2.seqOwned = false;
+}
+function a2PlaySeq(steps, name) {
+  const my = A2.seqRun += 1;
+  const total = steps.reduce((sum, item) => sum + item[1], 0);
+  A2.lockUntil = Date.now() + total;
+  A2.lockName = name || '序列';
+  const run = index => {
+    if (my !== A2.seqRun) return;
+    if (index >= steps.length) {
+      A2.lockUntil = 0;
+      A2.lockName = '';
+      A2.irr = 0;
+      A2.seqOwned = true;
+      setClawdC(null);
+      A2.seqOwned = false;
+      return;
+    }
+    A2.seqOwned = true;
+    setClawdC(steps[index][0], 0);
+    A2.seqOwned = false;
+    clawdLater(() => run(index + 1), steps[index][1]);
+  };
+  run(0);
+}
+function a2SulkSeq() {
+  A2.throws = 0;
+  clawdRigPickVariant('sulk') === 'rage' ? a2PlaySeq([['rage', CLAWD_RIG.clips.rage.dur]], '生气') : a2PlaySeq([['turn', 400], ['t5', 2600], ['face', 400]], '生气');
+}
+function a2Walls(button) {
+  const container = doc.querySelector('#sheld');
+  const fallback = { minx: -9e9, maxx: 9e9, maxxHome: 9e9, minxHome: -9e9, miny: -A2_FALLBACK_CEILING, maxy: 0 };
+  if (!container || !bridge.chatRect) return fallback;
+  const pr = button.getBoundingClientRect();
+  const fr = container.getBoundingClientRect();
+  if (!pr.width || !fr.width) return fallback;
+  const limitLeft = fr.left;
+  const limitTop = 0;
+  const limitRight = fr.right;
+  const form = doc.querySelector('#send_form');
+  let decorLeft = limitRight;
+  let formLeft = limitLeft, formRight = limitRight;
+  if (form) {
+    const sf = form.getBoundingClientRect();
+    if (sf.width > pr.width + 2 * A2_FORM_INSET) {
+      formLeft = Math.max(limitLeft, sf.left + A2_FORM_INSET);
+      formRight = Math.min(limitRight, sf.right - A2_FORM_INSET);
+    }
+  }
+  const maxx = A2.x + (limitRight - A2_EDGE - pr.right);
+  return {
+    minx: A2.x + (limitLeft + A2_EDGE - pr.left),
+    maxx: maxx,
+    maxxHome: Math.min(maxx, A2.x + (decorLeft - pr.right), A2.x + (formRight - pr.right)),
+    minxHome: Math.max(A2.x + (limitLeft + A2_EDGE - pr.left), A2.x + (formLeft - pr.left)),
+    miny: A2.fy + (limitTop + A2_EDGE - pr.top),
+    maxy: 0
+  };
+}
+function a2ClampX(x) {
+  return Math.max(A2.bnd.minx, Math.min(A2.bnd.maxx, x));
+}
+function scheduleA2BoundsWarm(button = composerClawd()) {
+  A2.bndReady = false;
+  if (A2.bndRaf || !button) return;
+  A2.bndRaf = requestClawdFrame(() => {
+    A2.bndRaf = 0;
+    if (A2.held || !button.isConnected) return;
+    A2.bnd = a2Walls(button);
+    A2.bndAt = Date.now();
+    A2.bndReady = true;
+    clawdRigPixelSnap(button);
+  });
+}
+function clawdRigPixelSnap(button = composerClawd()) {
+  const rig = button?.querySelector(':scope > .clawd-rig');
+  if (!rig || A2.held || Math.abs(A2.fy - A2.floor) > .5) return;
+  const r = rig.getBoundingClientRect();
+  if (!r.width) return;
+  const dpr = win.devicePixelRatio || 1;
+  const fx = r.left * dpr - Math.round(r.left * dpr), fy = r.top * dpr - Math.round(r.top * dpr);
+  if (Math.abs(fx) < .02 && Math.abs(fy) < .02) return;
+  const cur = rig._cwSnap || [0, 0];
+  const nx = cur[0] - fx / dpr, ny = cur[1] - fy / dpr;
+  rig._cwSnap = [nx, ny];
+  rig.style.setProperty('translate', `${nx.toFixed(3)}px ${ny.toFixed(3)}px`);
+}
+function a2NoteInteraction() {
+  lastPokeAt = Date.now();
+  neglected && setNeglected(false);
+  noteActivity();
+}
+
+/* ── 触摸交互（index.js 3147-3470） ── */
+function a2Down(button, event) {
+  if (A2.held && event.pointerId !== A2.pointerId) {
+    event.preventDefault();
+    return;
+  }
+  A2.pointerId = event.pointerId;
+  A2.tookPointer = false;
+  A2.wokeOnDown = idleAsleep;
+  a2NoteInteraction();
+  if (a2Locked()) {
+    event.preventDefault();
+    A2.tookPointer = true;
+    return;
+  }
+  event.preventDefault();
+  A2.held = true;
+  A2.flying += 1;
+  A2.vx = 0;
+  A2.vy = 0;
+  A2.moved = false;
+  A2.sx = event.clientX;
+  A2.sy = event.clientY;
+  A2.ox = A2.x;
+  A2.oy = A2.fy;
+  A2.lx = event.clientX;
+  A2.ly = event.clientY;
+  A2.lt = Date.now();
+  if (!A2.bndReady || Date.now() - A2.bndAt > A2_BOUNDS_TTL) {
+    A2.bnd = a2Walls(button);
+    A2.bndAt = Date.now();
+    A2.bndReady = true;
+  }
+  clawdRigSnapshotProps(button);
+  button.style.setProperty('transition', 'none', 'important');
+  try { button.setPointerCapture(event.pointerId); } catch (error) {}
+  A2.wokeOnDown || setClawdC(A2.fy < A2.floor - .5 ? 'grab' : 'press', 0);
+  cancelClawdLater(A2.petTimer);
+  A2.petting = false;
+  A2.petTimer = clawdLater(() => {
+    A2.petTimer = 0;
+    if (!A2.held || A2.moved || A2.fy < A2.floor - .5) return;
+    A2.petting = clawdPet();
+  }, CLAWD_PET_HOLD_MS);
+}
+function a2Move(button, event) {
+  if (!A2.held || event.pointerId !== A2.pointerId) return;
+  const dx = event.clientX - A2.sx;
+  const dy = event.clientY - A2.sy;
+  let dragStarted = false;
+  if (!A2.moved && Math.abs(dx) + Math.abs(dy) > A2_DRAG_THRESHOLD) {
+    A2.moved = true;
+    A2.dragging = true;
+    dragStarted = true;
+    cancelClawdLater(A2.petTimer);
+    A2.petting = false;
+    bridge.pileAPI?.unloadBig('lower');
+    if (A2.floor) {
+      A2.floor = 0;
+      bridge.pileAPI?.bigSat(null);
+    }
+    setClawdC('grab', 0);
+    clawdLater(() => {
+      if (A2.dragging) {
+        clawdRigPickVariant('drag');
+        setClawdC('drag', 0);
+      }
+    }, 350);
+  }
+  if (!A2.moved) return;
+  A2.fy = Math.max(A2.bnd.miny, Math.min(A2.bnd.maxy, A2.oy + dy));
+  A2.x = a2ClampX(A2.ox + dx);
+  const now = Date.now();
+  const dt = Math.max(12, now - A2.lt);
+  A2.vx = A2.vx * .45 + (event.clientX - A2.lx) / dt * 16 * .55;
+  A2.vy = A2.vy * .45 + (event.clientY - A2.ly) / dt * 16 * .55;
+  A2.lx = event.clientX;
+  A2.ly = event.clientY;
+  A2.lt = now;
+  A2.rot = Math.max(-14, Math.min(14, .7 * -A2.vx / A2.feel));
+  a2Place(button);
+}
+function a2Up(button, event) {
+  if (!A2.held || event && event.pointerId !== A2.pointerId) return;
+  A2.held = false;
+  A2.tookPointer = true;
+  cancelClawdLater(A2.petTimer);
+  if (A2.petting && !A2.moved) {
+    A2.petting = false;
+    A2.rot = 0;
+    button.style.removeProperty('transition');
+    a2Place(button);
+    return;
+  }
+  A2.petting = false;
+  (A2.moved || A2.fy < A2.floor - .5) && (A2.wokeOnDown = false);
+  if (A2.moved) a2Ballistic(button); else if (A2.fy < A2.floor - .5) {
+    A2.rot = 0;
+    a2Ballistic(button, true);
+  } else {
+    A2.rot = 0;
+    button.style.removeProperty('transition');
+    a2Place(button);
+    a2Poke();
+  }
+}
+function a2Phys() {
+  const t = (A2.feel - .55) / .95;
+  return {
+    g: .26 + t * .4,
+    rest: .5 - t * .42,
+    drag: .985 + t * .01,
+    thr: .78 - t * .12,
+    fric: .86 - t * .2,
+    spin: .55 - t * .38,
+    maxRot: 16 - t * 8,
+    sq: .1 - t * .03
+  };
+}
+function a2Ballistic(button, drop = false) {
+  const P = a2Phys();
+  const cap = value => Math.max(-24, Math.min(24, value));
+  let bx = drop ? 0 : cap(A2.vx) * P.thr;
+  let by = drop ? 0 : cap(A2.vy) * P.thr;
+  let bounces = 0;
+  const my = A2.flying += 1;
+  if (!drop) {
+    A2.throws += 1;
+    A2.lastThrow = Date.now();
+    A2.lastDec = Date.now();
+    A2.irr = Math.min(5, A2.irr + (A2.throws >= 3 ? 2 : 1));
+  }
+  A2.dragging = false;
+  a2NoteInteraction();
+  setClawdC('fly', 0);
+  if (A2.floor) {
+    A2.floor = 0;
+    bridge.pileAPI?.bigSat(null);
+  }
+  const rig0 = button.querySelector(':scope > .clawd-rig')?.getBoundingClientRect();
+  const liveSeats = rig0?.width ? (bridge.pileAPI?.trackSeats() || (() => [])) : () => [];
+  const x0 = A2.x, centerAt = x => rig0.left + (x - x0) + 24;
+  const seatUnder = x => liveSeats().filter(st => Math.abs(centerAt(x) - st.cx) < Math.max(48, st.w) * .5).sort((a, b) => b.h - a.h)[0] || null;
+  let last = 0;
+  const step = now => {
+    if (my !== A2.flying) return;
+    const stamp = typeof now === 'number' ? now : win.performance?.now?.() || 0;
+    const k = last ? Math.max(.5, Math.min(3, (stamp - last) / 16.666666666666668)) : 1;
+    last = stamp;
+    by += P.g * k;
+    bx *= Math.pow(P.drag, k);
+    by *= Math.pow(P.drag, k);
+    A2.x += bx * k;
+    A2.fy += by * k;
+    const clamped = a2ClampX(A2.x);
+    if (clamped !== A2.x) {
+      A2.x = clamped;
+      bx = .45 * -bx;
+    }
+    if (A2.fy < A2.bnd.miny) {
+      A2.fy = A2.bnd.miny;
+      by = .45 * -by;
+    }
+    const seat = by > 0 ? seatUnder(A2.x) : null;
+    const ground = seat ? -seat.h : 0;
+    if (A2.fy >= ground) {
+      A2.fy = ground;
+      bounces === 0 && setClawdC('land', 0);
+      if (!(Math.abs(by) > .7 && bounces < 6)) {
+        bx = 0;
+        by = 0;
+        A2.rot = 0;
+        A2.sqx = 1;
+        A2.sqy = 1;
+        A2.floor = ground;
+        bridge.pileAPI?.bigSat(seat ? seat.name : null);
+        a2Place(button);
+        A2.homeX = A2.x;
+        button.style.removeProperty('transition');
+        seat && rig0?.width && (A2.x += seat.cx - centerAt(A2.x));
+        if (!seat && rig0?.width) {
+          const bl = centerAt(A2.x) - 24;
+          for (const b of (bridge.pileAPI?.blocks() || [])) if (bl < b.r + 4 && b.l < bl + 48 + 4) {
+            A2.x += bl + 24 < (b.l + b.r) / 2 ? b.l - 4 - (bl + 48) : b.r + 4 - bl;
+            break;
+          }
+        }
+        (seat ? A2.x !== A2.homeX : A2.x > A2.bnd.maxxHome || A2.x < A2.bnd.minxHome || A2.x !== A2.homeX) && requestClawdFrame(() => {
+          if (my !== A2.flying) return;
+          A2.x = Math.max(A2.bnd.minxHome, Math.min(A2.bnd.maxxHome, A2.x));
+          A2.homeX = A2.x;
+          a2Place(button);
+          clawdLater(() => clawdRigPixelSnap(button), 300);
+        });
+        scheduleA2BoundsWarm(button);
+        if (drop) return;
+        clawdLater(() => {
+          if (my !== A2.flying) return;
+          A2.throws >= 5 ? a2SulkSeq() : A2.throws >= 3 ? setClawdC('stomp', CLAWD_RIG.clips[clawdRigPickVariant('stomp')].dur) : setClawdC(null);
+        }, 840);
+        return;
+      }
+      {
+        by = -by * P.rest;
+        bx *= P.fric;
+        bounces += 1;
+        const q = P.sq * Math.min(1, Math.abs(by) / 7);
+        A2.sqx = 1 + q;
+        A2.sqy = 1 - q;
+        A2.squashTimer && cancelClawdLater(A2.squashTimer);
+        A2.squashTimer = clawdLater(() => {
+          A2.squashTimer = 0;
+          if (my !== A2.flying) return;
+          A2.sqx = 1;
+          A2.sqy = 1;
+          a2Place(button);
+        }, 110);
+      }
+    }
+    A2.rot = Math.max(-P.maxRot, Math.min(P.maxRot, -bx * P.spin));
+    a2Place(button);
+    requestClawdFrame(step);
+  };
+  requestClawdFrame(step);
+}
+const CLAWD_PET_HOLD_MS = 600;
+let clawdPetUntil = 0;
+function clawdPet(button) {
+  if (a2Locked()) return false;
+  const now = Date.now();
+  if (now < clawdPetUntil) return false;
+  clawdPetUntil = now + CLAWD_RIG.clips.pet.dur;
+  lastPokeAt = now;
+  neglected && setNeglected(false);
+  A2.irr = 0;
+  setClawdC('pet', CLAWD_RIG.clips.pet.dur);
+  return true;
+}
+function a2Poke(button) {
+  if (a2Locked()) return;
+  if (A2.wokeOnDown) {
+    A2.wokeOnDown = false;
+    setClawdC(null);
+    clawdPokeReaction();
+    return;
+  }
+  A2.lastDec = Date.now();
+  a2NoteInteraction();
+  if (clawdTracks.A) {
+    a2RandomPoke(1);
+    clawdPokeReaction();
+    return;
+  }
+  A2.irr = Math.min(5, A2.irr + 1);
+  const tier = A2.irr;
+  if (tier <= A2_RICH_TIER) {
+    a2RandomPoke(tier);
+    clawdPokeReaction();
+    return;
+  }
+  tier >= 5 ? a2SulkSeq() : a2RandomPoke(tier);
+}
+let a2LastPoke = '';
+function a2RandomPoke(irr) {
+  const pool = (irr >= 3 ? ['t2', 't3', 't4'] : ['t1', 't2', 't3', 't4']).filter(t => t !== a2LastPoke);
+  const t = pool[Math.random() * pool.length | 0];
+  a2LastPoke = t;
+  setClawdC(t, A2_TMS[A2_TIER.indexOf(t)]);
+}
+function a2Bind(button) {
+  button.addEventListener('pointerdown', event => a2Down(button, event));
+  button.addEventListener('pointermove', event => a2Move(button, event));
+  button.addEventListener('pointerup', event => a2Up(button, event));
+  button.addEventListener('pointercancel', event => a2Cancel(button, event));
+  button.addEventListener('lostpointercapture', event => a2Cancel(button, event));
+  let petX = null, petDir = 0, petFlips = [];
+  button.addEventListener('pointermove', event => {
+    if (event.pointerType !== 'mouse' || event.buttons || A2.held) return;
+    if (petX !== null) {
+      const dx = event.clientX - petX;
+      if (Math.abs(dx) >= 2) {
+        const dir = Math.sign(dx);
+        if (petDir && dir !== petDir) {
+          const now = Date.now();
+          petFlips = petFlips.filter(t => now - t < 1e3).concat(now);
+          if (petFlips.length >= 3) {
+            petFlips = [];
+            clawdPet();
+          }
+        }
+        petDir = dir;
+      }
+    }
+    petX = event.clientX;
+  });
+  button.addEventListener('pointerleave', () => {
+    petX = null;
+    petDir = 0;
+    petFlips = [];
+  });
+}
+function a2Cancel(button, event) {
+  if (!A2.held || event && event.pointerId !== A2.pointerId) return;
+  cancelClawdLater(A2.petTimer);
+  A2.petting = false;
+  A2.held = false;
+  A2.tookPointer = true;
+  A2.dragging = false;
+  A2.rot = 0;
+  if (A2.moved || A2.fy < A2.floor - .5) a2Ballistic(button, true); else {
+    button.style.removeProperty('transition');
+    a2Place(button);
+    setClawdC(null);
+  }
+}
+function clawdPokeReaction() {
+  lastPokeAt = Date.now();
+  neglected && setNeglected(false);
+}
+function createButton(role = 'composer') {
+  const button = doc.createElement('button');
+  button.type = 'button';
+  button.className = BUTTON_CLASS;
+  button.classList.add(role === 'composer' ? 'clawd-composer-clawd' : 'clawd-message-signoff-clawd');
+  button.setAttribute('aria-label', 'Clawd');
+  button.title = 'Clawd';
+  a2Bind(button);
+  button.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (A2.tookPointer) {
+      A2.tookPointer = false;
+      return;
+    }
+    a2Poke();
+  });
+  return button;
+}
+const a2Locked = () => A2.lockUntil > Date.now();
+
+/* ── 作息（index.js 3496-3600，剪除 ccSleeping/hasChatActivity/letter） ── */
+function setSleeping(on) {
+  !on && idleAsleep && (idleAsleep = false);
+  syncClawdBState();
+}
+function setDrowsy(on) {
+  ccDrowsy = on;
+  syncClawdBState();
+}
+function setNeglected(on) {
+  if (neglected === on) return;
+  neglected = on;
+  syncClawdBState();
+}
+function refreshIdleSleep() {
+  const elapsed = Date.now() - lastActivityAt;
+  const idle = elapsed > IDLE_SLEEP_MS;
+  const shouldBeNeglected = elapsed < IDLE_SLEEP_MS * .75 && !isTypingActive() && Date.now() - lastPokeAt > NEGLECT_POKE_MS;
+  const nowN = Date.now();
+  if (shouldBeNeglected) {
+    if (neglected) nowN - clawdNeglectShownAt > CLAWD_NEGLECT_SHOW_MS && setNeglected(false); else if (nowN - clawdNeglectShownAt > CLAWD_NEGLECT_REPEAT_MS && clawdTracks.B === 'idle' && !clawdTracks.bUntil) {
+      clawdNeglectShownAt = nowN;
+      setNeglected(true);
+    }
+  } else setNeglected(false);
+  if (!idle) {
+    if (dozeTimer) {
+      cancelClawdLater(dozeTimer);
+      dozeTimer = 0;
+    }
+    ccDrowsy && setDrowsy(false);
+    if (idleAsleep) {
+      idleAsleep = false;
+      setSleeping(false);
+    }
+    return;
+  }
+  if (idleAsleep) {
+    setSleeping(true);
+    return;
+  }
+  if (dozeTimer) return;
+  setNeglected(false);
+  setDrowsy(true);
+  dozeTimer = clawdLater(() => {
+    dozeTimer = 0;
+    if (Date.now() - lastActivityAt <= IDLE_SLEEP_MS) return;
+    ccDrowsy = false;
+    idleAsleep = true;
+    setSleeping(true);
+  }, DOZE_OFF_MS);
+}
+function noteActivity() {
+  hasChatActivity = true;
+  lastActivityAt = Date.now();
+  if (dozeTimer) {
+    cancelClawdLater(dozeTimer);
+    dozeTimer = 0;
+  }
+  setDrowsy(false);
+  if (!idleAsleep) return;
+  idleAsleep = false;
+  setClawdB('wake', CLAWD_RIG.clips.wake.dur);
+}
+let hasChatActivity = true;
+
+/* ── 滚动 peek（index.js 3725-3760，去 readingGate） ── */
+const CLAWD_SCROLL_REST_MS = 700;
+function clawdScrollRelease() {
+  clawdScrollHolding = false;
+  composerClawd()?.style.removeProperty('translate');
+  clawdTracks.B === 'peek' && setClawdB('rig:peekOut', CLAWD_RIG.clips.peekOut.dur);
+}
+function clawdScrollTilt() {
+  if (isTypingActive() || clawdTracks.A || Date.now() < suppressManualScrollUntil) return;
+  const bBase = String(clawdTracks.B || '').replace(/^rig:/, '').replace(/-m$/, '');
+  const button = composerClawd();
+  const bigPeeks = !!button && !(clawdTracks.C || a2Locked() || A2.held || Math.abs(A2.fy - A2.floor) > .5)
+    && !(idleAsleep || ccDrowsy || bBase === 'sleep' || bBase === 'drowsy');
+  bridge.pileAPI?.peek(true, bigPeeks && !A2.floor ? 12 : 0, !!A2.floor);
+  if (bigPeeks && !A2.floor) { clawdScrollHolding = true; setClawdB('peek', 60000); scheduleClawdBAmbient(Date.now()); }
+  armClawdScrollRest();
+}
+function armClawdScrollRest() {
+  if (clawdPileRestTimer) cancelClawdLater(clawdPileRestTimer);
+  clawdPileRestTimer = clawdLater(() => { clawdPileRestTimer = 0; bridge.pileAPI?.peek(false); }, CLAWD_SCROLL_REST_MS);
+  if (!clawdScrollHolding) return;
+  if (clawdScrollRestTimer) cancelClawdLater(clawdScrollRestTimer);
+  clawdScrollRestTimer = clawdLater(() => { clawdScrollRestTimer = 0; clawdScrollRelease(); }, CLAWD_SCROLL_REST_MS);
+}
+
+/* ── 大 Clawd 落到小爪子头上（index.js 2112-2144；seats 由 pile 提供） ── */
+function clawdBigLower() {
+  const button = composerClawd();
+  A2.floor = 0;
+  let seat = null, cx = 0;
+  const rig = button?.querySelector(':scope > .clawd-rig')?.getBoundingClientRect();
+  if (rig?.width && !A2.held) {
+    cx = rig.left + 24;
+    seat = (bridge.pileAPI?.seats() || []).filter(st => Math.abs(cx - st.cx) < Math.max(48, st.w) * .5).sort((a, b) => b.h - a.h)[0] || null;
+  }
+  seat && (A2.floor = -seat.h);
+  clawdTracks.A && renderClawdTracks();
+  if (!button) return null;
+  if (A2.held) {
+    A2.petting = false;
+    cancelClawdLater(A2.petTimer);
+    return null;
+  }
+  button.style.setProperty('transition', 'transform .4s cubic-bezier(.4,0,.2,1)', 'important');
+  A2.fy = A2.floor;
+  if (seat) {
+    A2.x += seat.cx - cx;
+    A2.homeX = A2.x;
+  }
+  a2Place(button);
+  clawdLater(() => {
+    if (!A2.held) {
+      button.style.removeProperty('transition');
+      scheduleA2BoundsWarm(button);
+    }
+  }, 420);
+  return seat ? seat.name : null;
+}
+
+/* ── 空闲池挑选（index.js 2091-2110） ── */
+function clawdMealTime(now = new Date) {
+  const m = now.getHours() * 60 + now.getMinutes();
+  return m >= 690 && m <= 780 || m >= 1050 && m <= 1170;
+}
+const CLAWD_RIG_ON_COMPOSER_ONLY = new Set(['rickroll', 'plant']);
+function clawdOverComposer() {
+  if (A2.floor || A2.held || Math.abs(A2.fy) > .5) return false;
+  if (!A2.bndReady) return true;
+  return A2.x >= A2.bnd.minxHome - 1 && A2.x <= A2.bnd.maxxHome + 1;
+}
+function pickClawdRigClip(now) {
+  const meal = clawdMealTime();
+  const overComposer = clawdOverComposer();
+  const ok = CLAWD_RIG_POOL.filter(item => overComposer || !CLAWD_RIG_ON_COMPOSER_ONLY.has(item.id)).filter(item => !(clawdRigLastPlayed[item.id] && now - clawdRigLastPlayed[item.id] < item.cool)).map(item => ({
+    ...item,
+    w: meal && item.mealWeight ? item.mealWeight : item.weight
+  }));
+  const total = ok.reduce((sum, item) => sum + item.w, 0);
+  if (!total) return null;
+  let roll = Math.random() * total;
+  for (const item of ok) if ((roll -= item.w) <= 0) return item.id;
+  return ok[ok.length - 1].id;
+}
+
+/* ═══════════ 宿主桥入口（Kotlin evaluateJavascript 调这些） ═══════════ */
+
+/* #send_form 定位（物理 px） */
 function layoutForm(x, y, w, h) {
-  // 坐标是宿主物理 px；#send_form 用 CSS px 定位，除以 dpr
   const dpr = win.devicePixelRatio || 1;
   const f = doc.getElementById('send_form');
   f.style.left = (x / dpr) + 'px';
@@ -35,13 +1530,92 @@ function layoutForm(x, y, w, h) {
   f.style.width = (w / dpr) + 'px';
   f.style.height = (h / dpr) + 'px';
   bridge.formRect = { x, y, w, h };
-  bridge.pile?.restack?.();
+  const oldW = bridge.lastFormW || 0;
+  bridge.lastFormW = w;
+  if (oldW && w !== oldW && oldW > 0) clawdShiftWithForm((w - oldW) / dpr / 2);
+  bridge.pileAPI?.restack();
   reportRects();
 }
 
+/* 聊天区矩形（物理 px）→ #sheld 定位 + A2 边界过期 */
+function layoutChat(x, y, w, h) {
+  const dpr = win.devicePixelRatio || 1;
+  const s = doc.getElementById('sheld');
+  s.style.left = (x / dpr) + 'px';
+  s.style.top = (y / dpr) + 'px';
+  s.style.width = (w / dpr) + 'px';
+  s.style.height = (h / dpr) + 'px';
+  bridge.chatRect = { x, y, w, h };
+  A2.bndReady = false;
+}
+
+/* 输入框文本/焦点 → 镜像 textarea + 合成 beforeinput/input 事件 */
+function syncInput(text) {
+  const box = doc.getElementById('send_textarea');
+  if (!box) return;
+  if (box.value !== text) {
+    const longer = text.length > box.value.length;
+    const type = longer ? (text.length - box.value.length > 3 ? 'insertFromPaste' : 'insertText') : 'deleteContentBackward';
+    try {
+      box.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: type }));
+    } catch (e) {
+      box.dispatchEvent(new Event('beforeinput', { bubbles: true }));
+    }
+    box.value = text;
+    try {
+      box.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: type }));
+    } catch (e) {
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    box.selectionStart = box.selectionEnd = text.length;
+  }
+}
+
+/* 生成状态：active=有 isStreaming 的消息；hasText=最后一条已出字；!active 时 outcome 收尾 */
+function syncGeneration(active, hasText, outcome) {
+  const wasActive = generationEventActive;
+  if (active && !wasActive) {
+    generationEventActive = true;
+    setGeneratingFlag(true);
+    startGenTimer();
+    beginClawdGeneration();
+    return;
+  }
+  if (active && hasText && clawdTracks.A === 'think') {
+    setClawdA('stream');
+    return;
+  }
+  if (!active && wasActive) {
+    generationEventActive = false;
+    setGeneratingFlag(false);
+    stopGenTimer();
+    settleClawdGeneration(outcome || 'done');
+  }
+}
+
+/* 最后一条 assistant 消息文本 → 镜像 .mes_text（write 倍速跟出字） */
+function syncLastText(text) {
+  const el = doc.querySelector('#chat > .mes.last_mes .mes_text');
+  if (el && el.textContent !== text) el.textContent = text;
+}
+
+/* 用户滚动 → peek */
+function onScroll() {
+  clawdScrollTilt();
+}
+
+/* 输入框焦点变化（compose 状态与蹲字动画靠 focused+text 判定） */
+function syncFocus(focused) {
+  const box = doc.getElementById('send_textarea');
+  if (!box) return;
+  if (focused && doc.activeElement !== box) {
+    try { box.focus({ preventScroll: true }); } catch (e) { box.focus(); }
+  } else if (!focused && doc.activeElement === box) box.blur();
+  syncClawdBState();
+}
+
+/* 爪子屏幕矩形汇报（含大 Clawd 按钮） */
 function reportRects() {
-  // 用爪子元素的 getBoundingClientRect（WebView 全屏、视口=窗口坐标）换算成宿主物理像素。
-  // MotionEvent.x/y 是物理 px；CSS rect 乘 devicePixelRatio 对齐。
   const dpr = win.devicePixelRatio || 1;
   const out = [];
   if (bridge.pile) {
@@ -50,41 +1624,68 @@ function reportRects() {
       if (r.width > 0) out.push([r.left * dpr, r.top * dpr, r.right * dpr, r.bottom * dpr]);
     });
   }
+  const big = composerClawd();
+  if (big) {
+    const r = big.getBoundingClientRect();
+    if (r.width > 0) out.push([r.left * dpr, r.top * dpr, r.right * dpr, r.bottom * dpr]);
+  }
   bridge.rects = out;
   if (win.AsterClawd) { try { win.AsterClawd.pushRects(JSON.stringify(out)); } catch (e) {} }
 }
-
-/* 爪子会走会跳：布局变化之外也要持续汇报（1 帧 16ms 太频，60ms≈每 4 帧足够命中测试） */
 function startReporting() {
   if (bridge.reportTimer) return;
   bridge.reportTimer = win.setInterval(reportRects, 60);
   win.addEventListener('resize', reportRects);
 }
 
-function hitTest(x, y) {
-  for (const [l, t, r, b] of bridge.rects) {
-    if (x >= l && x < r && y >= t && y < b) return true;
-  }
-  return false;
-}
-
-/* 宿主桥：Android 端 addJavascriptInterface 的对象名 */
+/* ── 初始化 ── */
 function init() {
   try {
     if (typeof createClawdPile !== 'function') { console.error('clawd-host: createClawdPile 未定义'); return; }
-    bridge.pile = createClawdPile({ doc, win, big: null });
+    if (typeof buildClawdRig !== 'function') { console.error('clawd-host: buildClawdRig 未定义'); return; }
+    // 原版 makeClawdPile（index.js 1365）：big 只暴露 state/lower 两个方法
+    const bigApi = {
+      state: () => ({
+        grounded: !A2.held && Math.abs(A2.fy - A2.floor) < .5,
+        walking: /^rig:walkLoop/.test(String(clawdTracks.B || ''))
+      }),
+      lower: () => clawdBigLower()
+    };
+    bridge.pile = createClawdPile({ doc, win, big: bigApi });
+    bridge.pileAPI = bridge.pile;   // pile 返回值就是 { ensure, peek, seats, blocks, ... }
+    installClawdRigStyle();
+    ensureComposerClawd();
     const el = bridge.pile.ensure();
     if (!el) { console.error('clawd-host: ensure() 返回 null（#send_form 未找到）'); return; }
+    renderClawdTracks();
+    clawdLastIdleTickAt = Date.now();
+    clawdRuntimeTimer = win.setInterval(clawdRuntimeTick, 200);
+    bridge.rhythm = installClawdRhythm({
+      doc, win,
+      button: composerClawd,
+      enabled: () => true,
+      reducedMotion: clawdPrefersReducedMotion
+    });
     startReporting();
-    console.log('clawd-host: ready,', doc.querySelectorAll('.clawd-pile-c').length, '只');
+    console.log('clawd-host: ready,', doc.querySelectorAll('.clawd-pile-c').length, '只小爪子 + 大 Clawd, clips:', Object.keys(CLAWD_RIG.clips).length);
   } catch (e) {
     console.error('clawd-host init:', e && e.message, e && e.stack);
   }
 }
 
+/* 原版事件监听（index.js 7039-7040）：composer 编辑反应 + noteActivity */
+for (const type of ['beforeinput', 'compositionstart', 'compositionend']) doc.addEventListener(type, handleClawdComposerEdit, true);
+doc.addEventListener('input', handleClawdComposerInput, true);
+
 /* Android 侧 evaluateJavascript 调这些全局函数 */
 win.__clawdLayout = layoutForm;
-win.__clawdHit = hitTest;
+win.__clawdChat = layoutChat;
+win.__clawdInput = syncInput;
+win.__clawdFocus = syncFocus;
+win.__clawdGen = syncGeneration;
+win.__clawdLastText = syncLastText;
+win.__clawdScroll = onScroll;
+win.__clawdHit = (x, y) => bridge.rects.some(([l, t, r, b]) => x >= l && x < r && y >= t && y < b);
 win.__clawdRects = () => JSON.stringify(bridge.rects);
 win.__clawdNight = on => {
   doc.documentElement.setAttribute('data-claude-integrated-theme', on ? 'night' : '');

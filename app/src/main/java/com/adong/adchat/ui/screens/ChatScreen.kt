@@ -191,6 +191,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     var composerFocused by remember { mutableStateOf(false) }
     var composerHeightPx by remember { mutableIntStateOf(0) }
     var formAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var chatAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     var pendingFileExport by remember { mutableStateOf<ChatFileAttachment?>(null) }
     val fileExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val file = pendingFileExport
@@ -336,7 +337,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().onGloballyPositioned { chatAnchor = it.boundsInWindow() },
                         contentPadding = PaddingValues(
                             start = 22.dp,
                             end = 22.dp,
@@ -458,9 +459,17 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 )
                 }
             }
-            // 三只小 Clawd：全屏透明 WebView 盖在聊天内容之上，跑未经修改的原版 clawd-pile.js。
+            // 三只小 Clawd + 大 Clawd：全屏透明 WebView 盖在聊天内容之上，跑未经修改的原版 JS。
             // 原版里它们也允许浮到整个页面上（position:absolute 覆盖层、pointer-events:none）
-            ClawdPileLayer(Modifier.matchParentSize(), formAnchor)
+            ClawdPileLayer(
+                modifier = Modifier.matchParentSize(),
+                formAnchor = formAnchor,
+                chatAnchor = chatAnchor,
+                inputText = vm.chatInput,
+                inputFocused = composerFocused,
+                generating = vm.isChatLoading,
+                lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
+            )
         }
     }
     pendingEditResend?.let { candidate ->
@@ -503,14 +512,31 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
 }
 
-/** 输入框上的三只小 Clawd：全屏透明 WebView 跑未经修改的原版 clawd-pile.js。
- *  formAnchor = 输入框在 Window 内的像素矩形（由调用方 onGloballyPositioned 量），
- *  JS 侧 #send_form 镜像该矩形，原版 bottom:100% 几何使爪子精确落在输入框上端；
- *  触摸由 JS 推送的爪子矩形过滤——命中爪子归 WebView，空白穿透到 Compose。 */
+/** 输入框上的三只小 Clawd + 大 Clawd：全屏透明 WebView 跑未经修改的原版
+ *  clawd-pile.js + clawd-rig.js + clawd-rhythm.js。
+ *  formAnchor/chatAnchor = 输入框与聊天区在 Window 内的像素矩形（调用方量），
+ *  JS 侧镜像为 #send_form/#sheld；输入文本、焦点、生成状态推给 JS 驱动动作。 */
 @Composable
-private fun ClawdPileLayer(modifier: Modifier = Modifier, formAnchor: androidx.compose.ui.geometry.Rect?) {
+private fun ClawdPileLayer(
+    modifier: Modifier = Modifier,
+    formAnchor: androidx.compose.ui.geometry.Rect?,
+    chatAnchor: androidx.compose.ui.geometry.Rect?,
+    inputText: String,
+    inputFocused: Boolean,
+    generating: Boolean,
+    lastText: String,
+) {
     val dark = com.adong.adchat.ui.theme.LocalThemeDark.current
-    ClawdPileWebView(formAnchor = formAnchor, night = dark, modifier = modifier)
+    ClawdPileWebView(
+        formAnchor = formAnchor,
+        chatAnchor = chatAnchor,
+        inputText = inputText,
+        inputFocused = inputFocused,
+        generating = generating,
+        lastText = lastText,
+        night = dark,
+        modifier = modifier,
+    )
 }
 
 @Composable
