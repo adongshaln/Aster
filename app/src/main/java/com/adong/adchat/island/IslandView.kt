@@ -696,6 +696,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val params = windowParams ?: return
         val size = dpF(WINDOW_SIZE_DP).roundToInt()
         expandedViewport = false
+        // Remove the morphing body before shrinking the overlay; this prevents a final black seed
+        // frame from covering the restored resident halo.
+        surface.active = false
         params.width = size
         params.height = size
         params.y = calcWindowY()
