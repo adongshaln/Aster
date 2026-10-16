@@ -3338,6 +3338,7 @@ function clawdRigPickStickColors(button) {
 
 /* ── 轨道设置（index.js 2145-2176） ── */
 function setClawdA(value, duration = 0) {
+  if (value) clawdComposerReaction.reset();
   a2CancelSeq();
   value !== clawdTracks.A && clawdShakeRiders(value);
   value && clawdCancelTransientB();
@@ -3357,6 +3358,7 @@ function setClawdB(value, duration = 0) {
   renderClawdTracks();
 }
 function setClawdC(value, duration = 0) {
+  if (value) clawdComposerReaction.reset();
   if (a2Locked() && !A2.seqOwned) return;
   value && clawdCancelTransientB();
   value !== 'grab' && value !== 'drag' && value !== clawdTracks.C && clawdShakeRiders(value);
