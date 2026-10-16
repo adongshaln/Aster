@@ -58,6 +58,8 @@ class IslandMorphGeometryTest {
         assertEquals(0.05f, g.haloRecoil, 0.0001f)
 
         g.update(-IslandSpring.OVERSHOOT)
+        assertEquals(0.10f, g.haloRecoil, 0.0001f)
+        g.update(0f)
         assertEquals(0f, g.haloRecoil, 0f)
     }
 
