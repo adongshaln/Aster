@@ -1,5 +1,7 @@
 # 链接灵动岛：原位展开与 80/20 Spring
 
+> 卡片外观与开合路径已由 [ISLAND_BLACK_ISLAND.md](ISLAND_BLACK_ISLAND.md) 取代；本文的 IslandSpring 曲线参数、窗口/焦点/短链与绘制预算规则仍然有效。
+
 开发分支：`feature/island-spring-morph`。不改版本号，不合并 main，不改常驻光环的 shader、色板、线宽、64dp 画布或 25.5dp 圆心校准。
 
 ## 交互

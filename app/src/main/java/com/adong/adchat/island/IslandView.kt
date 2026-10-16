@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
 import android.os.Build
@@ -26,8 +27,10 @@ import android.view.View
 import android.view.WindowManager
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.adong.adchat.R
 import com.adong.adchat.media.MediaPlatform
 import kotlin.math.abs
 import kotlin.math.cos
@@ -36,9 +39,10 @@ import kotlin.math.roundToInt
 
 /**
  * One overlay, one anchored island. The original 64dp breathing halo stays unchanged at idle.
- * The notification grows out of its black centre, rather than moving the window below the cutout
- * and launching a separate popup. Window size changes only BEFORE opening / AFTER closing;
- * all in-flight geometry, content and halo channels share one vsync-driven spring clock.
+ * One pure-black island grows out of the halo's black core — first sideways into a capsule,
+ * then downward — and closes along the same path; the halo keeps its position and size.
+ * Window size changes only BEFORE opening / AFTER closing; all in-flight geometry, content and
+ * halo channels share one vsync-driven spring clock.
  */
 class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
     interface Callbacks {
@@ -54,6 +58,15 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         private const val CARD_TIMEOUT_MS = 12_000L
         private const val BREATH_PERIOD_MS = 3_800L
         private const val MIN_TAP_HOLD_MS = 150L
+        private const val SEED_RADIUS_DP = 13f
+        private const val ISLAND_RADIUS_DP = 40f
+        /** Closing tail: the island's single rebound becomes one glow pulse; the ring never resizes. */
+        private const val CLOSE_GLOW_PULSE = 0.32f
+        private val TEXT_PRIMARY = 0xFFF5F5F7.toInt()
+        private val TEXT_SECONDARY = 0xFF8E8E93.toInt()
+        private val BUTTON_SECONDARY_FILL = 0xFF2C2C2E.toInt()
+        private val BUTTON_PRIMARY_FILL = 0xFFF5F5F7.toInt()
+        private val BUTTON_PRIMARY_TEXT = 0xFF000000.toInt()
         private val SPRING_INTERPOLATOR = android.animation.TimeInterpolator { IslandSpring.progress(it) }
     }
 
@@ -110,10 +123,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private val glowView: IslandGlowView
     private val surface: IslandSurfaceView
     private val cardHost: LinearLayout
-    private val grabberView: View
-    private val platformTag: TextView
+    private val platformIcon: ImageView
     private val cardTitle: TextView
-    private val cardUrl: TextView
+    private val cardSummary: TextView
     private val parseButton: TextView
     private val cancelButton: TextView
     private var breathAnimator: ValueAnimator? = null
@@ -122,6 +134,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     internal val displayedLink: IslandLink? get() = (state as? State.Card)?.link
     internal val expansionProgress: Float get() = morphProgress
+    internal val cardTitleText: CharSequence get() = cardTitle.text
+    internal val cardSummaryText: CharSequence get() = cardSummary.text
 
     init {
         clipChildren = false
@@ -129,10 +143,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         surface = IslandSurfaceView(context)
         val card = buildCard()
         cardHost = card.host
-        grabberView = card.grabber
-        platformTag = card.tag
+        platformIcon = card.icon
         cardTitle = card.title
-        cardUrl = card.url
+        cardSummary = card.summary
         parseButton = card.parse
         cancelButton = card.cancel
         surface.addView(cardHost)
@@ -148,9 +161,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         addView(glowView, LayoutParams(dpF(WINDOW_SIZE_DP).roundToInt(), dpF(WINDOW_SIZE_DP).roundToInt()).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
         })
-        cardHost.alpha = 1f
-        cardHost.scaleX = 0f
-        cardHost.scaleY = 0f
+        cardHost.alpha = 0f
+        cardHost.scaleX = IslandMorphGeometry.CONTENT_MIN_SCALE
+        cardHost.scaleY = IslandMorphGeometry.CONTENT_MIN_SCALE
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
     }
 
@@ -231,86 +244,87 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     private data class CardParts(
-        val host: LinearLayout, val grabber: View, val tag: TextView,
-        val title: TextView, val url: TextView, val parse: TextView, val cancel: TextView
+        val host: LinearLayout, val icon: ImageView, val title: TextView,
+        val summary: TextView, val parse: TextView, val cancel: TextView
     )
 
     private fun buildCard(): CardParts {
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(12), dp(18), dp(16))
-            // The morphing surface is the only card background. Keeping this content host
-            // transparent makes the text/actions emerge from the same ring-centred silhouette.
+            // Top inset = 26dp black core + 10dp: the camera band at the island's top stays empty.
+            setPadding(dp(18), dp(36), dp(18), dp(18))
+            // The black island is the only card background; this content host stays transparent.
         }
-        val grabber = View(context).apply { background = grabberDrawable(0xFF38BDF8.toInt()) }
-        host.addView(grabber, LinearLayout.LayoutParams(dp(38), dp(4)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            bottomMargin = dp(12)
-        })
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val tag = TextView(context).apply {
-            textSize = 11f
-            setTextColor(0xFF060A10.toInt())
-            paint.isFakeBoldText = true
-            setPadding(dp(9), dp(3), dp(9), dp(3))
-            background = tagDrawable(0xFF38BDF8.toInt())
+        val icon = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = iconTileDrawable(0xFF3A3A3C.toInt())
+        }
+        headerRow.addView(icon, LinearLayout.LayoutParams(dp(36), dp(36)))
+        val texts = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
         }
         val title = TextView(context).apply {
-            textSize = 15.5f
-            setTextColor(0xFFF8FAFC.toInt())
-            paint.isFakeBoldText = true
+            textSize = 15f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(TEXT_PRIMARY)
+            includeFontPadding = false
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
-        headerRow.addView(tag, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-            rightMargin = dp(9)
-        })
-        headerRow.addView(title, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        val url = TextView(context).apply {
-            textSize = 12.5f
-            setTextColor(0xFFCBD5E1.toInt())
+        val summary = TextView(context).apply {
+            textSize = 13f
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            setTextColor(TEXT_SECONDARY)
+            includeFontPadding = false
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.MIDDLE
-            setPadding(dp(12), dp(9), dp(12), dp(9))
-            background = urlCapsuleDrawable()
         }
+        texts.addView(title, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        texts.addView(summary, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(3)
+        })
+        headerRow.addView(texts, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(12)
+        })
         val buttonRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        val cancel = actionButton("收起", accent = false) { hapticTick(); collapse() }
-        val parse = actionButton("立即解析", accent = true) {
+        val cancel = actionButton("收起", primary = false) { hapticTick(); collapse() }
+        val parse = actionButton("解析链接", primary = true) {
             hapticClick()
             displayedLink?.let { callbacks.onParseRequested(it) }
         }
-        buttonRow.addView(cancel, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-            rightMargin = dp(10)
+        buttonRow.addView(cancel, LinearLayout.LayoutParams(0, dp(44), 1f))
+        buttonRow.addView(parse, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
+            marginStart = dp(10)
         })
-        buttonRow.addView(parse, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
-        host.addView(headerRow)
-        host.addView(url, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(10)
-        })
+        host.addView(headerRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         host.addView(buttonRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(14)
         })
-        return CardParts(host, grabber, tag, title, url, parse, cancel)
+        return CardParts(host, icon, title, summary, parse, cancel)
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun actionButton(text: String, accent: Boolean, onClick: () -> Unit): TextView = TextView(context).apply {
+    private fun actionButton(text: String, primary: Boolean, onClick: () -> Unit): TextView = TextView(context).apply {
         this.text = text
-        textSize = 13.5f
+        textSize = 14f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        includeFontPadding = false
         gravity = Gravity.CENTER
-        minHeight = dp(48)
-        minWidth = dp(72)
-        setTextColor(if (accent) 0xFF050B12.toInt() else 0xFFE2E8F0.toInt())
-        if (accent) paint.isFakeBoldText = true
-        setPadding(dp(20), dp(9), dp(20), dp(9))
-        background = buttonDrawable(accent, 0xFF38BDF8.toInt())
+        maxLines = 1
+        setTextColor(if (primary) BUTTON_PRIMARY_TEXT else TEXT_PRIMARY)
+        background = GradientDrawable().apply {
+            setColor(if (primary) BUTTON_PRIMARY_FILL else BUTTON_SECONDARY_FILL)
+            // Concentric with the 40dp island at an 18dp inset.
+            cornerRadius = dpF(22f)
+        }
         setOnTouchListener { v, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> animateButton(v, 0.94f)
@@ -554,10 +568,13 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             // Body bounds reverse from expanded to idle during collapse; p itself is the
             // forward wall-clock progress, so every visual channel reaches its idle target once.
             applyMorph(lerp(from, target, p))
-            glowView.alpha = lerp(fromAlpha, if (expanding) 0f else 1f, p).coerceIn(0f, 1f)
-            val closingRecoil = if (!expanding) surface.geometry.haloRecoil else 0f
-            glowView.springScale = lerp(fromScale, if (expanding) 1.28f else 1f, p) + closingRecoil
-            glowView.glowIntensity = lerp(fromGlow, IslandGlowView.BASE_GLOW_INTENSITY, p)
+            val g = surface.geometry
+            // The resident halo never moves or resizes during a morph: an interrupted press only settles
+            // back to 1, opacity hands over to the island, and the closing rebound is one glow pulse.
+            glowView.alpha = minOf(g.ringAlpha, lerp(fromAlpha, 1f, p)).coerceIn(0f, 1f)
+            glowView.springScale = lerp(fromScale, 1f, p)
+            glowView.glowIntensity = lerp(fromGlow, IslandGlowView.BASE_GLOW_INTENSITY, p) +
+                if (expanding) 0f else CLOSE_GLOW_PULSE * g.recoil
             glowView.colorShift = lerp(fromColor, if (expanding) 1f else 0f, p).coerceIn(0f, 1f)
             glowView.nudgeShift = lerp(fromNudge, 0f, p).coerceIn(0f, 1f)
             glowView.flashIntensity = lerp(fromFlash, 0f, p).coerceIn(0f, 1f)
@@ -582,11 +599,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun applyMorph(value: Float) {
         morphProgress = value
         surface.setProgress(value)
-        // Map the entire measured card directly to/from the resident halo centre. No slide,
-        // partial scale, or early fade: at zero all content converges to the ring's exact centre.
-        val scale = IslandCardMorph.scale(value)
-        cardHost.scaleX = scale
-        cardHost.scaleY = scale
+        val g = surface.geometry
+        // Content is laid out once at its final position; the growing outline reveals and clips it.
+        cardHost.alpha = g.contentAlpha
+        cardHost.scaleX = g.contentScale
+        cardHost.scaleY = g.contentScale
         val actionable = state is State.Card && value >= 0.9f
         if (parseButton.isEnabled != actionable) parseButton.isEnabled = actionable
         if (cancelButton.isEnabled != actionable) cancelButton.isEnabled = actionable
@@ -646,9 +663,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         // Equal parity keeps Gravity.CENTER's integer rounding from moving the ring half a pixel.
         val viewportWidth = requestedWidth - ((requestedWidth - haloWidth) and 1)
         val contentWidth = (viewportWidth - dp(28)).coerceAtLeast(1)
-        val bodyTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(13f)).roundToInt()
-        // The card is redesigned as one surface; keep a compact inset from its new top edge.
-        cardHost.setPadding(dp(18), dp(12), dp(18), dp(16))
+        val bodyTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(SEED_RADIUS_DP)).roundToInt()
         cardHost.layoutParams = LayoutParams(contentWidth, LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = bodyTop
@@ -657,10 +672,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
-        val bodyBottom = bodyTop + cardHost.measuredHeight.toFloat()
         // Geometry is configured in onLayout from ACTUAL bounds, atomically with the centred halo.
-        // Reserve room for 2% overshoot so it never clips at the surface's lower/right edge.
-        val viewportHeight = (bodyBottom * 1.04f + dp(8)).roundToInt()
+        val bodyBottom = bodyTop + cardHost.measuredHeight.toFloat()
+        val seedBottom = dpF(WINDOW_SIZE_DP) / 2f + dpF(SEED_RADIUS_DP)
+        // Only the height overshoots; reserve its exact maximum so the rebound never clips.
+        val viewportHeight = (bodyBottom + (bodyBottom - seedBottom) * IslandMorphGeometry.MAX_HEIGHT_OVERSHOOT + dp(8)).roundToInt()
         expandedViewport = true
         glowView.isClickable = false
         glowView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -685,11 +701,12 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             val cardTop = cardHost.top.toFloat()
             val cardRight = cardHost.right.toFloat()
             val cardBottom = cardHost.bottom.toFloat()
+            // Content scales around the halo centre x and the island's top edge.
             cardHost.pivotX = anchorX - cardLeft
-            cardHost.pivotY = anchorY - cardTop
+            cardHost.pivotY = 0f
             surface.geometry.configure(
-                anchorX, anchorY, dpF(13f),
-                cardLeft, cardTop, cardRight, cardBottom, dpF(26f)
+                anchorX, anchorY, dpF(SEED_RADIUS_DP),
+                cardLeft, cardTop, cardRight, cardBottom, dpF(ISLAND_RADIUS_DP)
             )
             surface.active = true
             applyMorph(morphProgress)
@@ -734,24 +751,21 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     private fun renderCard(link: IslandLink) {
-        val (tag, title, accent) = when (link.platform) {
-            MediaPlatform.Douyin -> Triple("DOUYIN", "识别到抖音视频链接", 0xFF34D399.toInt())
-            MediaPlatform.Bilibili -> Triple("BILIBILI", "识别到 B 站视频链接", 0xFF38BDF8.toInt())
-            MediaPlatform.Twitter -> Triple("X / MEDIA", "识别到 X 媒体链接", 0xFFA78BFA.toInt())
-            else -> Triple("LINK", "识别到可解析媒体链接", 0xFFE5C384.toInt())
-        }
         if (renderedPlatform != link.platform) {
             renderedPlatform = link.platform
-            surface.setAccentColor(accent)
-            grabberView.background = grabberDrawable(accent)
-            platformTag.text = tag
-            platformTag.background = tagDrawable(accent)
-            cardTitle.text = title
-            parseButton.background = buttonDrawable(true, accent)
+            val (icon, tile) = when (link.platform) {
+                MediaPlatform.Douyin -> R.drawable.ic_island_douyin to 0xFF2F6F62.toInt()
+                MediaPlatform.Bilibili -> R.drawable.ic_island_bilibili to 0xFFD45C78.toInt()
+                MediaPlatform.Twitter -> R.drawable.ic_island_x to 0xFF3D586E.toInt()
+                MediaPlatform.Direct -> R.drawable.ic_island_link to 0xFF3A3A3C.toInt()
+            }
+            platformIcon.setImageResource(icon)
+            platformIcon.background = iconTileDrawable(tile)
+            platformIcon.contentDescription = link.displayName
+            cardTitle.text = IslandCardText.title(link.platform)
         }
-        val url = link.cleanedUrl.ifBlank { link.originalUrl }
-        val display = if (url.length <= 56) url else url.take(53) + "…"
-        if (cardUrl.text.toString() != display) cardUrl.text = display
+        val summary = IslandCardText.summary(link.cleanedUrl.ifBlank { link.originalUrl })
+        if (cardSummary.text.toString() != summary) cardSummary.text = summary
     }
 
     // ---------- Existing multi-level haptics (not an animation clock) ----------
@@ -840,25 +854,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         dispatchVibration(VibrationEffect.createWaveform(longArrayOf(0, 12, 50, 12), intArrayOf(0, 190, 0, 130), -1))
     }
 
-    private fun grabberDrawable(accent: Int) = GradientDrawable().apply {
-        setColor((accent and 0x00FFFFFF) or (0x88 shl 24))
-        cornerRadius = dpF(2f)
-    }
-
-    private fun tagDrawable(accent: Int) = GradientDrawable().apply {
-        setColor(accent)
-        cornerRadius = dpF(8f)
-    }
-
-    private fun urlCapsuleDrawable() = GradientDrawable().apply {
-        setColor(0xFF181C26.toInt())
-        cornerRadius = dpF(12f)
-        setStroke(max(1, (density * 0.8f).roundToInt()), 0x29FFFFFF)
-    }
-
-    private fun buttonDrawable(accent: Boolean, accentColor: Int) = GradientDrawable().apply {
-        setColor(if (accent) accentColor else 0x1FFFFFFF)
-        if (!accent) setStroke(max(1, (density * 0.8f).roundToInt()), 0x26FFFFFF)
-        cornerRadius = dpF(18f)
+    private fun iconTileDrawable(color: Int) = GradientDrawable().apply {
+        setColor(color)
+        cornerRadius = dpF(10f)
     }
 }

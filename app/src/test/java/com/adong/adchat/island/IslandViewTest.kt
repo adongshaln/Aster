@@ -7,6 +7,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import org.junit.After
 import org.junit.Assert.*
@@ -22,6 +23,7 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.shadows.ShadowViewRootImpl
 import java.time.Duration
+import kotlin.math.max
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28])
@@ -118,54 +120,104 @@ class IslandViewTest {
         assertEquals(1, events.dismissed)
     }
 
-    @Test fun cardCornersScaleAroundTheMeasuredRingCenterIntoTheSharedShell() {
+    @Test fun islandStretchesSidewaysThenGrowsDownWithAFixedTop() {
         view.attach()
         layoutWindow()
         val glow = view.getChildAt(1) as IslandGlowView
         view.show(first)
         layoutWindow()
-
         val surface = view.getChildAt(0) as IslandSurfaceView
         val card = surface.getChildAt(0)
+        val g = surface.geometry
         val anchorX = glow.left + glow.width / 2f
         val anchorY = glow.top + glow.height / 2f
         assertEquals(anchorX - card.left, card.pivotX, 0f)
-        assertEquals(anchorY - card.top, card.pivotY, 0f)
-        assertEquals(0f, card.scaleX, 0f)
-        assertEquals(anchorX, surface.geometry.left + 13f, 0.001f)
-        assertEquals(anchorY - 13f, surface.geometry.top, 0.001f)
+        assertEquals(0f, card.pivotY, 0f)
+        assertEquals(0f, card.alpha, 0f)
+        assertEquals(anchorX - 13f, g.left, 0.001f)
+        assertEquals(anchorY - 13f, g.top, 0.001f)
+        assertEquals(anchorY + 13f, g.bottom, 0.001f)
 
-        fun assertCardInsideShell() {
-            val scale = card.scaleX
-            assertEquals(scale, card.scaleY, 0.0001f)
-            assertEquals(IslandCardMorph.scale(view.expansionProgress), scale, 0.0001f)
-            val mappedLeft = anchorX + (card.left - anchorX) * scale
-            val mappedTop = anchorY + (card.top - anchorY) * scale
-            val mappedRight = anchorX + (card.right - anchorX) * scale
-            val mappedBottom = anchorY + (card.bottom - anchorY) * scale
-            assertTrue(surface.geometry.left <= mappedLeft + 0.01f)
-            assertTrue(surface.geometry.top <= mappedTop + 0.01f)
-            assertTrue(surface.geometry.right >= mappedRight - 0.01f)
-            assertTrue(surface.geometry.bottom >= mappedBottom - 0.01f)
-        }
+        // Spring progress stays below HEIGHT_START for the first 150ms of the 600ms clock.
+        advance(150)
+        assertTrue("must already stretch sideways; width=${g.right - g.left}", g.right - g.left > 60f)
+        assertEquals(anchorY + 13f, g.bottom, 0.001f)
+        assertEquals(anchorX, (g.left + g.right) / 2f, 0.5f)
+        assertEquals(0f, card.alpha, 0f)
 
-        advance(300)
-        assertCardInsideShell()
+        // By 300ms the width has settled; only the height is still growing.
+        advance(150)
+        assertEquals(card.left.toFloat(), g.left, 0.01f)
+        assertEquals(card.right.toFloat(), g.right, 0.01f)
+        assertTrue("height must be growing; bottom=${g.bottom}", g.bottom > anchorY + 13f + 20f)
+        assertTrue(g.bottom < card.bottom)
+        assertEquals(anchorY - 13f, g.top, 1f)
+
         advance(IslandSpring.EXPAND_MS)
         assertEquals(1f, view.expansionProgress, 0f)
-        assertEquals(card.left.toFloat(), surface.geometry.left, 0.01f)
-        assertEquals(card.top.toFloat(), surface.geometry.top, 0.01f)
-        assertEquals(card.right.toFloat(), surface.geometry.right, 0.01f)
-        assertEquals(card.bottom.toFloat(), surface.geometry.bottom, 0.01f)
+        assertEquals(card.left.toFloat(), g.left, 0.01f)
+        assertEquals(card.top.toFloat(), g.top, 0.01f)
+        assertEquals(card.right.toFloat(), g.right, 0.01f)
+        assertEquals(card.bottom.toFloat(), g.bottom, 0.01f)
+        assertEquals(1f, card.alpha, 0f)
+        assertEquals(1f, card.scaleX, 0f)
+        assertEquals(0f, glow.alpha, 0f)
 
         view.collapse()
-        advance(300)
-        assertCardInsideShell()
-        advance(IslandSpring.COLLAPSE_MS)
+        advance(IslandSpring.COLLAPSE_MS + 32L)
         assertEquals(0f, view.expansionProgress, 0f)
-        assertEquals(0f, card.scaleX, 0f)
-        assertEquals(anchorX, surface.geometry.left + 13f, 0.001f)
-        assertEquals(anchorY - 13f, surface.geometry.top, 0.001f)
+        assertEquals(0f, card.alpha, 0f)
+        assertEquals(1, events.dismissed)
+    }
+
+    @Test fun residentHaloKeepsItsSizeAndCentreThroughOpenAndClose() {
+        view.attach()
+        layoutWindow()
+        val glow = view.getChildAt(1) as IslandGlowView
+        val size = glow.width
+        view.show(first)
+        layoutWindow()
+        val surface = view.getChildAt(0) as IslandSurfaceView
+        fun assertHaloFixed() {
+            assertEquals(1f, glow.springScale, 0f)
+            assertEquals(size, glow.width)
+            assertEquals(size, glow.height)
+            assertEquals(0, glow.top)
+            assertEquals(view.width / 2f, glow.left + glow.width / 2f, 0.5f)
+        }
+        repeat((IslandSpring.EXPAND_MS / 16 + 2).toInt()) {
+            advance(16)
+            assertHaloFixed()
+        }
+        assertEquals(0f, glow.alpha, 0f)
+        view.collapse()
+        var peakGlow = 0f
+        var ringVisibleWhileWide = false
+        repeat((IslandSpring.COLLAPSE_MS / 16).toInt()) {
+            advance(16)
+            assertHaloFixed()
+            peakGlow = max(peakGlow, glow.glowIntensity)
+            if (surface.geometry.right - surface.geometry.left > 200f && glow.alpha > 0f) ringVisibleWhileWide = true
+        }
+        assertFalse("the ring must only reappear once the island is nearly back in the core", ringVisibleWhileWide)
+        assertTrue("closing tail must pulse the glow once; peak=$peakGlow", peakGlow > IslandGlowView.BASE_GLOW_INTENSITY + 0.1f)
+        advance(64)
+        layoutWindow()
+        assertEquals(1, events.dismissed)
+        assertHaloFixed()
+    }
+
+    @Test fun cardShowsPlatformTitleAndOneLineLinkSummary() {
+        view.show(first)
+        layoutWindow()
+        assertEquals("抖音视频", view.cardTitleText.toString())
+        assertEquals("v.douyin.com/one", view.cardSummaryText.toString())
+        val card = (view.getChildAt(0) as IslandSurfaceView).getChildAt(0) as ViewGroup
+        // Header + action row only: no grabber bar, no nested link capsule.
+        assertEquals(2, card.childCount)
+        advance(IslandSpring.EXPAND_MS + 32L)
+        view.updateCard(first.copy(cleanedUrl = "https://www.douyin.com/video/1"))
+        assertEquals("douyin.com/video/1", view.cardSummaryText.toString())
     }
 
     @Test fun shortLinkUpdateNeverReopensDismissedOrDifferentCard() {
