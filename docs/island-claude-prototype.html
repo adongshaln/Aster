@@ -60,7 +60,7 @@
     background: var(--paper);
     box-shadow: var(--shadow), inset 0 0 0 1px var(--edge);
   }
-  .card { position: absolute; top: 0; width: 364px; padding: 44px 18px 18px; transform-origin: 182px 0; color: var(--ink); }
+  .card { position: absolute; top: 0; width: 364px; padding: 47px 18px 18px; transform-origin: 182px 0; color: var(--ink); }
   .head { display: flex; align-items: center; gap: 12px; }
   .glyph { width: 38px; height: 38px; border-radius: 50%; background: var(--well); display: grid; place-items: center; flex: none; }
   .glyph svg { width: 20px; height: 20px; fill: var(--ink); opacity: 0.86; }
@@ -177,10 +177,10 @@ const PHONE_W = 392;
 const CAM_X = PHONE_W / 2, CAM_Y = 25.5;
 const CORE_R = 13;                 // black grommet around the lens
 const SEED = CORE_R * 2;           // the tag starts as the hidden core
-const TAG_TOP_INSET = 21;          // expanded tag top sits 21dp above the lens centre
+const TAG_TOP_INSET = 22.5;        // expanded tag top sits 22.5dp above the lens centre
 const RADIUS = 40;
 const CARD_W = Math.min(PHONE_W, 440) - 28;
-const RING_R = 15.4, RING_W = 2.1; // pen-drawn ink ring
+const RING_R = 16.8, RING_W = 2.1; // pen-drawn ink ring
 const P = { respW: 0.44, dampW: 0.76, respH: 0.52, dampH: 0.64, delayH: 0.06, squash: 0.8 };
 
 // ---------- Analytic damped spring: frame-rate independent, keeps velocity on retarget ----------

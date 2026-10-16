@@ -62,7 +62,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         private const val BREATH_PERIOD_MS = 5_000L
         private const val MIN_TAP_HOLD_MS = 150L
         /** The open tag's top edge sits this far above the lens centre, clearing the ink ring. */
-        private const val TAG_TOP_INSET_DP = 21f
+        private const val TAG_TOP_INSET_DP = 22.5f
         private const val ISLAND_RADIUS_DP = 40f
         private const val CONTENT_BLUR_DP = 6f
         /** Below this width the closing tag is back inside the ring, and the ink gulps once. */
@@ -271,7 +271,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             // The top inset clears the ink ring, the tag's eyelet, with 6dp to spare.
-            setPadding(dp(18), dp(44), dp(18), dp(18))
+            setPadding(dp(18), dp(47), dp(18), dp(18))
         }
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
