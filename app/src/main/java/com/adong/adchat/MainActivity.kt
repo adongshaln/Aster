@@ -122,6 +122,13 @@ internal enum class AppPage(val label: String, val icon: ImageVector) {
 @Composable
 private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextConsumed: () -> Unit) {
     var page by rememberSaveable { mutableStateOf(AppPage.Chat) }
+    if (!vm.appConfig.userNamePromptDone) {
+        UserNamePromptDialog(
+            currentName = vm.appConfig.userName,
+            onConfirm = vm::setUserName,
+            onSkip = vm::skipUserNamePrompt
+        )
+    }
     val pageStates = rememberSaveableStateHolder()
     val mediaVm: MediaDownloadViewModel = viewModel()
     val storyVm: StoryViewModel = viewModel()
