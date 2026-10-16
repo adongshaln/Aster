@@ -72,11 +72,12 @@
     transition: transform 150ms cubic-bezier(.2,.8,.25,1.25), filter 150ms ease !important;
   }
   button.clawd-signoff-button:hover { filter: saturate(1.08); }
-  /* composer 大 Clawd：钉在 #send_form 内、底边 calc(100% - 1px)（和装饰爪
-     bottom:100%+margin-bottom:-1px 完全等价，两只并排同一条线）。 */
+  /* composer 大 Clawd：钉在 #send_form 内。原版底边 calc(100% - 1px) 与小爪
+     bottom:100%+margin-bottom:-1px 等价（并排同一条线）；本宿主把小爪净降到
+     -5px（下降 1mm 校准），这里同步 -5px 保持同线。 */
   html body #send_form > button.clawd-signoff-button.clawd-composer-clawd {
     position: absolute !important;
-    inset: auto auto calc(100% - 1px) 18px !important;
+    inset: auto auto calc(100% - 5px) max(18px, calc(env(safe-area-inset-left, 0px) + 12px)) !important;
     z-index: 4 !important;
     display: block !important;
     margin: 0 !important;
