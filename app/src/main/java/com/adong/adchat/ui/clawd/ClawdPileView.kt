@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -110,6 +111,14 @@ fun ClawdPileOverlay(
         while (true) {
             kotlinx.coroutines.delay(360)
             dangleFrame = 1 - dangleFrame
+        }
+    }
+
+    // 动画时钟：hop/squash/Z 飘/星星按 elapsed 采样（原版 Web Animations）
+    var animNow by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            withFrameNanos { ns -> animNow = ns / 1_000_000 }
         }
     }
 
@@ -212,11 +221,15 @@ fun ClawdPileOverlay(
                         )
                     }
 
+                    // 戳跳 HOP（460ms）与落地 squash（320ms）：原版 Web Animations 关键帧
+                    val (hopDy, hopSx, hopSy) = hopTransform(actor, animNow)
+                    val (sqSx, sqSy) = squashTransform(actor, animNow)
+
                     // 原版 transform-origin: 8*PX 100% —— 绕"脚底、身体中心"做果冻缩放
                     val pivotX = (visualX + 8f * data.px) * density
                     val pivotY = groundY - lift * density + peekDrop * density
-                    translate(pivotX, pivotY) {
-                        scale(breatheX, breatheY, pivot = Offset.Zero) {
+                    translate(pivotX, pivotY + hopDy * data.px * density) {
+                        scale(breatheX * hopSx * sqSx, breatheY * hopSy * sqSy, pivot = Offset.Zero) {
                             drawImage(
                                 bmp,
                                 dstOffset = IntOffset(
@@ -231,9 +244,16 @@ fun ClawdPileOverlay(
                             )
                         }
                     }
+                    // 走路腿：身体图是「站起来、没腿」的 raised 帧，四根小腿单独画（原版 legs()）
+                    if (walking) drawWalkLegs(actor, visualX, groundY - lift * density, density, data, animNow)
                 }
             }
          }
+        }
+
+        // ===== 特效层：睡着的 Z 飘 + 巫师被戳的星星（原版 z-index:5）=====
+        Canvas(Modifier.fillMaxSize()) {
+            drawPileFx(pile, actors, animNow, bandHeightDp, density, night)
         }
 
         // ===== 触摸层：每只一个真实小 Box（画布 44x36dp 全区域），空白处穿透 =====
@@ -343,5 +363,186 @@ private fun DrawScope.drawClawdAt(bmp: ImageBitmap, xDp: Float, yDp: Float, data
             ),
             filterQuality = FilterQuality.None,
         )
+    }
+}
+
+/* ═══════════ 小爪动画（原版 Web Animations 关键帧的 Kotlin 等价）═══════════ */
+
+/**
+ * 戳跳 HOP（原版 460ms）：
+ * 0% 1/1 → 18% 1.08/0.9 → 50% 上跳 6px(3*PX) 0.95/1.07 → 78% 1.07/0.92 → 100% 1/1。
+ * 返回 (向上位移格, sx, sy)。
+ */
+private fun hopTransform(actor: ClawdPileState.Actor, nowMs: Long): Triple<Float, Float, Float> {
+    if (actor.hopAt == 0L) return Triple(0f, 1f, 1f)
+    val t = (nowMs - actor.hopAt) / 460.0
+    if (t !in 0.0..1.0) return Triple(0f, 1f, 1f)
+    return when {
+        t < .18 -> {
+            val k = (t / .18).toFloat()
+            Triple(0f, lerp(1f, 1.08f, k), lerp(1f, .9f, k))
+        }
+        t < .5 -> {
+            val k = ((t - .18) / .32).toFloat()
+            Triple(lerp(0f, -3f, k), lerp(1.08f, .95f, k), lerp(.9f, 1.07f, k))
+        }
+        t < .78 -> {
+            val k = ((t - .5) / .28).toFloat()
+            Triple(lerp(-3f, 0f, k), lerp(.95f, 1.07f, k), lerp(1.07f, .92f, k))
+        }
+        else -> {
+            val k = ((t - .78) / .22).toFloat()
+            Triple(0f, lerp(1.07f, 1f, k), lerp(.92f, 1f, k))
+        }
+    }
+}
+
+/** 落地 squash（原版 320ms）：1/1 → 1.12/.86 → .97/1.04 → 1/1 */
+private fun squashTransform(actor: ClawdPileState.Actor, nowMs: Long): Pair<Float, Float> {
+    if (actor.squashAt == 0L) return 1f to 1f
+    val t = (nowMs - actor.squashAt) / 320.0
+    if (t !in 0.0..1.0) return 1f to 1f
+    return when {
+        t < .35 -> {
+            val k = (t / .35).toFloat()
+            lerp(1f, 1.12f, k) to lerp(1f, .86f, k)
+        }
+        t < .7 -> {
+            val k = ((t - .35) / .35).toFloat()
+            lerp(1.12f, .97f, k) to lerp(.86f, 1.04f, k)
+        }
+        else -> {
+            val k = ((t - .7) / .3).toFloat()
+            lerp(.97f, 1f, k) to lerp(1.04f, 1f, k)
+        }
+    }
+}
+
+private fun lerp(a: Float, b: Float, k: Float): Float = a + (b - a) * k
+
+/**
+ * 走路腿（原版 legs()）：四根小腿在 x = LEG_X 位置、TOP+13 高度，
+ * 每根以「顶部」为原点做 scaleY 1→.4→1 并前移，两对相位差半个周期。
+ * 一个周期 2*STEP_MS（320ms）。
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWalkLegs(
+    actor: ClawdPileState.Actor,
+    visualX: Float,
+    groundTop: Float,
+    density: Float,
+    data: PileData,
+    nowMs: Long,
+) {
+    val dir = if (actor.face == 0) 1 else actor.face
+    val cycle = 2.0 * data.stepMs
+    val px = data.px
+    for ((i, legX) in data.legX.withIndex()) {
+        val phase = ((nowMs - actor.walkBase * 0L) % cycle.toLong()).toDouble() / cycle
+        val p = ((phase + if (i % 2 == 1) .5 else 0.0) % 1.0)
+        // 0 → .28 缩到 .4 并前移 .6 格；.28 → .5 回来；其余保持
+        val (scaleY, shiftX) = when {
+            p < .28 -> lerp(1f, .4f, (p / .28).toFloat()) to lerp(0f, dir * .6f * px, (p / .28).toFloat())
+            p < .5 -> lerp(.4f, 1f, ((p - .28) / .22).toFloat()) to lerp(dir * .6f * px, 0f, ((p - .28) / .22).toFloat())
+            else -> 1f to 0f
+        }
+        val cx = (visualX + legX * px + shiftX) * density
+        val topY = groundTop + (data.top + 13) * px * density
+        val w = px * density
+        val h = 2 * px * density * scaleY
+        drawRect(
+            color = if (i % 2 == 1) Color(0xFFBF684C) else Color(0xFFD97757),
+            topLeft = Offset(cx, topY),
+            size = Size(w, h),
+        )
+    }
+}
+
+/**
+ * 小爪特效（原版 puffZ / sparkle）：
+ * - Z 飘：每 5s 从一只睡着的（没驮人）头顶往右上飘一个「Z」，4.2s 线性淡入淡出。
+ *   原版用两个大小轮换的 box-shadow 点阵；这里直接画像素字。
+ * - 星星：巫师被戳时 4 颗星依次炸开（500ms，steps(4)）。
+ */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPileFx(
+    pile: ClawdPileState,
+    actors: List<ClawdPileState.Actor>,
+    nowMs: Long,
+    bandHeightDp: Float,
+    density: Float,
+    night: Boolean,
+) {
+    if (!pile.isLaid) return
+    val sheetHDp = pile.data.h * pile.data.px
+    val px = pile.data.px
+    val ink = if (night) Color(0xFFBDB7AE) else Color(0xFF6B6560)
+    val starY = Color(0xFFFFF3C4)
+    val starW = Color(0xFFFFFFFF)
+
+    // ── Z 飘：5s 一轮，从「睡着的、没人驮的」里随机一只（原版 puffZ）──
+    val zCycle = 5000L
+    val zIdx = nowMs / zCycle
+    val zPhase = (nowMs % zCycle) / 4200.0   // 飘 4.2s
+    if (zPhase in 0.0..1.0) {
+        val sleepers = actors.filter { a ->
+            a.mode == ClawdPileState.Mode.SLEEP &&
+                actors.none { o -> o.name != a.name && o.on.contains(a.name) }
+        }
+        if (sleepers.isNotEmpty()) {
+            val a = sleepers[((zIdx % sleepers.size).toInt() + sleepers.size) % sleepers.size]
+            val big = (zIdx % 2L) == 0L
+            val alpha = when {
+                zPhase < .12 -> (zPhase / .12).toFloat()
+                zPhase < .8 -> 1f
+                else -> ((1 - zPhase) / .2).toFloat().coerceIn(0f, 1f)
+            } * .9f
+            val x0 = a.x + 12 * px
+            val y0 = bandHeightDp - sheetHDp - pile.liftOf(a.name) + (pile.data.top + 5) * px
+            val dx = 6 * px * zPhase.toFloat()
+            val dy = -14 * px * zPhase.toFloat()
+            drawZMark(x0 + dx, y0 + dy, big, ink, alpha, density)
+        }
+    }
+
+    // ── 星星：巫师被戳后 500ms 内（原版 sparkle，4 颗错开 0/120/220/320ms）──
+    for (a in actors) {
+        if (a.name != "wizard" || a.hopAt == 0L) continue
+        val el = nowMs - a.hopAt
+        if (el < 0 || el > 820) continue
+        val top = bandHeightDp - sheetHDp - pile.liftOf(a.name)
+        val at = listOf(Triple(19, -3, 0), Triple(21, -1, 120), Triple(18, -1, 220), Triple(20, -5, 320))
+        for ((sx, sy, delay) in at) {
+            val t = (el - delay) / 500.0
+            if (t !in 0.0..1.0) continue
+            val scale = 1 + .6 * t.toFloat()
+            val alpha = (1 - t).toFloat()
+            val cx = (a.x + (sx - 1) * px).toFloat()
+            val cy = (top + (pile.data.top + 7 + sy - 1) * px).toFloat()
+            drawSpark(cx, cy, scale, alpha, starY, starW, density)
+        }
+    }
+}
+
+/** 画一个像素「Z」（原版 z 点阵：大 4x4、小 3x3，用 k 色） */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawZMark(
+    xDp: Float, yDp: Float, big: Boolean, ink: Color, alpha: Float, density: Float,
+) {
+    val cells = if (big) listOf(0 to 0, 1 to 0, 2 to 0, 3 to 0, 2 to 1, 1 to 2, 0 to 3, 1 to 3, 2 to 3, 3 to 3)
+    else listOf(0 to 0, 1 to 0, 2 to 0, 1 to 1, 0 to 2, 1 to 2, 2 to 2)
+    val px = 2f * density
+    for ((cx, cy) in cells) {
+        drawRect(ink.copy(alpha = alpha), Offset((xDp + cx * 2) * density, (yDp + cy * 2) * density), Size(px, px))
+    }
+}
+
+/** 画一颗像素星（原版 3x3：Y 十字 + 中心白点） */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSpark(
+    xDp: Float, yDp: Float, scale: Float, alpha: Float, y: Color, w: Color, density: Float,
+) {
+    val s = 2f * density * scale
+    val cells = listOf(
+        Triple(1, 0, y), Triple(0, 1, y), Triple(2, 1, y), Triple(1, 2, y), Triple(1, 1, w),
+    )
+    for ((cx, cy, color) in cells) {
+        drawRect(color.copy(alpha = alpha), Offset((xDp + cx * 2 * scale) * density, (yDp + cy * 2 * scale) * density), Size(s, s))
     }
 }

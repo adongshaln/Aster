@@ -46,6 +46,10 @@ class ClawdPileState(
         /** mode=WALK 时的视觉位移（px）：视觉 x = walkBase + walkOff */
         val walkOff: Int = 0,
         val walkBase: Int = 0,
+        /** 戳跳（原版 poke 的 HOP，460ms）：开始时刻 elapsedRealtime，0 = 没在跳 */
+        val hopAt: Long = 0,
+        /** 落地 squash（320ms）：开始时刻，0 = 没在压 */
+        val squashAt: Long = 0,
     )
 
     private class Inner(val name: String) {
@@ -57,6 +61,8 @@ class ClawdPileState(
         var face = 0
         var walk: Walk? = null
         var jobs = mutableListOf<Job>()
+        var hopAt = 0L
+        var squashAt = 0L
     }
 
     private class Walk(val base: Int, val target: Int, val dir: Int, val onArrive: (() -> Unit)?) {
@@ -511,6 +517,7 @@ class ClawdPileState(
         changed()
         later(k, 520) {
             k.pose = PilePose.CROUCH
+            k.squashAt = android.os.SystemClock.elapsedRealtime()
             changed()
             later(k, 400) { done() }
         }
@@ -531,6 +538,7 @@ class ClawdPileState(
             k.face = 0
         }
         k.eyes = PileEyes.OPEN
+        k.hopAt = android.os.SystemClock.elapsedRealtime()
         changed()
         later(k, 1000) {
             if (k.mode == Mode.HELD) return@later
@@ -757,6 +765,8 @@ class ClawdPileState(
             face = k.face,
             walkOff = k.walk?.off ?: 0,
             walkBase = k.walk?.base ?: k.x,
+            hopAt = k.hopAt,
+            squashAt = k.squashAt,
         )
     }
 

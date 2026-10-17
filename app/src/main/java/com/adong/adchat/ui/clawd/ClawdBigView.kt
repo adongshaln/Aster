@@ -75,7 +75,18 @@ fun ClawdBigOverlay(
             if (night && (ch == "e" || ch == "k")) NIGHT_INK else ClawdLoader.colorArgb(v)
         }
     }
-    val bitmapCache = remember(palArgb) { HashMap<PartKey, ImageBitmap>() }
+    // 彩棒随机色（原版 clawdRigPickStickColors）：每次进入 glowstick 系列剪辑换一组
+    var stickA by remember { mutableStateOf(STICK_COLORS[0]) }
+    var stickB by remember { mutableStateOf(STICK_COLORS[1]) }
+    val palWithSticks = remember(palArgb, stickA, stickB) {
+        palArgb + mapOf(
+            "G" to stickA,
+            "N" to stickB,
+            "t" to withAlpha(stickA, .35),
+            "u" to withAlpha(stickB, .35),
+        )
+    }
+    val bitmapCache = remember(palWithSticks) { HashMap<PartKey, ImageBitmap>() }
     // 位图窗口：全部部件、全部帧、含镜像的最大包络（数据驱动，换数据自动跟随）
     val win = remember(rig) { rigWindow(rig) }
     // sym 的变换中心（原版 .clr-p-sym transform-origin：box + origin + (0.5, 2.5) 格）
@@ -100,8 +111,11 @@ fun ClawdBigOverlay(
 
     var session by remember { mutableStateOf(ClipSession()) }
     var frame by remember { mutableStateOf(BigFrame.IDLE) }
+    // 掉道具 ghost：换剪辑瞬间把还在的道具层留一份，甩出去淡出（原版 clawdRigDropProps）
+    var ghosts by remember { mutableStateOf<List<Ghost>>(emptyList()) }
+    val ghostSpawn = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 
-    LaunchedEffect(runtime, rig, night) {
+    LaunchedEffect(runtime, rig, night, palWithSticks) {
         var frameT = 0L
         while (true) {
             withFrameNanos { frameNanos ->
@@ -111,15 +125,35 @@ fun ClawdBigOverlay(
                 val v = runtime.visualAt(nowMs)
                 var s = session
                 if (s.seq != v.seq || s.clipId != v.clipId) {
+                    // 换剪辑：上一帧还在的道具层甩出去（原版 clawdRigDropProps 的 drop 动画）
+                    val props = frame.parts.filter { it.part == "propA" || it.part == "propB" }
+                    if (props.isNotEmpty()) {
+                        ghosts = ghosts + props.map { p ->
+                            Ghost(
+                                part = p, bornAt = nowMs,
+                                dir = if (s.mirror) -1 else 1,
+                                id = ghostSpawn.incrementAndGet(),
+                            )
+                        }
+                    }
+                    ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
                     s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs, rate = v.rate)
                     session = s
+                    // 彩棒换色（原版：每次播 glowstick 系列重新掷）
+                    if (v.clipId?.startsWith("glowstick") == true) {
+                        val n = STICK_COLORS.size
+                        val a = (Math.random() * n).toInt()
+                        val b = (a + 1 + (Math.random() * (n - 1)).toInt()) % n
+                        stickA = STICK_COLORS[a]
+                        stickB = STICK_COLORS[b]
+                    }
                 } else if (s.rate != v.rate) {
                     // 倍速在会话中途变化：换算 startMs 保持已播进度连续
                     val elapsed = (nowMs - s.startMs).toDouble()
                     s = ClipSession(s.seq, s.clipId, s.mirror, nowMs - (elapsed / s.rate * v.rate).toLong(), v.rate)
                     session = s
                 }
-                frame = computeFrame(rig, palArgb, bitmapCache, win, symPivot, s, v, nowMs)
+                frame = computeFrame(rig, palWithSticks, bitmapCache, win, symPivot, s, v, nowMs)
             }
         }
     }
@@ -127,6 +161,14 @@ fun ClawdBigOverlay(
     // 物理层：订阅 version（runtime.onChanged 驱动），拖拽/弹道逐帧重组
     val phys = remember(version) { runtime.visualAt(android.os.SystemClock.elapsedRealtime()) }
     val f = frame
+    // ghost 活跃时逐帧重组（原版 Web Animations 自带时钟）
+    var ghostTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ghosts.isNotEmpty()) {
+        while (ghosts.isNotEmpty()) {
+            withFrameNanos { ghostTick++ }
+        }
+    }
+    val nowMsNow = remember(ghostTick, version, frame) { android.os.SystemClock.elapsedRealtime() }
 
     Box(modifier) {
         // ── 触摸层：与大爪同位置的 42×34 小盒（原版按钮命中区），空白处穿透 ──
@@ -174,6 +216,27 @@ fun ClawdBigOverlay(
                                 rotate(f.flexR, pivot = Offset.Zero) {
                                     scale(f.flexSx, f.flexSy, pivot = Offset.Zero) {
                                         translate(-pivot.x, -pivot.y) {
+                                            // 掉道具 ghost（原版 drop：抛物线甩出 + 淡出，800ms）
+                                            for (g in ghosts) {
+                                                val t = ((nowMsNow - g.bornAt).toFloat() / GHOST_MS).coerceIn(0f, 1f)
+                                                if (t >= 1f) continue
+                                                val dx = g.dir * 36f * t
+                                                val dy = -12f * t + 24f * t * t
+                                                translate((g.part.x + dx) * cellDp * d, (g.part.y + dy) * cellDp * d) {
+                                                    rotate(g.dir * 110f * t, pivot = Offset(g.part.bw * cellDp * d / 2f, g.part.bh * cellDp * d / 2f)) {
+                                                        drawImage(
+                                                            g.part.bitmap,
+                                                            dstOffset = IntOffset.Zero,
+                                                            dstSize = IntSize(
+                                                                (g.part.bw * cellDp * d).roundToInt(),
+                                                                (g.part.bh * cellDp * d).roundToInt(),
+                                                            ),
+                                                            alpha = (1f - t) * g.part.a,
+                                                            filterQuality = FilterQuality.None,
+                                                        )
+                                                    }
+                                                }
+                                            }
                                             if (f.clipGround) {
                                                 // 地面线以下裁掉：框内 y=16 格 = 48dp（原版 groundClipRule）
                                                 clipRect(-400f * d, -400f * d, 400f * d, 48f * d) {
@@ -212,6 +275,26 @@ fun ClawdBigOverlay(
 }
 
 private const val NIGHT_INK = 0xFFC3C2B7.toInt()
+private const val GHOST_MS = 800L
+
+/** 掉道具 ghost：换剪辑瞬间留下的道具层，抛物线甩出后淡出（原版 clawdRigDropProps）。 */
+private class Ghost(
+    val part: BigFrame.Part,
+    val bornAt: Long,
+    val dir: Int,
+    val id: Int,
+)
+
+/** 彩棒调色板（原版 CLAWD_STICK_COLORS） */
+private val STICK_COLORS = intArrayOf(
+    0xFF7DFF9B.toInt(), 0xFFFF6BD6.toInt(), 0xFF6BE4FF.toInt(), 0xFFFFF36B.toInt(),
+    0xFFFF9B4A.toInt(), 0xFFB18CFF.toInt(), 0xFFFF5C6C.toInt(),
+)
+
+private fun withAlpha(argb: Int, a: Double): Int {
+    val alpha = ((argb ushr 24) and 0xFF) * a
+    return (alpha.toInt().coerceIn(0, 255) shl 24) or (argb and 0x00FFFFFF)
+}
 
 /** 精灵包络窗：全部部件、全部帧、含镜像的最大范围（格）。位图按此开窗，不再 0..16 硬裁。 */
 private class RigWindow(val x0: Int, val y0: Int, val w: Int, val h: Int)
@@ -292,6 +375,7 @@ private class BigFrame(
         val x: Double, val y: Double,       // 位图原点的框内格坐标（含位移）
         val sc: Float, val r: Float, val a: Float,
         val cx: Double, val cy: Double,     // 变换中心（位图内，格）
+        val part: String = "",              // 部件名（ghost 判断道具层用）
     )
 
     companion object {
@@ -478,5 +562,5 @@ private fun makePart(
     // 变换中心：sym 用原版 transform-origin，其余（理论只有 sym 有 sc/r）用位图中心
     val cx = if (part == "sym") symPivot.first else win.w / 2.0
     val cy = if (part == "sym") symPivot.second else win.h / 2.0
-    return z to BigFrame.Part(bmp, win.w, win.h, x, y, sc, r, a, cx, cy)
+    return z to BigFrame.Part(bmp, win.w, win.h, x, y, sc, r, a, cx, cy, part)
 }
