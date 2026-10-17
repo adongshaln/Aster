@@ -461,9 +461,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
             // 三只小 Clawd + 大 Clawd：原生 Compose（像素引擎 + Kotlin 状态机），
             // 与原版行为逐段对照（tools/clawd/host-template.html 同源）。
-            // 真实占位一条 56dp 活动带在输入框上沿，空白处触摸穿透聊天页。
+            // 爪带真实占位 56dp 钉在输入框上沿（底边 = 地面 = composer 顶边），
+            // 与原版 .clawd-pile{bottom:100%} 一致；空白处触摸穿透聊天页。
             ClawdHost(
-                modifier = Modifier.matchParentSize(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = composerHeight),
                 inputText = vm.chatInput,
                 inputFocused = composerFocused,
                 generating = vm.isChatLoading,

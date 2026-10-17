@@ -131,9 +131,12 @@ fun ClawdBigOverlay(
     // 整只的物理形变：x/fy 平移 + rot + squash + flex
     val (dx, dy) = visual.dx to visual.dy
 
-    // ===== 触摸层：48x48dp Box，命中才消费 =====
+    // 大爪原位 = 输入框右内缘（x=0 时左边贴右边）；x/fy 是相对这个位置的偏移（dy<0 往上升）。
+    // 渲染 = 对齐到带右缘再平移：原版按钮钉在 #send_form 内右侧，x 是 translateX 偏移。
+    // 触摸层：48x48dp Box，命中才消费
     Box(
         modifier
+            .align(Alignment.TopEnd)
             .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
             .size(w.dp, h.dp)
             .pointerInput(runtime) {

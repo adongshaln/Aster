@@ -2,6 +2,7 @@ package com.adong.adchat.ui.clawd
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -87,6 +88,17 @@ fun ClawdHost(
         }
     }
 
+    // band 宽度（dp）：seat cx 用 pile 本地坐标系，runtime.x 用右侧偏移坐标系，桥接用
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(50)
+            if (pile.width > 0) {
+                // 大爪左边在 pile 坐标系 = bandW - RIG_W + x（x 是相对右缘的偏移）
+                runtime.bandLeftOffset = pile.width.toDouble() - 48.0
+            }
+        }
+    }
+
     // 输入联动
     LaunchedEffect(inputText) { runtime.onInputText(inputText) }
     LaunchedEffect(inputFocused) { runtime.onInputFocus(inputFocused) }
@@ -102,14 +114,14 @@ fun ClawdHost(
         }
     }
 
-    Box(modifier) {
-        // 小爪带：真实占位 56dp，底边 = 地面
+    Box(modifier.height(ClawdPileBandHeight)) {
+        // 小爪带：底边 = 地面（正好压在输入框上沿，原版 .clawd-pile{bottom:100%}）
         ClawdPileOverlay(
             pile = pile,
             night = night,
             modifier = Modifier.fillMaxSize(),
         )
-        // 大爪：叠加在同画布，自身位置由 runtime.x/fy 驱动
+        // 大爪：叠加在同画布，自身位置由 runtime.x/fy 驱动；默认钉在右侧内边
         ClawdBigOverlay(
             runtime = runtime,
             rig = data.rig,

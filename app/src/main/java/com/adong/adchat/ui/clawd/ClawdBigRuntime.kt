@@ -183,7 +183,7 @@ class ClawdBigRuntime(
             val t = now()
             val dt = ((t - last) / 16.6667f).coerceIn(0.5f, 3f)
             last = t
-            if (dragging || flying > 0 || held) stepPhysics(dt)
+            if (dragging || flying > 0 || held || ballisticSteps != null) stepPhysics(dt)
             delay(FRAME_MS)
         }
     }
@@ -784,7 +784,9 @@ class ClawdBigRuntime(
         val seats = { pile.trackSeats() }
         val x0 = x
         fun centerAt(xv: Double) = x0 + (xv - x0) + 24.0
-        fun seatUnder(xv: Double) = seats().filter { abs(centerAt(xv) - it.cx) < maxOf(48.0, it.w) * .5 }.maxByOrNull { it.h }
+        // seats 的 cx 在 pile 坐标系（band 左缘原点），runtime.x 是大爪右缘偏移坐标系：
+        // 统一换算成大爪中心：seatsCx - bandRigOrigin（大爪左边 = bandW - RIG_W + x）
+        fun seatUnder(xv: Double) = seats().filter { abs((xv + bandLeftOffset) - it.cx) < maxOf(48.0, it.w) * .5 }.maxByOrNull { it.h }
         ballisticSteps = Ballistic(
             my = my, P = P, bx = bx, by = by, bounces = bounces, drop = drop,
             centerAt = ::centerAt, seatUnder = ::seatUnder, x0 = x0,
@@ -796,10 +798,13 @@ class ClawdBigRuntime(
         val drop: Boolean, val centerAt: (Double) -> Double,
         val seatUnder: (Double) -> SeatInfo?, val x0: Double,
     ) {
-        var last = 0L
+        var last = SystemClock.elapsedRealtime()
     }
 
     private var ballisticSteps: Ballistic? = null
+
+    /** band 左缘在 window 坐标里的 x（dp），seat cx 在 pile 本地坐标 → 统一到本侧坐标轴用。 */
+    var bandLeftOffset = 0.0
 
     data class SeatInfo(val cx: Double, val h: Double, val w: Double, val name: String)
 
@@ -883,27 +888,22 @@ class ClawdBigRuntime(
     }
 
     private fun a2Walls(): Bounds {
+        // x 轴 = 相对原位的偏移（0 = 输入框右内缘），与原版 a2Walls 的 offset 语义一致。
         val fallback = Bounds()
         val chat = chatRect ?: return fallback
         if (chat.width <= 0 || chat.height <= 0) return fallback
         val form = formRect ?: return fallback
-        if (form.width <= RIG_W + 2 * A2_FORM_INSET) {
-            return Bounds(
-                minx = x + (chat.left + A2_EDGE - RIG_W * 0.5),
-                maxx = x + (chat.right - A2_EDGE - RIG_W * 0.5),
-                maxxHome = x + (chat.right - A2_EDGE - RIG_W * 0.5),
-                minxHome = x + (chat.left + A2_EDGE - RIG_W * 0.5),
-                miny = fy + (chat.top + A2_EDGE - RIG_H * 0.5),
-                maxy = 0.0,
-            )
-        }
-        val formL = maxOf(chat.left, form.left + A2_FORM_INSET)
-        val formR = minOf(chat.right, form.right - A2_FORM_INSET)
+        // 输入框右内缘在 window 里的位置：大爪原位左边 = form.right - RIG_W（钉右内缘）
+        val homeL = form.right - RIG_W
+        val chatL = chat.left + A2_EDGE - homeL   // 屏幕左边界 → offset
+        val chatR = chat.right - A2_EDGE - homeL  // 屏幕右边界 → offset
+        val formL = maxOf(chat.left, form.left + A2_FORM_INSET) - homeL
+        val formR = minOf(chat.right, form.right - A2_FORM_INSET) - homeL
         return Bounds(
-            minx = x + (chat.left + A2_EDGE - RIG_W),
-            maxx = x + (chat.right - A2_EDGE - RIG_W),
+            minx = x + (chatL - 0.0),
+            maxx = x + (chatR - RIG_W),
             maxxHome = x + (formR - RIG_W),
-            minxHome = x + (formL - RIG_W),
+            minxHome = x + (formL - 0.0),
             miny = fy + (chat.top + A2_EDGE - RIG_H),
             maxy = 0.0,
         )
@@ -1134,6 +1134,8 @@ class ClawdBigRuntime(
     // ── 边界矩形（调用方填，单位 dp）──
     var formRect: RectF? = null
     var chatRect: RectF? = null
+    /** 大爪原位（x=0）时的左边距（dp）：钉在输入框右内缘（原版 .clawd-composer-clawd 钉右侧）。 */
+    var homeLeftDp: Float = 0f
 
     data class RectF(val left: Float, val top: Float, val right: Float, val bottom: Float) {
         val width get() = right - left
