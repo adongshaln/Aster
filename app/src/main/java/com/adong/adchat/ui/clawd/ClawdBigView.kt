@@ -106,12 +106,15 @@ fun ClawdBigOverlay(
     val state = ClawdSampler.sampleState(rig, clip, clipT)
 
     val density = LocalDensity.current.density
-    val w = 16 * rig.px   // 48dp
-    val h = 14 * rig.px   // 42dp
+    // rig 画布是 16x14 美术格；每格 rig.px=3dp → 48x42dp（原版 rig 溢出绘制区）。
+    // Bitmap 用美术格分辨率，dst 用 17 格（含 shadow 的 y=16 溢出底行）。
+    val cellDp = rig.px
+    val w = 16 * cellDp   // 48dp
+    val h = 14 * cellDp   // 42dp
 
     // 按 z 排序部件 → 合成位图（一次成帧，金标准同款）
     val frameBitmap = remember(visual.clip, clipT, visual.mirror, night, version) {
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val bmp = Bitmap.createBitmap(17, 17, Bitmap.Config.ARGB_8888)
         val canvas = NativeCanvas(bmp)
         val paint = Paint()
         val parts = state.parts.entries.sortedBy { it.value.z }
@@ -121,7 +124,7 @@ fun ClawdBigOverlay(
             for (px in pixels) {
                 val cx = px.x + ps.dx.toInt()
                 val cy = px.y + ps.dy.toInt()
-                if (cx in 0 until w && cy in 0 until h) {
+                if (cx in 0..16 && cy in 0..16) {
                     paint.color = px.argb
                     canvas.drawPoint(cx.toFloat(), cy.toFloat(), paint)
                 }
@@ -172,11 +175,14 @@ fun ClawdBigOverlay(
                             scaleY = (visual.sy * flex.sy).toFloat(),
                             pivot = Offset.Zero,
                         ) {
-                            translate(-pivotX, -pivotY) {
+                            translate(-pivotX - 4 * density, -pivotY - 14 * density) {
                                 drawImage(
                                     frameBitmap,
                                     dstOffset = IntOffset.Zero,
-                                    dstSize = IntSize((w * density).roundToInt(), (h * density).roundToInt()),
+                                    dstSize = IntSize(
+                                        (17 * cellDp * density).roundToInt(),
+                                        (17 * cellDp * density).roundToInt(),
+                                    ),
                                     filterQuality = FilterQuality.None,
                                 )
                             }
