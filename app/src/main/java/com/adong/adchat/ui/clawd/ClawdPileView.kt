@@ -303,9 +303,12 @@ fun ClawdPileOverlay(
                                     val release = heldPos
                                     if (release != null) {
                                         // 松手 → 弹道飞行（落座/落地由 state 机在落地回调里判）
+                                        // 离地高度 = 带底 - 画布底边（地面时 = 0，向上为正）
+                                        val fromGround = (bandHeightDp - release.y - sheetHDp).toDouble()
                                         pile.throwAt(
                                             actor.name, release.x.toDouble(), release.y.toDouble(),
                                             throwVx.toDouble(), throwVy.toDouble(),
+                                            releaseFromGround = fromGround,
                                         ) { n, landX, target ->
                                             pile.drop(n, landX, target)
                                         }

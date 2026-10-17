@@ -436,7 +436,8 @@ class ClawdPileState(
         }
         // 大爪也是会动的障碍（原版 253-255 行）
         val bx = bigX()
-        if (bx != null && sign(bx - x) == w.dir.toDouble() && clashBig(nx, bx)) {
+        val bigDir = if (bx != null) sign(bx - x).toInt() else 0
+        if (bx != null && bigDir == w.dir && clashBig(nx, bx)) {
             bump(k, null, w)
             return
         }
@@ -635,16 +636,28 @@ class ClawdPileState(
         var x: Double, var y: Double,
         var vx: Double, var vy: Double,
         var bounces: Int = 0,
+        /** 松手时离地高度（正数）：放到大爪头上判定用（原版 drop 的 py） */
+        var releaseFromGround: Double = 0.0,
     )
 
     private val flights = HashMap<String, Flight>()
     fun flightOf(name: String): Flight? = flights[name]
     fun isFlying(name: String): Boolean = flights.containsKey(name)
 
-    /** 松手抛出。onLand(name, 落地x, 坐在谁头上或null)。 */
-    fun throwAt(name: String, x: Double, y: Double, vx: Double, vy: Double, onLand: (String, Int, String?) -> Unit) {
+    /**
+     * 松手抛出。onLand(name, 落地x, 坐在谁头上或null)。
+     * releaseFromGround = 松手时画布底边离地高度（正数，地面=0）——原版 drop 的 py 取负，
+     * 这里用同量纲的正值，供「放到大爪头上」判定（原版 py < -supportTop('big') + 6）。
+     */
+    fun throwAt(
+        name: String, x: Double, y: Double, vx: Double, vy: Double,
+        releaseFromGround: Double = 0.0,
+        onLand: (String, Int, String?) -> Unit,
+    ) {
         actors.getValue(name)   // 校验存在
-        flights[name] = Flight(x, y, vx, vy)
+        val f = Flight(x, y, vx, vy)
+        f.releaseFromGround = releaseFromGround
+        flights[name] = f
         flightCallbacks[name] = onLand
     }
 
@@ -673,10 +686,11 @@ class ClawdPileState(
                     val snap = snapshot()
                     val bl = bigX()
                     val bigFree = bl != null && actors.values.none { it.on.contains("big") }
-                    // 大爪头顶能放：站稳、头顶没人、横向居中、手指在它头顶上方（原版 397 行）
+                    // 大爪头顶能放：站稳、头顶没人、横向居中、松手时手指在它头顶上方（原版 397 行）
+                    // 原版 py 是 clientY 相对地面（向上为负）；这里 releaseFromGround 是同一高度的正值。
                     val onBigHead = bigFree &&
                         abs(bl!! + BIG_W / 2 - (f.x + bodyW / 2)) < BIG_W * .55 &&
-                        f.y < -supportTopBig("big") + 6
+                        -f.releaseFromGround < -supportTopBig("big") + 6
                     val target = if (onBigHead) "big" else snap
                         .filter { o -> o.name != name && o.mode != Mode.HELD }
                         .filter { o -> snap.none { c -> c.name != o.name && c.on.contains(o.name) } }

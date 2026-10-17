@@ -466,9 +466,14 @@ class ClawdBigRuntime(
      */
     fun onInputText(text: String) {
         if (inputText == text) return
+        // 原版 DOM：input 事件只会在输入框聚焦时发生——文字变了就等价于「正在输入」。
+        // Compose 的焦点信号与文字更新是两条独立 LaunchedEffect，会抢跑；
+        // 这里直接对齐原版语义，保证 compose/tilt/wow 不因焦点信号晚到而丢。
+        if (text.isNotEmpty() && !inputFocused) inputFocused = true
         inputText = text
-        // 插入检测：旧值是前中缀
-        if (composerHasSeenText && text.isNotEmpty() && composerBefore != text) {
+        // 插入检测：旧值是前中缀。首字符也要检测（composerBefore 初值为空串，天然成立），
+        // 不能要求 composerHasSeenText——否则开机后第一句永远不触发 ?/! 反应。
+        if (text.isNotEmpty() && composerBefore != text) {
             val addition = computeInserted(composerBefore, text, composerBeforeStart, composerBeforeEnd)
             if (addition != null) commitComposer(addition, null)
         }
@@ -619,7 +624,9 @@ class ClawdBigRuntime(
 
     private fun syncBState() {
         val reaction = if (inputFocused) currentComposerReaction() else null
-        if (!inputFocused) composerReactionReset()
+        // 未聚焦：原版 input 事件只在聚焦后发生；Compose 里两条 LaunchedEffect 同帧顺序不定，
+        // 刚建立的反应不能因为「焦点状态还没更新」被清掉——只在没有待生效反应时才 reset。
+        if (!inputFocused && composerReaction == null) composerReactionReset()
         val next = when {
             idleAsleep -> "sleep"
             ccDrowsy -> "drowsy"
@@ -1312,6 +1319,13 @@ class ClawdBigRuntime(
             syncBState()
         }
         if (cUntil != 0L && t >= cUntil) setClawdC(null)
+        // 兜底：press/grab 是 hold 剪辑（cUntil=0），正常会被 poke/drag 状态覆盖；
+        // 若因手势取消等异常路径残留，C 轨会永久压制 B 轨（打字反馈全失效）。
+        // 没按住、没拖动、没在飞、剪辑已播完 → 清掉。
+        if (cUntil == 0L && trackC != null && !held && !dragging && ballisticSteps == null) {
+            val c = clipId?.let { rig.clips[it] }
+            if (c != null && c.hold && t - clipStartMs >= c.dur) setClawdC(null)
+        }
         if (irr > 0 && t - lastDec > 1e3 && !a2Locked()) {
             lastDec = t
             irr = maxOf(0, irr - 1)
@@ -1361,6 +1375,19 @@ class ClawdBigRuntime(
 
     /** 大爪是否正在走路（原版 bigState().walking，pile 用它判断骑头上的要不要等）。 */
     fun isWalking(): Boolean = walkActive && trackB.startsWith("rig:walkLoop")
+
+    /**
+     * 大爪此刻是否「站在输入框上」——原版 bigState().grounded：
+     * 没被拎着、没在飞、脚踩在地面/座位上（fy 与 floor 重合）。坐在小爪头上也算 grounded。
+     */
+    fun isBigGrounded(): Boolean = !held && ballisticSteps == null && abs(fy - floor) < .5
+
+    /**
+     * 大爪在带（pile）坐标系里的左缘 dp —— 原版 bigLeft()：
+     * rig 视觉左缘 = 按钮左缘 - 4。按钮左缘 = 带右缘 - RIG_W + x，带右缘 = bandLeftOffset + 42。
+     * 之前把 runtime.x（偏移量）当左缘传给 pile，导致小爪把障碍当成在带最左边，直接穿过去。
+     */
+    fun bigLeftInBand(): Double = bandLeftOffset - 4.0 + x
 
     // ── 边界矩形（调用方填，单位 dp）──
     var formRect: RectF? = null

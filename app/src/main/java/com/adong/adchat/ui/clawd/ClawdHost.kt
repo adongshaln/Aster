@@ -78,8 +78,8 @@ fun ClawdHost(
         // 小爪左边距输入框左缘的偏移 = 带的位置；大爪左边 = runtime.x，相对输入框左缘
         // pile 的 left() 等价物：大爪左边在 pile 坐标系里 = runtime.x
         pile.setBigGrounded(
-            grounded = runtime.x == 0.0 && !generating,
-            leftDp = runtime.x,
+            grounded = runtime.isBigGrounded(),
+            leftDp = runtime.bigLeftInBand(),
             walking = runtime.isWalking(),
         )
     }
@@ -88,7 +88,7 @@ fun ClawdHost(
     LaunchedEffect(runtime) {
         while (true) {
             kotlinx.coroutines.delay(100)
-            pile.setBigGrounded(runtime.x >= 0.0, runtime.x, walking = runtime.isWalking())
+            pile.setBigGrounded(runtime.isBigGrounded(), runtime.bigLeftInBand(), walking = runtime.isWalking())
         }
     }
 
