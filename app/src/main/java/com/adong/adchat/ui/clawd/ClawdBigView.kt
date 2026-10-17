@@ -151,31 +151,27 @@ fun ClawdBigOverlay(
     // 渲染 = 对齐到带右缘再平移：原版按钮钉在 #send_form 内右侧，x 是 translateX 偏移。
     // 触摸层：48x48dp Box，命中才消费
     Box(Modifier.fillMaxSize()) {
-        // 外层静止容器收手势：内层 Box 随 .offset 移动，positionChange 会被自身位移污染。
-        // 命中测试 = 大爪当前屏幕矩形（42x34dp，钉在右内缘 + x/fy 偏移）
+        // 触摸层：与大爪同位置的小 Box（42x34dp），只命中它才收手势；
+        // 空白处直接穿透到聊天页。drag 用累计增量避免自身位移污染。
         var dragAccX = 0f
         var dragAccY = 0f
-        var bandW by remember { mutableStateOf(0) }
         Box(
             Modifier
-                .fillMaxSize()
-                .onSizeChanged { bandW = it.width }
-                .pointerInput(runtime, dx, dy) {
+                .align(Alignment.TopEnd)
+                .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
+                .size(42.dp, 34.dp)
+                .pointerInput(runtime) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
-                        // 命中：手指落在「右内缘 + dx」起 42dp x 34dp 里
-                        val leftPx = bandW - 42 * density + dx * density
-                        val topPx = dy * density
-                        val hit = down.position.x >= leftPx && down.position.x < leftPx + 42 * density &&
-                                down.position.y >= topPx && down.position.y < topPx + 34 * density
-                        if (!hit) return@awaitEachGesture
                         down.consume()
                         runtime.a2Down(down.position.x, down.position.y, down.id.value)
                         dragAccX = 0f; dragAccY = 0f
+                        var accX = 0f
+                        var accY = 0f
                         drag(down.id) { change ->
-                            dragAccX += change.positionChange().x
-                            dragAccY += change.positionChange().y
-                            runtime.a2Move(dragAccX, dragAccY, change.position.x, change.position.y, change.id.value)
+                            accX += change.positionChange().x
+                            accY += change.positionChange().y
+                            runtime.a2Move(accX, accY, change.position.x, change.position.y, change.id.value)
                             change.consume()
                         }
                         runtime.a2Up(down.id.value)
