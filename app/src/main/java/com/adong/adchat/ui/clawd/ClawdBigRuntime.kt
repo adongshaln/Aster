@@ -902,7 +902,7 @@ class ClawdBigRuntime(
         val formL = maxOf(chat.left, form.left + A2_FORM_INSET) - homeL
         val formR = minOf(chat.right, form.right - A2_FORM_INSET) - homeL
         // fy<0 往上升；天花板 = 聊天区上沿距地面的偏移
-        val ceiling = -(form.top - chat.top) - A2_EDGE
+        val ceiling = -((form.top - chat.top) + A2_EDGE).toDouble()
         // 原版边界是绝对 px（把 x 与屏幕坐标直接比较）；本侧 x 也是偏移轴，换算：
         // minx/maxx = 聊天区边缘的偏移值；minxHome/maxxHome = 输入框内自由区偏移值
         return Bounds(

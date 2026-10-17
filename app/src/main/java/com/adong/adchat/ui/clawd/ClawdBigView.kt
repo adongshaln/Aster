@@ -34,6 +34,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
@@ -148,9 +149,8 @@ fun ClawdBigOverlay(
                         var accX = 0f
                         var accY = 0f
                         drag(down.id) { change ->
-                            val d = change.positionChange()
-                            accX += d.x
-                            accY += d.y
+                            accX += change.positionChange().x
+                            accY += change.positionChange().y
                             runtime.a2Move(accX, accY, change.position.x, change.position.y, change.id.value)
                             change.consume()
                         }
