@@ -145,8 +145,13 @@ fun ClawdBigOverlay(
                         val down = awaitFirstDown()
                         down.consume()
                         runtime.a2Down(down.position.x, down.position.y, down.id.value)
+                        var accX = 0f
+                        var accY = 0f
                         drag(down.id) { change ->
-                            runtime.a2Move(change.position.x, change.position.y, change.id.value)
+                            val d = change.positionChange()
+                            accX += d.x
+                            accY += d.y
+                            runtime.a2Move(accX, accY, change.position.x, change.position.y, change.id.value)
                             change.consume()
                         }
                         runtime.a2Up(down.id.value)

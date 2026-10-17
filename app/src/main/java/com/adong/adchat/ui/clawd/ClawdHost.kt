@@ -3,6 +3,8 @@ package com.adong.adchat.ui.clawd
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -114,7 +116,8 @@ fun ClawdHost(
         }
     }
 
-    Box(modifier.height(ClawdPileBandHeight)) {
+    // 下降约 1mm 校准（原版 .clawd-pile{margin-bottom:-5px}）：带整体往下挪
+    Box(modifier.height(ClawdPileBandHeight).offset(y = 1.dp)) {
         // 小爪带：底边 = 地面（正好压在输入框上沿，原版 .clawd-pile{bottom:100%}）
         ClawdPileOverlay(
             pile = pile,

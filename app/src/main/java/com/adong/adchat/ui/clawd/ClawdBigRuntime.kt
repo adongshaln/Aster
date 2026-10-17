@@ -663,7 +663,7 @@ class ClawdBigRuntime(
         flying += 1
         vx0 = 0.0; vy0 = 0.0
         moved = false
-        sx0 = px.toDouble(); sy0 = py.toDouble()
+        sx0 = 0.0; sy0 = 0.0
         ox0 = x; oy0 = fy
         lx = px.toDouble(); ly = py.toDouble(); lt = now()
         if (!bndReady || now() - bndAt > A2_BOUNDS_TTL) {
@@ -681,10 +681,11 @@ class ClawdBigRuntime(
         }
     }
 
-    fun a2Move(px: Float, py: Float, id: Long = 0) {
+    /** 拖拽位移累计：手指相对按下点的总位移（px,py 是绝对位移由调用方累计）。 */
+    fun a2Move(dxAcc: Float, dyAcc: Float, px: Float, py: Float, id: Long = 0) {
         if (!held || id != pointerId) return
-        val dx = px - sx0.toFloat()
-        val dy = py - sy0.toFloat()
+        val dx = dxAcc
+        val dy = dyAcc
         var dragStarted = false
         if (!moved && abs(dx) + abs(dy) > A2_DRAG_THRESHOLD) {
             moved = true; dragging = true; dragStarted = true
@@ -894,17 +895,22 @@ class ClawdBigRuntime(
         if (chat.width <= 0 || chat.height <= 0) return fallback
         val form = formRect ?: return fallback
         // 输入框右内缘在 window 里的位置：大爪原位左边 = form.right - RIG_W（钉右内缘）
+        // 屏幕坐标 → 相对右内缘（homeL）的偏移；边界值本身已含位移量，与原版一致
         val homeL = form.right - RIG_W
-        val chatL = chat.left + A2_EDGE - homeL   // 屏幕左边界 → offset
-        val chatR = chat.right - A2_EDGE - homeL  // 屏幕右边界 → offset
+        val chatL = chat.left + A2_EDGE - homeL   // 聊天区左缘 → offset
+        val chatR = chat.right - A2_EDGE - homeL  // 聊天区右缘 → offset
         val formL = maxOf(chat.left, form.left + A2_FORM_INSET) - homeL
         val formR = minOf(chat.right, form.right - A2_FORM_INSET) - homeL
+        // fy<0 往上升；天花板 = 聊天区上沿距地面的偏移
+        val ceiling = -(form.top - chat.top) - A2_EDGE
+        // 原版边界是绝对 px（把 x 与屏幕坐标直接比较）；本侧 x 也是偏移轴，换算：
+        // minx/maxx = 聊天区边缘的偏移值；minxHome/maxxHome = 输入框内自由区偏移值
         return Bounds(
-            minx = x + (chatL - 0.0),
-            maxx = x + (chatR - RIG_W),
-            maxxHome = x + (formR - RIG_W),
-            minxHome = x + (formL - 0.0),
-            miny = fy + (chat.top + A2_EDGE - RIG_H),
+            minx = chatL,
+            maxx = chatR - RIG_W,
+            maxxHome = minOf(0.0, formR - RIG_W),
+            minxHome = formL,
+            miny = ceiling,
             maxy = 0.0,
         )
     }
