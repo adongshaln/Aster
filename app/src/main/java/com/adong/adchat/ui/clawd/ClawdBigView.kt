@@ -118,8 +118,11 @@ fun ClawdBigOverlay(
     LaunchedEffect(runtime, rig, night, palWithSticks) {
         var frameT = 0L
         while (true) {
-            withFrameNanos { frameNanos ->
-                val nowMs = frameNanos / 1_000_000
+            withFrameNanos {
+                // 帧循环时钟必须与 runtime 的 clipStartMs 同域（elapsedRealtime）：
+                // withFrameNanos 给的是 System.nanoTime 域（不含深睡），混用会让
+                // elapsed = nowMs - startMs 恒为负 → 每个剪辑永远冻结在 t=0 第一帧
+                val nowMs = android.os.SystemClock.elapsedRealtime()
                 if (nowMs == frameT) return@withFrameNanos
                 frameT = nowMs
                 val v = runtime.visualAt(nowMs)

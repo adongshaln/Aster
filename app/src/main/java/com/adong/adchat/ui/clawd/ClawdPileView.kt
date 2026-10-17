@@ -115,10 +115,11 @@ fun ClawdPileOverlay(
     }
 
     // 动画时钟：hop/squash/Z 飘/星星按 elapsed 采样（原版 Web Animations）
+    // 必须与 hopAt/squashAt 的 elapsedRealtime 同域——nanoTime 域相减恒负，动作全部冻结
     var animNow by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) {
         while (true) {
-            withFrameNanos { ns -> animNow = ns / 1_000_000 }
+            withFrameNanos { animNow = android.os.SystemClock.elapsedRealtime() }
         }
     }
 
