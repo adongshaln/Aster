@@ -23,7 +23,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -116,7 +116,7 @@ fun ClawdPileOverlay(
     LaunchedEffect(pile) {
         var last = 0L
         while (true) {
-            withFrameNanos { ns ->
+            withFrameNanos { ns: Long ->
                 val nowMs = ns / 1_000_000
                 val dt = if (last > 0) ((nowMs - last) / 16.6667f).coerceIn(0.5f, 3f) else 1f
                 last = nowMs

@@ -223,8 +223,8 @@ private fun DrawScope.drawParts(f: BigFrame, d: Float, cellDp: Int) {
             )
         } else {
             // 需要形变/透明：绕部件格中心（原版 transform-origin 该格中心）
-            val cx = ox + p.cx * cellDp * d
-            val cy = oy + p.cy * cellDp * d
+            val cx = (ox + p.cx * cellDp * d).toFloat()
+            val cy = (oy + p.cy * cellDp * d).toFloat()
             translate(cx, cy) {
                 rotate(p.r, pivot = Offset.Zero) {
                     scale(p.sc, p.sc, pivot = Offset.Zero) {
