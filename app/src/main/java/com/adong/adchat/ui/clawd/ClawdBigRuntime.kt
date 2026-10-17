@@ -548,14 +548,14 @@ class ClawdBigRuntime(
             lastTextLen = -1
             return
         }
-        val len = lastAssistantText.replace(Regex("\s+"), "").length
+        val len = lastAssistantText.replace(Regex("\\s+"), "").length
         if (nowMs - rateSampleAt >= 100) {
             rateSampleAt = nowMs
             if (lastTextLen < 0 || len < lastTextLen) lastTextLen = len
             else if (len > lastTextLen) {
                 repeat(minOf(200, len - lastTextLen)) { charTimes.addLast(nowMs) }
                 lastTextLen = len
-                lastCharAt = nowMs
+                lastCharAt = nowMs.toDouble()
             }
             while (charTimes.isNotEmpty() && nowMs - charTimes.first() > 1000) charTimes.removeFirst()
         }

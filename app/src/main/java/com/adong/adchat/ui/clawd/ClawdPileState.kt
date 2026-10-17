@@ -538,7 +538,7 @@ class ClawdPileState(
                 k.face = dir
                 changed()
                 later(k, 300) {
-                    if (k.mode == Mode.WALK && w != null) steps(k, w.target, w.onArrive)
+                    if (k.mode == Mode.WALK && w != null) steps(k, w.target, w.onArrive ?: {})
                 }
                 return@later
             }
