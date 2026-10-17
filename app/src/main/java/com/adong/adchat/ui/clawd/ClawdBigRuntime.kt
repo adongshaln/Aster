@@ -472,10 +472,9 @@ class ClawdBigRuntime(
      */
     fun onInputText(text: String) {
         if (inputText == text) return
-        // 原版 DOM：input 事件只会在输入框聚焦时发生——文字变了就等价于「正在输入」。
-        // Compose 的焦点信号与文字更新是两条独立 LaunchedEffect，会抢跑；
-        // 这里直接对齐原版语义，保证 compose/tilt/wow 不因焦点信号晚到而丢。
-        if (text.isNotEmpty() && !inputFocused) inputFocused = true
+        // 焦点只由 onInputFocus 维护（原版 activeElement）。这里不要「文字变了就置聚焦」——
+        // 那样 inputFocused 会永久为 true：B 轨锁死在 compose、maybePlayAmbient 永久 blocked，
+        // 大爪待机就完全不动了。?/! 反应已与焦点解耦，不需要这条。
         inputText = text
         // 插入检测：旧值是前中缀。首字符也要检测（composerBefore 初值为空串，天然成立），
         // 不能要求 composerHasSeenText——否则开机后第一句永远不触发 ?/! 反应。

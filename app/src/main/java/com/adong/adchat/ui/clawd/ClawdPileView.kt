@@ -245,7 +245,11 @@ fun ClawdPileOverlay(
                         }
                     }
                     // 走路腿：身体图是「站起来、没腿」的 raised 帧，四根小腿单独画（原版 legs()）
-                    if (walking) drawWalkLegs(actor, visualX, groundY - lift * density, density, data, animNow)
+                    // 画布顶 = 地面 - 画布高 - 抬升；腿的 top 是相对画布顶的 (TOP+13) 格。
+                    if (walking) {
+                        val canvasTop = groundY - (sheetHDp + lift) * density
+                        drawWalkLegs(actor, visualX, canvasTop, density, data, animNow)
+                    }
                 }
             }
          }
@@ -428,7 +432,7 @@ private fun lerp(a: Float, b: Float, k: Float): Float = a + (b - a) * k
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWalkLegs(
     actor: ClawdPileState.Actor,
     visualX: Float,
-    groundTop: Float,
+    canvasTop: Float,
     density: Float,
     data: PileData,
     nowMs: Long,
@@ -437,7 +441,9 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWalkLegs(
     val cycle = 2.0 * data.stepMs
     val px = data.px
     for ((i, legX) in data.legX.withIndex()) {
-        val phase = ((nowMs - actor.walkBase * 0L) % cycle.toLong()).toDouble() / cycle
+        // 相位用绝对时钟（原版 Web Animations 从开始走路那一刻起算；
+        // 绝对时钟的差异只是两对腿的起始相位，视觉上等价）
+        val phase = (nowMs % cycle.toLong()).toDouble() / cycle
         val p = ((phase + if (i % 2 == 1) .5 else 0.0) % 1.0)
         // 0 → .28 缩到 .4 并前移 .6 格；.28 → .5 回来；其余保持
         val (scaleY, shiftX) = when {
@@ -446,7 +452,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawWalkLegs(
             else -> 1f to 0f
         }
         val cx = (visualX + legX * px + shiftX) * density
-        val topY = groundTop + (data.top + 13) * px * density
+        // 原版 .clawd-pile-leg{top:(TOP+13)*PX} 相对画布顶
+        val topY = canvasTop + (data.top + 13) * px * density
         val w = px * density
         val h = 2 * px * density * scaleY
         drawRect(
