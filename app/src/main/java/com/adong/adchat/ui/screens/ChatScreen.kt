@@ -68,7 +68,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
-import com.adong.adchat.ui.clawd.ClawdPileWebView
+import com.adong.adchat.ui.clawd.ClawdHost
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -459,16 +459,17 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 )
                 }
             }
-            // 三只小 Clawd + 大 Clawd：全屏透明 WebView 盖在聊天内容之上，跑未经修改的原版 JS。
-            // 原版里它们也允许浮到整个页面上（position:absolute 覆盖层、pointer-events:none）
-            ClawdPileLayer(
+            // 三只小 Clawd + 大 Clawd：原生 Compose（像素引擎 + Kotlin 状态机），
+            // 与原版行为逐段对照（tools/clawd/host-template.html 同源）。
+            // 真实占位一条 56dp 活动带在输入框上沿，空白处触摸穿透聊天页。
+            ClawdHost(
                 modifier = Modifier.matchParentSize(),
-                formAnchor = formAnchor,
-                chatAnchor = chatAnchor,
                 inputText = vm.chatInput,
                 inputFocused = composerFocused,
                 generating = vm.isChatLoading,
                 lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
+                formAnchor = formAnchor,
+                chatAnchor = chatAnchor,
             )
         }
     }
@@ -512,32 +513,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
 }
 
-/** 输入框上的三只小 Clawd + 大 Clawd：全屏透明 WebView 跑未经修改的原版
- *  clawd-pile.js + clawd-rig.js + clawd-rhythm.js。
- *  formAnchor/chatAnchor = 输入框与聊天区在 Window 内的像素矩形（调用方量），
- *  JS 侧镜像为 #send_form/#sheld；输入文本、焦点、生成状态推给 JS 驱动动作。 */
-@Composable
-private fun ClawdPileLayer(
-    modifier: Modifier = Modifier,
-    formAnchor: androidx.compose.ui.geometry.Rect?,
-    chatAnchor: androidx.compose.ui.geometry.Rect?,
-    inputText: String,
-    inputFocused: Boolean,
-    generating: Boolean,
-    lastText: String,
-) {
-    val dark = com.adong.adchat.ui.theme.LocalThemeDark.current
-    ClawdPileWebView(
-        formAnchor = formAnchor,
-        chatAnchor = chatAnchor,
-        inputText = inputText,
-        inputFocused = inputFocused,
-        generating = generating,
-        lastText = lastText,
-        night = dark,
-        modifier = modifier,
-    )
-}
+/** 输入框上的 Clawd 层由 ui/clawd/ClawdHost.kt 接管：原生 Compose 宿主。 */
 
 @Composable
 private fun ChatHeader(
