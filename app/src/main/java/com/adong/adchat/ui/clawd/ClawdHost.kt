@@ -67,6 +67,13 @@ fun ClawdHost(
         )
     }
 
+    // 视口尺寸（dp）：band 所在窗口的宽高，最后防线用
+    LaunchedEffect(Unit) {
+        val metrics = context.resources.displayMetrics
+        runtime.viewportW = metrics.widthPixels / density.toDouble()
+        runtime.viewportH = metrics.heightPixels / density.toDouble()
+    }
+
     // 锚矩形：Window 像素 → 转 dp → 写 runtime（同步 formRect/chatRect）
     LaunchedEffect(formAnchor, chatAnchor, density) {
         runtime.formRect = formAnchor?.let {

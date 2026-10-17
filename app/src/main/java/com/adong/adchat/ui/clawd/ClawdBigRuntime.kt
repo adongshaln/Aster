@@ -124,10 +124,16 @@ class ClawdBigRuntime(
     private var bndAt = 0L
     private var tookPointer = false
 
+    /**
+     * 边界。注意默认值（原版 fallback 是 ±9e9 / -240）：无限边界 + clamp 意味着
+     * 「计算失败 = 大爪可以飞出屏幕」——这正是历史上左右飞出 + 上限半屏的来源
+     * （fallback 的 miny=-240 恰好是用户看到的「半屏」）。
+     * 本侧 fallback 改为基于 band 宽度的有限范围，保证任何失败路径下都留在屏幕内。
+     */
     private data class Bounds(
-        val minx: Double = -9e9, val maxx: Double = 9e9,
-        val maxxHome: Double = 9e9, val minxHome: Double = -9e9,
-        val miny: Double = -A2_FALLBACK_CEILING, val maxy: Double = 0.0,
+        val minx: Double = -BAND_FALLBACK_W, val maxx: Double = 0.0,
+        val maxxHome: Double = 0.0, val minxHome: Double = -BAND_FALLBACK_W,
+        val miny: Double = -VIEW_FALLBACK_H, val maxy: Double = 0.0,
     )
 
     // ═══ 作息（host 3496-3600）═══
@@ -997,6 +1003,7 @@ class ClawdBigRuntime(
         refreshBoundsIfStale()
         fy = (oy0 + dy).coerceIn(bnd.miny, bnd.maxy)
         x = a2ClampX(ox0 + dx)
+        clampToViewport()
         val t = now()
         val dt = maxOf(12L, t - lt)
         vx0 = vx0 * .45 + ((cx.toDouble() - lx) / dt * 16 * .55)
@@ -1121,6 +1128,7 @@ class ClawdBigRuntime(
             fy = bnd.miny
             bal.by = .45 * -bal.by
         }
+        clampToViewport()
         val seat = if (bal.by > 0) bal.seatUnder(x) else null
         val ground = seat?.h?.let { -it } ?: 0.0
         if (fy >= ground) {
@@ -1228,6 +1236,26 @@ class ClawdBigRuntime(
         val t = now()
         if (!bndReady || t - bndAt > A2_BOUNDS_TTL) {
             bnd = a2Walls(); bndAt = t; bndReady = true
+        }
+    }
+
+    /**
+     * 最后防线：无论 a2Walls 算出什么，x/fy 都不得离开视口。
+     * 按钮（RIG_W 宽）左缘 = homeL + x（homeL = formRect.right - RIG_W）。
+     * - 左界：左缘 ≥ 0          → x ≥ -homeL
+     * - 右界：右缘 ≤ viewportW  → x ≤ viewportW - homeL - RIG_W
+     * - 上界：顶 ≥ A2_EDGE      → fy ≥ EDGE - formRect.top
+     * formRect 未就绪时退用 bandLeftOffset（band 右缘 == 视口右缘）。
+     */
+    private fun clampToViewport() {
+        if (viewportW <= 0.0) return
+        val homeL = (formRect?.right ?: (bandLeftOffset + RIG_W)) - RIG_W
+        val xLo = -homeL
+        val xHi = viewportW - homeL - RIG_W
+        x = x.coerceIn(minOf(xLo, 0.0), maxOf(xHi, 0.0))
+        if (viewportH > 0.0) {
+            val fyCeil = -((formRect?.top ?: viewportH) - A2_EDGE)
+            fy = fy.coerceIn(minOf(fyCeil, 0.0), 0.0)
         }
     }
 
@@ -1434,6 +1462,10 @@ class ClawdBigRuntime(
      */
     fun bigLeftInBand(): Double = bandLeftOffset - 4.0 + x
 
+    // ── 视口尺寸（host 设置；最后防线用，不依赖任何布局计算）──
+    var viewportW: Double = 0.0
+    var viewportH: Double = 0.0
+
     // ── 边界矩形（调用方填，单位 dp）──
     var formRect: RectF? = null
         set(value) { field = value; invalidateBounds() }
@@ -1466,6 +1498,9 @@ class ClawdBigRuntime(
         private const val A2_EDGE = 6
         private const val A2_FORM_INSET = 8
         private const val A2_FALLBACK_CEILING = 240.0
+        /** fallback 边界的有限值：band 宽度上限 / 视口高度上限（都比真机屏大，但有限）。 */
+        private const val BAND_FALLBACK_W = 800.0
+        private const val VIEW_FALLBACK_H = 1200.0
         private const val A2_BOUNDS_TTL = 800L
         private const val CLAWD_RIG_CELL = 3
         private const val CLAWD_PET_HOLD_MS = 600L
