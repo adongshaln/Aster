@@ -56,7 +56,7 @@ class ClawdBigRuntime(
         val sx: Float,
         val sy: Float,
         /** 弹性层 flex */
-        val flex: ClawdModels.FlexValue,
+        val flex: FlexValue,
         /** 显示中（A2.seqOwned 期间强制占用 C）*/
         val mirror: Boolean,
         /** 生成徽标：剩余秒数（<0 表示不显示） */
@@ -130,7 +130,7 @@ class ClawdBigRuntime(
     private data class Reaction(val state: String, val until: Long, val serial: Int)
 
     // ═══ 空闲调度（host 2255-2354）═══
-    private var ambientNextAt = now() + 18e3
+    private var ambientNextAt = now() + 18000L
     private var lastAmbient = ""
     private val lastPlayed = mutableMapOf<String, Long>()
     private var walkRun = 0
@@ -148,7 +148,7 @@ class ClawdBigRuntime(
     private var physicsJob: Job? = null
     private var timerJob: Job? = null
 
-    private var currentFlex = ClawdModels.FlexValue.IDENTITY
+    private var currentFlex = FlexValue.IDENTITY
     private var timerText: String? = null
     private var lastVisual: Visual? = null
 
@@ -1067,7 +1067,7 @@ class ClawdBigRuntime(
         }
         val mirror = clip.endsWith("-m") || clip.startsWith("rig:walkLoop-m")
         val clipId = clip.removePrefix("rig:").removeSuffix("-m")
-        val flex = rig.clips[clipId]?.let { ClawdSampler.flexAt(it, clipElapsedMs(clipId, nowMs)) } ?: ClawdModels.FlexValue.IDENTITY
+        val flex = rig.clips[clipId]?.let { ClawdSampler.flexAt(it, clipElapsedMs(clipId, nowMs)) } ?: FlexValue.IDENTITY
         return Visual(
             clip = clipId,
             dx = x.roundToInt(),
@@ -1103,7 +1103,7 @@ class ClawdBigRuntime(
         }
     }
 
-    private fun clipElapsedMs(clipId: String, nowMs: Long): Int {
+    fun clipElapsedMs(clipId: String, nowMs: Long): Int {
         val c = rig.clips[clipId] ?: return 0
         val since = if (trackA != null && clipId == (A_MAP[trackA] ?: "")) nowMs - aStartedAt
             else nowMs - (if (trackC != null) cUntil - (rig.clips[clipId]?.dur ?: 0) else bUntil - (rig.clips[clipId]?.dur ?: 0))
