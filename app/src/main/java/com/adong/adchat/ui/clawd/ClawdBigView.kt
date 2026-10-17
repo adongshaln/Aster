@@ -101,9 +101,20 @@ fun ClawdBigOverlay(
     }
 
     val visual = sampledVisual ?: return
-    val clip = rig.clips[visual.clip] ?: rig.clips["idle"] ?: return
-    val clipT = runtime.clipElapsedMs(visual.clip, android.os.SystemClock.elapsedRealtime())
-    val state = ClawdSampler.sampleState(rig, clip, clipT)
+    val clip = rig.clips[visual.clip]
+    val clipT = if (clip != null) runtime.clipElapsedMs(visual.clip, android.os.SystemClock.elapsedRealtime()) else 0
+    // clip == null = 原版静止姿势（restF）：B 轨 'idle' 无动作，显示默认站立
+    val state = if (clip != null) ClawdSampler.sampleState(rig, clip, clipT) else {
+        val parts = rig.parts.associateWith { part ->
+            ClawdSampler.PartState(
+                dx = 0.0, dy = 0.0,
+                f = rig.restF[part],
+                z = rig.restZ.getValue(part),
+                sc = 1.0, r = 0.0, a = 1.0,
+            )
+        }
+        ClawdSampler.RigState(parts, 0.0, 0.0)
+    }
 
     val density = LocalDensity.current.density
     // rig 画布是 16x14 美术格；每格 rig.px=3dp → 48x42dp（原版 rig 溢出绘制区）。
@@ -140,27 +151,42 @@ fun ClawdBigOverlay(
     // 渲染 = 对齐到带右缘再平移：原版按钮钉在 #send_form 内右侧，x 是 translateX 偏移。
     // 触摸层：48x48dp Box，命中才消费
     Box(Modifier.fillMaxSize()) {
+        // 外层静止容器收手势：内层 Box 随 .offset 移动，positionChange 会被自身位移污染。
+        // 命中测试 = 大爪当前屏幕矩形（42x34dp，钉在右内缘 + x/fy 偏移）
+        var dragAccX = 0f
+        var dragAccY = 0f
+        var bandW by remember { mutableStateOf(0) }
         Box(
             Modifier
-                .align(Alignment.TopEnd)
-                .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
-                .size(42.dp, 34.dp)
-                .pointerInput(runtime) {
+                .fillMaxSize()
+                .onSizeChanged { bandW = it.width }
+                .pointerInput(runtime, dx, dy) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
+                        // 命中：手指落在「右内缘 + dx」起 42dp x 34dp 里
+                        val leftPx = bandW - 42 * density + dx * density
+                        val topPx = dy * density
+                        val hit = down.position.x >= leftPx && down.position.x < leftPx + 42 * density &&
+                                down.position.y >= topPx && down.position.y < topPx + 34 * density
+                        if (!hit) return@awaitEachGesture
                         down.consume()
                         runtime.a2Down(down.position.x, down.position.y, down.id.value)
-                        var accX = 0f
-                        var accY = 0f
+                        dragAccX = 0f; dragAccY = 0f
                         drag(down.id) { change ->
-                            accX += change.positionChange().x
-                            accY += change.positionChange().y
-                            runtime.a2Move(accX, accY, change.position.x, change.position.y, change.id.value)
+                            dragAccX += change.positionChange().x
+                            dragAccY += change.positionChange().y
+                            runtime.a2Move(dragAccX, dragAccY, change.position.x, change.position.y, change.id.value)
                             change.consume()
                         }
                         runtime.a2Up(down.id.value)
                     }
                 }
+        )
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
+                .size(42.dp, 34.dp)
         ) {
             // flex 层：sx/sy/r/tx/ty（原版 CSS transform 合成，按「先缩后转再移」作用在整只上）
             val flex = visual.flex

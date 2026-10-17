@@ -1171,7 +1171,7 @@ class ClawdBigRuntime(
         private const val CLAWD_GEN_MAX_MS = 300_000L
         private const val GEN_TIMER_LINGER_MS = 4_000L
         private const val RUNTIME_TICK_MS = 200L
-        private const val FRAME_MS = 33L
+        private const val FRAME_MS = 17L
 
         private val A2_TIER = listOf("t1", "t2", "t3", "t4", "t5")
         private val A2_TMS = listOf(600, 700, 700, 1100, 0)
