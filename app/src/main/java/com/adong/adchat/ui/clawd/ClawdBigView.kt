@@ -51,7 +51,7 @@ import kotlin.math.roundToInt
  *
  * 这里每帧把「当前剪辑在 t 时刻」的 9 层状态采出来直接画：
  * - 时间轴挂在 runtime.visualAt 的 startMs（单调时钟）；intro 播一次 → loop 段循环；
- *   非循环播完停在末帧（hold）或回调 runtime.notifyClipEnded。
+ *   非循环播完停在末帧（hold）；剪辑自然结束的轨道收尾由 runtime tick 负责（animationend 等价物）。
  * - 镜像：除 sym 外每层以框中线翻转（rigFramePixels 已处理像素翻转），
  *   sym 只镜像位置不翻像素（「？」翻过来就不是问号），缩放/旋转/透明度方向随镜像取反。
  * - 物理层（A2 x/fy/rot/squash）与剪辑的 root/flex 分层 transform，顺序与原版一致：
@@ -110,16 +110,14 @@ fun ClawdBigOverlay(
                     s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs)
                     session = s
                 }
-                frame = computeFrame(rig, palArgb, bitmapCache, s, nowMs) { endedBase ->
-                    runtime.notifyClipEnded(endedBase)
-                }
+                frame = computeFrame(rig, palArgb, bitmapCache, s, nowMs)
             }
         }
     }
 
+    // 物理层平移/形变：订阅 version（runtime.onChanged 驱动），拖拽/弹道 60fps 更新都走这里
+    val phys = remember(version) { runtime.visualAt(android.os.SystemClock.elapsedRealtime()) }
     val f = frame
-    // 物理层平移/形变（帧循环里只更新了 frame；x/fy/rot/squash 直接读 runtime 快照）
-    val phys = runtime.visualAt(android.os.SystemClock.elapsedRealtime())
 
     Box(modifier) {
         // ── 触摸层：与大爪同位置的 42×34 小盒（原版按钮命中区），空白处穿透 ──
@@ -282,7 +280,6 @@ private fun computeFrame(
     cache: HashMap<PartKey, ImageBitmap>,
     session: ClipSession,
     nowMs: Long,
-    onEnded: (String) -> Unit,
 ): BigFrame {
     val clipId = session.clipId ?: return restFrame(rig, pal, cache, nowMs)
     val clip = rig.clips[clipId] ?: return restFrame(rig, pal, cache, nowMs)
@@ -295,7 +292,7 @@ private fun computeFrame(
         else intro + ((elapsed - intro) % maxOf(1L, clip.dur - intro.toLong())).toInt()
     } else {
         t = elapsed.coerceAtMost(clip.dur.toLong()).toInt()
-        if (elapsed >= clip.dur && !clip.hold && clip.next == null) onEnded(clip.id)
+        // hold 停在末帧（fill=forwards）；有 next 的由 runtime 的 syncClip 到点接力
     }
     val st = ClawdSampler.sampleState(rig, clip, t)
     val flex = ClawdSampler.flexAt(clip, t)

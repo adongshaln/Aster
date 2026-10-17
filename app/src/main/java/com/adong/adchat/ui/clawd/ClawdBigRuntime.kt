@@ -299,15 +299,6 @@ class ClawdBigRuntime(
         return over(c.extentR, c.extentL) < over(c.extentL, c.extentR)
     }
 
-    /** 渲染层在非循环剪辑播完时调（原版 animationend）：轨道现状自然决定下一剪辑。 */
-    fun notifyClipEnded(base: String) {
-        if (base != clipId) return
-        // hold 类（press/grab/peek）停在末帧由渲染层负责；这里只把「非 hold 播完」的
-        // 轨道状态重新同步一次（cUntil 到点时 track 已被 tick 清掉，syncClip 切走）。
-        syncClip()
-        onChanged?.invoke()
-    }
-
     // ═══════════════════ 帧同步（渲染层调）═══════════════════
 
     /** 渲染层每帧调：当前视觉快照。剪辑的采样相位由渲染层拿 startMs 自推。 */
@@ -1184,6 +1175,16 @@ class ClawdBigRuntime(
             syncBState()
         }
         if (cUntil != 0L && t >= cUntil) setClawdC(null)
+        // 剪辑自然结束（原版 CSS animationend → syncClawdRig 换剪辑）：非循环、无 next、
+        // 轨道还停在它身上时，播完即把当前轨道的剪辑时钟重置（等价原版「重新设置 data-clawd-clip」）。
+        clipId?.let { id ->
+            val c = rig.clips[id]
+            if (c != null && !c.loop && !c.hold && c.next == null && t - clipStartMs >= c.dur) {
+                clipStartMs = t
+                clipSeq += 1
+                onChanged?.invoke()
+            }
+        }
         if (irr > 0 && t - lastDec > 1e3 && !a2Locked()) {
             lastDec = t
             irr = maxOf(0, irr - 1)
