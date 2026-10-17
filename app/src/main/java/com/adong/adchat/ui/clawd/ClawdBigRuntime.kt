@@ -8,7 +8,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import com.adong.adchat.ui.clawd.ClawdSampler.FlexValue
 import androidx.compose.runtime.setValue
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -57,7 +56,7 @@ class ClawdBigRuntime(
         val sx: Float,
         val sy: Float,
         /** 弹性层 flex */
-        val flex: FlexValue,
+        val flex: ClawdModels.FlexValue,
         /** 显示中（A2.seqOwned 期间强制占用 C）*/
         val mirror: Boolean,
         /** 生成徽标：剩余秒数（<0 表示不显示） */
@@ -149,7 +148,7 @@ class ClawdBigRuntime(
     private var physicsJob: Job? = null
     private var timerJob: Job? = null
 
-    private var currentFlex = FlexValue.IDENTITY
+    private var currentFlex = ClawdModels.FlexValue.IDENTITY
     private var timerText: String? = null
     private var lastVisual: Visual? = null
 
@@ -201,7 +200,7 @@ class ClawdBigRuntime(
         val t = now()
         trackA = value
         aStartedAt = if (value != null) t else 0
-        val dur = if (value == "think" && duration == 0L) 16e3 else if (value == "stream" && duration == 0L) 20e3 else duration
+        val dur = if (value == "think" && duration == 0L) 16000L else if (value == "stream" && duration == 0L) 20000L else duration
         aUntil = if (value != null && dur > 0) t + dur else 0
         renderTracks()
         if (value == null && trackB == "idle") syncBState()
@@ -491,7 +490,7 @@ class ClawdBigRuntime(
     // ═══════════════════ 空闲调度 ═══════════════════
 
     private fun scheduleAmbient(t: Long, retry: Boolean = false) {
-        ambientNextAt = t + if (retry) 5e3 else 22e3 + random.nextLong(14e3)
+        ambientNextAt = t + if (retry) 5000L else 22000L + random.nextLong(14000L)
     }
 
     private fun maybePlayAmbient(nowMs: Long) {
@@ -505,7 +504,7 @@ class ClawdBigRuntime(
         if (pile.riderCount() > 0) {
             if (random.nextDouble() < .35 && walk(nowMs) > 0) {
                 lastAmbient = "rig:walk"
-                scheduleAmbient(nowMs + 6e3)
+                scheduleAmbient(nowMs + 6000L)
                 return
             }
             val quiet = AMBIENT_QUIET_POSES.filter { it.first != lastAmbient }
@@ -598,8 +597,8 @@ class ClawdBigRuntime(
         else if (roomR < 0) { dir = -1; dist = minOf(x - lo, want / 2 - roomR) }
         // 避让小爪
         for (b in pile.blocks()) {
-            if (dir > 0 && b.l >= x + RIG_W - 1) dist = minOf(dist, b.l - (x + RIG_W) - 4)
-            if (dir < 0 && b.r <= x - 1) dist = minOf(dist, x - b.r - 4)
+            if (dir > 0 && b.left >= x + RIG_W - 1) dist = minOf(dist, b.left - (x + RIG_W) - 4)
+            if (dir < 0 && b.right <= x - 1) dist = minOf(dist, x - b.right - 4)
         }
         if (dist < 24) return 0
         val steps = maxOf(2, (dist / CLAWD_RIG_CELL).toInt())
@@ -839,8 +838,8 @@ class ClawdBigRuntime(
                 if (seat != null) x += seat.cx - bal.centerAt(x)
                 else {
                     val bl = bal.centerAt(x) - 24
-                    for (b in pile.blocks()) if (bl < b.r + 4 && b.l < bl + RIG_W + 4) {
-                        x += if (bl + 24 < (b.l + b.r) / 2) b.l - 4 - (bl + RIG_W) else b.r + 4 - bl
+                    for (b in pile.blocks()) if (bl < b.right + 4 && b.left < bl + RIG_W + 4) {
+                        x += if (bl + 24 < (b.left + b.right) / 2) b.left - 4 - (bl + RIG_W) else b.right + 4 - bl
                         break
                     }
                 }
@@ -982,6 +981,11 @@ class ClawdBigRuntime(
 
     private var lastPoke = ""
 
+    private fun pokeReaction() {
+        lastPokeAt = now()
+        if (neglected) setNeglected(false)
+    }
+
     private fun a2SulkSeq() {
         throws = 0
         if (pickVariant("sulk") == "rage") a2PlaySeq(listOf("rage" to (rig.clips["rage"]?.dur ?: 1200).toLong()), "生气")
@@ -1063,7 +1067,7 @@ class ClawdBigRuntime(
         }
         val mirror = clip.endsWith("-m") || clip.startsWith("rig:walkLoop-m")
         val clipId = clip.removePrefix("rig:").removeSuffix("-m")
-        val flex = rig.clips[clipId]?.let { ClawdSampler.flexAt(it, clipElapsedMs(clipId, nowMs)) } ?: FlexValue.IDENTITY
+        val flex = rig.clips[clipId]?.let { ClawdSampler.flexAt(it, clipElapsedMs(clipId, nowMs)) } ?: ClawdModels.FlexValue.IDENTITY
         return Visual(
             clip = clipId,
             dx = x.roundToInt(),

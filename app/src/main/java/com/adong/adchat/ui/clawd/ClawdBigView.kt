@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -156,8 +157,8 @@ fun ClawdBigOverlay(
             val pivotY = h * density
             translate(pivotX + flex.tx * density, pivotY + flex.ty * density) {
                 scale(
-                    scaleX = visual.sx * flex.sx.toFloat(),
-                    scaleY = visual.sy * flex.sy.toFloat(),
+                    scaleX = (visual.sx * flex.sx).toFloat(),
+                    scaleY = (visual.sy * flex.sy).toFloat(),
                     pivot = Offset.Zero,
                 ) {
                     // rot + flex.r 合并（原版 transform 串行 rotate(...) scale(...)）
