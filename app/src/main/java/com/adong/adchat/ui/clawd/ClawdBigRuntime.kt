@@ -1187,20 +1187,32 @@ class ClawdBigRuntime(
         val form = formRect ?: return fallback
         // 输入框右内缘在 window 里的位置：大爪原位左边 = form.right - RIG_W（钉右内缘）
         // 屏幕坐标 → 相对右内缘（homeL）的偏移；边界值本身已含位移量，与原版一致
+        // 原版 a2Walls（host-template 971-999）：
+        //   minx      = A2.x + (limitLeft + EDGE - pr.left)
+        //   maxx      = A2.x + (limitRight - EDGE - pr.right)
+        //   maxxHome  = min(maxx, A2.x + (decorLeft - pr.right), A2.x + (formRight - pr.right))
+        //   minxHome  = max(minx, A2.x + (formLeft - pr.left))
+        // pr.left = homeL + x，pr.right = homeL + x + RIG_W，代入后各项与 x 无关（都是绝对坐标），
+        // 再统一减去 homeL 得到本侧的偏移轴。decorLeft = limitRight（聊天区右缘）。
         val homeL = form.right - RIG_W
-        val chatL = chat.left + A2_EDGE - homeL   // 聊天区左缘 → offset
-        val chatR = chat.right - A2_EDGE - homeL  // 聊天区右缘 → offset
+        val chatL = chat.left + A2_EDGE - homeL
+        val chatR = chat.right - A2_EDGE - homeL
         val formL = maxOf(chat.left, form.left + A2_FORM_INSET) - homeL
         val formR = minOf(chat.right, form.right - A2_FORM_INSET) - homeL
+        // 注意：maxxHome 的「聊天区右缘对齐」项原版是 A2.x + (decorLeft - pr.right)，
+        // 即 chat.right - homeL - RIG_W —— 不减 EDGE（EDGE 只用于 minx/maxx 的硬边界）。
+        val decorRight = chat.right - homeL - RIG_W
+        val maxx = chatR - RIG_W
+        val minx = chatL
         // fy<0 往上升；天花板 = 聊天区上沿距地面的偏移
         val ceiling = -((form.top - chat.top) + A2_EDGE).toDouble()
-        // 原版边界是绝对 px（把 x 与屏幕坐标直接比较）；本侧 x 也是偏移轴，换算：
-        // minx/maxx = 聊天区边缘的偏移值；minxHome/maxxHome = 输入框内自由区偏移值
         return Bounds(
-            minx = chatL,
-            maxx = chatR - RIG_W,
-            maxxHome = minOf(0.0, formR - RIG_W),
-            minxHome = formL,
+            minx = minx,
+            maxx = maxx,
+            // 原版三项：maxx、聊天区右缘对齐、输入框右内缘对齐——取最小
+            maxxHome = minOf(maxx, decorRight, formR - RIG_W),
+            // 原版两项：minx、输入框左内缘对齐——取最大
+            minxHome = maxOf(minx, formL),
             miny = ceiling,
             maxy = 0.0,
         )
@@ -1329,12 +1341,15 @@ class ClawdBigRuntime(
             syncBState()
         }
         if (cUntil != 0L && t >= cUntil) setClawdC(null)
-        // 兜底：press/grab 是 hold 剪辑（cUntil=0），正常会被 poke/drag 状态覆盖；
-        // 若因手势取消等异常路径残留，C 轨会永久压制 B 轨（打字反馈全失效）。
-        // 没按住、没拖动、没在飞、剪辑已播完 → 清掉。
-        if (cUntil == 0L && trackC != null && !held && !dragging && ballisticSteps == null) {
+        // C 轨剪辑播完收尾（等价原版 CSS animationend）：
+        // 非循环、非 hold、无 next 的剪辑（land/poke/t/stomp/fly 等）播完即结束，
+        // 否则 trackC 会永久占用、B 轨的空闲动作全被压制（大爪待机彻底不动）。
+        // press/grab 是 hold（停末帧等手势）；drag/fly 是 loop（持续）。
+        if (trackC != null && !held && !dragging && ballisticSteps == null) {
             val c = clipId?.let { rig.clips[it] }
-            if (c != null && c.hold && t - clipStartMs >= c.dur) setClawdC(null)
+            if (c != null && !c.loop && !c.hold && c.next == null && t - clipStartMs >= c.dur) {
+                setClawdC(null)
+            }
         }
         if (irr > 0 && t - lastDec > 1e3 && !a2Locked()) {
             lastDec = t
@@ -1401,7 +1416,21 @@ class ClawdBigRuntime(
 
     // ── 边界矩形（调用方填，单位 dp）──
     var formRect: RectF? = null
+        set(value) { field = value; invalidateBounds() }
     var chatRect: RectF? = null
+        set(value) { field = value; invalidateBounds() }
+
+    /** 布局矩形变化：边界立刻作废并同步重算（原版 layoutChat 里 A2.bndReady = false + 下次使用时重算）。 */
+    private fun invalidateBounds() {
+        bndReady = false
+        bndAt = 0L
+        // 立刻重算一次（不用等 32ms），避免飞行中用到 fallback 的 ±9e9 边界
+        if (formRect != null && chatRect != null) {
+            bnd = a2Walls()
+            bndAt = now()
+            bndReady = true
+        }
+    }
     /** 大爪原位（x=0）时的左边距（dp）：钉在输入框右内缘（原版 .clawd-composer-clawd 钉右侧）。 */
     var homeLeftDp: Float = 0f
 
