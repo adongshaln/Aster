@@ -36,7 +36,9 @@ import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -155,23 +157,26 @@ fun ClawdBigOverlay(
         // 空白处直接穿透到聊天页。drag 用累计增量避免自身位移污染。
         var dragAccX = 0f
         var dragAccY = 0f
+        // 节点随拖拽移动，局部坐标被自身位移污染；记住节点 window 位置，
+        // 屏幕位移 = (nodeWindowPos + position) 之差，与原版 clientX/Y 一致。
+        var nodePosInWindow by remember { mutableStateOf(Offset.Zero) }
         Box(
             Modifier
                 .align(Alignment.TopEnd)
                 .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
                 .size(42.dp, 34.dp)
+                .onGloballyPositioned { nodePosInWindow = it.positionInWindow() }
                 .pointerInput(runtime) {
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         down.consume()
                         runtime.a2Down(down.position.x, down.position.y, down.id.value)
-                        dragAccX = 0f; dragAccY = 0f
-                        var accX = 0f
-                        var accY = 0f
+                        val sx = nodePosInWindow.x + down.position.x
+                        val sy = nodePosInWindow.y + down.position.y
                         drag(down.id) { change ->
-                            accX += change.positionChange().x
-                            accY += change.positionChange().y
-                            runtime.a2Move(accX, accY, change.position.x, change.position.y, change.id.value)
+                            val fx = nodePosInWindow.x + change.position.x
+                            val fy = nodePosInWindow.y + change.position.y
+                            runtime.a2Move(fx - sx, fy - sy, change.position.x, change.position.y, change.id.value)
                             change.consume()
                         }
                         runtime.a2Up(down.id.value)
