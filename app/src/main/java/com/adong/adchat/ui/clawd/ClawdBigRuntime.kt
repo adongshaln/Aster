@@ -994,6 +994,7 @@ class ClawdBigRuntime(
             }
         }
         if (!moved) return
+        refreshBoundsIfStale()
         fy = (oy0 + dy).coerceIn(bnd.miny, bnd.maxy)
         x = a2ClampX(ox0 + dx)
         val t = now()
@@ -1115,6 +1116,7 @@ class ClawdBigRuntime(
             x = clamped
             bal.bx = .45 * -bal.bx
         }
+        refreshBoundsIfStale()
         if (fy < bnd.miny) {
             fy = bnd.miny
             bal.by = .45 * -bal.by
@@ -1187,13 +1189,12 @@ class ClawdBigRuntime(
         val form = formRect ?: return fallback
         // 输入框右内缘在 window 里的位置：大爪原位左边 = form.right - RIG_W（钉右内缘）
         // 屏幕坐标 → 相对右内缘（homeL）的偏移；边界值本身已含位移量，与原版一致
-        // 原版 a2Walls（host-template 971-999）：
-        //   minx      = A2.x + (limitLeft + EDGE - pr.left)
-        //   maxx      = A2.x + (limitRight - EDGE - pr.right)
-        //   maxxHome  = min(maxx, A2.x + (decorLeft - pr.right), A2.x + (formRight - pr.right))
-        //   minxHome  = max(minx, A2.x + (formLeft - pr.left))
-        // pr.left = homeL + x，pr.right = homeL + x + RIG_W，代入后各项与 x 无关（都是绝对坐标），
-        // 再统一减去 homeL 得到本侧的偏移轴。decorLeft = limitRight（聊天区右缘）。
+        // 原版 a2Walls（host-template 971-999）把按钮钳在「聊天区 ± EDGE」内。
+        // 但原版 #send_form 比聊天区窄（有内边距），所以原位（右缘贴 form.right）仍在界内；
+        // Aster 的 composer 是 fillMaxWidth（form.right == chat.right），按原式算出的
+        // maxx 会比原位还小（x=0 越界），落地时会把大爪往左拽。
+        // 这里把右边界取「聊天区右缘 - EDGE」与「原位」的较大者，保证 x=0 永远合法；
+        // 左边界同理保证不越过聊天区左缘。
         val homeL = form.right - RIG_W
         val chatL = chat.left + A2_EDGE - homeL
         val chatR = chat.right - A2_EDGE - homeL
@@ -1202,23 +1203,42 @@ class ClawdBigRuntime(
         // 注意：maxxHome 的「聊天区右缘对齐」项原版是 A2.x + (decorLeft - pr.right)，
         // 即 chat.right - homeL - RIG_W —— 不减 EDGE（EDGE 只用于 minx/maxx 的硬边界）。
         val decorRight = chat.right - homeL - RIG_W
-        val maxx = chatR - RIG_W
-        val minx = chatL
-        // fy<0 往上升；天花板 = 聊天区上沿距地面的偏移
-        val ceiling = -((form.top - chat.top) + A2_EDGE).toDouble()
+        val maxx = maxOf(chatR - RIG_W, 0.0)
+        val minx = minOf(chatL, 0.0)
+        // fy<0 往上升；原版 miny = A2.fy + (limitTop + EDGE - pr.top)，limitTop = 0（视口顶部，
+        // 不是聊天区顶部）。pr.top = form.top + fy，代入后 = EDGE - form.top —— 与 fy 无关。
+        // 之前误用 chat.top，导致天花板只有半个屏幕高。
+        val ceiling = (A2_EDGE - form.top).toDouble()
+        // 防御：布局异常（矩形还没量到 / 宽度为 0）时不要给出反直觉的边界。
+        // 原版此时返回 fallback（±9e9 + 240 天花板）；这里同样退回，避免把大爪 clamp 到屏幕外。
+        if (chat.width <= 0 || form.width <= 0 || maxx <= minx) return fallback
         return Bounds(
             minx = minx,
             maxx = maxx,
-            // 原版三项：maxx、聊天区右缘对齐、输入框右内缘对齐——取最小
-            maxxHome = minOf(maxx, decorRight, formR - RIG_W),
-            // 原版两项：minx、输入框左内缘对齐——取最大
-            minxHome = maxOf(minx, formL),
+            // 原版三项取最小；但同样要保证原位（x=0）合法，否则落地会被拽离原位
+            maxxHome = maxOf(0.0, minOf(maxx, decorRight, formR - RIG_W)),
+            minxHome = minOf(0.0, maxOf(minx, formL)),
             miny = ceiling,
             maxy = 0.0,
         )
     }
 
-    private fun a2ClampX(v: Double) = v.coerceIn(bnd.minx, bnd.maxx)
+    /** 边界过期或未就绪就现场重算（原版各处 A2.bndReady/TTL 检查的等价物）。 */
+    private fun refreshBoundsIfStale() {
+        val t = now()
+        if (!bndReady || t - bndAt > A2_BOUNDS_TTL) {
+            bnd = a2Walls(); bndAt = t; bndReady = true
+        }
+    }
+
+    /**
+     * 边界钳制（原版 a2ClampX）。用之前确保边界是新鲜的：
+     * 过期或未就绪就现场重算一次——否则会拿 fallback 的 ±9e9 放行，大爪就飞出去了。
+     */
+    private fun a2ClampX(v: Double): Double {
+        refreshBoundsIfStale()
+        return v.coerceIn(bnd.minx, bnd.maxx)
+    }
 
     private fun scheduleBoundsWarm() {
         bndReady = false
