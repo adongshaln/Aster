@@ -405,7 +405,7 @@ private fun buildParts(
         }
         // 位图原点 = 窗口原点 + 合成位移（像素翻转已在 rigFramePixels 内完成）
         makePart(
-            rig, pal, cache, win, part, f,
+            rig, pal, cache, win, symPivot, part, f,
             win.x0 + dx + rootDx, win.y0 + ps.dy + st.rootDy,
             mirror = mirror && part != "sym",
             sc = ps.sc.toFloat(),
