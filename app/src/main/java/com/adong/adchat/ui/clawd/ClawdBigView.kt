@@ -140,7 +140,7 @@ fun ClawdBigOverlay(
             Modifier
                 .align(Alignment.TopEnd)
                 .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
-                .size(w.dp, h.dp)
+                .size(42.dp, 34.dp)
                 .pointerInput(runtime) {
                     awaitEachGesture {
                         val down = awaitFirstDown()

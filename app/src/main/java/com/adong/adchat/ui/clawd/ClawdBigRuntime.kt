@@ -92,6 +92,7 @@ class ClawdBigRuntime(
     private var lastThrow = 0L; private var lastDec = 0L
     private var lockUntil = 0L; private var lockName = ""; private var seqRun = 0; private var seqOwned = false
     private var flying = 0; private var dragging = false; private var moved = false
+    private var flyingActive = false
     private var held = false; private var pointerId = -1L
     private var wokeOnDown = false
     private var bndReady = false
@@ -183,7 +184,7 @@ class ClawdBigRuntime(
             val t = now()
             val dt = ((t - last) / 16.6667f).coerceIn(0.5f, 3f)
             last = t
-            if (dragging || flying > 0 || held || ballisticSteps != null) stepPhysics(dt)
+            if (dragging || held || ballisticSteps != null) stepPhysics(dt)
             delay(FRAME_MS)
         }
     }
@@ -792,6 +793,7 @@ class ClawdBigRuntime(
             my = my, P = P, bx = bx, by = by, bounces = bounces, drop = drop,
             centerAt = ::centerAt, seatUnder = ::seatUnder, x0 = x0,
         )
+        flyingActive = true
     }
 
     private class Ballistic(
@@ -866,6 +868,7 @@ class ClawdBigRuntime(
                     }
                 }
                 ballisticSteps = null
+                flyingActive = false
                 onChanged?.invoke()
                 return
             }
