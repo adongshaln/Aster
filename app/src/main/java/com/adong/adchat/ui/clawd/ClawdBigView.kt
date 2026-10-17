@@ -222,7 +222,7 @@ fun ClawdBigOverlay(
                                                 if (t >= 1f) continue
                                                 val dx = (g.dir * 36f * t).toDouble()
                                                 val dy = (-12f * t + 24f * t * t).toDouble()
-                                                translate((g.part.x + dx) * cellDp * d, (g.part.y + dy) * cellDp * d) {
+                                                translate(((g.part.x + dx) * cellDp * d).toFloat(), ((g.part.y + dy) * cellDp * d).toFloat()) {
                                                     rotate(g.dir * 110f * t, pivot = Offset(g.part.bw * cellDp * d / 2f, g.part.bh * cellDp * d / 2f)) {
                                                         drawImage(
                                                             g.part.bitmap,

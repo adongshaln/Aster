@@ -495,8 +495,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPileFx(
                 zPhase < .8 -> 1f
                 else -> ((1 - zPhase) / .2).toFloat().coerceIn(0f, 1f)
             } * .9f
-            val x0 = a.x + 12 * px
-            val y0 = bandHeightDp - sheetHDp - pile.liftOf(a.name) + (pile.data.top + 5) * px
+            val x0 = (a.x + 12 * px).toFloat()
+            val y0 = bandHeightDp - sheetHDp - pile.liftOf(a.name) + ((pile.data.top + 5) * px).toFloat()
             val dx = 6 * px * zPhase.toFloat()
             val dy = -14 * px * zPhase.toFloat()
             drawZMark(x0 + dx, y0 + dy, big, ink, alpha, density)
@@ -516,8 +516,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPileFx(
             val scale = 1 + .6 * t.toFloat()
             val alpha = (1 - t).toFloat()
             val cx = (a.x + (sx - 1) * px).toFloat()
-            val cy = (top + (pile.data.top + 7 + sy - 1) * px.toFloat()).toFloat()
-            drawSpark(cx, cy, scale, alpha, starY, starW, density)
+            val cy = top + ((pile.data.top + 7 + sy - 1) * px).toFloat()
+            drawSpark(cx, cy, scale, alpha, starY, starW, density.toFloat())
         }
     }
 }
