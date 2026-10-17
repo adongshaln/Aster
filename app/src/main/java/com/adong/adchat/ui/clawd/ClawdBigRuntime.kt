@@ -1175,16 +1175,6 @@ class ClawdBigRuntime(
             syncBState()
         }
         if (cUntil != 0L && t >= cUntil) setClawdC(null)
-        // 剪辑自然结束（原版 CSS animationend → syncClawdRig 换剪辑）：非循环、无 next、
-        // 轨道还停在它身上时，播完即把当前轨道的剪辑时钟重置（等价原版「重新设置 data-clawd-clip」）。
-        clipId?.let { id ->
-            val c = rig.clips[id]
-            if (c != null && !c.loop && !c.hold && c.next == null && t - clipStartMs >= c.dur) {
-                clipStartMs = t
-                clipSeq += 1
-                onChanged?.invoke()
-            }
-        }
         if (irr > 0 && t - lastDec > 1e3 && !a2Locked()) {
             lastDec = t
             irr = maxOf(0, irr - 1)

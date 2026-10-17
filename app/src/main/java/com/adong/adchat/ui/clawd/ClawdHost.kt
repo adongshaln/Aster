@@ -116,8 +116,9 @@ fun ClawdHost(
         }
     }
 
-    // 下降约 1mm 校准（原版 .clawd-pile{margin-bottom:-5px}）：带整体往下挪
-    Box(modifier.height(ClawdPileBandHeight).offset(y = 1.dp)) {
+    // 小爪整体下移：原版 .clawd-pile{bottom:100%; margin-bottom:-1px}，WebView 时期校准到净 -5px；
+    // 本版要求再降 ~1mm（6dp），带从 1dp 提到 7dp——爪脚压进输入框上缘，视觉上「站在框上」。
+    Box(modifier.height(ClawdPileBandHeight).offset(y = 7.dp)) {
         // 小爪带：底边 = 地面（正好压在输入框上沿，原版 .clawd-pile{bottom:100%}）
         ClawdPileOverlay(
             pile = pile,

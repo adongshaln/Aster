@@ -121,10 +121,12 @@ fun ClawdBigOverlay(
 
     Box(modifier) {
         // ── 触摸层：与大爪同位置的 42×34 小盒（原版按钮命中区），空白处穿透 ──
+        // 底边贴带底（= 小爪脚线 = 地面）：原版按钮钉 #send_form「inset:auto auto calc(100% - 5px) …」，
+        // 即按钮底边 ≈ 表单上沿，与小爪 bottom:100%+净 -5px 同一条线。
         var nodePosInWindow by remember { mutableStateOf(Offset.Zero) }
         Box(
             Modifier
-                .align(Alignment.TopEnd)
+                .align(Alignment.BottomEnd)
                 .offset { IntOffset((phys.dx * d).roundToInt(), (phys.dy * d).roundToInt()) }
                 .size(42.dp, 34.dp)
                 .onGloballyPositioned { nodePosInWindow = it.positionInWindow() }
@@ -147,10 +149,10 @@ fun ClawdBigOverlay(
                 }
         )
 
-        // ── 绘制层：按钮体（42×34）钉右缘，rig 画布溢出到左 -4 / 上 -14 ──
+        // ── 绘制层：按钮体（42×34）底边贴带底，rig 画布溢出到左 -4 / 上 -14 ──
         Box(
             Modifier
-                .align(Alignment.TopEnd)
+                .align(Alignment.BottomEnd)
                 .offset { IntOffset((phys.dx * d).roundToInt(), (phys.dy * d).roundToInt()) }
                 .size(42.dp, 34.dp)
         ) {
