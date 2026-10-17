@@ -257,7 +257,7 @@ private fun DrawScope.drawParts(f: BigFrame, d: Float, cellDp: Int) {
             // 绕部件自己的变换中心（sym 用原版 transform-origin 格）
             val px = drawX + (p.cx * cellDp * d).toFloat()
             val py = drawY + (p.cy * cellDp * d).toFloat()
-            translate(px, py) {
+            translate(px.toFloat(), py.toFloat()) {
                 rotate(p.r, pivot = Offset.Zero) {
                     scale(p.sc, p.sc, pivot = Offset.Zero) {
                         drawImage(
@@ -441,7 +441,7 @@ private fun makePart(
         b.asImageBitmap()
     }
     // 变换中心：sym 用原版 transform-origin，其余（理论只有 sym 有 sc/r）用位图中心
-    val cx = symPivot.first.takeIf { part == "sym" } ?: (win.w / 2.0)
-    val cy = symPivot.second.takeIf { part == "sym" } ?: (win.h / 2.0)
+    val cx = if (part == "sym") symPivot.first else win.w / 2.0
+    val cy = if (part == "sym") symPivot.second else win.h / 2.0
     return z to BigFrame.Part(bmp, win.w, win.h, x, y, sc, r, a, cx, cy)
 }
