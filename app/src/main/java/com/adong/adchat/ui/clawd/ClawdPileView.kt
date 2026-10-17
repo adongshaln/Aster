@@ -513,10 +513,10 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPileFx(
         for ((sx, sy, delay) in at) {
             val t = (el - delay) / 500.0
             if (t !in 0.0..1.0) continue
-            val scale = 1 + .6 * t.toFloat()
+            val scale = 1f + .6f * t.toFloat()
             val alpha = (1 - t).toFloat()
-            val cx = (a.x + (sx - 1) * px).toFloat()
-            val cy = top + ((pile.data.top + 7 + sy - 1) * px).toFloat()
+            val cx: Float = (a.x + (sx - 1) * px).toFloat()
+            val cy: Float = top + ((pile.data.top + 7 + sy - 1) * px).toFloat()
             drawSpark(cx, cy, scale, alpha, starY, starW, density.toFloat())
         }
     }
