@@ -243,7 +243,7 @@ class ClawdBigRuntime(
      * - 目标剪辑没变 → 不动（继续播，不重置时钟）；
      * - 变了 → 记 startMs/seq；从 tilt 下来先播 untilt；镜像按「接得上保留、否则靠边判断」。
      */
-    private fun syncClip() {
+    private fun syncClip(forceRestart: Boolean = false) {
         val targetRaw = clipForTrack()
         val curBase = clipId
         var target = targetRaw.removePrefix("rig:").removeSuffix("-m").ifEmpty { null }
@@ -257,7 +257,7 @@ class ClawdBigRuntime(
                 target = "untilt"
             }
         }
-        if (target == curBase) {
+        if (target == curBase && !forceRestart) {
             // 同剪辑续播：非循环且有 next 链的（grab→drag）到点自己接（原版 clip.next）
             val c = clipId?.let { rig.clips[it] }
             if (c != null && !c.loop && c.next != null && now() - clipStartMs >= c.dur) {
@@ -266,6 +266,12 @@ class ClawdBigRuntime(
                 clipSeq += 1
                 if (clipId == "drag") clipId = clipVariants.getValue("drag")
             }
+            return
+        }
+        if (target == curBase && forceRestart) {
+            // 重播（原版 replay：animation.currentTime = 0）
+            clipStartMs = now()
+            clipSeq += 1
             return
         }
         val explicitMirror = targetRaw.startsWith("rig:") && targetRaw.endsWith("-m")
@@ -623,10 +629,11 @@ class ClawdBigRuntime(
     // ═══════════════════ B 轨状态同步 ═══════════════════
 
     private fun syncBState() {
-        val reaction = if (inputFocused) currentComposerReaction() else null
-        // 未聚焦：原版 input 事件只在聚焦后发生；Compose 里两条 LaunchedEffect 同帧顺序不定，
-        // 刚建立的反应不能因为「焦点状态还没更新」被清掉——只在没有待生效反应时才 reset。
-        if (!inputFocused && composerReaction == null) composerReactionReset()
+        // 反应一旦建立就独立生效（原版 reaction 的 current() 只查 blocked/过期；
+        // focused 只决定「无反应时选 compose 还是 idle」）。Compose 的焦点信号会抖动，
+        // 不能让它决定反应是否可见，否则 ?/! 反馈会时有时无。
+        val reaction = currentComposerReaction()
+        if (!inputFocused && reaction == null) composerReactionReset()
         val next = when {
             idleAsleep -> "sleep"
             ccDrowsy -> "drowsy"
@@ -639,7 +646,7 @@ class ClawdBigRuntime(
             val replay = reaction.serial != lastReactionSerial && trackB == next
             lastReactionSerial = reaction.serial
             setClawdB(next, maxOf(1L, reaction.until - now()))
-            if (replay) syncClip()   // 同一反应连续触发：剪辑从头再播（原版 replay 重置 currentTime）
+            if (replay) syncClip(forceRestart = true)   // 同一反应连续触发：剪辑从头再播
             return
         }
         if (bUntil > now() && next in listOf("idle", "neglected", "drowsy", "sleep")) {
@@ -781,10 +788,10 @@ class ClawdBigRuntime(
                 scheduleAmbient(nowMs + 6000L)
                 return
             }
-            val quiet = AMBIENT_QUIET_POSES.filter { it.first != lastAmbient }
-            val (state, dur) = quiet[random.nextInt(quiet.size)]
+            val quiet = AMBIENT_QUIET_IDS.filter { it != lastAmbient }
+            val state = quiet[random.nextInt(quiet.size)]
             lastAmbient = state
-            setClawdB(state, dur)
+            setClawdB(state, clipDur(state))
             scheduleAmbient(nowMs)
             return
         }
@@ -809,12 +816,16 @@ class ClawdBigRuntime(
                 return
             }
         }
-        val choices = AMBIENT_POSES.filter { it.first != lastAmbient }
-        val (state, dur) = choices[random.nextInt(choices.size)]
+        val choices = AMBIENT_POSE_IDS.filter { it != lastAmbient }
+        val state = choices[random.nextInt(choices.size)]
         lastAmbient = state
-        setClawdB(state, dur)
+        setClawdB(state, clipDur(state))
         scheduleAmbient(nowMs)
     }
+
+    /** B 轨状态对应的剪辑时长（原版 CLAWD_RIG.clips[state].dur）。找不到回退 1200ms。 */
+    private fun clipDur(state: String): Long =
+        (B_MAP[state]?.let { rig.clips[it]?.dur } ?: rig.clips[state]?.dur ?: 1200).toLong()
 
     private fun mealTime(): Boolean {
         val cal = java.util.Calendar.getInstance()
@@ -1490,12 +1501,11 @@ class ClawdBigRuntime(
             "glowstick" to listOf("glowstick", "glowstickPump"),
             "glowstick2" to listOf("glowstick2", "glowstick2Pump", "glowstick2Alt"),
         )
-        private val AMBIENT_POSES = listOf(
-            "around" to 0L, "spin" to 0L, "lean" to 0L, "hide" to 0L, "tramp" to 0L,
-            "scratch" to 0L, "crouch" to 0L, "heart" to 0L, "point" to 0L, "facepalm" to 0L,
+        /** 空闲动作池：时长取自数据（原版 CLAWD_RIG.clips[state].dur），0 会让动作瞬间结束。 */
+        private val AMBIENT_POSE_IDS = listOf(
+            "around", "spin", "lean", "hide", "tramp", "scratch", "crouch", "heart", "point", "facepalm",
         )
-        private val AMBIENT_QUIET_POSES = listOf("around", "point", "scratch", "facepalm")
-            .map { it to 0L }
+        private val AMBIENT_QUIET_IDS = listOf("around", "point", "scratch", "facepalm")
 
     }
 }
