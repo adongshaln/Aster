@@ -100,7 +100,7 @@ fun ClawdBigOverlay(
 
     val visual = sampledVisual ?: return
     val clip = rig.clips[visual.clip] ?: rig.clips["idle"] ?: return
-    val clipT = runtime.clipElapsedMs(visual.clip, SystemClockTimeSource())
+    val clipT = runtime.clipElapsedMs(visual.clip, android.os.SystemClock.elapsedRealtime())
     val state = ClawdSampler.sampleState(rig, clip, clipT)
 
     val density = LocalDensity.current.density
@@ -134,69 +134,65 @@ fun ClawdBigOverlay(
     // 大爪原位 = 输入框右内缘（x=0 时左边贴右边）；x/fy 是相对这个位置的偏移（dy<0 往上升）。
     // 渲染 = 对齐到带右缘再平移：原版按钮钉在 #send_form 内右侧，x 是 translateX 偏移。
     // 触摸层：48x48dp Box，命中才消费
-    Box(
-        modifier
-            .align(Alignment.TopEnd)
-            .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
-            .size(w.dp, h.dp)
-            .pointerInput(runtime) {
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    down.consume()
-                    runtime.a2Down(down.position.x, down.position.y, down.id.value)
-                    drag(down.id) { change ->
-                        runtime.a2Move(change.position.x, change.position.y, change.id.value)
-                        change.consume()
-                    }
-                    runtime.a2Up(down.id.value)
-                }
-            }
-    ) {
-        // flex 层：sx/sy/r/tx/ty（原版 CSS transform 合成，按「先缩后转再移」作用在整只上）
-        val flex = visual.flex
-        Canvas(Modifier.fillMaxSize()) {
-            // transform-origin: 8*PX 100%（脚底中心），与原版 CSS 一致
-            val pivotX = (8f * rig.px) * density
-            val pivotY = h * density
-            translate(pivotX + flex.tx.toFloat() * density, pivotY + flex.ty.toFloat() * density) {
-                scale(
-                    scaleX = (visual.sx * flex.sx).toFloat(),
-                    scaleY = (visual.sy * flex.sy).toFloat(),
-                    pivot = Offset.Zero,
-                ) {
-                    // rot + flex.r 合并（原版 transform 串行 rotate(...) scale(...)）
-                    // 简化：先做 squash 再做旋转和总位移
-                    translate(-pivotX, -pivotY) {
-                        // 绘制 bitmap
-                        drawImage(
-                            frameBitmap,
-                            dstOffset = IntOffset.Zero,
-                            dstSize = IntSize((w * density).roundToInt(), (h * density).roundToInt()),
-                            filterQuality = FilterQuality.None,
-                        )
+    Box(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .align(Alignment.TopEnd)
+                .offset { IntOffset((dx * density).roundToInt(), (dy * density).roundToInt()) }
+                .size(w.dp, h.dp)
+                .pointerInput(runtime) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        down.consume()
+                        runtime.a2Down(down.position.x, down.position.y, down.id.value)
+                        drag(down.id) { change ->
+                            runtime.a2Move(change.position.x, change.position.y, change.id.value)
+                            change.consume()
+                        }
+                        runtime.a2Up(down.id.value)
                     }
                 }
+        ) {
+            // flex 层：sx/sy/r/tx/ty（原版 CSS transform 合成，按「先缩后转再移」作用在整只上）
+            val flex = visual.flex
+            Canvas(Modifier.fillMaxSize()) {
+                // transform-origin: 8*PX 100%（脚底中心），与原版 CSS 一致
+                val pivotX = (8f * rig.px) * density
+                val pivotY = h * density
+                translate(pivotX + flex.tx.toFloat() * density, pivotY + flex.ty.toFloat() * density) {
+                    scale(
+                        scaleX = (visual.sx * flex.sx).toFloat(),
+                        scaleY = (visual.sy * flex.sy).toFloat(),
+                        pivot = Offset.Zero,
+                    ) {
+                        translate(-pivotX, -pivotY) {
+                            drawImage(
+                                frameBitmap,
+                                dstOffset = IntOffset.Zero,
+                                dstSize = IntSize((w * density).roundToInt(), (h * density).roundToInt()),
+                                filterQuality = FilterQuality.None,
+                            )
+                        }
+                    }
+                }
             }
-        }
 
-        // 生成计时徽标（原版 #clawd_gen_timer：44dp 方贴纸右上）
-        visual.timerText?.let { text ->
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .size(24.dp)
-                    .offset(x = 6.dp, y = (-4).dp)
-                    .pointerInput(Unit) {},
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = text,
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                )
+            // 生成计时徽标（原版 #clawd_gen_timer：44dp 方贴纸右上）
+            visual.timerText?.let { text ->
+                Box(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .size(24.dp)
+                        .offset(x = 6.dp, y = (-4).dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = text,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
             }
         }
     }
 }
-
-private fun SystemClockTimeSource(): Long = android.os.SystemClock.elapsedRealtime()
