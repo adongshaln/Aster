@@ -530,6 +530,7 @@ class ClawdPileState(
         val k = actors.getValue(name)
         atHome = false
         clear(k)
+        flights.remove(name)
         k.mode = Mode.HELD
         lowerFrom(carriers(k).map { it }, name)
         k.on = mutableListOf()
@@ -570,6 +571,87 @@ class ClawdPileState(
                 later(k, rnd(1500, 3000).toLong()) { doze(k) }
             }
         }
+    }
+
+    /* ===== 弹道（松手后飞行，与大 Clawd 同公式、速度更快） =====
+       渲染层在拖拽松手时调 throwAt：状态机存飞行状态，渲染层按帧调 stepFlights 积分。
+       落地后由回调归位到 drop() 的座位/地面逻辑。 */
+
+    /** 弹道状态（渲染层按帧读；位置 = 画布左上角 dp，相对带；速度 = dp/16.7ms 帧）。 */
+    class Flight(
+        var x: Double, var y: Double,
+        var vx: Double, var vy: Double,
+        var bounces: Int = 0,
+    )
+
+    private val flights = HashMap<String, Flight>()
+    fun flightOf(name: String): Flight? = flights[name]
+    fun isFlying(name: String): Boolean = flights.containsKey(name)
+
+    /** 松手抛出。onLand(name, 落地x, 坐在谁头上或null)。 */
+    fun throwAt(name: String, x: Double, y: Double, vx: Double, vy: Double, onLand: (String, Int, String?) -> Unit) {
+        actors.getValue(name)   // 校验存在
+        flights[name] = Flight(x, y, vx, vy)
+        flightCallbacks[name] = onLand
+    }
+
+    private val flightCallbacks = HashMap<String, (String, Int, String?) -> Unit>()
+
+    /** 渲染层驱动的物理帧（原版在 rAF 里）。dt = 相对 16.7ms 的倍数。返回 true = 还有在飞的。 */
+    fun stepFlights(dt: Float, bandHeightDp: Float): Boolean {
+        if (flights.isEmpty()) return false
+        val P = flightPhys()
+        val it = flights.entries.iterator()
+        while (it.hasNext()) {
+            val (name, f) = it.next()
+            f.vy += P.g * dt
+            f.vx *= Math.pow(P.drag, dt.toDouble())
+            f.vy *= Math.pow(P.drag, dt.toDouble())
+            f.x += f.vx * dt
+            f.y += f.vy * dt
+            // 地面 = 带底（画布高 actorHeightPx 贴地）；y 向下为正
+            val groundY = (bandHeightDp - actorHeightPx).toDouble()
+            if (f.y >= groundY) {
+                f.y = groundY
+                if (!(abs(f.vy) > .7 && f.bounces < 6)) {
+                    f.vx = 0.0; f.vy = 0.0
+                    it.remove()
+                    val cb = flightCallbacks.remove(name)
+                    val snap = snapshot()
+                    val target = snap
+                        .filter { o -> o.name != name && o.mode != Mode.HELD }
+                        .filter { o -> snap.none { c -> c.name != o.name && c.on.contains(o.name) } }
+                        .filter { o -> abs(posX(actors.getValue(o.name)) - f.x) < bodyW * .6 }
+                        .minByOrNull { o -> abs(posX(actors.getValue(o.name)) - f.x) }
+                        ?.name
+                    cb?.invoke(name, f.x.toInt(), target)
+                    changed()
+                    continue
+                }
+                f.vy = -f.vy * P.rest
+                f.vx *= P.fric
+                f.bounces += 1
+            }
+            // 左右墙（带内）
+            val maxX = (width - actorWidthPx).toDouble().coerceAtLeast(0.0)
+            if (f.x < 0) { f.x = 0.0; f.vx = .45 * -f.vx }
+            if (f.x > maxX) { f.x = maxX; f.vx = .45 * -f.vx }
+        }
+        changed()
+        return flights.isNotEmpty()
+    }
+
+    /** 与大 Clawd 同一套弹道参数，速度更快（feel .85 vs 大爪 .64：g/rest/thr 更大、drag 更小）。 */
+    private data class FlightPhys(val g: Double, val rest: Double, val drag: Double, val fric: Double)
+
+    private fun flightPhys(): FlightPhys {
+        val t = (0.85 - .55) / .95
+        return FlightPhys(
+            g = .26 + t * .4,
+            rest = .5 - t * .42,
+            drag = .985 + t * .01,
+            fric = .86 - t * .2,
+        )
     }
 
     /** 下面那只被拿走：上面的平滑降下来补位（原版 lowerFrom 358–370 行） */

@@ -35,6 +35,32 @@ object ClawdPixels {
     }
 
     /**
+     * 同 rigFramePixels，但颜色用调用方给的 palette（夜间主题换色用）。
+     * 位图按 (part, frame, mirror) 缓存，palette 切换时换缓存即整体重生成。
+     */
+    fun rigFramePixels(rig: RigData, part: String, frame: String?, mirror: Boolean, pal: Map<String, Int>): List<ClawdPixel> {
+        if (frame == null) return emptyList()
+        val sheet = rig.sprites[rig.sheetOf(part)]
+            ?: throw IllegalStateException("未知精灵表: ${rig.sheetOf(part)}")
+        val fr = sheet[frame] ?: throw IllegalStateException("没有这一帧: $part.$frame")
+        val origin = rig.origin[part] ?: throw IllegalStateException("未知部件: $part")
+        val out = ArrayList<ClawdPixel>()
+        for ((y, row) in fr.rows.withIndex()) {
+            for ((x, ch) in row.withIndex()) {
+                if (ch == '.' || ch == ' ') continue
+                val argb = pal[ch.toString()]
+                    ?: throw IllegalStateException("调色板缺字符 '$ch' ($part.$frame)")
+                val cx = origin.first + fr.ox + x
+                val cy = origin.second + fr.oy + y
+                val fx = if (mirror) 15 - cx else cx
+                out.add(ClawdPixel(fx + rig.boxX, cy + rig.boxY, argb))
+            }
+        }
+        out.sortWith(compareBy({ it.y }, { it.x }))
+        return out
+    }
+
+    /**
      * 小 Clawd：一只在指定形态下的全部像素（22x18 格内）。
      * 同格重复时后写的颜色覆盖先写的（与原版 DOM 叠放顺序一致）。
      */

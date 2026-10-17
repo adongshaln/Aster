@@ -39,6 +39,13 @@ data class RigClip(
     val hold: Boolean,
     val after: String?,
     val from: String?,
+    /** 地面线以下剪掉（hide/peek/peekOut 缩进输入框用），原版 clipGround */
+    val clipGround: Boolean,
+    /** 允许中途没有影子（离地、缩进输入框），原版 noShadow */
+    val noShadow: Boolean,
+    /** 左右伸出 Clawd 框多少格（靠边时换镜像版的判断依据），原版 clipExtent */
+    val extentL: Int,
+    val extentR: Int,
     val flexEase: String,
     val smooth: Set<String>,
     val tr: Map<String, Map<String, List<RigKeyframe>>>,

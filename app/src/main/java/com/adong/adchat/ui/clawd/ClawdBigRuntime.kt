@@ -43,23 +43,28 @@ class ClawdBigRuntime(
     // ── 状态（渲染层订阅 onChanged 快照）──
     var onChanged: (() -> Unit)? = null
 
-    /** 三轨可见状态（渲染层按 A→C→B 优先级选 clip 渲染）。 */
+    /**
+     * 三轨可见状态。渲染层按它驱动「剪辑播放器」（原版 CSS animation 的等价物）。
+     * 时间轴全部挂在 elapsedRealtime 单调时钟上：startMs = 剪辑开始时刻。
+     */
     data class Visual(
-        /** 当前 clip id（若 C/A 为空、B 为 'idle' 则是 'idle'） */
-        val clip: String,
-        /** 整只像素偏移（CSS px → dp），与 A2.x/fy 同坐标系 */
-        val dx: Int,
-        val dy: Int,
-        /** rotate 角（°） */
-        val rot: Float,
-        /** squash 缩放（sx > 1 横拉，sy < 1 压扁） */
-        val sx: Float,
-        val sy: Float,
-        /** 弹性层 flex */
-        val flex: FlexValue,
-        /** 显示中（A2.seqOwned 期间强制占用 C）*/
+        /** 当前剪辑基 id（无 rig: 前缀、无 -m 后缀）；null = 待机（rest：眨眼+钳呼吸） */
+        val clipId: String?,
+        /** 镜像（rig:xxx-m / 靠边自动镜像） */
         val mirror: Boolean,
-        /** 生成徽标：剩余秒数（<0 表示不显示） */
+        /** 本次剪辑开始时刻（elapsedRealtime ms）；渲染层用它推 intro/loop/end 相位 */
+        val startMs: Long,
+        /** 剪辑会话序号：每次换剪辑 +1，渲染层据此中断上一段（掉道具 ghost 等） */
+        val seq: Int,
+        /** 整只平移（CSS px → dp，与 A2.x/fy 同坐标系，浮点保真；渲染层再乘 density） */
+        val dx: Double,
+        val dy: Double,
+        /** 物理层 rotate（°） */
+        val rot: Double,
+        /** 物理层 squash（sqx > 1 横拉，sqy < 1 压扁） */
+        val sqx: Double,
+        val sqy: Double,
+        /** 生成徽标：剩余秒数（null = 不显示） */
         val timerText: String?,
         /** 夜间墨色调色 */
         val night: Boolean,
@@ -81,6 +86,14 @@ class ClawdBigRuntime(
     private var pokeT1 = "poke1"  // 每轮 t1 选 poke1/poke1Shy（host 501 行）
 
     private val clipVariants = mutableMapOf("drag" to "drag", "stomp" to "stomp", "sulk" to "sulk")
+
+    // ═══ 剪辑播放会话（原版 syncClawdRig 的 dataset.clawdClip + CSS animation）═══
+    private var clipId: String? = null     // 当前播放的剪辑基 id；null = 待机 rest
+    private var clipMirror = false
+    private var clipStartMs = 0L
+    private var clipSeq = 0
+    private var untiltUntil = 0L           // host clawdRigUntiltUntil
+    private var lastReactionSerial = 0     // host reactionSerial（replay 检测用）
 
     // ═══ A2 物理（host 232-244）═══
     private var petTimer: Job? = null
@@ -149,9 +162,7 @@ class ClawdBigRuntime(
     private var physicsJob: Job? = null
     private var timerJob: Job? = null
 
-    private var currentFlex = FlexValue.IDENTITY
     private var timerText: String? = null
-    private var lastVisual: Visual? = null
 
     private fun now() = SystemClock.elapsedRealtime()
 
@@ -191,7 +202,128 @@ class ClawdBigRuntime(
 
     // ═══════════════════ 三轨（host setClawdA/B/C）═══════════════════
 
-    private fun renderTracks() = onChanged?.invoke()
+    /** 原版 renderClawdTracks：状态变了才重同步剪辑（ poke/drag 连续调用不重置播放）。 */
+    private fun renderTracks() {
+        syncClip()
+        onChanged?.invoke()
+    }
+
+    /**
+     * 从轨道状态算出该播的剪辑并切换（原版 syncClawdRig）：
+     * - 目标剪辑没变 → 不动（继续播，不重置时钟）；
+     * - 变了 → 记 startMs/seq；从 tilt 下来先播 untilt；镜像按「接得上保留、否则靠边判断」。
+     */
+    private fun syncClip() {
+        val targetRaw = clipForTrack()
+        val curBase = clipId
+        var target = targetRaw.removePrefix("rig:").removeSuffix("-m").ifEmpty { null }
+        // untilt 桥接（host 503-510）：刚从 tilt 走，先播 untilt 回正；untilt 没播完不抢
+        if (target != "tilt") {
+            val t = now()
+            if (curBase == "tilt") {
+                untiltUntil = t + (rig.clips["untilt"]?.dur ?: 400)
+                target = "untilt"
+            } else if (curBase == "untilt" && t < untiltUntil) {
+                target = "untilt"
+            }
+        }
+        if (target == curBase) {
+            // 同剪辑续播：非循环且有 next 链的（grab→drag）到点自己接（原版 clip.next）
+            val c = clipId?.let { rig.clips[it] }
+            if (c != null && !c.loop && c.next != null && now() - clipStartMs >= c.dur) {
+                clipId = c.next
+                clipStartMs = now()
+                clipSeq += 1
+                if (clipId == "drag") clipId = clipVariants.getValue("drag")
+            }
+            return
+        }
+        val explicitMirror = targetRaw.startsWith("rig:") && targetRaw.endsWith("-m")
+        val mirror = when {
+            target == null -> false
+            curBase != null && clipContinues(target, curBase) -> clipMirror
+            explicitMirror -> true
+            else -> shouldMirror(target)
+        }
+        clipId = target
+        clipMirror = mirror
+        clipStartMs = now()
+        clipSeq += 1
+    }
+
+    /** 当前轨道组合下该播的剪辑（原版 clawdRigClipFor；'' = 不播、进待机）。 */
+    private fun clipForTrack(): String {
+        val owner = if (trackC != null) 'C' else if (trackA != null) 'A' else 'B'
+        return when (owner) {
+            'C' -> {
+                val t = trackC!!
+                if (t == "t1") {
+                    if (clipId != "poke1" && clipId != "poke1Shy") {
+                        pokeT1 = if (random.nextDouble() < .34) "poke1Shy" else "poke1"
+                    }
+                    pokeT1
+                } else if (t in clipVariants) clipVariants.getValue(t)
+                else C_MAP[t] ?: t
+            }
+            'A' -> (if (floor != 0.0) A_HELD else A_MAP)[trackA] ?: ""
+            else -> {
+                val b = trackB
+                if (b.startsWith("rig:")) {
+                    val id = b.substring(4)
+                    if (rig.clips[id.removeSuffix("-m")] != null) id else ""
+                } else B_MAP[b] ?: ""
+            }
+        }
+    }
+
+    /** 前后剪辑是否「接得上」（保留镜像取向，不重新掷硬币）——原版 clawdRigContinues。 */
+    private fun clipContinues(base: String, curBase: String): Boolean {
+        val meta = rig.clips[base] ?: return false
+        val cur = rig.clips[curBase] ?: return false
+        return meta.from == curBase || meta.after == curBase || cur.next == base || cur.from == base ||
+                (meta.from != null && meta.from == cur.from)
+    }
+
+    /** 靠边自动镜像：往哪边伸出会撞墙就翻向另一边（原版 clawdRigShouldMirror，extent 来自数据）。 */
+    private fun shouldMirror(base: String): Boolean {
+        val c = rig.clips[base] ?: return false
+        if (c.extentL == 0 && c.extentR == 0) return false
+        val t = now()
+        if (!bndReady || t - bndAt > A2_BOUNDS_TTL) {
+            bnd = a2Walls(); bndAt = t; bndReady = true
+        }
+        val left = x - maxOf(bnd.minx, bnd.minxHome)
+        val right = bnd.maxxHome - x
+        fun over(l: Int, r: Int) =
+            maxOf(0.0, r * CLAWD_RIG_CELL - right) + maxOf(0.0, l * CLAWD_RIG_CELL - left)
+        return over(c.extentR, c.extentL) < over(c.extentL, c.extentR)
+    }
+
+    /** 渲染层在非循环剪辑播完时调（原版 animationend）：轨道现状自然决定下一剪辑。 */
+    fun notifyClipEnded(base: String) {
+        if (base != clipId) return
+        // hold 类（press/grab/peek）停在末帧由渲染层负责；这里只把「非 hold 播完」的
+        // 轨道状态重新同步一次（cUntil 到点时 track 已被 tick 清掉，syncClip 切走）。
+        syncClip()
+        onChanged?.invoke()
+    }
+
+    // ═══════════════════ 帧同步（渲染层调）═══════════════════
+
+    /** 渲染层每帧调：当前视觉快照。剪辑的采样相位由渲染层拿 startMs 自推。 */
+    fun visualAt(nowMs: Long): Visual = Visual(
+        clipId = clipId,
+        mirror = clipMirror,
+        startMs = clipStartMs,
+        seq = clipSeq,
+        dx = x,
+        dy = fy,
+        rot = rot0,
+        sqx = sqx,
+        sqy = sqy,
+        timerText = timerText,
+        night = night,
+    )
 
     private fun setClawdA(value: String?, duration: Long = 0) {
         if (value != null) composerReactionReset()
@@ -255,6 +387,8 @@ class ClawdBigRuntime(
         if (active && !lastGenActive) {
             beginGeneration()
             lastGenActive = true
+        } else if (active && hasText && trackA == "think") {
+            setClawdA("stream")   // 原版 syncGeneration：出了第一个字就从「想」进「写」
         } else if (!active && lastGenActive) {
             settleGeneration(outcome ?: "done")
             lastGenActive = false
@@ -287,12 +421,13 @@ class ClawdBigRuntime(
     }
 
     private suspend fun genTimerLoop() {
-        var lastSecond = -1
+        // 原版 tickGenTimer：200ms 一跳、0.1s 精度
+        var lastText = ""
         while (scope.isActive) {
-            val secs = ((now() - genStartedAt) / 1000).toInt()
-            if (secs != lastSecond) {
-                lastSecond = secs
-                timerText = "${secs}s"
+            val text = "%.1fs".format((now() - genStartedAt) / 1000.0)
+            if (text != lastText) {
+                lastText = text
+                timerText = text
                 onChanged?.invoke()
             }
             delay(200)
@@ -356,6 +491,7 @@ class ClawdBigRuntime(
 
     private fun syncBState() {
         val reaction = if (inputFocused) currentComposerReaction() else null
+        if (!inputFocused) composerReactionReset()
         val next = when {
             idleAsleep -> "sleep"
             ccDrowsy -> "drowsy"
@@ -365,8 +501,10 @@ class ClawdBigRuntime(
             else -> "idle"
         }
         if (reaction != null) {
-            composerReactionSerial = reaction.serial
+            val replay = reaction.serial != lastReactionSerial && trackB == next
+            lastReactionSerial = reaction.serial
             setClawdB(next, maxOf(1L, reaction.until - now()))
+            if (replay) syncClip()   // 同一反应连续触发：剪辑从头再播（原版 replay 重置 currentTime）
             return
         }
         if (bUntil > now() && next in listOf("idle", "neglected", "drowsy", "sleep")) {
@@ -575,6 +713,7 @@ class ClawdBigRuntime(
     private var walkFrom = 0.0
     private var walkTo = 0.0
     private var walkMs = 0
+    private var walkActive = false
 
     /** 大爪自主走路（ambient 池里的 'walk'）。返回总时长 ms；0 = 走不了。 */
     private fun walk(nowMs: Long): Long {
@@ -596,10 +735,12 @@ class ClawdBigRuntime(
         }
         if (roomL < 0) { dir = 1; dist = minOf(hi - x, want / 2 - roomL) }
         else if (roomR < 0) { dir = -1; dist = minOf(x - lo, want / 2 - roomR) }
-        // 避让小爪
+        // 避让小爪（rig 视觉左缘 = 按钮左缘 - 4，宽 48；块在带坐标系，先统一）
+        val bl = x - 4 + bandLeftOffset
+        val br = bl + 48
         for (b in pile.blocks()) {
-            if (dir > 0 && b.left >= x + RIG_W - 1) dist = minOf(dist, b.left - (x + RIG_W) - 4)
-            if (dir < 0 && b.right <= x - 1) dist = minOf(dist, x - b.right - 4)
+            if (dir > 0 && b.left >= br - 1) dist = minOf(dist, (b.left - 4 - br).toDouble())
+            if (dir < 0 && b.right <= bl + 1) dist = minOf(dist, (bl - b.right - 4).toDouble())
         }
         if (dist < 24) return 0
         val steps = maxOf(2, (dist / CLAWD_RIG_CELL).toInt())
@@ -609,6 +750,7 @@ class ClawdBigRuntime(
         walkTo = x + dir * steps * CLAWD_RIG_CELL
         walkMs = totalMs
         walkT0 = nowMs + intro
+        walkActive = true
         val state = if (dir > 0) "rig:walkLoop-m" else "rig:walkLoop"
         setClawdB(state, (intro + totalMs + 50).toLong())
         return (intro + totalMs + 50).toLong()
@@ -616,8 +758,9 @@ class ClawdBigRuntime(
 
     /** runtimeTick 里推进走路位移（原版在 requestClawdFrame 里） */
     private fun stepWalk(nowMs: Long) {
+        if (!walkActive) return
         if (trackB != "rig:walkLoop" && trackB != "rig:walkLoop-m") {
-            walkNudge = null
+            endWalk()
             return
         }
         if (trackA != null || trackC != null || held || fy != 0.0) {
@@ -627,10 +770,12 @@ class ClawdBigRuntime(
         pile.follow(x - walkFrom)
         val k = ((nowMs - walkT0).toDouble() / walkMs).coerceIn(0.0, 1.0)
         x = walkFrom + (walkTo - walkFrom) * k
+        onChanged?.invoke()
         if (k >= 1) endWalk()
     }
 
     private fun endWalk() {
+        walkActive = false
         walkNudge = null
         homeX = x
         pile.followEnd()
@@ -649,8 +794,8 @@ class ClawdBigRuntime(
 
     // ═══════════════════ 触摸（host a2Down/Move/Up/Ballistic）═══════════════════
 
-    /** 大爪被按下。consume 与否由调用方按 pointerInput 命中测试先判。 */
-    fun a2Down(px: Float, py: Float, id: Long = 0) {
+    /** 大爪被按下。sx/sy = 手指按下点的屏幕坐标（dp），由渲染层按 window 坐标给出（原版 clientX/Y）。 */
+    fun a2Down(sxDp: Float, syDp: Float, id: Long = 0) {
         if (held && id != pointerId) return
         pointerId = id
         tookPointer = false
@@ -664,13 +809,12 @@ class ClawdBigRuntime(
         flying += 1
         vx0 = 0.0; vy0 = 0.0
         moved = false
-        sx0 = 0.0; sy0 = 0.0
+        sx0 = sxDp.toDouble(); sy0 = syDp.toDouble()
         ox0 = x; oy0 = fy
-        lx = px.toDouble(); ly = py.toDouble(); lt = now()
+        lx = sxDp.toDouble(); ly = syDp.toDouble(); lt = now()
         if (!bndReady || now() - bndAt > A2_BOUNDS_TTL) {
             bnd = a2Walls(); bndAt = now(); bndReady = true
         }
-        snapshotProps()
         setClawdC(if (fy < floor - .5) "grab" else "press", 0)
         petTimer?.cancel()
         petting = false
@@ -682,14 +826,13 @@ class ClawdBigRuntime(
         }
     }
 
-    /** 拖拽位移累计：手指相对按下点的总位移（px,py 是绝对位移由调用方累计）。 */
-    fun a2Move(dxAcc: Float, dyAcc: Float, px: Float, py: Float, id: Long = 0) {
+    /** 拖拽：cx/cy = 手指当前屏幕坐标（dp，window 坐标系；原版 clientX/Y）。 */
+    fun a2Move(cx: Float, cy: Float, id: Long = 0) {
         if (!held || id != pointerId) return
-        val dx = dxAcc
-        val dy = dyAcc
-        var dragStarted = false
+        val dx = cx.toDouble() - sx0
+        val dy = cy.toDouble() - sy0
         if (!moved && abs(dx) + abs(dy) > A2_DRAG_THRESHOLD) {
-            moved = true; dragging = true; dragStarted = true
+            moved = true; dragging = true
             petTimer?.cancel(); petting = false
             pile.unloadBig("lower")
             if (floor != 0.0) {
@@ -710,9 +853,9 @@ class ClawdBigRuntime(
         x = a2ClampX(ox0 + dx)
         val t = now()
         val dt = maxOf(12L, t - lt)
-        vx0 = vx0 * .45 + ((px.toDouble() - lx) / dt * 16 * .55)
-        vy0 = vy0 * .45 + ((py.toDouble() - ly) / dt * 16 * .55)
-        lx = px.toDouble(); ly = py.toDouble(); lt = t
+        vx0 = vx0 * .45 + ((cx.toDouble() - lx) / dt * 16 * .55)
+        vy0 = vy0 * .45 + ((cy.toDouble() - ly) / dt * 16 * .55)
+        lx = cx.toDouble(); ly = cy.toDouble(); lt = t
         rot0 = (0.7 * -vx0 / feel).coerceIn(-14.0, 14.0)
         onChanged?.invoke()
     }
@@ -784,14 +927,13 @@ class ClawdBigRuntime(
             pile.bigSat(null)
         }
         val seats = { pile.trackSeats() }
-        val x0 = x
-        fun centerAt(xv: Double) = x0 + (xv - x0) + 24.0
-        // seats 的 cx 在 pile 坐标系（band 左缘原点），runtime.x 是大爪右缘偏移坐标系：
-        // 统一换算成大爪中心：seatsCx - bandRigOrigin（大爪左边 = bandW - RIG_W + x）
-        fun seatUnder(xv: Double) = seats().filter { abs((xv + bandLeftOffset) - it.cx) < maxOf(48.0, it.w) * .5 }.maxByOrNull { it.h }
+        // seats.cx 在带（pile）坐标系；大爪 rig 中心在带坐标系 = x + bandLeftOffset - 4 + 24。
+        // 换算回偏移轴比较：偏移轴中心 = x - 4 + 24（相对带右缘的按钮左缘偏移 x）。
+        fun centerAt(xv: Double) = xv + bandLeftOffset + 20.0
+        fun seatUnder(xv: Double) = seats().filter { abs(centerAt(xv) - it.cx) < maxOf(48.0, it.w) * .5 }.maxByOrNull { it.h }
         ballisticSteps = Ballistic(
             my = my, P = P, bx = bx, by = by, bounces = bounces, drop = drop,
-            centerAt = ::centerAt, seatUnder = ::seatUnder, x0 = x0,
+            centerAt = ::centerAt, seatUnder = ::seatUnder, x0 = x,
         )
         flyingActive = true
     }
@@ -845,9 +987,10 @@ class ClawdBigRuntime(
                 homeX = x
                 if (seat != null) x += seat.cx - bal.centerAt(x)
                 else {
-                    val bl = bal.centerAt(x) - 24
-                    for (b in pile.blocks()) if (bl < b.right + 4 && b.left < bl + RIG_W + 4) {
-                        x += if (bl + 24 < (b.left + b.right) / 2) b.left - 4 - (bl + RIG_W) else b.right + 4 - bl
+                    // 不落到小爪身上：挡路就推开（带坐标系统一比较，差值平移回偏移轴）
+                    val bl = x - 4 + bandLeftOffset
+                    for (b in pile.blocks()) if (bl < b.right + 4 && b.left < bl + 48 + 4) {
+                        x += if (bl + 24 < (b.left + b.right) / 2) b.left - 4 - (bl + 48) else b.right + 4 - bl
                         break
                     }
                 }
@@ -930,11 +1073,6 @@ class ClawdBigRuntime(
                 bnd = a2Walls(); bndAt = now(); bndReady = true
             }
         }
-    }
-
-    private fun snapshotProps() {
-        // 原版 clawdRigSnapshotProps 存下被干扰前的 transform，以便结束恢复；
-        // Compose 侧物理状态机自含，不需要快照 DOM。
     }
 
     private fun a2NoteInteraction() {
@@ -1064,82 +1202,6 @@ class ClawdBigRuntime(
 
     private var lastIdleTickAt = 0L
 
-    // ═══════════════════ 帧同步（渲染层调）═══════════════════
-
-    /** 渲染层每帧调：返回当前应渲染的视觉状态（按优先级 A→C→B 选 clip）。 */
-    fun visualAt(nowMs: Long): Visual {
-        val clip = when {
-            trackC != null -> resolveClip(trackC!!, 'C')
-            trackA != null -> resolveClip(trackA!!, 'A')
-            trackB != "idle" -> resolveClip(trackB, 'B')
-            else -> resolveClip("idle", 'B')
-        }
-        val mirror = clip.endsWith("-m") || clip.startsWith("rig:walkLoop-m")
-        val clipId = clip.removePrefix("rig:").removeSuffix("-m")
-        val flex = rig.clips[clipId]?.let { ClawdSampler.flexAt(it, clipElapsedMs(clipId, nowMs)) } ?: FlexValue.IDENTITY
-        return Visual(
-            clip = clipId,
-            dx = x.roundToInt(),
-            dy = fy.roundToInt(),
-            rot = rot0.toFloat(),
-            sx = sqx.toFloat(),
-            sy = sqy.toFloat(),
-            flex = flex,
-            mirror = mirror,
-            timerText = timerText,
-            night = night,
-        )
-    }
-
-    private fun resolveClip(track: String, owner: Char): String {
-        return when (owner) {
-            'C' -> {
-                if (track == "t1" && trackC != "press") {
-                    if (pokeT1 != "poke1" && trackC != "t1") pokeT1 = "poke1"
-                    else if (trackC == "t1") pokeT1 = if (random.nextDouble() < .34) "poke1Shy" else "poke1"
-                }
-                val table = mapOf(
-                    "press" to "press", "grab" to "grab", "drag" to clipVariants.getValue("drag"),
-                    "fly" to "fly", "land" to "land", "stomp" to clipVariants.getValue("stomp"),
-                    "pet" to "pet", "t2" to "poke2", "t3" to "poke3", "t4" to "poke4",
-                    "turn" to "sulk", "t5" to "sulk", "face" to "sulk", "rage" to "rage", "t1" to pokeT1,
-                )
-                table[track] ?: track
-            }
-            'A' -> (if (floor != 0.0) A_HELD else A_MAP)[track] ?: track
-            'B' -> track
-            else -> track
-        }
-    }
-
-    fun clipElapsedMs(clipId: String, nowMs: Long): Int {
-        val c = rig.clips[clipId] ?: return 0
-        val since = if (trackA != null && clipId == (A_MAP[trackA] ?: "")) nowMs - aStartedAt
-            else nowMs - (if (trackC != null) cUntil - (rig.clips[clipId]?.dur ?: 0) else bUntil - (rig.clips[clipId]?.dur ?: 0))
-        return (since % maxOf(1, c.dur)).toInt()
-    }
-
-    // ═══════════════════ 形态快照（渲染层调）═══════════════════
-
-    /** 当前 clip id（按优先级）。渲染层只负责把它采出来。 */
-    fun currentClipId(): String {
-        val track = trackC ?: trackA ?: trackB
-        return resolveClip(track, if (trackC != null) 'C' else if (trackA != null) 'A' else 'B')
-            .removePrefix("rig:").removeSuffix("-m")
-    }
-
-    /** 采样该 clip 在 t 时刻的状态，渲染层把它变成像素。 */
-    fun sampleClip(clipId: String, t: Int): ClawdSampler.RigState {
-        val clip = rig.clips[clipId] ?: return ClawdSampler.RigState(emptyMap(), 0.0, 0.0)
-        return ClawdSampler.sampleState(rig, clip, t)
-    }
-
-    /** 该 clip 是否镜像（rig:xxx-m） */
-    fun currentMirror(): Boolean {
-        val track = trackC ?: trackA ?: trackB
-        return track.endsWith("-m")
-    }
-
     // ── 边界矩形（调用方填，单位 dp）──
     var formRect: RectF? = null
     var chatRect: RectF? = null
@@ -1181,6 +1243,22 @@ class ClawdBigRuntime(
             "done" to "done", "stopped" to "stopped", "error" to "error")
         private val A_HELD = mapOf("think" to "writeHeld", "stream" to "writeHeld", "sit" to "writeHeld",
             "done" to "doneHeld", "stopped" to "stoppedHeld", "error" to "errorHeld")
+
+        /** host CLAWD_RIG_B：B 轨状态 → 剪辑基 id（idle 不在表内 = 不播剪辑） */
+        private val B_MAP = mapOf(
+            "compose" to "compose", "tilt" to "tilt", "wow" to "wow", "wake" to "wake",
+            "drowsy" to "drowsy", "sleep" to "sleep", "neglected" to "neglected", "around" to "around",
+            "spin" to "spin", "lean" to "lean", "hide" to "hide", "tramp" to "tramp",
+            "scratch" to "scratch", "crouch" to "crouch", "heart" to "heart", "point" to "point",
+            "facepalm" to "facepalm", "peek" to "peek",
+        )
+
+        /** host CLAWD_RIG_C：C 轨状态 → 剪辑基 id（t1 经 pokeT1、drag/stomp/sulk 经变体表） */
+        private val C_MAP = mapOf(
+            "press" to "press", "grab" to "grab", "fly" to "fly", "land" to "land",
+            "pet" to "pet", "t2" to "poke2", "t3" to "poke3", "t4" to "poke4",
+            "turn" to "sulk", "t5" to "sulk", "face" to "sulk", "rage" to "rage",
+        )
 
         private val VARIANTS = mapOf(
             "drag" to listOf("drag", "dragSwing"),

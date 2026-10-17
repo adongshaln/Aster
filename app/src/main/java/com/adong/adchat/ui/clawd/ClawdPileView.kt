@@ -99,6 +99,9 @@ fun ClawdPileOverlay(
     /** 拎着时画布左上角（dp，跟手）；手指位置 = heldPos + grab */
     var heldPos by remember { mutableStateOf<Offset?>(null) }
     var bandHeightDp by remember { mutableFloatStateOf(0f) }
+    /** 松手弹道速度（dp/16.7ms 帧，拖拽最后几帧的指数平均） */
+    var throwVx by remember { mutableFloatStateOf(0f) }
+    var throwVy by remember { mutableFloatStateOf(0f) }
 
     // 被拎着的两帧蹬腿
     var dangleFrame by remember { mutableIntStateOf(0) }
@@ -106,6 +109,19 @@ fun ClawdPileOverlay(
         while (true) {
             kotlinx.coroutines.delay(360)
             dangleFrame = 1 - dangleFrame
+        }
+    }
+
+    // 弹道帧：有在飞的小爪时驱动 stepFlights（原版 rAF 逐帧积分）
+    LaunchedEffect(pile) {
+        var last = 0L
+        while (true) {
+            withFrameNanos { ns ->
+                val nowMs = ns / 1_000_000
+                val dt = if (last > 0) ((nowMs - last) / 16.6667f).coerceIn(0.5f, 3f) else 1f
+                last = nowMs
+                pile.stepFlights(dt, bandHeightDp)
+            }
         }
     }
 
@@ -126,20 +142,27 @@ fun ClawdPileOverlay(
         // 原版 data-unlaid：量到宽度、摆好之前先藏着
         if (pile.isLaid) {
 
-        // ===== 绘制层：后画的在上（lift 高的盖住低的；拎着的最后画） =====
+        // ===== 绘制层：后画的在上（lift 高的盖住低的；拎着的/在飞的最后画） =====
         val breath = rememberInfiniteTransition(label = "clawdBreath")
-        for (actor in actors.sortedBy { if (it.name == heldName) Int.MAX_VALUE else pile.liftOf(it.name) }) {
+        for (actor in actors.sortedBy {
+            when {
+                it.name == heldName -> Int.MAX_VALUE
+                pile.isFlying(it.name) -> Int.MAX_VALUE - 1
+                else -> pile.liftOf(it.name)
+            }
+        }) {
          key(actor.name) {
             val isHeld = actor.name == heldName && heldPos != null
+            val flight = pile.flightOf(actor.name)
             val walking = actor.mode == ClawdPileState.Mode.WALK
             val poseNow = when {
-                isHeld -> if (dangleFrame == 0) PilePose.DANGLE_A else PilePose.DANGLE_B
+                isHeld || flight != null -> if (dangleFrame == 0) PilePose.DANGLE_A else PilePose.DANGLE_B
                 walking -> PilePose.RAISED
                 else -> actor.pose
             }
             val bmp = bitmapFor(actor.name, actor.eyes, poseNow, actor.face)
             val visualX = visualXOf(actor)
-            val sleeping = !isHeld && actor.mode == ClawdPileState.Mode.SLEEP && actor.pose == PilePose.CROUCH
+            val sleeping = !isHeld && flight == null && actor.mode == ClawdPileState.Mode.SLEEP && actor.pose == PilePose.CROUCH
 
             // 果冻呼吸（只对睡姿有形变）：三只各自独立时长+负相位错开
             // （原版 473–476 行：3.1s；shades 3.5s/-1.2s；wizard 2.8s/-0.6s）
@@ -172,6 +195,9 @@ fun ClawdPileOverlay(
                 if (isHeld) {
                     val pos = heldPos ?: return@Canvas
                     drawClawdAt(bmp, pos.x, pos.y, data)
+                } else if (flight != null) {
+                    // 弹道中：画布直接画在飞行位置（不画影子、不做果冻呼吸）
+                    drawClawdAt(bmp, flight.x.toFloat(), flight.y.toFloat(), data)
                 } else {
                     val lift = pile.liftOf(actor.name).toFloat()
 
@@ -233,6 +259,7 @@ fun ClawdPileOverlay(
                                 down.consume()
                                 var dragging = false
                                 var grab = Offset.Zero
+                                var prevUptime = down.uptimeMillis
                                 drag(down.id) { change ->
                                     if (!dragging && (change.position - down.position).getDistance() > 4f * density) {
                                         dragging = true
@@ -249,12 +276,22 @@ fun ClawdPileOverlay(
                                         pile.pickUp(actor.name)
                                         heldPos = origin0
                                         dragInfo = DragInfo(actor.name, origin0)
+                                        throwVx = 0f; throwVy = 0f
                                     }
                                     if (dragging) {
-                                        heldPos = Offset(
-                                            change.position.x / density - grab.x,
-                                            change.position.y / density - grab.y,
-                                        )
+                                        val nx = change.position.x / density - grab.x
+                                        val ny = change.position.y / density - grab.y
+                                        // 松手弹道速度：最后几帧的指数平均（dp/16.7ms 帧）
+                                        val prev = heldPos
+                                        if (prev != null) {
+                                            val dtMs = (change.uptimeMillis - prevUptime).coerceAtLeast(1)
+                                            val fvx = (nx - prev.x) / dtMs * 16.6667f
+                                            val fvy = (ny - prev.y) / dtMs * 16.6667f
+                                            throwVx = throwVx * .45f + fvx * .55f
+                                            throwVy = throwVy * .45f + fvy * .55f
+                                        }
+                                        prevUptime = change.uptimeMillis
+                                        heldPos = Offset(nx, ny)
                                         change.consume()
                                     }
                                 }
@@ -263,21 +300,14 @@ fun ClawdPileOverlay(
                                 } else {
                                     val release = heldPos
                                     if (release != null) {
-                                        // 原版 drop 收 el.left + BODY_W/2（内部减回去），即画布左缘；
-                                        // 叠头 y 用手指高度（py = clientY 相对地面）
+                                        // 松手 → 弹道飞行（落座/落地由 state 机在落地回调里判）
                                         val fingerY = release.y + grab.y
-                                        val snap = pile.snapshot()
-                                        val target = snap
-                                            .filter { it.name != actor.name && it.mode != ClawdPileState.Mode.HELD }
-                                            // 原版 390 行 !carriers(o).length：头顶已有人就不能再放
-                                            .filter { a -> snap.none { o -> o.name != a.name && o.on.contains(a.name) } }
-                                            .filter { a ->
-                                                abs(visualXOf(a) - release.x) < pile.actorWidthPx * 0.6f &&
-                                                    fingerY < bandHeightDp - sheetHDp / 2f - pile.liftOf(a.name)
-                                            }
-                                            .minByOrNull { a -> abs(visualXOf(a) - release.x) }
-                                            ?.name
-                                        pile.drop(actor.name, release.x.roundToInt(), target)
+                                        pile.throwAt(
+                                            actor.name, release.x.toDouble(), release.y.toDouble(),
+                                            throwVx.toDouble(), throwVy.toDouble(),
+                                        ) { n, landX, target ->
+                                            pile.drop(n, landX, target)
+                                        }
                                     }
                                     heldPos = null
                                     dragInfo = null

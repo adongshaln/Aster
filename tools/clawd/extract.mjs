@@ -95,6 +95,8 @@ for (const [id, c] of Object.entries(EX.CLIPS)) {
     id, name: c.name, dur: c.dur, loop: !!c.loop, intro: c.intro || 0,
     track: c.track, group: c.group, next: c.next || null, hold: !!c.hold,
     after: c.after || null, from: c.from || null,
+    clipGround: !!c.clipGround, noShadow: !!c.noShadow,
+    extent: EX.clipExtent(c),
     flexEase: c.flexEase,
     smooth: [...c.smooth],
     tr: c.tr,

@@ -120,6 +120,10 @@ object ClawdLoader {
         hold = c.getBoolean("hold"),
         after = if (c.isNull("after")) null else c.getString("after"),
         from = if (c.isNull("from")) null else c.getString("from"),
+        clipGround = c.optBoolean("clipGround", false),
+        noShadow = c.optBoolean("noShadow", false),
+        extentL = c.optJSONObject("extent")?.optInt("l", 0) ?: 0,
+        extentR = c.optJSONObject("extent")?.optInt("r", 0) ?: 0,
         flexEase = c.getString("flexEase"),
         smooth = c.getJSONArray("smooth").toStringList().toSet(),
         tr = c.getJSONObject("tr").let { parts ->
