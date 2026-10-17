@@ -68,6 +68,12 @@ class ClawdBigRuntime(
         val timerText: String?,
         /** 夜间墨色调色 */
         val night: Boolean,
+        /** 打字节奏：上半身下沉量（美术格，compose 时每上屏一个字沉 1 格） */
+        val rhythmDy: Double = 0.0,
+        /** 打字节奏：眼睛扫视横移（美术格，停手时偶尔往右扫一眼） */
+        val rhythmDx: Double = 0.0,
+        /** 生成倍速（clawd-rhythm 的出字速度档位：0.6 / 1 / 1.6） */
+        val rate: Double = 1.0,
     )
 
     // ═══ 三轨（host-template 177-222）═══
@@ -133,6 +139,27 @@ class ClawdBigRuntime(
     private var dozeTimer: Job? = null
     private var neglectShownAt = -1L
 
+    // ═══ 打字节奏（clawd-rhythm.js 移植）═══
+    private var prevLen = 0
+    private var lastKeyAt = -1e9
+    private var lastDipKey = 0.0
+    private var dipQueue = 0
+    private var dipDown = false
+    private var dipUntil = 0.0
+    private var dipDur = RHYTHM_DIP_MS.toDouble()
+    private var dipGap = RHYTHM_GAP_MS.toDouble()
+    private var rhythmDy = 0.0
+    private var rhythmDx = 0.0
+
+    // 生成倍速（write / sitWrite / writeHeld）
+    private var rateTier = 0
+    private var tierAt = 0L
+    private var lastCharAt = -1e9
+    private val charTimes = ArrayDeque<Long>()
+    private var lastTextLen = -1
+    private var rateSampleAt = 0L
+    private var writeRate = 1.0
+
     // ═══ 打字反应（host 2181-2236）═══
     private var composerBefore = ""
     private var composerBeforeStart = 0
@@ -196,6 +223,9 @@ class ClawdBigRuntime(
             val dt = ((t - last) / 16.6667f).coerceIn(0.5f, 3f)
             last = t
             if (dragging || held || ballisticSteps != null) stepPhysics(dt)
+            // 打字节奏 / 生成倍速逐帧推进（原版 rhythm 的 rAF）
+            stepRhythm(t)
+            stepWriteRate(t)
             delay(FRAME_MS)
         }
     }
@@ -314,6 +344,9 @@ class ClawdBigRuntime(
         sqy = sqy,
         timerText = timerText,
         night = night,
+        rhythmDy = rhythmDy,
+        rhythmDx = rhythmDx,
+        rate = writeRate,
     )
 
     private fun setClawdA(value: String?, duration: Long = 0) {
@@ -439,6 +472,13 @@ class ClawdBigRuntime(
             val addition = computeInserted(composerBefore, text, composerBeforeStart, composerBeforeEnd)
             if (addition != null) commitComposer(addition, null)
         }
+        // ── 打字节奏（clawd-rhythm onInput）：上屏几个字蹲几下；粘贴/拖入只蹲一下 ──
+        val added = text.length - prevLen
+        prevLen = text.length
+        if (added > 0) {
+            lastKeyAt = now().toDouble()
+            rhythmDip(if (added > 3) 1 else added)
+        }
         composerBefore = text
         composerBeforeStart = text.length
         composerBeforeEnd = text.length
@@ -447,10 +487,107 @@ class ClawdBigRuntime(
         syncBState()
     }
 
+    /** 上屏 n 个字：排 n 次下沉（原版 clawd-rhythm dip()）。字越密蹲得越短，连发时用短促节奏。 */
+    private fun rhythmDip(n: Int) {
+        if (n <= 0) return
+        val t = now().toDouble()
+        val interval = if (lastDipKey > 0) t - lastDipKey else 1e9
+        lastDipKey = t
+        dipQueue = minOf(RHYTHM_QUEUE_MAX, dipQueue + n)
+        val burst = dipQueue > 1
+        dipDur = if (burst) RHYTHM_BURST_DIP.toDouble()
+        else maxOf(RHYTHM_DIP_MIN.toDouble(), minOf(RHYTHM_DIP_MS.toDouble(), interval * .6))
+        dipGap = if (burst) RHYTHM_BURST_GAP.toDouble() else minOf(RHYTHM_GAP_MS.toDouble(), interval * .3)
+    }
+
+    /** 每帧推进打字节奏（原版 rhythm frame()）：dip 队列 + 停手扫视。 */
+    private fun stepRhythm(nowMs: Long) {
+        val composing = clipId == "compose"
+        if (!composing) {
+            if (rhythmDy != 0.0 || rhythmDx != 0.0) {
+                rhythmDy = 0.0
+                rhythmDx = 0.0
+                onChanged?.invoke()
+            }
+            dipQueue = 0
+            dipDown = false
+            return
+        }
+        if (dipDown && nowMs >= dipUntil) {
+            dipDown = false
+            dipUntil = nowMs + dipGap
+        }
+        if (!dipDown && dipQueue > 0 && nowMs >= dipUntil) {
+            dipQueue--
+            dipDown = true
+            dipUntil = nowMs + dipDur
+        }
+        // 停手 600ms 后，每 3200ms 的 2400–2700ms 窗口往右扫一眼（读字）
+        val typing = nowMs - lastKeyAt < RHYTHM_QUIET_MS
+        val cycle = ((nowMs - clipStartMs) % 3200 + 3200) % 3200
+        val scan = !typing && !dipDown && cycle > 2400 && cycle < 2700
+        val ndy = if (dipDown) 1.0 else 0.0   // 1 美术格 = 3px = DIP_PX
+        val ndx = if (scan) (if (clipMirror) -1.0 else 1.0) else 0.0
+        if (ndy != rhythmDy || ndx != rhythmDx) {
+            rhythmDy = ndy
+            rhythmDx = ndx
+            onChanged?.invoke()
+        }
+    }
+
+    /** 每帧推进生成倍速（原版 rhythm 的 write 档位）：按最后一条 assistant 文本的出字速度。 */
+    private fun stepWriteRate(nowMs: Long) {
+        val writing = clipId == "write" || clipId == "sitWrite" || clipId == "writeHeld"
+        if (!writing) {
+            rateTier = 0
+            if (writeRate != 1.0) {
+                writeRate = 1.0
+                onChanged?.invoke()
+            }
+            charTimes.clear()
+            lastTextLen = -1
+            return
+        }
+        val len = lastAssistantText.replace(Regex("\s+"), "").length
+        if (nowMs - rateSampleAt >= 100) {
+            rateSampleAt = nowMs
+            if (lastTextLen < 0 || len < lastTextLen) lastTextLen = len
+            else if (len > lastTextLen) {
+                repeat(minOf(200, len - lastTextLen)) { charTimes.addLast(nowMs) }
+                lastTextLen = len
+                lastCharAt = nowMs
+            }
+            while (charTimes.isNotEmpty() && nowMs - charTimes.first() > 1000) charTimes.removeFirst()
+        }
+        val quiet = nowMs - lastCharAt > RHYTHM_QUIET_MS
+        val tier = if (quiet) 0 else decideTier(charTimes.size.toDouble(), nowMs)
+        val rate = RHYTHM_RATE[tier]
+        if (rate != writeRate) {
+            writeRate = rate
+            onChanged?.invoke()
+        }
+    }
+
+    private fun decideTier(cps: Double, nowMs: Long): Int {
+        var want = rateTier
+        when (rateTier) {
+            0 -> if (cps >= RHYTHM_CPS_UP[0]) want = if (cps >= RHYTHM_CPS_UP[1]) 2 else 1
+            1 -> if (cps >= RHYTHM_CPS_UP[1]) want = 2 else if (cps <= RHYTHM_CPS_UP[0] * RHYTHM_HYS) want = 0
+            2 -> if (cps <= RHYTHM_CPS_UP[1] * RHYTHM_HYS) want = if (cps <= RHYTHM_CPS_UP[0] * RHYTHM_HYS) 0 else 1
+        }
+        if (want != rateTier && nowMs - tierAt >= RHYTHM_HOLD_MS) {
+            rateTier = want
+            tierAt = nowMs
+        }
+        return rateTier
+    }
+
     fun onInputFocus(focused: Boolean) {
         if (inputFocused == focused) return
         inputFocused = focused
         if (!focused) composerReactionReset()
+        // 原版 onFocus：发送 / 程序清空不会发 input，对齐一次长度，避免下一字算错字数
+        prevLen = inputText.length
         syncBState()
     }
 
@@ -1188,10 +1325,42 @@ class ClawdBigRuntime(
             refreshIdleSleep()
         }
         stepWalk(t)
+        // 大爪的座位被抽走（小爪被拎起）：平滑降下（原版 lowerBig）
+        if (pile.consumeBigSeatDirty() && !held && ballisticSteps == null) {
+            lowerBig()
+        }
         maybePlayAmbient(t)
     }
 
     private var lastIdleTickAt = 0L
+
+    /**
+     * 大爪降下来（原版 clawdBigLower / lowerBig）：座位没了 → 找下方能坐的小爪头，
+     * 没有就落回地面；横向对齐座位中心。被拎着时不动。
+     */
+    private fun lowerBig() {
+        floor = 0.0
+        var seat: SeatInfo? = null
+        if (!held) {
+            val cx = x + bandLeftOffset + 20.0   // 大爪 rig 中心（带坐标系）
+            seat = pile.seats()
+                .filter { abs(cx - it.cx) < maxOf(48.0, it.w) * .5 }
+                .maxByOrNull { it.h }
+        }
+        if (seat != null) {
+            floor = -seat.h
+            x += seat.cx - (x + bandLeftOffset + 20.0)
+            homeX = x
+        }
+        pile.bigSat(seat?.name)
+        fy = floor
+        if (trackA != null) renderTracks()
+        onChanged?.invoke()
+        scheduleBoundsWarm()
+    }
+
+    /** 大爪是否正在走路（原版 bigState().walking，pile 用它判断骑头上的要不要等）。 */
+    fun isWalking(): Boolean = walkActive && trackB.startsWith("rig:walkLoop")
 
     // ── 边界矩形（调用方填，单位 dp）──
     var formRect: RectF? = null
@@ -1225,6 +1394,19 @@ class ClawdBigRuntime(
         private const val GEN_TIMER_LINGER_MS = 4_000L
         private const val RUNTIME_TICK_MS = 200L
         private const val FRAME_MS = 17L
+
+        // ── 打字节奏（clawd-rhythm.js）──
+        private const val RHYTHM_DIP_MS = 100
+        private const val RHYTHM_DIP_MIN = 50
+        private const val RHYTHM_GAP_MS = 40
+        private const val RHYTHM_BURST_DIP = 60
+        private const val RHYTHM_BURST_GAP = 30
+        private const val RHYTHM_QUEUE_MAX = 8
+        private const val RHYTHM_QUIET_MS = 600L
+        private const val RHYTHM_HOLD_MS = 800L
+        private const val RHYTHM_HYS = .75
+        private val RHYTHM_RATE = doubleArrayOf(.6, 1.0, 1.6)
+        private val RHYTHM_CPS_UP = doubleArrayOf(12.0, 32.0)
 
         private val A2_TIER = listOf("t1", "t2", "t3", "t4", "t5")
         private val A2_TMS = listOf(600, 700, 700, 1100, 0)

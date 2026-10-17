@@ -111,10 +111,15 @@ fun ClawdBigOverlay(
                 val v = runtime.visualAt(nowMs)
                 var s = session
                 if (s.seq != v.seq || s.clipId != v.clipId) {
-                    s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs)
+                    s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs, rate = v.rate)
+                    session = s
+                } else if (s.rate != v.rate) {
+                    // 倍速在会话中途变化：换算 startMs 保持已播进度连续
+                    val elapsed = (nowMs - s.startMs).toDouble()
+                    s = ClipSession(s.seq, s.clipId, s.mirror, nowMs - (elapsed / s.rate * v.rate).toLong(), v.rate)
                     session = s
                 }
-                frame = computeFrame(rig, palArgb, bitmapCache, win, symPivot, s, nowMs)
+                frame = computeFrame(rig, palArgb, bitmapCache, win, symPivot, s, v, nowMs)
             }
         }
     }
@@ -300,6 +305,7 @@ private class ClipSession(
     val clipId: String? = null,
     val mirror: Boolean = false,
     val startMs: Long = 0,
+    val rate: Double = 1.0,
 )
 
 private data class PartKey(val part: String, val frame: String, val mirror: Boolean)
@@ -316,11 +322,13 @@ private fun computeFrame(
     win: RigWindow,
     symPivot: Pair<Double, Double>,
     session: ClipSession,
+    visual: ClawdBigRuntime.Visual,
     nowMs: Long,
 ): BigFrame {
     val clipId = session.clipId ?: return restFrame(rig, pal, cache, win, symPivot, nowMs)
     val clip = rig.clips[clipId] ?: return restFrame(rig, pal, cache, win, symPivot, nowMs)
 
+    // rate（write 倍速）已在会话切换时折进 startMs，这里按 elapsed 直接采样
     val elapsed = (nowMs - session.startMs).coerceAtLeast(0)
     val t: Int
     if (clip.loop) {
@@ -331,7 +339,9 @@ private fun computeFrame(
         t = elapsed.coerceAtMost(clip.dur.toLong()).toInt()
         // hold/非循环都停在末帧（原版 fill:forwards）；剪辑退出靠轨道切换
     }
-    val st = ClawdSampler.sampleState(rig, clip, t)
+    val st0 = ClawdSampler.sampleState(rig, clip, t)
+    // 打字节奏（clawd-rhythm）：compose 时上半身下沉 rhythmDy、眼睛横移 rhythmDx
+    val st = if (visual.rhythmDy != 0.0 || visual.rhythmDx != 0.0) applyRhythm(st0, visual) else st0
     var flex = ClawdSampler.flexAt(clip, t)
     if (session.mirror) {
         // 原版 flexOf：镜像时 r 与 tx 取反
@@ -344,6 +354,29 @@ private fun computeFrame(
         clipGround = clip.clipGround,
     )
 }
+
+/**
+ * 打字节奏叠加（clawd-rhythm frame()）：compose 时上半身层（body/eyes/clawL/clawR/sym）
+ * 整体下沉 rhythmDy 格；眼睛额外横移 rhythmDx 格（停手扫视）。
+ * 原版改的是各层行内 translate，这里等价地加在采样结果的 dx/dy 上。
+ */
+private fun applyRhythm(
+    st: ClawdSampler.RigState,
+    visual: ClawdBigRuntime.Visual,
+): ClawdSampler.RigState {
+    if (visual.rhythmDy == 0.0 && visual.rhythmDx == 0.0) return st
+    val out = LinkedHashMap(st.parts)
+    for (p in UPPER_PARTS) {
+        val ps = out[p] ?: continue
+        out[p] = ps.copy(
+            dy = ps.dy + visual.rhythmDy,
+            dx = ps.dx + if (p == "eyes") visual.rhythmDx else 0.0,
+        )
+    }
+    return st.copy(parts = out)
+}
+
+private val UPPER_PARTS = listOf("body", "eyes", "clawL", "clawR", "sym")
 
 /** 待机帧：rest 姿势 + 眨眼（clr-blink 4400ms）+ 双钳呼吸（clr-breathe-claw 3200ms 平滑）。 */
 private fun restFrame(

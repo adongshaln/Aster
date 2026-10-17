@@ -140,50 +140,67 @@ class ClawdPileState(
         if (n == "big") (bigSatName?.let { supportTop(it) } ?: 0) + BIG_REST else lift(actors.getValue(n)) + liftH
 
     private fun carriers(k: Inner): List<String> =
-        actors.values.filter { it.on.contains(k.name) }.map { it.name }
+        actors.values.filter { it.on.contains(k.name) }.map { it.name } +
+            if (bigSatName == k.name) listOf("big") else emptyList()
 
     private fun grounded(except: String? = null): List<Inner> =
         actors.values.filter { it.name != except && it.on.isEmpty() && it.mode != Mode.HELD }
 
     private fun posX(o: Inner): Int = o.walk?.let { it.base + it.off } ?: o.x
 
-    private fun freeAt(x: Int, except: String): Boolean {
+    /**
+     * 大爪此刻在带坐标系里的左缘（原版 bigX）：只有「站在输入框上、没坐在小爪头上」才算障碍；
+     * 被拎着/飞着/坐着都不算。null = 不在。
+     */
+    private fun bigX(): Double? = bigLeftDp?.takeIf { bigGrounded && bigSatName == null }
+
+    private fun clashBig(x: Int, bx: Double?): Boolean =
+        bx != null && x < bx + BIG_W + gap && bx < x + bodyW + gap
+
+    private fun freeAt(x: Int, except: String, bx: Double? = bigX()): Boolean {
         val b = bounds()
-        if (x < b.first || x > b.last) return false
+        if (x < b.first || x > b.last || clashBig(x, bx)) return false
         return grounded(except).all { abs(posX(it) - x) >= bodyW + gap }
     }
 
     private fun nearestFree(x: Int, except: String): Int? {
         val b = bounds()
+        val bx = bigX()
         val cx = clampX(x)
-        if (freeAt(cx, except)) return cx
+        if (freeAt(cx, except, bx)) return cx
         var d = px
         while (d < width) {
             for (s in intArrayOf(-1, 1)) {
                 val t = cx + s * d
-                if (t in b && freeAt(t, except)) return t
+                if (t in b && freeAt(t, except, bx)) return t
             }
             d += px
         }
         return null
     }
 
-    private fun clearPath(a: Int, b: Int, except: String): Boolean {
+    private fun clearPath(a: Int, b: Int, except: String, bx: Double?): Boolean {
         val lo = minOf(a, b)
         val hi = maxOf(a, b)
         val apart = { o: Int -> o + bodyW + gap <= lo || o >= hi + bodyW + gap }
-        return grounded(except).all { apart(posX(it)) }
+        val apartBig = { o: Double -> o + BIG_W + gap <= lo || o >= hi + bodyW + gap }
+        return (bx == null || apartBig(bx)) && grounded(except).all { apart(posX(it)) }
     }
 
     /* ===== 叠放几何（原版 523–535 行 stackX/unstack） ===== */
 
     private fun depthOf(k: Inner): Int =
-        if (k.on.isEmpty()) 0 else 1 + k.on.maxOf { depthOf(actors.getValue(it)) }
+        if (k.on.isEmpty()) 0
+        else 1 + k.on.maxOf { if (it == "big") 0 else depthOf(actors.getValue(it)) }
 
     private fun stackX() {
         val stacked = actors.values.filter { it.on.isNotEmpty() }.sortedBy { depthOf(it) }
+        val bl = bigLeftDp
         for (k in stacked) {
-            val cx = k.on.sumOf { actors.getValue(it).x + bodyW / 2 }.toDouble() / k.on.size
+            // 支撑是 'big' 时用大爪中心（原版 cxOf：bl + BIG_W/2）
+            val cx = k.on.sumOf { m ->
+                if (m == "big") (bl ?: 0.0) + BIG_W / 2.0 else actors.getValue(m).x + bodyW / 2.0
+            } / k.on.size
             k.x = Math.round((cx - bodyW / 2) / px).toInt() * px
         }
     }
@@ -305,6 +322,11 @@ class ClawdPileState(
             return
         }
         if (k.on.isNotEmpty()) {
+            // 坐在正在走路的大爪头上：等它停下再下来（原版 197 行）
+            if (onBig(k) && bigWalking) {
+                later(k, 1500) { stroll(k) }
+                return
+            }
             hopDown(k) { stroll(k) }
             return
         }
@@ -321,11 +343,12 @@ class ClawdPileState(
             later(k, rnd(1200, 2500).toLong()) { doze(k) }
             return
         }
+        val bx = bigX()
         var target: Int? = null
         var i = 0
         while (i < 12 && target == null) {
             val t = Math.round((k.x + (if (random.nextBoolean()) -1 else 1) * rnd(30, 100)).toDouble() / px).toInt() * px
-            if (freeAt(t, k.name) && clearPath(k.x, t, k.name)) target = t
+            if (freeAt(t, k.name, bx) && clearPath(k.x, t, k.name, bx)) target = t
             i++
         }
         if (target == null) {
@@ -411,6 +434,12 @@ class ClawdPileState(
             bump(k, hit, w)
             return
         }
+        // 大爪也是会动的障碍（原版 253-255 行）
+        val bx = bigX()
+        if (bx != null && sign(bx - x) == w.dir.toDouble() && clashBig(nx, bx)) {
+            bump(k, null, w)
+            return
+        }
         w.off += w.dir * px
         changed()
         later(k, data.stepMs.toLong()) { stepOnce(k) }
@@ -492,8 +521,9 @@ class ClawdPileState(
         val k = actors.getValue(name)
         val was = k.mode
         val eyes = k.eyes
-        val wasWalking = k.walk != null
-        val dir = k.walk?.dir ?: 1
+        val w = k.walk
+        val wasWalking = w != null
+        val dir = w?.dir ?: 1
         endWalk(k)
         if (wasWalking) {
             k.pose = PilePose.STAND
@@ -504,8 +534,12 @@ class ClawdPileState(
         later(k, 1000) {
             if (k.mode == Mode.HELD) return@later
             if (wasWalking) {
+                // 走到一半被戳：看你一眼，1s 后继续走（原版 300-302 行）
                 k.face = dir
                 changed()
+                later(k, 300) {
+                    if (k.mode == Mode.WALK && w != null) steps(k, w.target, w.onArrive)
+                }
                 return@later
             }
             if (was == Mode.SLEEP) {
@@ -534,6 +568,8 @@ class ClawdPileState(
         k.mode = Mode.HELD
         lowerFrom(carriers(k).map { it }, name)
         k.on = mutableListOf()
+        // 支撑被抽走：大爪如果坐在这只头上，座位失效，runtime 会重新落座（原版 pickUp 341 行 lowerBig）
+        if (bigSatName == k.name) bigSeatDirty = true
         k.pose = PilePose.DANGLE_A
         k.eyes = PileEyes.OPEN
         k.face = 0
@@ -542,6 +578,23 @@ class ClawdPileState(
 
     fun drop(name: String, cx: Int, onHead: String?) {
         val k = actors.getValue(name)
+        if (onHead == "big") {
+            // 放在大爪头上（原版 drop 的 onBigHead 分支）
+            k.x = clampX(cx)
+            k.on = mutableListOf("big")
+            stackX()
+            k.mode = Mode.SIT
+            k.pose = PilePose.DANGLE_A
+            changed()
+            later(k, 300) {
+                k.pose = PilePose.CROUCH
+                k.eyes = PileEyes.OPEN
+                changed()
+                save()
+                later(k, rnd(1500, 3000).toLong()) { doze(k) }
+            }
+            return
+        }
         if (onHead != null && actors.containsKey(onHead) && actors.getValue(onHead).mode != Mode.HELD) {
             val below = actors.getValue(onHead)
             if (below.walk != null) {
@@ -618,7 +671,13 @@ class ClawdPileState(
                     it.remove()
                     val cb = flightCallbacks.remove(name)
                     val snap = snapshot()
-                    val target = snap
+                    val bl = bigX()
+                    val bigFree = bl != null && actors.values.none { it.on.contains("big") }
+                    // 大爪头顶能放：站稳、头顶没人、横向居中、手指在它头顶上方（原版 397 行）
+                    val onBigHead = bigFree &&
+                        abs(bl!! + BIG_W / 2 - (f.x + bodyW / 2)) < BIG_W * .55 &&
+                        f.y < -supportTopBig("big") + 6
+                    val target = if (onBigHead) "big" else snap
                         .filter { o -> o.name != name && o.mode != Mode.HELD }
                         .filter { o -> snap.none { c -> c.name != o.name && c.on.contains(o.name) } }
                         .filter { o -> abs(posX(actors.getValue(o.name)) - f.x) < bodyW * .6 }
@@ -655,14 +714,16 @@ class ClawdPileState(
     }
 
     /** 下面那只被拿走：上面的平滑降下来补位（原版 lowerFrom 358–370 行） */
-    private fun lowerFrom(list: List<String>, gone: String) {
+    private fun lowerFrom(list: List<String>, gone: String, hop: Boolean = false) {
         if (list.isEmpty()) return
         for (n in list) {
             val t = actors.getValue(n)
             t.on = t.on.filter { it != gone }.toMutableList()
             if (t.on.isEmpty()) {
                 endWalk(t)
-                t.x = nearestFree(t.x, t.name) ?: clampX(t.x)
+                // hop：大爪要做别的动作，头上的往旁边跳开（原版 364 行）
+                val side = if (hop) (if (random.nextBoolean()) -1 else 1) * (BIG_W / 2 + bodyW) else 0
+                t.x = nearestFree(t.x + side, t.name) ?: clampX(t.x + side)
             }
         }
         stackX()
@@ -715,11 +776,27 @@ class ClawdPileState(
     /** 大 Clawd 在 pile 坐标系里的左缘（视觉左缘，dp）。由 runtime 推进时填；null 表示大爪不在。 */
     var bigLeftDp: Double? = null
 
+    /** 大爪的座位因为支撑被抽走而失效（runtime 读走后清零，重新 lower）。 */
+    var bigSeatDirty: Boolean = false
+        private set
+
+    /** runtime 取走「座位失效」标记（取一次清一次）。 */
+    fun consumeBigSeatDirty(): Boolean {
+        val v = bigSeatDirty
+        bigSeatDirty = false
+        return v
+    }
+
     /** 大 Clawd 正站在输入框上（没被拎、没飞、没坐在小的头上）才算障碍。 */
     private var bigGrounded: Boolean = false
-    fun setBigGrounded(grounded: Boolean, leftDp: Double?) {
+    /** 大 Clawd 正在走路（原版 bigState().walking）：骑它头上的要等它停下再下来。 */
+    var bigWalking: Boolean = false
+        private set
+
+    fun setBigGrounded(grounded: Boolean, leftDp: Double?, walking: Boolean = false) {
         bigGrounded = grounded
         bigLeftDp = leftDp
+        bigWalking = walking
     }
 
     /** 间接或直接坐在大 Clawd 头上（on 链里含 'big'）。 */
@@ -777,7 +854,7 @@ class ClawdPileState(
         val list = actors.values.filter { it.on.contains("big") }.toList()
         if (list.isEmpty()) return
         for (k in list) clear(k)
-        lowerFrom(list.map { it.name }, "big")
+        lowerFrom(list.map { it.name }, "big", hop = kind == "hop")
         for (k in list) {
             if (k.mode != Mode.SLEEP) {
                 later(k, 1600) { doze(k) }
@@ -855,7 +932,7 @@ class ClawdPileState(
     fun peekOffsetOf(name: String): Int {
         if (!peeking) return 0
         val k = actors[name] ?: return 0
-        return if (onBig(k) || peekStill.contains(name)) peekBigDrop else 12
+        return if (onBig(k) || peekStill.contains(name)) peekBigDrop else 4 * px
     }
 
     companion object {

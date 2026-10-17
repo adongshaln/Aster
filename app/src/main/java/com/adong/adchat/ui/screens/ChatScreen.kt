@@ -154,6 +154,11 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val imeInsets = WindowInsets.ime
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     val userDragging by listState.interactionSource.collectIsDraggedAsState()
+    // 滚动信号：给 Clawd 的 peek（原版监听滚动）
+    var clawdScrollTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(listState.isScrollInProgress, listState.firstVisibleItemIndex) {
+        if (listState.isScrollInProgress || listState.firstVisibleItemIndex >= 0) clawdScrollTick++
+    }
     val streamScrollSignals = remember {
         MutableSharedFlow<Unit>(
             extraBufferCapacity = 1,
@@ -473,6 +478,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
                 formAnchor = formAnchor,
                 chatAnchor = chatAnchor,
+                scrollTick = clawdScrollTick,
             )
         }
     }

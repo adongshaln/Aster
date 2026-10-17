@@ -191,6 +191,7 @@ fun ClawdPileOverlay(
                 label = "by-${actor.name}",
             )
 
+            val peekDrop = if (isHeld || flight != null) 0 else pile.peekOffsetOf(actor.name)
             Canvas(Modifier.fillMaxSize()) {
                 val groundY = size.height
                 if (isHeld) {
@@ -202,8 +203,8 @@ fun ClawdPileOverlay(
                 } else {
                     val lift = pile.liftOf(actor.name).toFloat()
 
-                    // 影子贴地面（叠在别人头上时不画）
-                    if (actor.on.isEmpty()) {
+                    // 影子贴地面（叠在别人头上时不画；peek 缩下去时隐藏，原版 data-paused）
+                    if (actor.on.isEmpty() && peekDrop == 0) {
                         drawOval(
                             color = if (night) Color(0x59000000) else Color(0x24141413),
                             topLeft = Offset((visualX + 1.5f * data.px) * density, groundY - 2f * density),
@@ -213,7 +214,7 @@ fun ClawdPileOverlay(
 
                     // 原版 transform-origin: 8*PX 100% —— 绕"脚底、身体中心"做果冻缩放
                     val pivotX = (visualX + 8f * data.px) * density
-                    val pivotY = groundY - lift * density
+                    val pivotY = groundY - lift * density + peekDrop * density
                     translate(pivotX, pivotY) {
                         scale(breatheX, breatheY, pivot = Offset.Zero) {
                             drawImage(
@@ -302,7 +303,6 @@ fun ClawdPileOverlay(
                                     val release = heldPos
                                     if (release != null) {
                                         // 松手 → 弹道飞行（落座/落地由 state 机在落地回调里判）
-                                        val fingerY = release.y + grab.y
                                         pile.throwAt(
                                             actor.name, release.x.toDouble(), release.y.toDouble(),
                                             throwVx.toDouble(), throwVy.toDouble(),

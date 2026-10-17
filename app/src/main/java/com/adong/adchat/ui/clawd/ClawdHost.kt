@@ -37,6 +37,7 @@ fun ClawdHost(
     lastText: String,
     formAnchor: Rect?,
     chatAnchor: Rect?,
+    scrollTick: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -79,6 +80,7 @@ fun ClawdHost(
         pile.setBigGrounded(
             grounded = runtime.x == 0.0 && !generating,
             leftDp = runtime.x,
+            walking = runtime.isWalking(),
         )
     }
 
@@ -86,7 +88,7 @@ fun ClawdHost(
     LaunchedEffect(runtime) {
         while (true) {
             kotlinx.coroutines.delay(100)
-            pile.setBigGrounded(runtime.x >= 0.0, runtime.x)
+            pile.setBigGrounded(runtime.x >= 0.0, runtime.x, walking = runtime.isWalking())
         }
     }
 
@@ -108,6 +110,8 @@ fun ClawdHost(
         runtime.setGeneration(generating, lastText.isNotBlank(), if (!generating) "done" else null)
     }
     LaunchedEffect(night) { runtime.night = night }
+    // 聊天区滚动 → 大爪扒边 + 小爪缩下去（原版 __clawdScroll → clawdScrollTilt）
+    LaunchedEffect(scrollTick) { if (scrollTick > 0) runtime.onScroll() }
 
     DisposableEffect(pile, runtime) {
         onDispose {
