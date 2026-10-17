@@ -96,7 +96,7 @@ fun ClawdHost(
             kotlinx.coroutines.delay(50)
             if (pile.width > 0) {
                 // 大爪左边在 pile 坐标系 = bandW - RIG_W + x（x 是相对右缘的偏移）
-                runtime.bandLeftOffset = pile.width.toDouble() - 48.0
+                runtime.bandLeftOffset = pile.width.toDouble() - 42.0
             }
         }
     }

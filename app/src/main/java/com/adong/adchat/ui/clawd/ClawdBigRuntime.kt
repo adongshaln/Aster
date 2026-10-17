@@ -1152,8 +1152,8 @@ class ClawdBigRuntime(
     }
 
     companion object {
-        private const val RIG_W = 48.0      // rig 视觉宽度 dp（16格 x px=3）
-        private const val RIG_H = 42.0      // rig 视觉高度 dp（14格 x px=3）
+        private const val RIG_W = 42.0      // 大爪本体 42dp（原版按钮 42x34；rig 溢出画到 48x42）
+        private const val RIG_H = 34.0      // 大爪本体 34dp
         private const val A2_DRAG_THRESHOLD = 5f
         private const val A2_EDGE = 6
         private const val A2_FORM_INSET = 8

@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
@@ -164,19 +165,21 @@ fun ClawdBigOverlay(
                 // transform-origin: 8*PX 100%（脚底中心），与原版 CSS 一致
                 val pivotX = (8f * rig.px) * density
                 val pivotY = h * density
-                translate(pivotX + flex.tx.toFloat() * density, pivotY + flex.ty.toFloat() * density) {
-                    scale(
-                        scaleX = (visual.sx * flex.sx).toFloat(),
-                        scaleY = (visual.sy * flex.sy).toFloat(),
-                        pivot = Offset.Zero,
-                    ) {
-                        translate(-pivotX, -pivotY) {
-                            drawImage(
-                                frameBitmap,
-                                dstOffset = IntOffset.Zero,
-                                dstSize = IntSize((w * density).roundToInt(), (h * density).roundToInt()),
-                                filterQuality = FilterQuality.None,
-                            )
+                translate(pivotX + flex.tx.toFloat() * rig.px * density, pivotY + flex.ty.toFloat() * density) {
+                    rotate(visual.rot + flex.r.toFloat(), pivot = Offset.Zero) {
+                        scale(
+                            scaleX = (visual.sx * flex.sx).toFloat(),
+                            scaleY = (visual.sy * flex.sy).toFloat(),
+                            pivot = Offset.Zero,
+                        ) {
+                            translate(-pivotX, -pivotY) {
+                                drawImage(
+                                    frameBitmap,
+                                    dstOffset = IntOffset.Zero,
+                                    dstSize = IntSize((w * density).roundToInt(), (h * density).roundToInt()),
+                                    filterQuality = FilterQuality.None,
+                                )
+                            }
                         }
                     }
                 }
