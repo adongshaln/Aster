@@ -1249,12 +1249,12 @@ class ClawdBigRuntime(
      */
     private fun clampToViewport() {
         if (viewportW <= 0.0) return
-        val homeL = (formRect?.right ?: (bandLeftOffset + RIG_W)) - RIG_W
+        val homeL = (formRect?.right?.toDouble() ?: (bandLeftOffset + RIG_W)) - RIG_W
         val xLo = -homeL
         val xHi = viewportW - homeL - RIG_W
         x = x.coerceIn(minOf(xLo, 0.0), maxOf(xHi, 0.0))
         if (viewportH > 0.0) {
-            val fyCeil = -((formRect?.top ?: viewportH) - A2_EDGE)
+            val fyCeil = -(formRect?.top?.toDouble()?.minus(A2_EDGE) ?: viewportH)
             fy = fy.coerceIn(minOf(fyCeil, 0.0), 0.0)
         }
     }
