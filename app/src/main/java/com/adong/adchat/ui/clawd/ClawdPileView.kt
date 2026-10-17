@@ -516,7 +516,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawPileFx(
             val scale = 1 + .6 * t.toFloat()
             val alpha = (1 - t).toFloat()
             val cx = (a.x + (sx - 1) * px).toFloat()
-            val cy = (top + (pile.data.top + 7 + sy - 1) * px).toFloat()
+            val cy = (top + (pile.data.top + 7 + sy - 1) * px.toFloat()).toFloat()
             drawSpark(cx, cy, scale, alpha, starY, starW, density)
         }
     }

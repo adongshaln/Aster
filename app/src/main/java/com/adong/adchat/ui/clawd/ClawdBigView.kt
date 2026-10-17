@@ -220,8 +220,8 @@ fun ClawdBigOverlay(
                                             for (g in ghosts) {
                                                 val t = ((nowMsNow - g.bornAt).toFloat() / GHOST_MS).coerceIn(0f, 1f)
                                                 if (t >= 1f) continue
-                                                val dx = g.dir * 36f * t
-                                                val dy = -12f * t + 24f * t * t
+                                                val dx = (g.dir * 36f * t).toDouble()
+                                                val dy = (-12f * t + 24f * t * t).toDouble()
                                                 translate((g.part.x + dx) * cellDp * d, (g.part.y + dy) * cellDp * d) {
                                                     rotate(g.dir * 110f * t, pivot = Offset(g.part.bw * cellDp * d / 2f, g.part.bh * cellDp * d / 2f)) {
                                                         drawImage(
