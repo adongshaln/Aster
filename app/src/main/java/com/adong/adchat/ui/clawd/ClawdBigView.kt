@@ -318,8 +318,8 @@ private fun computeFrame(
     session: ClipSession,
     nowMs: Long,
 ): BigFrame {
-    val clipId = session.clipId ?: return restFrame(rig, pal, cache, win, nowMs)
-    val clip = rig.clips[clipId] ?: return restFrame(rig, pal, cache, win, nowMs)
+    val clipId = session.clipId ?: return restFrame(rig, pal, cache, win, symPivot, nowMs)
+    val clip = rig.clips[clipId] ?: return restFrame(rig, pal, cache, win, symPivot, nowMs)
 
     val elapsed = (nowMs - session.startMs).coerceAtLeast(0)
     val t: Int
@@ -351,6 +351,7 @@ private fun restFrame(
     pal: Map<String, Int>,
     cache: HashMap<PartKey, ImageBitmap>,
     win: RigWindow,
+    symPivot: Pair<Double, Double>,
     nowMs: Long,
 ): BigFrame {
     val blinkT = (nowMs % 4400).toInt()
@@ -372,7 +373,7 @@ private fun restFrame(
         val rest = rig.restF[part] ?: continue
         val f = if (part == "eyes") eyesF else rest
         val dy = if (part == "clawL" || part == "clawR") clawDy.toDouble() else 0.0
-        makePart(rig, pal, cache, win, part, f, win.x0.toDouble(), win.y0 + dy,
+        makePart(rig, pal, cache, win, symPivot, part, f, win.x0.toDouble(), win.y0 + dy,
             mirror = false, sc = 1f, r = 0f, a = 1f, z = rig.restZ.getValue(part))
             ?.let { out.add(it) }
     }
@@ -422,6 +423,7 @@ private fun makePart(
     pal: Map<String, Int>,
     cache: HashMap<PartKey, ImageBitmap>,
     win: RigWindow,
+    symPivot: Pair<Double, Double>,
     part: String,
     frame: String,
     x: Double, y: Double,
