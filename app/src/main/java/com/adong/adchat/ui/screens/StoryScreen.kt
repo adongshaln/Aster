@@ -1574,7 +1574,8 @@ internal fun StoryMessageItem(
                 }
                 ConversationReasoningPanel(
                     reasoning = reasoning,
-                    streaming = row.revision.state == StoryRevisionState.Streaming
+                    streaming = row.revision.state == StoryRevisionState.Streaming,
+                    bodyStarted = prose != null
                 )
                 if (waitingForFirstToken && reasoning.isBlank()) {
                     ConversationThinkingIndicator()

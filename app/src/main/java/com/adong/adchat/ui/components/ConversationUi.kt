@@ -514,15 +514,17 @@ fun ConversationThinkingIndicator() {
 fun ConversationReasoningPanel(
     reasoning: String,
     streaming: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    bodyStarted: Boolean = false
 ) {
     if (reasoning.isBlank()) return
-    var expanded by remember { mutableStateOf(streaming) }
-    var wasStreaming by remember { mutableStateOf(false) }
+    val thinkingLive = streaming && !bodyStarted
+    var expanded by remember { mutableStateOf(thinkingLive) }
+    var wasLive by remember { mutableStateOf(false) }
 
-    LaunchedEffect(streaming) {
-        if (wasStreaming && !streaming) expanded = false
-        wasStreaming = streaming
+    LaunchedEffect(thinkingLive) {
+        if (wasLive && !thinkingLive) expanded = false
+        wasLive = thinkingLive
     }
 
     val chevronRotation by animateFloatAsState(
@@ -551,13 +553,13 @@ fun ConversationReasoningPanel(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = if (streaming) "正在思考…" else "已思考 · ${reasoning.length} 字",
+                text = if (thinkingLive) "正在思考…" else "已思考 · ${reasoning.length} 字",
                 style = MaterialTheme.typography.labelLarge.copy(
                     fontWeight = FontWeight.Medium,
                     fontSize = 13.sp
                 ),
                 color = MutedInk,
-                modifier = if (streaming) Modifier.claudeStreamingPulse() else Modifier
+                modifier = if (thinkingLive) Modifier.claudeStreamingPulse() else Modifier
             )
             Spacer(Modifier.width(3.dp))
             Icon(

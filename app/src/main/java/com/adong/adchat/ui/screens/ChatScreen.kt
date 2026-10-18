@@ -597,7 +597,7 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             last = now
             if (spinSpeed > 0f) {
                 angle = (angle + spinSpeed * dt) % 360f
-                spinSpeed = (spinSpeed - 60f * dt).coerceAtLeast(0f)
+                spinSpeed = (spinSpeed - 80f * dt).coerceAtLeast(0f)
             }
         }
     }
@@ -613,7 +613,7 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null
                     ) {
-                        spinSpeed = (spinSpeed + 240f).coerceAtMost(1440f)
+                        spinSpeed = (spinSpeed + 120f).coerceAtMost(540f)
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     },
                 contentAlignment = Alignment.Center
@@ -715,7 +715,11 @@ private fun ChatMessageItem(
                 if (!waitingForFirstToken) {
                     ConversationAuthor(error = message.isError)
                 }
-                ConversationReasoningPanel(reasoning = message.reasoning, streaming = message.isStreaming)
+                ConversationReasoningPanel(
+                    reasoning = message.reasoning,
+                    streaming = message.isStreaming,
+                    bodyStarted = message.content.isNotBlank()
+                )
                 if (message.toolActivities.isNotEmpty()) {
                     ToolActivitySummary(message.toolActivities)
                 }
