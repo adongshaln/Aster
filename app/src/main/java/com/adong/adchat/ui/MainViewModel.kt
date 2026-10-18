@@ -858,8 +858,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     profile = profile,
                     model = model,
                     systemPrompt = listOf(
-                        appConfig.userName.takeIf { it.isNotBlank() }?.let { "称呼用户为「$it」。" }
-                            ?: appConfig.systemPrompt,
+                        appConfig.systemPrompt,
+                        userNameInstruction(appConfig.userName),
                         NARRATIVE_NAME_MARK_INSTRUCTION,
                         COVER_IMAGE_INSTRUCTION
                     ).filter(String::isNotBlank).joinToString("\n\n"),

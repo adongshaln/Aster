@@ -83,6 +83,7 @@ import com.adong.adchat.ui.components.AdActionOption
 import com.adong.adchat.ui.components.AdActionSheet
 import com.adong.adchat.ui.components.AdConfirmDialog
 import com.adong.adchat.ui.components.UserNamePromptDialog
+import com.adong.adchat.ui.components.UserNamePromptMode
 import com.adong.adchat.ui.components.AdModalDialog
 import com.adong.adchat.ui.components.AdToggleCard
 import com.adong.adchat.ui.components.AdChoiceOption
@@ -203,9 +204,10 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
                     var editingName by remember { mutableStateOf(false) }
                     if (editingName) {
                         UserNamePromptDialog(
+                            mode = UserNamePromptMode.Edit,
                             currentName = vm.appConfig.userName,
                             onConfirm = { vm.setUserName(it); editingName = false },
-                            onSkip = { vm.skipUserNamePrompt(); editingName = false }
+                            onSkip = { editingName = false }
                         )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {

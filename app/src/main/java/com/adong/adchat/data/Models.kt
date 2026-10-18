@@ -542,3 +542,7 @@ data class ReferenceImageAttachment(
     val width: Int = 0,
     val height: Int = 0
 )
+
+/** 聊天请求中的用户称呼指令；空称呼返回空串，由调用方与自定义系统提示按序拼接、互不覆盖。 */
+fun userNameInstruction(userName: String): String =
+    userName.trim().takeIf { it.isNotEmpty() }?.let { "称呼用户为「$it」。" } ?: ""

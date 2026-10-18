@@ -51,6 +51,8 @@ import kotlin.math.abs
 import com.adong.adchat.data.Conversation
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.*
+import com.adong.adchat.ui.components.UserNamePromptDialog
+import com.adong.adchat.ui.components.UserNamePromptMode
 import com.adong.adchat.ui.components.AdActionOption
 import com.adong.adchat.ui.components.AdActionSheet
 import com.adong.adchat.ui.components.AdConfirmDialog
@@ -124,6 +126,7 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
     var page by rememberSaveable { mutableStateOf(AppPage.Chat) }
     if (!vm.appConfig.userNamePromptDone) {
         UserNamePromptDialog(
+            mode = UserNamePromptMode.Onboarding,
             currentName = vm.appConfig.userName,
             onConfirm = vm::setUserName,
             onSkip = vm::skipUserNamePrompt
