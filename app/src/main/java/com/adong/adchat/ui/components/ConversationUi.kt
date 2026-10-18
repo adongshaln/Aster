@@ -328,11 +328,7 @@ fun ConversationComposer(
                             .appleSpringPressable(pressedScale = 0.86f, enabled = !loading && !attachmentLoading)
                     ) {
                         if (attachmentLoading) {
-                            CircularProgressIndicator(
-                                Modifier.size(18.dp),
-                                color = Accent,
-                                strokeWidth = 2.dp
-                            )
+                            AsterLoadingIndicator(size = 18.dp)
                         } else {
                             Icon(
                                 Icons.Rounded.Add,

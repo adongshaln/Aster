@@ -606,7 +606,7 @@ private fun ConversationRow(
                 Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = if (generating) Accent else MutedInk, style = MaterialTheme.typography.labelMedium)
             }
-            if (generating) CircularProgressIndicator(Modifier.padding(horizontal = 4.dp).size(12.dp), color = Accent, strokeWidth = 1.5.dp)
+            if (generating) AsterLoadingIndicator(Modifier.padding(horizontal = 4.dp), size = 12.dp)
             AsterIconButton(Icons.Rounded.MoreHoriz, "更多：${conversation.title}", { showActions = true })
         }
     }

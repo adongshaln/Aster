@@ -223,7 +223,7 @@ private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy:
             Button(onClick = { focusManager.clearFocus(); onResolve() }, enabled = value.isNotBlank() && !busy,
                 modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Night)) {
-                if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                if (busy) AsterLoadingIndicator(size = 18.dp)
                 else Icon(Icons.Rounded.ArrowDownward, null, Modifier.size(19.dp))
                 Spacer(Modifier.width(9.dp))
                 Text(if (busy) "正在处理" else "解析链接")
@@ -300,7 +300,7 @@ private fun DouyinResolverCard(
                 DouyinResolverWebView(request, Modifier.fillMaxSize(), onProgress, onVerificationRequired, onResolved, onFailure)
                 if (!verificationVisible) {
                     Column(Modifier.fillMaxSize().background(Canvas), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                        CircularProgressIndicator(color = Accent, strokeWidth = 2.5.dp, modifier = Modifier.size(30.dp))
+                        AsterLoadingIndicator(size = 30.dp, tint = Accent)
                         Spacer(Modifier.height(10.dp))
                         Text("正在读取视频信息", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
                     }

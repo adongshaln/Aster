@@ -326,11 +326,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 if (vm.messages.isEmpty()) {
                     EmptyChat(
                         model = vm.chatProfile.chatModel,
-                        onSuggestion = { draft ->
-                            vm.updateChatInput(draft)
-                            composerFocusRequester.requestFocus()
-                            keyboard?.show()
-                        },
+                        userName = vm.appConfig.userName,
                         onConfigure = onOpenSettings,
                         modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
                     )
@@ -571,24 +567,40 @@ private fun ChatHeader(
 }
 
 @Composable
-internal fun EmptyChat(model: String, onSuggestion: (String) -> Unit, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
-    ConversationWelcome(
-        title = "把想法，写在这里。",
-        subtitle = "一个问题，一点灵感。\n从你在意的事情开始。",
-        label = "新的对话",
-        starters = if (model.isBlank()) emptyList() else listOf(
-            ConversationStarter("理清思路", "把复杂的事拆开", Icons.Rounded.Lightbulb, "帮我把一个复杂问题拆成清晰的行动步骤。"),
-            ConversationStarter("一起创作", "让文字慢慢成形", Icons.Rounded.EditNote, "我想写一点东西，帮我一起打磨想法。"),
-            ConversationStarter("发现新知", "从好奇开始理解", Icons.Rounded.Explore, "我有一个想弄懂的概念，请用直观的例子解释。"),
-            ConversationStarter("聊聊日常", "留一点空间给自己", Icons.Rounded.Forum, "我想和你聊聊今天发生的事情。")
-        ), onSelect = onSuggestion, modifier = modifier,
-        footer = {
+internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
+    // 极简空态：星标 + 一句时段问候，仅保留未配置模型时的引导动作。
+    // 问候取本地时段，每分钟轻刷一次（长时间停留跨过时段边界也不至于停在昨天的句子）。
+    var hourOfDay by remember { mutableIntStateOf(java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000L)
+            hourOfDay = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+        }
+    }
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Box(
+                Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(AccentSoft.copy(alpha = 0.6f)),
+                contentAlignment = Alignment.Center
+            ) {
+                AsterMark(Modifier.padding(16.dp).fillMaxSize().claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200))
+            }
+            Spacer(Modifier.height(22.dp))
+            Text(
+                text = emptyChatGreeting(hourOfDay, userName),
+                style = MaterialTheme.typography.headlineSmall,
+                color = Ink,
+                textAlign = TextAlign.Center
+            )
             if (model.isBlank()) {
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(20.dp))
                 Button(onClick = onConfigure, shape = RoundedCornerShape(16.dp)) { Text("连接第一个模型") }
             }
         }
-    )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -824,12 +836,7 @@ private fun StreamRecoveryStatus(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (recovering) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    color = Accent,
-                    trackColor = Accent.copy(alpha = .18f),
-                    strokeWidth = 1.8.dp
-                )
+                AsterLoadingIndicator(size = 14.dp)
             } else {
                 Icon(Icons.Rounded.Sync, null, Modifier.size(15.dp))
             }
@@ -880,12 +887,7 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     waiting -> Icon(Icons.Rounded.HelpOutline, null, Modifier.size(18.dp), tint = Sage)
-                    running -> CircularProgressIndicator(
-                        modifier = Modifier.size(17.dp),
-                        color = tint,
-                        trackColor = tint.copy(alpha = .16f),
-                        strokeWidth = 2.dp
-                    )
+                    running -> AsterLoadingIndicator(size = 17.dp, tint = tint)
                     failed -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp), tint = tint)
                     else -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(18.dp), tint = tint)
                 }
@@ -1903,7 +1905,7 @@ private fun ReadableText(
                     placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter
                 )
             ) {
-                AsterMark(Modifier.fillMaxSize(), tint = Accent.copy(alpha = .72f))
+                AsterMark(Modifier.fillMaxSize().graphicsLayer { alpha = 0.72f })
             }
         )
     } else {
@@ -1950,8 +1952,7 @@ private fun ModelWorkingFoot(caption: String) {
     val lift = with(density) { 4.dp.toPx() } * sin(PI * beat).toFloat()
     Row(Modifier.padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
         AsterMark(
-            Modifier.size(18.dp).graphicsLayer { translationY = -lift },
-            tint = Accent
+            Modifier.size(18.dp).graphicsLayer { translationY = -lift }
         )
         Spacer(Modifier.width(8.dp))
         Text(caption, color = MutedInk, style = MaterialTheme.typography.labelLarge)

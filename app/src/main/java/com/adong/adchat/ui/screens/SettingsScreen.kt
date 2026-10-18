@@ -759,7 +759,7 @@ private fun ProfileCard(
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(Canvas), contentAlignment = Alignment.Center) {
-                    if (state.phase == ConnectionPhase.Testing) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                    if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 19.dp, tint = Accent)
                     else Icon(Icons.Rounded.Dns, null, tint = statusColor, modifier = Modifier.size(21.dp))
                 }
                 Spacer(Modifier.width(12.dp))
@@ -1128,7 +1128,7 @@ private fun ConnectionEditorCard(
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)
             ) {
-                if (state.phase == ConnectionPhase.Testing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = WarmWhite)
+                if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 16.dp, tint = WarmWhite)
                 else Text("测试并同步")
             }
         }

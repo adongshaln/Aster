@@ -16,7 +16,6 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -45,6 +44,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.adong.adchat.media.ResolvedMedia
+import com.adong.adchat.ui.components.AsterLoadingIndicator
 import com.adong.adchat.ui.theme.Accent
 import com.adong.adchat.ui.theme.Ink
 import kotlinx.coroutines.delay
@@ -214,10 +214,10 @@ fun MediaPreviewPlayer(
                     }
                 }
             }
-            buffering -> CircularProgressIndicator(
-                color = Color.White,
-                strokeWidth = 2.5.dp,
-                modifier = Modifier.align(Alignment.Center).size(38.dp)
+            buffering -> AsterLoadingIndicator(
+                tint = Color.White,
+                modifier = Modifier.align(Alignment.Center),
+                size = 38.dp
             )
             else -> AnimatedVisibility(
                 visible = controlsVisible || !playing,
