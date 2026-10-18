@@ -26,6 +26,7 @@ import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import com.adong.adchat.ui.markdown.linkAt
 import com.adong.adchat.ui.clawd.ClawdHost
 import androidx.compose.ui.text.Placeholder
@@ -581,6 +583,24 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             hourOfDay = nowHour().also { band = greetingBand(it) }
         }
     }
+
+    // 星标是可点的实体：每点一次角速度加一档，惯性旋转并摩擦减速，越点越快。
+    // 旋转通过 graphicsLayer 的延迟读取应用在绘制阶段，不触发每帧重组。
+    val haptics = LocalHapticFeedback.current
+    var angle by remember { mutableFloatStateOf(0f) }
+    var spinSpeed by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(Unit) {
+        var last = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            val dt = (now - last) / 1_000_000_000.0
+            last = now
+            if (spinSpeed > 0f) {
+                angle = (angle + spinSpeed * dt).toFloat() % 360f
+                spinSpeed = (spinSpeed - 60f * dt).coerceAtLeast(0f)
+            }
+        }
+    }
     Box(modifier, contentAlignment = Alignment.TopCenter) {
         Column(
             modifier = Modifier.padding(top = 88.dp),
@@ -589,8 +609,18 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             Box(
                 Modifier.size(88.dp)
                     .claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) {
+                        spinSpeed = (spinSpeed + 240f).coerceAtMost(1440f)
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    },
+                contentAlignment = Alignment.Center
             ) {
-                AsterMark(Modifier.fillMaxSize())
+                AsterMark(
+                    Modifier.fillMaxSize().graphicsLayer { rotationZ = angle }
+                )
             }
             Spacer(Modifier.height(22.dp))
             Text(
