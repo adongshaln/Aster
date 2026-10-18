@@ -214,7 +214,7 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
                         Column(Modifier.weight(1f)) {
                             Text("我的称呼", style = MaterialTheme.typography.titleSmall)
                             Text(
-                                if (vm.appConfig.userName.isBlank()) "未设置；对话中助手不会用特定称呼" else "对话中助手会称呼您「${vm.appConfig.userName}」",
+                                if (vm.appConfig.userName.isBlank()) "未设置；首页问候不带称呼" else "首页问候会称呼您「${vm.appConfig.userName}」",
                                 color = MutedInk, style = MaterialTheme.typography.bodySmall
                             )
                         }

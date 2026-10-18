@@ -859,7 +859,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     model = model,
                     systemPrompt = listOf(
                         appConfig.systemPrompt,
-                        userNameInstruction(appConfig.userName),
                         NARRATIVE_NAME_MARK_INSTRUCTION,
                         COVER_IMAGE_INSTRUCTION
                     ).filter(String::isNotBlank).joinToString("\n\n"),

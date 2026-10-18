@@ -49,9 +49,9 @@ fun UserNamePromptDialog(
 
     val title = if (mode == UserNamePromptMode.Onboarding) "该怎么称呼您？" else "我的称呼"
     val subtitle = if (mode == UserNamePromptMode.Onboarding)
-        "助手会用这个称呼您；也可以先跳过，随时能在 设置 → 助手偏好 里补充"
+        "首页的时段问候会用这个称呼您；也可以先跳过，随时能在 设置 → 助手偏好 里补充"
     else
-        "助手会在对话中这样称呼您；留空保存即清除"
+        "首页问候会用这个称呼您；留空保存即清除"
     val skipLabel = if (mode == UserNamePromptMode.Onboarding) "稍后再说" else "取消"
     val confirmLabel = if (mode == UserNamePromptMode.Onboarding) "就叫我这个" else "保存"
     val confirmEnabled = if (mode == UserNamePromptMode.Onboarding) trimmed.isNotBlank() else true
