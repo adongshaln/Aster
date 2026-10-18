@@ -593,10 +593,10 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
         var last = withFrameNanos { it }
         while (true) {
             val now = withFrameNanos { it }
-            val dt = (now - last) / 1_000_000_000.0
+            val dt = ((now - last) / 1_000_000_000.0).toFloat()
             last = now
             if (spinSpeed > 0f) {
-                angle = (angle + spinSpeed * dt).toFloat() % 360f
+                angle = (angle + spinSpeed * dt) % 360f
                 spinSpeed = (spinSpeed - 60f * dt).coerceAtLeast(0f)
             }
         }
