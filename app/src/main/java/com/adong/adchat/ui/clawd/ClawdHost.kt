@@ -117,7 +117,7 @@ fun ClawdHost(
         runtime.setGeneration(generating, lastText.isNotBlank(), if (!generating) "done" else null)
     }
     LaunchedEffect(night) { runtime.night = night }
-    // 聊天区滚动 → 大爪扒边 + 小爪缩下去（原版 __clawdScroll → clawdScrollTilt）
+    // 聊天区滚动只驱动大爪扒边，小爪不响应（原版 __clawdScroll → clawdScrollTilt）
     LaunchedEffect(scrollTick) { if (scrollTick > 0) runtime.onScroll() }
 
     DisposableEffect(pile, runtime) {

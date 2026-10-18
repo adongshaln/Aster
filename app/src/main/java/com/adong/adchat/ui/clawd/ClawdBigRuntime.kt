@@ -184,7 +184,6 @@ class ClawdBigRuntime(
     // ═══ 滚动 peek（host 3725-3760）═══
     private var scrollHolding = false
     private var scrollRestTimer: Job? = null
-    private var pileRestTimer: Job? = null
     private var suppressManualScrollUntil = 0L
 
     // ═══ 帧渲染输出（采样层读）═══
@@ -205,7 +204,7 @@ class ClawdBigRuntime(
         runtimeJob?.cancel(); runtimeJob = null
         physicsJob?.cancel(); physicsJob = null
         petTimer?.cancel(); dozeTimer?.cancel()
-        scrollRestTimer?.cancel(); pileRestTimer?.cancel()
+        scrollRestTimer?.cancel()
         squashTimer?.cancel(); bndRaf?.cancel()
         started = false
     }
@@ -714,7 +713,6 @@ class ClawdBigRuntime(
         val bBase = trackB.removePrefix("rig:").removeSuffix("-m")
         val bigPeeks = trackC == null && !a2Locked() && !held && abs(fy - floor) < .5
             && !(idleAsleep || ccDrowsy || bBase == "sleep" || bBase == "drowsy")
-        pile.peek(true, if (bigPeeks && floor == 0.0) 12 else 0, floor != 0.0)
         if (bigPeeks && floor == 0.0) {
             scrollHolding = true
             setClawdB("peek", 60000)
@@ -724,12 +722,6 @@ class ClawdBigRuntime(
     }
 
     private fun armScrollRest() {
-        pileRestTimer?.cancel()
-        pileRestTimer = scope.launch {
-            delay(CLAWD_SCROLL_REST_MS)
-            pileRestTimer = null
-            pile.peek(false)
-        }
         if (!scrollHolding) return
         scrollRestTimer?.cancel()
         scrollRestTimer = scope.launch {

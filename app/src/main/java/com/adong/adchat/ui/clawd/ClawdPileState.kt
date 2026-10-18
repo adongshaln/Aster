@@ -847,7 +847,7 @@ class ClawdPileState(
     val actorWidthPx: Int get() = bodyW
     val actorHeightPx: Int get() = data.h * data.px
 
-    /* ===== 大 Clawd 支撑（原版 seats/blocks/follow/bigSat/unloadBig/peek/restack，2.0.300+） ===== */
+    /* ===== 大 Clawd 支撑（原版 seats/blocks/follow/bigSat/unloadBig/restack，2.0.300+） ===== */
 
     /** 当前坐在大 Clawd 头上的那只（大 Clawd 只是一个「支撑」）。 */
     var bigSatName: String? = null
@@ -973,42 +973,6 @@ class ClawdPileState(
         for (k in fell) if (k.on.isEmpty()) nearestFree(k.x, k.name)?.let { k.x = it }
         stackX()
         changed()
-    }
-
-    /** peek（滚动时扒边）。bigDrop：坐大爪头上的往下多少；bigSeated：大爪坐着时不缩。 */
-    var peeking = false
-        private set
-    var peekBigDrop = 0
-        private set
-    private var peekStill = emptySet<String>()
-
-    fun peek(on: Boolean, bigDrop: Int = 12, bigSeated: Boolean = false) {
-        if (!laid) return
-        if (on) {
-            peekBigDrop = bigDrop
-            if (bigSeated && bigSatName != null) {
-                val still = mutableSetOf<String>()
-                fun down(n: String) {
-                    if (n == "big" || still.contains(n)) return
-                    still.add(n)
-                    actors[n]?.on?.forEach(::down)
-                }
-                down(bigSatName!!)
-                peekStill = still
-            } else peekStill = emptySet()
-            if (!peeking) peeking = true
-        } else if (peeking) {
-            peeking = false
-            peekStill = emptySet()
-        }
-        changed()
-    }
-
-    /** 渲染层查询：某只这次 peek 应往下缩多少（dp）。 */
-    fun peekOffsetOf(name: String): Int {
-        if (!peeking) return 0
-        val k = actors[name] ?: return 0
-        return if (onBig(k) || peekStill.contains(name)) peekBigDrop else 4 * px
     }
 
     companion object {
