@@ -1050,14 +1050,12 @@ class ClawdBigRuntime(
             floor = 0.0
             pile.bigSat(null)
         }
-        val seats = { pile.trackSeats() }
         // seats.cx 在带（pile）坐标系；大爪 rig 中心在带坐标系 = x + bandLeftOffset - 4 + 24。
         // 换算回偏移轴比较：偏移轴中心 = x - 4 + 24（相对带右缘的按钮左缘偏移 x）。
         fun centerAt(xv: Double) = xv + bandLeftOffset + 20.0
-        fun seatUnder(xv: Double) = seats().filter { abs(centerAt(xv) - it.cx) < maxOf(48.0, it.w) * .5 }.maxByOrNull { it.h }
         ballisticSteps = Ballistic(
             my = my, P = P, bx = bx, by = by, bounces = bounces, drop = drop,
-            centerAt = ::centerAt, seatUnder = ::seatUnder, x0 = x,
+            centerAt = ::centerAt,
         )
         flyingActive = true
     }
@@ -1065,7 +1063,6 @@ class ClawdBigRuntime(
     private class Ballistic(
         val my: Int, val P: Phys, var bx: Double, var by: Double, var bounces: Int,
         val drop: Boolean, val centerAt: (Double) -> Double,
-        val seatUnder: (Double) -> SeatInfo?, val x0: Double,
     ) {
         var last = SystemClock.elapsedRealtime()
     }
@@ -1087,8 +1084,56 @@ class ClawdBigRuntime(
         bal.by += P.g * k
         bal.bx *= Math.pow(P.drag, k)
         bal.by *= Math.pow(P.drag, k)
-        x += bal.bx * k
-        fy += bal.by * k
+        // 物理 hull：pile 本地坐标，bottom=fy，legacy 支撑尺寸
+        var box = ClawdCollision.Box(
+            left = x - 4 + bandLeftOffset,
+            top = fy - ClawdPileState.BIG_REST,
+            right = x - 4 + bandLeftOffset + ClawdPileState.BIG_W,
+            bottom = fy,
+        )
+        var remDx = bal.bx * k
+        var remDy = bal.by * k
+        val solids = pile.collisionBodies(includeBig = false) +
+            ClawdCollision.Solid("__ground", ClawdCollision.Box(-10000.0, 0.0, 10000.0, 10000.0))
+        var landingSolid: ClawdCollision.Solid? = null
+        for (i in 0 until 4) {
+            val hit = ClawdCollision.firstHit(box, remDx, remDy, solids)
+            if (hit == null) {
+                // 无接触：走完本帧剩余位移
+                box = box.translated(remDx, remDy)
+                remDx = 0.0; remDy = 0.0
+                break
+            }
+            box = box.translated(remDx * hit.time, remDy * hit.time)
+            remDx -= remDx * hit.time
+            remDy -= remDy * hit.time
+            if (hit.pushX != 0.0 || hit.pushY != 0.0) {
+                // 初始重叠：推出到不穿透位置
+                box = box.translated(hit.pushX, hit.pushY)
+            }
+            when {
+                hit.normalX != 0 && bal.bx * hit.normalX < 0 -> {
+                    bal.bx = -bal.bx * .45
+                    remDx = 0.0
+                }
+                hit.normalY > 0 && bal.by * hit.normalY < 0 -> {
+                    bal.by = -bal.by * .45
+                    remDy = 0.0
+                }
+                hit.normalY < 0 && bal.by >= 0 -> {
+                    // 顶面接触且正在下行：落地
+                    landingSolid = hit.solid
+                    remDx = 0.0
+                    remDy = 0.0
+                    break
+                }
+                else -> {
+                    // 上行顶到顶面：仅推出，保留向上剩余位移，不判落地
+                }
+            }
+        }
+        x = box.left - (bandLeftOffset - 4)
+        fy = box.bottom
         val clamped = a2ClampX(x)
         if (clamped != x) {
             x = clamped
@@ -1100,9 +1145,16 @@ class ClawdBigRuntime(
             bal.by = .45 * -bal.by
         }
         clampToViewport()
-        val seat = if (bal.by > 0) bal.seatUnder(x) else null
-        val ground = seat?.h?.let { -it } ?: 0.0
-        if (fy >= ground) {
+        val seat = landingSolid?.takeUnless { it.name == "__ground" }?.let {
+            SeatInfo(
+                cx = (it.box.left + it.box.right) / 2,
+                h = -it.box.top,
+                w = it.box.right - it.box.left,
+                name = it.name,
+            )
+        }
+        val ground = landingSolid?.box?.top ?: 0.0
+        if (landingSolid != null) {
             fy = ground
             if (bal.bounces == 0) setClawdC("land", 0)
             if (!(abs(bal.by) > .7 && bal.bounces < 6)) {

@@ -587,6 +587,7 @@ class ClawdPileState(
 
     fun drop(name: String, cx: Int, onHead: String?) {
         val k = actors.getValue(name)
+        k.squashAt = android.os.SystemClock.elapsedRealtime()
         if (onHead == "big") {
             // 放在大爪头上（原版 drop 的 onBigHead 分支）
             k.x = clampX(cx)
@@ -607,6 +608,7 @@ class ClawdPileState(
         if (onHead != null && actors.containsKey(onHead) && actors.getValue(onHead).mode != Mode.HELD) {
             val below = actors.getValue(onHead)
             if (below.walk != null) {
+                endWalk(below)
                 clear(below)
                 below.mode = Mode.SIT
                 below.pose = PilePose.CROUCH
@@ -644,79 +646,128 @@ class ClawdPileState(
         var x: Double, var y: Double,
         var vx: Double, var vy: Double,
         var bounces: Int = 0,
-        /** 松手时离地高度（正数）：放到大爪头上判定用（原版 drop 的 py） */
-        var releaseFromGround: Double = 0.0,
     )
 
     private val flights = HashMap<String, Flight>()
     fun flightOf(name: String): Flight? = flights[name]
     fun isFlying(name: String): Boolean = flights.containsKey(name)
 
-    /**
-     * 松手抛出。onLand(name, 落地x, 坐在谁头上或null)。
-     * releaseFromGround = 松手时画布底边离地高度（正数，地面=0）——原版 drop 的 py 取负，
-     * 这里用同量纲的正值，供「放到大爪头上」判定（原版 py < -supportTop('big') + 6）。
-     */
+    /** 松手抛出。onLand(name, 落地x, 落到哪只身上或null——精确接触面，不再用临近猜测)。 */
     fun throwAt(
         name: String, x: Double, y: Double, vx: Double, vy: Double,
-        releaseFromGround: Double = 0.0,
         onLand: (String, Int, String?) -> Unit,
     ) {
         actors.getValue(name)   // 校验存在
-        val f = Flight(x, y, vx, vy)
-        f.releaseFromGround = releaseFromGround
-        flights[name] = f
+        flights[name] = Flight(x, y, vx, vy)
         flightCallbacks[name] = onLand
     }
 
     private val flightCallbacks = HashMap<String, (String, Int, String?) -> Unit>()
 
+    /**
+     * 碰撞体清单（飞行扫掠用）：每个站稳的小爪一个 hull
+     * [posX, -lift-liftH, posX+bodyW, -lift]（地面=0，向上为负）。
+     * except 排除自己；includeBig=false 时排除骑在大爪头上的（大爪不能撞自己头上的乘客）。
+     * 大爪站稳（含坐着时）也算：底 = -(bigSat 的 supportTop)，高 BIG_REST。
+     */
+    internal fun collisionBodies(except: String? = null, includeBig: Boolean = true): List<ClawdCollision.Solid> {
+        val solids = ArrayList<ClawdCollision.Solid>()
+        for (k in actors.values) {
+            if (k.name == except || k.mode == Mode.HELD || flights.containsKey(k.name)) continue
+            if (!includeBig && onBig(k)) continue
+            val l = posX(k).toDouble()
+            val b = -lift(k).toDouble()
+            solids.add(ClawdCollision.Solid(k.name, ClawdCollision.Box(l, b - liftH, l + bodyW, b)))
+        }
+        if (includeBig && bigGrounded && bigLeftDp != null) {
+            val bottom = -(bigSatName?.let { supportTop(it) } ?: 0).toDouble()
+            solids.add(
+                ClawdCollision.Solid(
+                    "big",
+                    ClawdCollision.Box(bigLeftDp!!, bottom - BIG_REST, bigLeftDp!! + BIG_W, bottom),
+                )
+            )
+        }
+        return solids
+    }
+
     /** 渲染层驱动的物理帧（原版在 rAF 里）。dt = 相对 16.7ms 的倍数。返回 true = 还有在飞的。 */
     fun stepFlights(dt: Float, bandHeightDp: Float): Boolean {
         if (flights.isEmpty()) return false
         val P = flightPhys()
+        val hPx = actorHeightPx.toDouble()
         val it = flights.entries.iterator()
         while (it.hasNext()) {
             val (name, f) = it.next()
             f.vy += P.g * dt
             f.vx *= Math.pow(P.drag, dt.toDouble())
             f.vy *= Math.pow(P.drag, dt.toDouble())
-            f.x += f.vx * dt
-            f.y += f.vy * dt
-            // 地面 = 带底（画布高 actorHeightPx 贴地）；y 向下为正
-            val groundY = (bandHeightDp - actorHeightPx).toDouble()
-            if (f.y >= groundY) {
-                f.y = groundY
-                if (!(abs(f.vy) > .7 && f.bounces < 6)) {
-                    f.vx = 0.0; f.vy = 0.0
-                    it.remove()
-                    val cb = flightCallbacks.remove(name)
-                    val snap = snapshot()
-                    val bl = bigX()
-                    val bigFree = bl != null && actors.values.none { it.on.contains("big") }
-                    // 大爪头顶能放：站稳、头顶没人、横向居中、松手时手指在它头顶上方（原版 397 行）
-                    // 原版 py 是 clientY 相对地面（向上为负）；这里 releaseFromGround 是同一高度的正值。
-                    val onBigHead = bigFree &&
-                        abs(bl!! + BIG_W / 2 - (f.x + bodyW / 2)) < BIG_W * .55 &&
-                        -f.releaseFromGround < -supportTopBig("big") + 6
-                    val target = if (onBigHead) "big" else snap
-                        .filter { o -> o.name != name && o.mode != Mode.HELD }
-                        .filter { o -> snap.none { c -> c.name != o.name && c.on.contains(o.name) } }
-                        .filter { o -> abs(posX(actors.getValue(o.name)) - f.x) < bodyW * .6 }
-                        .minByOrNull { o -> abs(posX(actors.getValue(o.name)) - f.x) }
-                        ?.name
-                    cb?.invoke(name, f.x.toInt(), target)
-                    changed()
-                    continue
+            // 移动盒（地面坐标系：底边 y，向上为负；地面 = 带底）
+            var left = f.x
+            var bottom = f.y + hPx - bandHeightDp
+            val wallR = max(width, bodyW).toDouble()
+            val solids = collisionBodies(except = name) + listOf(
+                ClawdCollision.Solid("__ground", ClawdCollision.Box(-10000.0, 0.0, 10000.0, 10000.0)),
+                ClawdCollision.Solid("__wallL", ClawdCollision.Box(-10000.0, -10000.0, 0.0, 10000.0)),
+                ClawdCollision.Solid("__wallR", ClawdCollision.Box(wallR, -10000.0, wallR + 10000.0, 10000.0)),
+            )
+            var remainX = f.vx * dt
+            var remainY = f.vy * dt
+            var settled = false
+            var contact: String? = null
+            loop@ for (i in 0 until 4) {
+                if (remainX == 0.0 && remainY == 0.0) break
+                val box = ClawdCollision.Box(left, bottom - liftH, left + bodyW, bottom)
+                val hit = ClawdCollision.firstHit(box, remainX, remainY, solids)
+                if (hit == null) {
+                    left += remainX; bottom += remainY
+                    break
                 }
-                f.vy = -f.vy * P.rest
-                f.vx *= P.fric
-                f.bounces += 1
+                left += remainX * hit.time
+                bottom += remainY * hit.time
+                val tangX = remainX * (1 - hit.time)
+                val tangY = remainY * (1 - hit.time)
+                left += hit.pushX
+                bottom += hit.pushY
+                when {
+                    hit.normalY == -1 -> {
+                        if (f.vy > 0) {
+                            // 落在顶面：弹跳或落稳
+                            if (abs(f.vy) > .7 && f.bounces < 6) {
+                                f.vy = -f.vy * P.rest
+                                f.vx *= P.fric
+                                f.bounces += 1
+                            } else {
+                                f.vx = 0.0; f.vy = 0.0
+                                settled = true
+                                contact = hit.solid.name
+                                break@loop
+                            }
+                        }
+                        remainX = tangX
+                        remainY = if (tangY < 0.0) tangY else 0.0
+                    }
+                    hit.normalX != 0 -> {
+                        if (f.vx * hit.normalX < 0) f.vx = .45 * -f.vx
+                        remainX = if (tangX * hit.normalX > 0.0) tangX else 0.0
+                        remainY = tangY
+                    }
+                    else -> {
+                        if (f.vy * hit.normalY < 0) f.vy = .45 * -f.vy
+                        remainY = if (tangY > 0.0) tangY else 0.0
+                        remainX = tangX
+                    }
+                }
             }
-            // 左右墙（带内）
-            val maxX = (width - actorWidthPx).toDouble().coerceAtLeast(0.0)
-            if (f.x < 0) { f.x = 0.0; f.vx = .45 * -f.vx }
-            if (f.x > maxX) { f.x = maxX; f.vx = .45 * -f.vx }
+            f.x = left
+            f.y = bottom + bandHeightDp - hPx
+            if (settled) {
+                it.remove()
+                val cb = flightCallbacks.remove(name)
+                cb?.invoke(name, f.x.toInt(), contact?.takeIf { c -> c != "__ground" })
+                changed()
+                continue
+            }
         }
         changed()
         return flights.isNotEmpty()
@@ -739,6 +790,11 @@ class ClawdPileState(
     private fun lowerFrom(list: List<String>, gone: String, hop: Boolean = false) {
         if (list.isEmpty()) return
         for (n in list) {
+            // 'big' 不是小爪 actor（carriers 会算进来）：座位失效即可
+            if (n == "big") {
+                bigSeatDirty = true
+                continue
+            }
             val t = actors.getValue(n)
             t.on = t.on.filter { it != gone }.toMutableList()
             if (t.on.isEmpty()) {
@@ -825,10 +881,6 @@ class ClawdPileState(
 
     /** 间接或直接坐在大 Clawd 头上（on 链里含 'big'）。 */
     private fun onBig(k: Inner): Boolean = k.on.any { it == "big" || onBig(actors.getValue(it)) }
-
-    /** supportTop 递归改为会认 'big'：坐在 n 头上时离地多高。 */
-    private fun supportTopBig(n: String): Int =
-        if (n == "big") (bigSatName?.let { supportTop(it) } ?: 0) + BIG_REST else supportTop(n)
 
     /** 大 Clawd 掉下来时，哪些小爪头上能坐：屏幕中心 x、身宽、坐上去离地多高（dp）。 */
     fun seats(): List<ClawdBigRuntime.SeatInfo> {
