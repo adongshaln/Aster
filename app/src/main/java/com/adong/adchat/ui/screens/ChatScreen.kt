@@ -574,26 +574,23 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
     fun nowHour() = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
     var hourOfDay by remember { mutableIntStateOf(nowHour()) }
     var band by remember { mutableIntStateOf(greetingBand(hourOfDay)) }
-    var roll by remember { mutableIntStateOf((0..Int.MAX_VALUE).random()) }
-    LaunchedEffect(band) {
-        roll = (0..Int.MAX_VALUE).random()
-    }
+    var roll by remember(band) { mutableIntStateOf((0..Int.MAX_VALUE).random()) }
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000L)
             hourOfDay = nowHour().also { band = greetingBand(it) }
         }
     }
-    Box(modifier, contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    Box(modifier, contentAlignment = Alignment.TopCenter) {
+        Column(
+            modifier = Modifier.padding(top = 88.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Box(
-                Modifier
-                    .size(96.dp)
-                    .clip(CircleShape)
-                    .background(AccentSoft.copy(alpha = 0.6f)),
-                contentAlignment = Alignment.Center
+                Modifier.size(88.dp)
+                    .claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200)
             ) {
-                AsterMark(Modifier.padding(16.dp).fillMaxSize().claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200))
+                AsterMark(Modifier.fillMaxSize())
             }
             Spacer(Modifier.height(22.dp))
             Text(

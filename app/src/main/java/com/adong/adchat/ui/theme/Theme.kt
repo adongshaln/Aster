@@ -212,6 +212,13 @@ private fun asterTypography(serifFont: FontFamily) = Typography(
         lineHeight = 35.sp,
         letterSpacing = (-0.3).sp
     ),
+    headlineSmall = TextStyle(
+        fontFamily = serifFont,
+        fontWeight = FontWeight.Normal,
+        fontSize = 24.sp,
+        lineHeight = 32.sp,
+        letterSpacing = (-0.3).sp
+    ),
     titleLarge = TextStyle(
         fontFamily = serifFont,
         fontWeight = FontWeight.Medium,
