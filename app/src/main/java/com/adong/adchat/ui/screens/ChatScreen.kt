@@ -569,12 +569,18 @@ private fun ChatHeader(
 @Composable
 internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
     // 极简空态：星标 + 一句时段问候，仅保留未配置模型时的引导动作。
-    // 问候取本地时段，每分钟轻刷一次（长时间停留跨过时段边界也不至于停在昨天的句子）。
-    var hourOfDay by remember { mutableIntStateOf(java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)) }
+    // 问候按时段随机轮换：进入空态抽一句，跨时段再抽一次；每分钟只刷新时钟，重组不闪句。
+    fun nowHour() = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+    var hourOfDay by remember { mutableIntStateOf(nowHour()) }
+    var band by remember { mutableIntStateOf(greetingBand(hourOfDay)) }
+    var roll by remember { mutableIntStateOf((0..Int.MAX_VALUE).random()) }
+    LaunchedEffect(band) {
+        roll = (0..Int.MAX_VALUE).random()
+    }
     LaunchedEffect(Unit) {
         while (true) {
             delay(60_000L)
-            hourOfDay = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
+            hourOfDay = nowHour().also { band = greetingBand(it) }
         }
     }
     Box(modifier, contentAlignment = Alignment.Center) {
@@ -590,7 +596,7 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             }
             Spacer(Modifier.height(22.dp))
             Text(
-                text = emptyChatGreeting(hourOfDay, userName),
+                text = emptyChatGreeting(hourOfDay, userName, roll),
                 style = MaterialTheme.typography.headlineSmall,
                 color = Ink,
                 textAlign = TextAlign.Center

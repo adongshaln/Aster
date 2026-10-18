@@ -48,7 +48,6 @@ import com.adong.adchat.ui.screens.StoryMessageItem
 import com.adong.adchat.ui.screens.StoryWorkspaceEmpty
 import com.adong.adchat.ui.screens.StructuredMessageText
 import com.adong.adchat.ui.screens.TavernPresetConfigurationSheet
-import com.adong.adchat.ui.screens.emptyChatGreeting
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -550,8 +549,8 @@ class SharedUiInteractionTest {
         }
         screenshot("welcome-before")
         rule.runOnIdle { screen = 1 }
-        // 空态改为时段问候后不再有旧标题与建议卡；用问候文本确认新空态在显示。
-        rule.onNodeWithText(emptyChatGreeting(java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY), "小明")).assertIsDisplayed()
+        // 空态改为时段随机问候后不再有旧标题与建议卡；断言带称呼问候在随机轮换下仍可命中。
+        rule.onNode(hasAnyDescendant(hasTextSubstring("小明"))).assertExists("新空态应显示带称呼的时段问候")
         screenshot("welcome-after")
         rule.runOnIdle { screen = 2 }
         rule.onNodeWithText("故事，从想象开始。").assertIsDisplayed()
