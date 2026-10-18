@@ -68,7 +68,7 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.adong.adchat.ui.markdown.linkAt
-import com.adong.adchat.ui.clawd.ClawdPileWebView
+import com.adong.adchat.ui.clawd.ClawdHost
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -154,6 +154,27 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val imeInsets = WindowInsets.ime
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     val userDragging by listState.interactionSource.collectIsDraggedAsState()
+    // 滚动信号：给 Clawd 的 peek（原版监听滚动）。仅在实际的拖拽/惯性滚动且位置真正变化时计数，
+    // 排除首次组合、程序化定位与回弹无位移的干扰。
+    var clawdScrollTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(listState, vm.activeConversationId) {
+        var manualScroll = false
+        var previousPosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                userDragging,
+                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            )
+        }.collect { (inProgress, dragging, position) ->
+            if (dragging) manualScroll = true
+            if (!inProgress && !dragging) manualScroll = false
+            if (inProgress && manualScroll && position != previousPosition) {
+                clawdScrollTick++
+            }
+            previousPosition = position
+        }
+    }
     val streamScrollSignals = remember {
         MutableSharedFlow<Unit>(
             extraBufferCapacity = 1,
@@ -459,16 +480,21 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 )
                 }
             }
-            // 三只小 Clawd + 大 Clawd：全屏透明 WebView 盖在聊天内容之上，跑未经修改的原版 JS。
-            // 原版里它们也允许浮到整个页面上（position:absolute 覆盖层、pointer-events:none）
-            ClawdPileLayer(
-                modifier = Modifier.matchParentSize(),
-                formAnchor = formAnchor,
-                chatAnchor = chatAnchor,
+            // 三只小 Clawd + 大 Clawd：原生 Compose（像素引擎 + Kotlin 状态机），
+            // 与原版行为逐段对照（tools/clawd/host-template.html 同源）。
+            // 爪带真实占位 56dp 钉在输入框上沿（底边 = 地面 = composer 顶边），
+            // 与原版 .clawd-pile{bottom:100%} 一致；空白处触摸穿透聊天页。
+            ClawdHost(
+                modifier = Modifier.align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(bottom = composerHeight),
                 inputText = vm.chatInput,
                 inputFocused = composerFocused,
                 generating = vm.isChatLoading,
                 lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
+                formAnchor = formAnchor,
+                chatAnchor = chatAnchor,
+                scrollTick = clawdScrollTick,
             )
         }
     }
@@ -512,32 +538,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
 }
 
-/** 输入框上的三只小 Clawd + 大 Clawd：全屏透明 WebView 跑未经修改的原版
- *  clawd-pile.js + clawd-rig.js + clawd-rhythm.js。
- *  formAnchor/chatAnchor = 输入框与聊天区在 Window 内的像素矩形（调用方量），
- *  JS 侧镜像为 #send_form/#sheld；输入文本、焦点、生成状态推给 JS 驱动动作。 */
-@Composable
-private fun ClawdPileLayer(
-    modifier: Modifier = Modifier,
-    formAnchor: androidx.compose.ui.geometry.Rect?,
-    chatAnchor: androidx.compose.ui.geometry.Rect?,
-    inputText: String,
-    inputFocused: Boolean,
-    generating: Boolean,
-    lastText: String,
-) {
-    val dark = com.adong.adchat.ui.theme.LocalThemeDark.current
-    ClawdPileWebView(
-        formAnchor = formAnchor,
-        chatAnchor = chatAnchor,
-        inputText = inputText,
-        inputFocused = inputFocused,
-        generating = generating,
-        lastText = lastText,
-        night = dark,
-        modifier = modifier,
-    )
-}
+/** 输入框上的 Clawd 层由 ui/clawd/ClawdHost.kt 接管：原生 Compose 宿主。 */
 
 @Composable
 private fun ChatHeader(
