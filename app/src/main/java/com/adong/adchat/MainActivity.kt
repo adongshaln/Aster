@@ -51,6 +51,8 @@ import kotlin.math.abs
 import com.adong.adchat.data.Conversation
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.*
+import com.adong.adchat.ui.components.UserNamePromptDialog
+import com.adong.adchat.ui.components.UserNamePromptMode
 import com.adong.adchat.ui.components.AdActionOption
 import com.adong.adchat.ui.components.AdActionSheet
 import com.adong.adchat.ui.components.AdConfirmDialog
@@ -122,6 +124,14 @@ internal enum class AppPage(val label: String, val icon: ImageVector) {
 @Composable
 private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextConsumed: () -> Unit) {
     var page by rememberSaveable { mutableStateOf(AppPage.Chat) }
+    if (!vm.appConfig.userNamePromptDone) {
+        UserNamePromptDialog(
+            mode = UserNamePromptMode.Onboarding,
+            currentName = vm.appConfig.userName,
+            onConfirm = vm::setUserName,
+            onSkip = vm::skipUserNamePrompt
+        )
+    }
     val pageStates = rememberSaveableStateHolder()
     val mediaVm: MediaDownloadViewModel = viewModel()
     val storyVm: StoryViewModel = viewModel()
@@ -599,7 +609,7 @@ private fun ConversationRow(
                 Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = if (generating) Accent else MutedInk, style = MaterialTheme.typography.labelMedium)
             }
-            if (generating) CircularProgressIndicator(Modifier.padding(horizontal = 4.dp).size(12.dp), color = Accent, strokeWidth = 1.5.dp)
+            if (generating) AsterLoadingIndicator(Modifier.padding(horizontal = 4.dp), size = 12.dp)
             AsterIconButton(Icons.Rounded.MoreHoriz, "更多：${conversation.title}", { showActions = true })
         }
     }

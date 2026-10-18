@@ -71,6 +71,7 @@ import com.adong.adchat.data.IMAGE_API_MODE_GEMINI
 import com.adong.adchat.data.IMAGE_API_MODE_OPENAI
 import com.adong.adchat.data.hasValidBaseUrl
 import com.adong.adchat.data.invalidExtraHeaderLines
+import com.adong.adchat.data.usesAnthropicMessages
 import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.resolveConversationRoute
 import com.adong.adchat.data.normalized
@@ -81,6 +82,8 @@ import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.AdActionOption
 import com.adong.adchat.ui.components.AdActionSheet
 import com.adong.adchat.ui.components.AdConfirmDialog
+import com.adong.adchat.ui.components.UserNamePromptDialog
+import com.adong.adchat.ui.components.UserNamePromptMode
 import com.adong.adchat.ui.components.AdModalDialog
 import com.adong.adchat.ui.components.AdToggleCard
 import com.adong.adchat.ui.components.AdChoiceOption
@@ -198,6 +201,28 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
             }
             item {
                 SettingsDisclosure("助手偏好", "角色、语气与回答习惯", Icons.Rounded.EditNote) {
+                    var editingName by remember { mutableStateOf(false) }
+                    if (editingName) {
+                        UserNamePromptDialog(
+                            mode = UserNamePromptMode.Edit,
+                            currentName = vm.appConfig.userName,
+                            onConfirm = { vm.setUserName(it); editingName = false },
+                            onSkip = { editingName = false }
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("我的称呼", style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                if (vm.appConfig.userName.isBlank()) "未设置；首页问候不带称呼" else "首页问候会称呼您「${vm.appConfig.userName}」",
+                                color = MutedInk, style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        TextButton(onClick = { editingName = true }) {
+                            Text(if (vm.appConfig.userName.isBlank()) "设置" else "修改")
+                        }
+                    }
+                    Spacer(Modifier.height(14.dp))
                     OutlinedTextField(
                         value = vm.appConfig.systemPrompt, onValueChange = vm::updateSystemPrompt,
                         modifier = Modifier.fillMaxWidth(), minLines = 4, maxLines = 8,
@@ -736,7 +761,7 @@ private fun ProfileCard(
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(Canvas), contentAlignment = Alignment.Center) {
-                    if (state.phase == ConnectionPhase.Testing) CircularProgressIndicator(Modifier.size(19.dp), color = Accent, strokeWidth = 2.dp)
+                    if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 19.dp, tint = Accent)
                     else Icon(Icons.Rounded.Dns, null, tint = statusColor, modifier = Modifier.size(21.dp))
                 }
                 Spacer(Modifier.width(12.dp))
@@ -774,7 +799,7 @@ private fun ProfileCard(
                 TextButton(onClick = onTest, enabled = state.phase != ConnectionPhase.Testing, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
                     Icon(Icons.Rounded.NetworkCheck, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("测试并同步")
                 }
-                Button(onClick = onEdit, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Night)) {
+                Button(onClick = onEdit, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)) {
                     Icon(Icons.Rounded.Edit, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("编辑")
                 }
             }
@@ -895,7 +920,16 @@ private fun ProfileEditor(
                             modifier = Modifier.fillMaxWidth(),
                             placeholder = { Text(if (keyNeedsReentry) "密钥已丢失，请重新填写" else "可留空用于本地服务") },
                             leadingIcon = { Icon(Icons.Outlined.Key, null) },
-                            trailingIcon = { IconButton(onClick = { keyVisible = !keyVisible }) { Icon(if (keyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (keyVisible) "隐藏密钥" else "显示密钥") } },
+                            trailingIcon = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    AnimatedVisibility(draft.apiKey.isNotEmpty()) {
+                                        IconButton(onClick = { draft = draft.copy(apiKey = "", cachedModels = emptyList(), lastLatencyMs = null) }) {
+                                            Icon(Icons.Outlined.Close, "全部删除")
+                                        }
+                                    }
+                                    IconButton(onClick = { keyVisible = !keyVisible }) { Icon(if (keyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (keyVisible) "隐藏密钥" else "显示密钥") }
+                                }
+                            },
                             visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             singleLine = true, shape = RoundedCornerShape(15.dp), colors = editorFieldColors()
                         )
@@ -917,7 +951,12 @@ private fun ProfileEditor(
             }
             item {
                 EditorSection("默认模型", "切换到此 API 时，会恢复这里保存的模型。") {
-                    Text(if (draft.usesResponses()) "GPT / Grok · Responses" else "其他模型 · Chat Completions",
+                    Text(
+                        when {
+                            draft.usesResponses() -> "GPT / Grok · Responses"
+                            draft.usesAnthropicMessages() -> "Claude 等 · Anthropic Messages"
+                            else -> "其他模型 · Chat Completions"
+                        },
                         color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("对话模型", draft.chatModel, models.filterNot { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
                     val limits = draft.modelContexts[draft.chatModel.trim()]
@@ -1029,9 +1068,9 @@ private fun ProfileEditor(
                     }
                     Text(
                         if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
-                            "对话仍走上方的 OpenAI 兼容路径。把这个配置选为联网搜索后端时，搜索改走 Messages API 的 web_search。"
+                            "非 GPT/Grok 模型的对话改走 Messages API（含工具调用与提示缓存）；GPT/Grok 仍走 Responses。选为联网搜索后端时用 Messages 的 web_search。"
                         } else {
-                            "GPT 与 Grok 的对话和默认搜索走 Responses。Anthropic 格式只在作为搜索后端时使用。"
+                            "GPT 与 Grok 的对话和默认搜索走 Responses；其他模型走 Chat Completions。"
                         },
                         color = MutedInk,
                         style = MaterialTheme.typography.bodySmall
@@ -1085,8 +1124,13 @@ private fun ConnectionEditorCard(
                 Text(disabledReason ?: state.detail, color = tone, style = MaterialTheme.typography.bodySmall)
             }
             Spacer(Modifier.width(8.dp))
-            TextButton(onClick = onTest, enabled = canTest && state.phase != ConnectionPhase.Testing) {
-                if (state.phase == ConnectionPhase.Testing) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            Button(
+                onClick = onTest,
+                enabled = canTest && state.phase != ConnectionPhase.Testing,
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)
+            ) {
+                if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 16.dp, tint = WarmWhite)
                 else Text("测试并同步")
             }
         }

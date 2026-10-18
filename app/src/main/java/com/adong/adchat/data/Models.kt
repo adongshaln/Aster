@@ -104,7 +104,11 @@ data class AppConfig(
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
     val themeMode: String = THEME_MODE_ASTER,
     val fontWeight: Int = DEFAULT_FONT_WEIGHT,
-    val allowInsecureCertificates: Boolean = false
+    val allowInsecureCertificates: Boolean = false,
+    /** 用户希望被怎样称呼；空串表示尚未设置（首启弹窗会询问）。 */
+    val userName: String = "",
+    /** 询问称呼的首启弹窗是否已完成（跳过或填写都算完成）。 */
+    val userNamePromptDone: Boolean = false
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
@@ -204,6 +208,8 @@ class ConfigStore(context: Context) {
         .put("themeMode", config.themeMode)
         .put("fontWeight", config.fontWeight)
         .put("allowInsecureCertificates", config.allowInsecureCertificates)
+        .put("userName", config.userName)
+        .put("userNamePromptDone", config.userNamePromptDone)
         .put("profiles", JSONArray().apply {
             config.profiles.forEach { profile ->
                 put(JSONObject()
@@ -299,7 +305,9 @@ class ConfigStore(context: Context) {
             systemPrompt = migrateSystemPrompt(root.optString("systemPrompt").ifBlank { DEFAULT_SYSTEM_PROMPT }),
             themeMode = root.optString("themeMode").takeIf { it in setOf(THEME_MODE_DARK, THEME_MODE_SYSTEM) } ?: THEME_MODE_ASTER,
             fontWeight = root.optInt("fontWeight", DEFAULT_FONT_WEIGHT).coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX),
-            allowInsecureCertificates = root.optBoolean("allowInsecureCertificates", false)
+            allowInsecureCertificates = root.optBoolean("allowInsecureCertificates", false),
+            userName = root.optString("userName").trim().take(24),
+            userNamePromptDone = root.optBoolean("userNamePromptDone", false)
         )
     }
 

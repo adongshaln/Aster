@@ -465,7 +465,7 @@ private fun PromptStudio(
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (referenceLoading) {
-                                    CircularProgressIndicator(Modifier.size(21.dp), color = Accent, strokeWidth = 2.dp)
+                                    AsterLoadingIndicator(size = 21.dp, tint = Accent)
                                 } else {
                                     Icon(Icons.Rounded.Collections, null, tint = Accent)
                                 }
@@ -999,7 +999,7 @@ private fun ArtworkCard(
                 )
                 if (!imageLoaded && !imageFailed) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp, color = Accent)
+                        AsterLoadingIndicator(size = 24.dp, tint = Accent)
                         Spacer(Modifier.height(8.dp))
                         Text("正在读取作品", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     }
@@ -1155,7 +1155,7 @@ private fun ImageLightbox(
                 }
             )
             if (!imageLoaded && !imageFailed) {
-                CircularProgressIndicator(Modifier.align(Alignment.Center).size(34.dp), color = Accent, strokeWidth = 2.5.dp)
+                AsterLoadingIndicator(Modifier.align(Alignment.Center), size = 34.dp, tint = Accent)
             }
             if (imageFailed) {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {

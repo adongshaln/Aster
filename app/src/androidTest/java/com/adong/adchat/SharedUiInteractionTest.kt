@@ -534,7 +534,7 @@ class SharedUiInteractionTest {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (screen) {
                         0 -> BaselineEmptyChat("gemini", {}, {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
-                        1 -> EmptyChat("gemini", { chosen = it }, {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
+                        1 -> EmptyChat("gemini", "小明", {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
                         2 -> StoryWorkspaceEmpty(StoryWorkspace.Discussion, Modifier.fillMaxSize().padding(bottom = 82.dp)) { chosen = it }
                         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                             .padding(horizontal = 22.dp, vertical = 20.dp).padding(bottom = 82.dp)) {
@@ -549,10 +549,10 @@ class SharedUiInteractionTest {
         }
         screenshot("welcome-before")
         rule.runOnIdle { screen = 1 }
-        rule.onNodeWithText("把想法，写在这里。").assertIsDisplayed()
+        // 空态改为时段随机问候后不再有旧标题与建议卡；断言带称呼问候在随机轮换下仍可命中。
+        rule.onNode(hasAnyDescendant(hasTextSubstring("小明"))).assertExists("新空态应显示带称呼的时段问候")
         screenshot("welcome-after")
-        rule.onNodeWithText("一起创作").performClick()
-        rule.runOnIdle { assertTrue(chosen.contains("打磨想法")); screen = 2 }
+        rule.runOnIdle { screen = 2 }
         rule.onNodeWithText("故事，从想象开始。").assertIsDisplayed()
         screenshot("story-welcome-after")
         rule.onNodeWithText("梳理走向").performClick()

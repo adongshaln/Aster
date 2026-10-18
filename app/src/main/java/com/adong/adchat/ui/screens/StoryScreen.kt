@@ -453,7 +453,7 @@ private fun TavernPresetSheet(
             modifier = Modifier.fillMaxWidth().height(50.dp),
             shape = RoundedCornerShape(16.dp)
         ) {
-            if (busy) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            if (busy) AsterLoadingIndicator(size = 18.dp)
             else Icon(Icons.Rounded.FileUpload, null, Modifier.size(19.dp))
             Spacer(Modifier.width(8.dp))
             Text(if (busy) "正在处理…" else "导入酒馆 JSON 预设")
