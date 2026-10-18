@@ -587,13 +587,10 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
-                Modifier
-                    .size(96.dp)
-                    .clip(CircleShape)
-                    .background(AccentSoft.copy(alpha = 0.6f)),
-                contentAlignment = Alignment.Center
+                Modifier.size(88.dp)
+                    .claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200)
             ) {
-                AsterMark(Modifier.padding(16.dp).fillMaxSize().claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200))
+                AsterMark(Modifier.fillMaxSize())
             }
             Spacer(Modifier.height(22.dp))
             Text(
