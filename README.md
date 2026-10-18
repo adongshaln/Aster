@@ -10,7 +10,7 @@
 
 Aster（原 ADChat）使用 Kotlin 与 Jetpack Compose 构建。对话与绘图可以分别路由到不同的 API 服务，模型、推理、工具调用、故事资料与历史任务都在统一界面中管理。
 
-> 当前稳定版本：**3.3.0** · `versionCode 75` · 完整历史见 [CHANGELOG.md](CHANGELOG.md)
+> 当前稳定版本：**3.7.0** · `versionCode 79` · 完整历史见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 功能版图
 
@@ -65,6 +65,7 @@ Aster（原 ADChat）使用 Kotlin 与 Jetpack Compose 构建。对话与绘图�
 - 3.1 — 制卡工作台与手势交互优化
 - 3.2 — 链接灵动岛
 - 3.3 — 输入建议、SVG / Mermaid 渲染、灵动岛光圈重设计
+- 3.7 — 原生 Clawd：状态互动与碰撞修复
 
 ## 技术栈
 

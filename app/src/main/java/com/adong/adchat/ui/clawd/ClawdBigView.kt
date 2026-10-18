@@ -1,0 +1,550 @@
+package com.adong.adchat.ui.clawd
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
+
+/**
+ * 大 Clawd 渲染层 = 原版 clawd-rig.js 的 CSS 动画引擎在 Compose 里的等价物。
+ *
+ * 原版：每层一个 <i class="clr-p-X">，帧 = box-shadow 点阵（无裁剪，符号/纸页自由溢出
+ * Clawd 框），位移 = left/top，缩放/旋转/透明度 = 独立属性动画，整只平移 = .clr-root
+ * transform，弹性层 = .clr-flex transform（transform-origin 脚底中点），剪辑切换 =
+ * data-clawd-clip 换 animation；待机常驻眨眼 + 双钳呼吸。
+ *
+ * 这里每帧把「当前剪辑在 t 时刻」的 9 层状态采出来直接画：
+ * - 位图窗口 = 全部精灵帧（含镜像）的最大包络（实测 x −6..21、y −10..16 格），
+ *   不再按 0..16 裁——「？」/「！」符号、写字的纸、伸出去的钳子都必须完整。
+ *   部件位移最大 ±33 格（done/write 甩纸），绘制层不裁剪（Compose 默认不裁）。
+ * - 时间轴挂在 runtime.visualAt 的 startMs（单调时钟）；intro 播一次 → loop 段循环；
+ *   非循环播完停在末帧（fill:forwards 等价）；剪辑退出靠轨道切换。
+ * - 镜像（mirrorState）：像素以框中线翻转（rigFramePixels 已处理）之外，
+ *   每层 dx 取反（sym 是 1−dx）、root.dx 取反、flex 的 r/tx 取反、逐层旋转取反。
+ * - 物理层（A2 x/fy/rot/squash）与剪辑的 root/flex 分层 transform，顺序与原版一致。
+ * - clipGround（hide/peek/peekOut）：地面线（框内 y=16 格）以下裁掉。
+ * - 待机：rest 姿势 + 4.4s 眨眼 + 双钳 3.2s 呼吸起伏。
+ * - 夜间墨色：'e'/'k' 换浅色（原版 --clr-ink 夜间变量）。
+ *
+ * 触摸层：42×34dp 小盒跟随 runtime.x/fy；屏幕位移用 window 坐标（原版 clientX/Y 语义）。
+ */
+@Composable
+fun ClawdBigOverlay(
+    runtime: ClawdBigRuntime,
+    rig: RigData,
+    modifier: Modifier = Modifier,
+    night: Boolean = false,
+) {
+    val palArgb = remember(night) {
+        rig.pal.mapValues { (ch, v) ->
+            if (night && (ch == "e" || ch == "k")) NIGHT_INK else ClawdLoader.colorArgb(v)
+        }
+    }
+    // 彩棒随机色（原版 clawdRigPickStickColors）：每次进入 glowstick 系列剪辑换一组
+    var stickA by remember { mutableStateOf(STICK_COLORS[0]) }
+    var stickB by remember { mutableStateOf(STICK_COLORS[1]) }
+    val palWithSticks = remember(palArgb, stickA, stickB) {
+        palArgb + mapOf(
+            "G" to stickA,
+            "N" to stickB,
+            "t" to withAlpha(stickA, .35),
+            "u" to withAlpha(stickB, .35),
+        )
+    }
+    val bitmapCache = remember(palWithSticks) { HashMap<PartKey, ImageBitmap>() }
+    // 位图窗口：全部部件、全部帧、含镜像的最大包络（数据驱动，换数据自动跟随）
+    val win = remember(rig) { rigWindow(rig) }
+    // sym 的变换中心（原版 .clr-p-sym transform-origin：box + origin + (0.5, 2.5) 格）
+    val symPivot = remember(rig, win) {
+        val o = rig.origin["sym"] ?: (7 to -9)
+        Pair(rig.boxX + o.first + 0.5 - win.x0, rig.boxY + o.second + 2.5 - win.y0)
+    }
+
+    var version by remember { mutableIntStateOf(0) }
+    DisposableEffect(runtime) {
+        runtime.onChanged = { version++ }
+        runtime.start()
+        onDispose {
+            runtime.onChanged = null
+            runtime.stop()
+        }
+    }
+
+    val density = LocalDensity.current
+    val d = density.density
+    val cellDp = rig.px
+
+    var session by remember { mutableStateOf(ClipSession()) }
+    var frame by remember { mutableStateOf(BigFrame.IDLE) }
+    // 掉道具 ghost：换剪辑瞬间把还在的道具层留一份，甩出去淡出（原版 clawdRigDropProps）
+    var ghosts by remember { mutableStateOf<List<Ghost>>(emptyList()) }
+    val ghostSpawn = remember { java.util.concurrent.atomic.AtomicInteger(0) }
+
+    LaunchedEffect(runtime, rig, night, palWithSticks) {
+        var frameT = 0L
+        while (true) {
+            withFrameNanos {
+                // 帧循环时钟必须与 runtime 的 clipStartMs 同域（elapsedRealtime）：
+                // withFrameNanos 给的是 System.nanoTime 域（不含深睡），混用会让
+                // elapsed = nowMs - startMs 恒为负 → 每个剪辑永远冻结在 t=0 第一帧
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                if (nowMs == frameT) return@withFrameNanos
+                frameT = nowMs
+                val v = runtime.visualAt(nowMs)
+                var s = session
+                if (s.seq != v.seq || s.clipId != v.clipId) {
+                    // 换剪辑：上一帧还在的道具层甩出去（原版 clawdRigDropProps 的 drop 动画）
+                    val props = frame.parts.filter { it.part == "propA" || it.part == "propB" }
+                    if (props.isNotEmpty()) {
+                        ghosts = ghosts + props.map { p ->
+                            Ghost(
+                                part = p, bornAt = nowMs,
+                                dir = if (s.mirror) -1 else 1,
+                                id = ghostSpawn.incrementAndGet(),
+                            )
+                        }
+                    }
+                    ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
+                    s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs, rate = v.rate)
+                    session = s
+                    // 彩棒换色（原版：每次播 glowstick 系列重新掷）
+                    if (v.clipId?.startsWith("glowstick") == true) {
+                        val n = STICK_COLORS.size
+                        val a = (Math.random() * n).toInt()
+                        val b = (a + 1 + (Math.random() * (n - 1)).toInt()) % n
+                        stickA = STICK_COLORS[a]
+                        stickB = STICK_COLORS[b]
+                    }
+                } else if (s.rate != v.rate) {
+                    // 倍速在会话中途变化：换算 startMs 保持已播进度连续
+                    val elapsed = (nowMs - s.startMs).toDouble()
+                    s = ClipSession(s.seq, s.clipId, s.mirror, nowMs - (elapsed / s.rate * v.rate).toLong(), v.rate)
+                    session = s
+                }
+                frame = computeFrame(rig, palWithSticks, bitmapCache, win, symPivot, s, v, nowMs)
+            }
+        }
+    }
+
+    // 物理层：订阅 version（runtime.onChanged 驱动），拖拽/弹道逐帧重组
+    val phys = remember(version) { runtime.visualAt(android.os.SystemClock.elapsedRealtime()) }
+    val f = frame
+    // ghost 活跃时逐帧重组（原版 Web Animations 自带时钟）
+    var ghostTick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ghosts.isNotEmpty()) {
+        while (ghosts.isNotEmpty()) {
+            withFrameNanos { ghostTick++ }
+        }
+    }
+    val nowMsNow = remember(ghostTick, version, frame) { android.os.SystemClock.elapsedRealtime() }
+
+    Box(modifier) {
+        // ── 触摸层：与大爪同位置的 42×34 小盒（原版按钮命中区），空白处穿透 ──
+        // 底边贴带底（= 小爪脚线 = 地面）：原版按钮 inset:auto auto calc(100% - 5px)。
+        var nodePosInWindow by remember { mutableStateOf(Offset.Zero) }
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .offset { IntOffset((phys.dx * d).roundToInt(), (phys.dy * d).roundToInt()) }
+                .size(42.dp, 34.dp)
+                .onGloballyPositioned { nodePosInWindow = it.positionInWindow() }
+                .pointerInput(runtime) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        down.consume()
+                        val sx = (nodePosInWindow.x + down.position.x) / d
+                        val sy = (nodePosInWindow.y + down.position.y) / d
+                        runtime.a2Down(sx, sy, down.id.value)
+                        drag(down.id) { change ->
+                            val cx = (nodePosInWindow.x + change.position.x) / d
+                            val cy = (nodePosInWindow.y + change.position.y) / d
+                            runtime.a2Move(cx, cy, change.id.value)
+                            change.consume()
+                        }
+                        runtime.a2Up(down.id.value)
+                    }
+                }
+        )
+
+        // ── 绘制层：按钮体（42×34）底边贴带底，rig 画布溢出到左 -4 / 上 -14 ──
+        Box(
+            Modifier
+                .align(Alignment.BottomEnd)
+                .offset { IntOffset((phys.dx * d).roundToInt(), (phys.dy * d).roundToInt()) }
+                .size(42.dp, 34.dp)
+        ) {
+            Canvas(Modifier.fillMaxSize()) {
+                // A2 物理形变层：transform-origin 按钮中心底部（21, 34）
+                rotate(phys.rot.toFloat(), pivot = Offset(21f * d, 34f * d)) {
+                    scale(phys.sqx.toFloat(), phys.sqy.toFloat(), pivot = Offset(21f * d, 34f * d)) {
+                        // rig 原点：按钮左上 + (-4dp, -14dp)；flex transform-origin (24, 48) 相对 rig 原点
+                        translate(-4f * d, -14f * d) {
+                            val pivot = Offset(24f * d, 48f * d)
+                            translate(pivot.x + f.flexTx * cellDp * d, pivot.y + f.flexTy * cellDp * d) {
+                                rotate(f.flexR, pivot = Offset.Zero) {
+                                    scale(f.flexSx, f.flexSy, pivot = Offset.Zero) {
+                                        translate(-pivot.x, -pivot.y) {
+                                            // 掉道具 ghost（原版 drop：抛物线甩出 + 淡出，800ms）
+                                            for (g in ghosts) {
+                                                val t = ((nowMsNow - g.bornAt).toFloat() / GHOST_MS).coerceIn(0f, 1f)
+                                                if (t >= 1f) continue
+                                                val dx = (g.dir * 36f * t).toDouble()
+                                                val dy = (-12f * t + 24f * t * t).toDouble()
+                                                translate(((g.part.x + dx) * cellDp * d).toFloat(), ((g.part.y + dy) * cellDp * d).toFloat()) {
+                                                    rotate(g.dir * 110f * t, pivot = Offset(g.part.bw * cellDp * d / 2f, g.part.bh * cellDp * d / 2f)) {
+                                                        drawImage(
+                                                            g.part.bitmap,
+                                                            dstOffset = IntOffset.Zero,
+                                                            dstSize = IntSize(
+                                                                (g.part.bw * cellDp * d).roundToInt(),
+                                                                (g.part.bh * cellDp * d).roundToInt(),
+                                                            ),
+                                                            alpha = (1f - t) * g.part.a,
+                                                            filterQuality = FilterQuality.None,
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            if (f.clipGround) {
+                                                // 地面线以下裁掉：框内 y=16 格 = 48dp（原版 groundClipRule）
+                                                clipRect(-400f * d, -400f * d, 400f * d, 48f * d) {
+                                                    drawParts(f, d, cellDp)
+                                                }
+                                            } else {
+                                                drawParts(f, d, cellDp)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+private const val NIGHT_INK = 0xFFC3C2B7.toInt()
+private const val GHOST_MS = 800L
+
+/** 掉道具 ghost：换剪辑瞬间留下的道具层，抛物线甩出后淡出（原版 clawdRigDropProps）。 */
+private class Ghost(
+    val part: BigFrame.Part,
+    val bornAt: Long,
+    val dir: Int,
+    val id: Int,
+)
+
+/** 彩棒调色板（原版 CLAWD_STICK_COLORS） */
+private val STICK_COLORS = intArrayOf(
+    0xFF7DFF9B.toInt(), 0xFFFF6BD6.toInt(), 0xFF6BE4FF.toInt(), 0xFFFFF36B.toInt(),
+    0xFFFF9B4A.toInt(), 0xFFB18CFF.toInt(), 0xFFFF5C6C.toInt(),
+)
+
+private fun withAlpha(argb: Int, a: Double): Int {
+    val alpha = ((argb ushr 24) and 0xFF) * a
+    return (alpha.toInt().coerceIn(0, 255) shl 24) or (argb and 0x00FFFFFF)
+}
+
+/** 精灵包络窗：全部部件、全部帧、含镜像的最大范围（格）。位图按此开窗，不再 0..16 硬裁。 */
+private class RigWindow(val x0: Int, val y0: Int, val w: Int, val h: Int)
+
+private fun rigWindow(rig: RigData): RigWindow {
+    var x0 = Int.MAX_VALUE; var y0 = Int.MAX_VALUE
+    var x1 = Int.MIN_VALUE; var y1 = Int.MIN_VALUE
+    for (part in rig.parts) {
+        val sheet = rig.sprites[rig.sheetOf(part)] ?: continue
+        val o = rig.origin[part] ?: continue
+        for (fr in sheet.values) {
+            for ((y, row) in fr.rows.withIndex()) {
+                for ((x, ch) in row.withIndex()) {
+                    if (ch == '.' || ch == ' ') continue
+                    val cx = o.first + fr.ox + x
+                    val cy = o.second + fr.oy + y
+                    for (fx in intArrayOf(cx, 15 - cx)) {   // 镜像也罩进来
+                        val ax = fx + rig.boxX
+                        val ay = cy + rig.boxY
+                        if (ax < x0) x0 = ax
+                        if (ax > x1) x1 = ax
+                        if (ay < y0) y0 = ay
+                        if (ay > y1) y1 = ay
+                    }
+                }
+            }
+        }
+    }
+    return RigWindow(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+}
+
+/** 逐层画部件位图。parts 已按 z 升序；x/y 是位图原点的框内格坐标（含 root 位移）。 */
+private fun DrawScope.drawParts(f: BigFrame, d: Float, cellDp: Int) {
+    for (p in f.parts) {
+        val drawX = (p.x * cellDp * d)
+        val drawY = (p.y * cellDp * d)
+        val bmpW = (p.bw * cellDp * d).roundToInt()
+        val bmpH = (p.bh * cellDp * d).roundToInt()
+        if (p.sc == 1f && p.r == 0f) {
+            drawImage(
+                p.bitmap,
+                dstOffset = IntOffset(drawX.roundToInt(), drawY.roundToInt()),
+                dstSize = IntSize(bmpW, bmpH),
+                alpha = p.a,
+                filterQuality = FilterQuality.None,
+            )
+        } else {
+            // 绕部件自己的变换中心（sym 用原版 transform-origin 格）
+            val px = drawX + (p.cx * cellDp * d).toFloat()
+            val py = drawY + (p.cy * cellDp * d).toFloat()
+            translate(px.toFloat(), py.toFloat()) {
+                rotate(p.r, pivot = Offset.Zero) {
+                    scale(p.sc, p.sc, pivot = Offset.Zero) {
+                        drawImage(
+                            p.bitmap,
+                            dstOffset = IntOffset((-p.cx * cellDp * d).roundToInt(), (-p.cy * cellDp * d).roundToInt()),
+                            dstSize = IntSize(bmpW, bmpH),
+                            alpha = p.a,
+                            filterQuality = FilterQuality.None,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 一帧要画的内容（帧循环产出，Canvas 消费）。 */
+private class BigFrame(
+    val parts: List<Part>,           // z 升序
+    val flexSx: Float, val flexSy: Float, val flexR: Float,
+    val flexTx: Float, val flexTy: Float,   // 美术格单位（×px=3 = dp）
+    val clipGround: Boolean,
+) {
+    class Part(
+        val bitmap: ImageBitmap,
+        val bw: Int, val bh: Int,           // 位图尺寸（格）
+        val x: Double, val y: Double,       // 位图原点的框内格坐标（含位移）
+        val sc: Float, val r: Float, val a: Float,
+        val cx: Double, val cy: Double,     // 变换中心（位图内，格）
+        val part: String = "",              // 部件名（ghost 判断道具层用）
+    )
+
+    companion object {
+        val IDLE = BigFrame(emptyList(), 1f, 1f, 0f, 0f, 0f, false)
+    }
+}
+
+/** 剪辑会话：runtime 换剪辑（seq 变）时重建。 */
+private class ClipSession(
+    val seq: Int = -1,
+    val clipId: String? = null,
+    val mirror: Boolean = false,
+    val startMs: Long = 0,
+    val rate: Double = 1.0,
+)
+
+private data class PartKey(val part: String, val frame: String, val mirror: Boolean)
+
+/**
+ * 采一帧：剪辑态或待机 rest 态。
+ * - 剪辑：intro 内播 intro；loop 段 (t-intro) 取模循环；非循环到 dur 停末帧（fill:forwards）。
+ * - 待机：rest 帧 + 眨眼（4.4s 一轮）+ 双钳呼吸（3.2s 平滑抬放）。
+ */
+private fun computeFrame(
+    rig: RigData,
+    pal: Map<String, Int>,
+    cache: HashMap<PartKey, ImageBitmap>,
+    win: RigWindow,
+    symPivot: Pair<Double, Double>,
+    session: ClipSession,
+    visual: ClawdBigRuntime.Visual,
+    nowMs: Long,
+): BigFrame {
+    val clipId = session.clipId ?: return restFrame(rig, pal, cache, win, symPivot, nowMs)
+    val clip = rig.clips[clipId] ?: return restFrame(rig, pal, cache, win, symPivot, nowMs)
+
+    // rate（write 倍速）已在会话切换时折进 startMs，这里按 elapsed 直接采样
+    val elapsed = (nowMs - session.startMs).coerceAtLeast(0)
+    val t: Int
+    if (clip.loop) {
+        val intro = clip.intro
+        t = if (elapsed < intro) elapsed.toInt()
+        else intro + ((elapsed - intro) % maxOf(1L, clip.dur - intro.toLong())).toInt()
+    } else {
+        t = elapsed.coerceAtMost(clip.dur.toLong()).toInt()
+        // hold/非循环都停在末帧（原版 fill:forwards）；剪辑退出靠轨道切换
+    }
+    val st0 = ClawdSampler.sampleState(rig, clip, t)
+    // 打字节奏（clawd-rhythm）：compose 时上半身下沉 rhythmDy、眼睛横移 rhythmDx
+    val st = if (visual.rhythmDy != 0.0 || visual.rhythmDx != 0.0) applyRhythm(st0, visual) else st0
+    var flex = ClawdSampler.flexAt(clip, t)
+    if (session.mirror) {
+        // 原版 flexOf：镜像时 r 与 tx 取反
+        flex = FlexValue(flex.sx, flex.sy, -flex.r, -flex.tx, flex.ty)
+    }
+    return BigFrame(
+        parts = buildParts(rig, pal, cache, win, symPivot, st, session.mirror),
+        flexSx = flex.sx.toFloat(), flexSy = flex.sy.toFloat(), flexR = flex.r.toFloat(),
+        flexTx = flex.tx.toFloat(), flexTy = flex.ty.toFloat(),
+        clipGround = clip.clipGround,
+    )
+}
+
+/**
+ * 打字节奏叠加（clawd-rhythm frame()）：compose 时上半身层（body/eyes/clawL/clawR/sym）
+ * 整体下沉 rhythmDy 格；眼睛额外横移 rhythmDx 格（停手扫视）。
+ * 原版改的是各层行内 translate，这里等价地加在采样结果的 dx/dy 上。
+ */
+private fun applyRhythm(
+    st: ClawdSampler.RigState,
+    visual: ClawdBigRuntime.Visual,
+): ClawdSampler.RigState {
+    if (visual.rhythmDy == 0.0 && visual.rhythmDx == 0.0) return st
+    val out = LinkedHashMap(st.parts)
+    for (p in UPPER_PARTS) {
+        val ps = out[p] ?: continue
+        out[p] = ps.copy(
+            dy = ps.dy + visual.rhythmDy,
+            dx = ps.dx + if (p == "eyes") visual.rhythmDx else 0.0,
+        )
+    }
+    return st.copy(parts = out)
+}
+
+private val UPPER_PARTS = listOf("body", "eyes", "clawL", "clawR", "sym")
+
+/** 待机帧：rest 姿势 + 眨眼（clr-blink 4400ms）+ 双钳呼吸（clr-breathe-claw 3200ms 平滑）。 */
+private fun restFrame(
+    rig: RigData,
+    pal: Map<String, Int>,
+    cache: HashMap<PartKey, ImageBitmap>,
+    win: RigWindow,
+    symPivot: Pair<Double, Double>,
+    nowMs: Long,
+): BigFrame {
+    val blinkT = (nowMs % 4400).toInt()
+    val eyesF = when {
+        blinkT < 4000 -> "open"
+        blinkT < 4100 -> "half"
+        blinkT < 4200 -> "shut"
+        blinkT < 4300 -> "half"
+        else -> "open"
+    }
+    val bt = (nowMs % 3200).toInt()
+    val clawDy = when {
+        bt < 1400 -> -easeInOut(bt / 1400f)
+        bt < 2600 -> -1f + easeInOut((bt - 1400) / 1200f)
+        else -> 0f
+    }
+    val out = ArrayList<Pair<Int, BigFrame.Part>>()
+    for (part in rig.parts) {
+        val rest = rig.restF[part] ?: continue
+        val f = if (part == "eyes") eyesF else rest
+        val dy = if (part == "clawL" || part == "clawR") clawDy.toDouble() else 0.0
+        makePart(rig, pal, cache, win, symPivot, part, f, win.x0.toDouble(), win.y0 + dy,
+            mirror = false, sc = 1f, r = 0f, a = 1f, z = rig.restZ.getValue(part))
+            ?.let { out.add(it) }
+    }
+    return BigFrame(out.sortedBy { it.first }.map { it.second }, 1f, 1f, 0f, 0f, 0f, false)
+}
+
+private fun easeInOut(p: Float): Float = p * p * (3 - 2 * p)
+
+/** 采样状态 → 可画部件列表（z 升序）。原版 mirrorState：dx 取反（sym 1−dx）、root.dx 取反。 */
+private fun buildParts(
+    rig: RigData,
+    pal: Map<String, Int>,
+    cache: HashMap<PartKey, ImageBitmap>,
+    win: RigWindow,
+    symPivot: Pair<Double, Double>,
+    st: ClawdSampler.RigState,
+    mirror: Boolean,
+): List<BigFrame.Part> {
+    val out = ArrayList<Pair<Int, BigFrame.Part>>()
+    val rootDx = if (mirror) -st.rootDx else st.rootDx
+    for (part in rig.parts) {
+        val ps = st.parts[part] ?: continue
+        val f = ps.f ?: continue
+        if (ps.a <= 0.0) continue
+        val dx = when {
+            !mirror -> ps.dx
+            part == "sym" -> 1.0 - ps.dx
+            else -> -ps.dx
+        }
+        // 位图原点 = 窗口原点 + 合成位移（像素翻转已在 rigFramePixels 内完成）
+        makePart(
+            rig, pal, cache, win, symPivot, part, f,
+            win.x0 + dx + rootDx, win.y0 + ps.dy + st.rootDy,
+            mirror = mirror && part != "sym",
+            sc = ps.sc.toFloat(),
+            r = (if (mirror) -ps.r else ps.r).toFloat(),
+            a = ps.a.toFloat(),
+            z = ps.z,
+        )?.let { out.add(it) }
+    }
+    return out.sortedBy { it.first }.map { it.second }
+}
+
+/** 单部件 → 包络窗大小的位图。x/y 是位图原点应画到的框内格坐标。 */
+private fun makePart(
+    rig: RigData,
+    pal: Map<String, Int>,
+    cache: HashMap<PartKey, ImageBitmap>,
+    win: RigWindow,
+    symPivot: Pair<Double, Double>,
+    part: String,
+    frame: String,
+    x: Double, y: Double,
+    mirror: Boolean,
+    sc: Float, r: Float, a: Float,
+    z: Int,
+): Pair<Int, BigFrame.Part>? {
+    val bmp = cache.getOrPut(PartKey(part, frame, mirror)) {
+        val pixels = ClawdPixels.rigFramePixels(rig, part, frame, mirror, pal)
+        if (pixels.isEmpty()) return null
+        val b = android.graphics.Bitmap.createBitmap(win.w, win.h, android.graphics.Bitmap.Config.ARGB_8888)
+        for (p in pixels) {
+            val bx = p.x - win.x0
+            val by = p.y - win.y0
+            if (bx in 0 until win.w && by in 0 until win.h) b.setPixel(bx, by, p.argb)
+        }
+        b.asImageBitmap()
+    }
+    // 变换中心：sym 用原版 transform-origin，其余（理论只有 sym 有 sc/r）用位图中心
+    val cx = if (part == "sym") symPivot.first else win.w / 2.0
+    val cy = if (part == "sym") symPivot.second else win.h / 2.0
+    return z to BigFrame.Part(bmp, win.w, win.h, x, y, sc, r, a, cx, cy, part)
+}
