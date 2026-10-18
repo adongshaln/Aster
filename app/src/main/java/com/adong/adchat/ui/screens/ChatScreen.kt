@@ -154,10 +154,26 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val imeInsets = WindowInsets.ime
     val imeAnimationTarget = WindowInsets.imeAnimationTarget
     val userDragging by listState.interactionSource.collectIsDraggedAsState()
-    // 滚动信号：给 Clawd 的 peek（原版监听滚动）
+    // 滚动信号：给 Clawd 的 peek（原版监听滚动）。仅在实际的拖拽/惯性滚动且位置真正变化时计数，
+    // 排除首次组合、程序化定位与回弹无位移的干扰。
     var clawdScrollTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(listState.isScrollInProgress, listState.firstVisibleItemIndex) {
-        if (listState.isScrollInProgress || listState.firstVisibleItemIndex >= 0) clawdScrollTick++
+    LaunchedEffect(listState, vm.activeConversationId) {
+        var manualScroll = false
+        var previousPosition = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        snapshotFlow {
+            Triple(
+                listState.isScrollInProgress,
+                userDragging,
+                listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+            )
+        }.collect { (inProgress, dragging, position) ->
+            if (dragging) manualScroll = true
+            if (!inProgress && !dragging) manualScroll = false
+            if (inProgress && manualScroll && position != previousPosition) {
+                clawdScrollTick++
+            }
+            previousPosition = position
+        }
     }
     val streamScrollSignals = remember {
         MutableSharedFlow<Unit>(
