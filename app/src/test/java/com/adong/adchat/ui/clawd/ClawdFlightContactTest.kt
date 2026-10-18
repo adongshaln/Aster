@@ -29,7 +29,7 @@ class ClawdFlightContactTest {
         var count = 0
         var target: String? = null
         var landedX = -1
-        pile.throwAt("wizard", 72.0, -40.0, 4.0, 40.0) { _, x, head ->
+        pile.throwAt("wizard", 72.0, -40.0, 12.0, 40.0) { _, x, head ->
             assertFalse(pile.isFlying("wizard"))
             count++
             target = head
