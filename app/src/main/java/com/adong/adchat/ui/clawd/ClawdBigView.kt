@@ -8,8 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -22,7 +20,6 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -257,22 +254,6 @@ fun ClawdBigOverlay(
                 }
             }
 
-            // 生成计时徽标（原版 #clawd_gen_timer）
-            phys.timerText?.let { text ->
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .size(24.dp)
-                        .offset(x = 6.dp, y = (-4).dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = text,
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                }
-            }
         }
     }
 }

@@ -64,8 +64,6 @@ class ClawdBigRuntime(
         /** 物理层 squash（sqx > 1 横拉，sqy < 1 压扁） */
         val sqx: Double,
         val sqy: Double,
-        /** 生成徽标：剩余秒数（null = 不显示） */
-        val timerText: String?,
         /** 夜间墨色调色 */
         val night: Boolean,
         /** 打字节奏：上半身下沉量（美术格，compose 时每上屏一个字沉 1 格） */
@@ -193,9 +191,6 @@ class ClawdBigRuntime(
     private var started = false
     private var runtimeJob: Job? = null
     private var physicsJob: Job? = null
-    private var timerJob: Job? = null
-
-    private var timerText: String? = null
 
     private fun now() = SystemClock.elapsedRealtime()
 
@@ -214,7 +209,6 @@ class ClawdBigRuntime(
         squashTimer?.cancel(); bndRaf?.cancel()
         started = false
     }
-
     private suspend fun runtimeLoop() {
         while (scope.isActive) {
             tick()
@@ -354,7 +348,6 @@ class ClawdBigRuntime(
         rot = rot0,
         sqx = sqx,
         sqy = sqy,
-        timerText = timerText,
         night = night,
         rhythmDy = rhythmDy,
         rhythmDx = rhythmDx,
@@ -439,9 +432,6 @@ class ClawdBigRuntime(
         round += 1; activeRound = round
         genStartedAt = now()
         setClawdA("think")
-        timerText = "0s"
-        timerJob?.cancel()
-        timerJob = scope.launch { genTimerLoop() }
     }
 
     private fun settleGeneration(outcome: String) {
@@ -449,25 +439,6 @@ class ClawdBigRuntime(
         if (r == 0 || settledRound == r) return
         settledRound = r
         setClawdA(outcome, (rig.clips[outcome]?.dur ?: 1400).toLong())
-        timerJob?.cancel()
-        timerJob = scope.launch {
-            delay(GEN_TIMER_LINGER_MS)
-            timerText = null
-        }
-    }
-
-    private suspend fun genTimerLoop() {
-        // 原版 tickGenTimer：200ms 一跳、0.1s 精度
-        var lastText = ""
-        while (scope.isActive) {
-            val text = "%.1fs".format((now() - genStartedAt) / 1000.0)
-            if (text != lastText) {
-                lastText = text
-                timerText = text
-                onChanged?.invoke()
-            }
-            delay(200)
-        }
     }
 
     // ═══════════════════ 输入（打字联动）═══════════════════
@@ -1512,7 +1483,6 @@ class ClawdBigRuntime(
         private const val DOZE_OFF_MS = 1_900L
         private const val CLAWD_TIRED_SIT_MS = 12_000L
         private const val CLAWD_GEN_MAX_MS = 300_000L
-        private const val GEN_TIMER_LINGER_MS = 4_000L
         private const val RUNTIME_TICK_MS = 200L
         private const val FRAME_MS = 17L
 
