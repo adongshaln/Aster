@@ -52,7 +52,7 @@ class GifEncoderTest {
     // ── LZW 回环 ──────────────────────────────────────────────
 
     /** 测试专用的最小 GIF LZW 解码器（只解码测试用，与编码器同一套变长码约定） */
-    private class MiniLzwDecoder(initialCodeSize: Int, data: ByteArray) {
+    private class MiniLzwDecoder(private val data: ByteArray, initialCodeSize: Int) {
         private val minCodeSize = initialCodeSize
         private val clearCode = 1 shl initialCodeSize
         private val eoiCode = clearCode + 1
@@ -179,7 +179,7 @@ class GifEncoderTest {
         val paletteSize = 4
         val bytes = encodeOneFrame(width, height, paletteSize)
         val (initialCodeSize, lzwData) = extractLzwData(bytes)
-        val decoded = MiniLzwDecoder(initialCodeSize, lzwData).decode()
+        val decoded = MiniLzwDecoder(lzwData, initialCodeSize).decode()
         val expected = frameIndices(width, height, paletteSize)
         assertEquals("解码像素数不符", expected.size, decoded.size)
         for (i in expected.indices) {

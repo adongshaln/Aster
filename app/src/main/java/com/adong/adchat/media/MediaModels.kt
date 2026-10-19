@@ -1,5 +1,6 @@
 package com.adong.adchat.media
 
+import java.io.File
 import java.util.UUID
 
 enum class MediaPlatform(val key: String, val displayName: String) {
@@ -102,3 +103,17 @@ data class MediaDownloadProgress(
 }
 
 class ExpiredMediaUrlException(message: String) : Exception(message)
+
+/** 由视频下载记录派生 GIF 产物记录：产物落在同目录，文件名加 _gif 后缀。 */
+fun MediaDownloadRecord.asGifRecord(gifFile: File, fileSize: Long): MediaDownloadRecord = copy(
+    id = UUID.randomUUID().toString(),
+    title = "$title (GIF)",
+    thumbnailUrl = "",
+    thumbnailFallbackUrl = "",
+    filePath = gifFile.absolutePath,
+    galleryUri = "",
+    fileSize = fileSize,
+    mimeType = "image/gif",
+    fileExtension = "gif",
+    createdAt = System.currentTimeMillis()
+)

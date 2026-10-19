@@ -50,21 +50,30 @@ class MediaGallerySaver(context: Context) {
 
     private suspend fun saveScoped(source: File, record: MediaDownloadRecord): MediaGallerySaveResult {
         val resolver = appContext.contentResolver
+        val isGif = record.mimeType.equals("image/gif", ignoreCase = true)
+        val mediaColumn = if (isGif) MediaStore.Images.Media else MediaStore.Video.Media
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, displayName(record))
-            put(MediaStore.Video.Media.MIME_TYPE, record.mimeType.ifBlank { "video/mp4" })
-            put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/Aster")
-            put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis() / 1_000L)
-            put(MediaStore.Video.Media.DATE_TAKEN, record.createdAt)
-            put(MediaStore.Video.Media.IS_PENDING, 1)
+            put(mediaColumn.DISPLAY_NAME, displayName(record))
+            put(mediaColumn.MIME_TYPE, record.mimeType.ifBlank { if (isGif) "image/gif" else "video/mp4" })
+            put(
+                mediaColumn.RELATIVE_PATH,
+                if (isGif) "${Environment.DIRECTORY_PICTURES}/Aster" else "${Environment.DIRECTORY_MOVIES}/Aster"
+            )
+            put(mediaColumn.DATE_ADDED, System.currentTimeMillis() / 1_000L)
+            put(mediaColumn.DATE_TAKEN, record.createdAt)
+            put(mediaColumn.IS_PENDING, 1)
         }
-        val collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val collection = if (isGif) {
+            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        } else {
+            MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        }
         val uri = resolver.insert(collection, values)
             ?: return MediaGallerySaveResult.Failed("系统相册拒绝创建文件")
         return try {
             resolver.openOutputStream(uri, "w")?.use { output -> copyFile(source, output) }
                 ?: error("系统相册无法打开文件")
-            resolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+            resolver.update(uri, ContentValues().apply { put(mediaColumn.IS_PENDING, 0) }, null, null)
             MediaGallerySaveResult.Saved(uri.toString())
         } catch (error: Exception) {
             runCatching { resolver.delete(uri, null, null) }
@@ -77,8 +86,11 @@ class MediaGallerySaver(context: Context) {
         if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             return MediaGallerySaveResult.PermissionRequired
         }
+        val isGif = record.mimeType.equals("image/gif", ignoreCase = true)
         val directory = File(
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+            Environment.getExternalStoragePublicDirectory(
+                if (isGif) Environment.DIRECTORY_PICTURES else Environment.DIRECTORY_MOVIES
+            ),
             "Aster"
         ).apply { if (!exists() && !mkdirs()) error("无法创建相册目录") }
         val target = nextAvailableFile(directory, displayName(record))
