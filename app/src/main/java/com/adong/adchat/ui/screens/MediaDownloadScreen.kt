@@ -58,11 +58,14 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.adong.adchat.media.*
 import com.adong.adchat.ui.components.AdConfirmDialog
 import com.adong.adchat.ui.media.*
+import com.adong.adchat.ui.media.VideoToGifSheet
+import com.adong.adchat.ui.media.VideoToGifViewModel
 import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.theme.*
 import java.text.SimpleDateFormat
@@ -76,6 +79,8 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
     val state by vm.state
     val snackbarHostState = remember { SnackbarHostState() }
     var deleteCandidate by remember { mutableStateOf<MediaDownloadRecord?>(null) }
+    val gifVm: VideoToGifViewModel = viewModel()
+    var gifSource by remember { mutableStateOf<MediaDownloadRecord?>(null) }
     val galleryPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         vm.onGalleryPermissionResult(it)
     }
@@ -156,7 +161,10 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             item { DownloadSectionHeader(state.downloads.size) }
             if (state.downloads.isEmpty()) item { EmptyDownloadHistory() }
             else items(state.downloads, key = MediaDownloadRecord::id) { record ->
-                DownloadHistoryItem(record, { vm.openDownload(record) }, { vm.shareDownload(record) }, { deleteCandidate = record })
+                DownloadHistoryItem(record, { vm.openDownload(record) }, { vm.shareDownload(record) }, { deleteCandidate = record }) {
+                    gifSource = record
+                    gifVm.start(record)
+                }
             }
         }
     }
@@ -171,6 +179,14 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             icon = Icons.Rounded.DeleteOutline, destructive = true,
             onConfirm = { vm.removeDownload(record.id, true); deleteCandidate = null },
             onDismiss = { deleteCandidate = null }
+        )
+    }
+
+    if (gifSource != null) {
+        VideoToGifSheet(
+            vm = gifVm,
+            onShare = { record -> gifVm.dismiss(); vm.shareDownload(record) },
+            onDismiss = { gifSource = null }
         )
     }
 }
@@ -496,7 +512,7 @@ private fun EmptyDownloadHistory() {
 }
 
 @Composable
-private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit) {
+private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit, onConvertToGif: () -> Unit) {
     var showActions by remember(record.id) { mutableStateOf(false) }
     Surface(
         color = Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Hairline),
@@ -535,11 +551,12 @@ private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit,
             actions = listOf(
                 AdActionOption("open", "播放视频", icon = Icons.Rounded.PlayArrow),
                 AdActionOption("share", "分享", icon = Icons.Rounded.Share),
+                AdActionOption("gif", "转为 GIF", icon = Icons.Rounded.Gif),
                 AdActionOption("delete", "删除", icon = Icons.Rounded.DeleteOutline, destructive = true)
             ),
             onAction = {
                 showActions = false
-                when (it.id) { "open" -> onOpen(); "share" -> onShare(); "delete" -> onDelete() }
+                when (it.id) { "open" -> onOpen(); "share" -> onShare(); "gif" -> onConvertToGif(); "delete" -> onDelete() }
             },
             onDismiss = { showActions = false }
         )
