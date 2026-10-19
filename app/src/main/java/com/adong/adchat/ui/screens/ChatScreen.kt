@@ -46,9 +46,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
@@ -687,22 +691,70 @@ private fun ChatMessageItem(
         ) {
             if (user) {
                 Surface(
-                    // 右下的 8dp 小角是 iMessage「气泡尖角指向发送者」的语言；
-                    // AI 消息不用气泡时，用户气泡不需要方向性，对称圆角更一致。
-                    color = SurfaceInset, contentColor = Ink, shape = RoundedCornerShape(22.dp),
-                    border = BorderStroke(1.dp, Hairline.copy(alpha = .55f))
+                    // Claude 官方用户气泡语言：陶土淡染底、18dp 对称圆角、无边框
+                    // （逆向规范 --cds-message-bubble-radius 18px；Personal 模式即色染气泡）。
+                    color = Accent.copy(alpha = 0.08f), contentColor = Ink, shape = RoundedCornerShape(18.dp)
                 ) {
-                    Column(Modifier.padding(7.dp)) {
+                    Column(Modifier.padding(horizontal = 13.dp, vertical = 9.dp)) {
                         if (message.attachments.isNotEmpty()) {
                             ConversationImages(message.attachments)
                         }
                         if (message.content.isNotBlank()) {
-                            SelectionContainer {
-                                Text(
-                                    message.content,
-                                    Modifier.padding(horizontal = 11.dp, vertical = 9.dp),
-                                    style = MaterialTheme.typography.bodyLarge
-                                )
+                            // 超长内容折叠：折叠预览 + 底部渐隐 + 展开/收起。
+                            // 用 onTextLayout 的 hasVisualOverflow 检测溢出：
+                            // heightIn 会同时截短 onSizeChanged 的实测高度，不能用它比较阈值。
+                            var expanded by remember(message.id) { mutableStateOf(false) }
+                            var overflowed by remember(message.id) { mutableStateOf(false) }
+                            // Canvas 是 @Composable getter，须先在组合期取值再进 draw lambda
+                            val fadeBase = Canvas
+                            Box {
+                                SelectionContainer {
+                                    Text(
+                                        message.content,
+                                        Modifier
+                                            .heightIn(max = if (expanded) Infinity else 360.dp)
+                                            .onTextLayout { if (!expanded) overflowed = it.hasVisualOverflow }
+                                            .then(
+                                                if (overflowed && !expanded) Modifier
+                                                    .drawWithContent {
+                                                        drawContent()
+                                                        // 底部 36dp 七档渐隐幕，盖住被截断的正文
+                                                        val fadeH = 36.dp.toPx()
+                                                        drawRect(
+                                                            brush = Brush.verticalGradient(
+                                                                0f to Color.Transparent,
+                                                                0.15f to fadeBase.copy(alpha = 0.05f),
+                                                                0.30f to fadeBase.copy(alpha = 0.15f),
+                                                                0.45f to fadeBase.copy(alpha = 0.30f),
+                                                                0.60f to fadeBase.copy(alpha = 0.50f),
+                                                                0.75f to fadeBase.copy(alpha = 0.70f),
+                                                                0.87f to fadeBase.copy(alpha = 0.85f),
+                                                                1f to fadeBase,
+                                                                startY = size.height - fadeH,
+                                                                endY = size.height
+                                                            ),
+                                                            topLeft = Offset(0f, size.height - fadeH),
+                                                            size = Size(size.width, fadeH)
+                                                        )
+                                                    }
+                                                else Modifier
+                                            ),
+                                        style = MaterialTheme.typography.bodyLarge
+                                    )
+                                }
+                                if (overflowed) {
+                                    Text(
+                                        text = if (expanded) "收起" else "展开",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = Accent,
+                                        modifier = Modifier
+                                            .padding(top = 4.dp)
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) { expanded = !expanded }
+                                    )
+                                }
                             }
                         }
                     }

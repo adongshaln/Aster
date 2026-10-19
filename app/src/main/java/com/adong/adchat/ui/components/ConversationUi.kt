@@ -734,11 +734,18 @@ fun ConversationSheetAction(
 
 @Composable
 fun ConversationReadingVeil(modifier: Modifier = Modifier) {
+    // Claude 官方 7 档非线性 Alpha 渐变（逆向规范）：28dp 羽化距离内按 y≈x^1.5 幂律采样，
+    // 消除高分屏线性渐变的色阶断层。
     Box(
         modifier.background(
             Brush.verticalGradient(
-                0f to Color.Transparent,
-                0.22f to Canvas.copy(alpha = 0.72f),
+                0f to Canvas.copy(alpha = 0.72f),
+                0.15f to Canvas.copy(alpha = 0.76f),
+                0.30f to Canvas.copy(alpha = 0.82f),
+                0.45f to Canvas.copy(alpha = 0.88f),
+                0.60f to Canvas.copy(alpha = 0.93f),
+                0.75f to Canvas.copy(alpha = 0.97f),
+                0.87f to Canvas.copy(alpha = 0.99f),
                 1f to Canvas
             )
         )
