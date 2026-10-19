@@ -2,6 +2,7 @@ package com.adong.adchat.media.gif
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 
@@ -157,15 +158,17 @@ class GifEncoderTest {
         // 收集子块；带边界诊断：若真实流缺块终止符，断言输出末尾字节帮助定位
         val chunks = ArrayList<ByteArray>()
         while (true) {
-            assertTrue(
-                "子块循环越界：pos=$pos size=${bytes.size} " +
-                    "末尾16字节=${bytes.drop((bytes.size - 16).coerceAtLeast(0)).joinToString(\" \") { String.format(\"%02X\", it) }}",
-                pos < bytes.size
-            )
+            if (pos >= bytes.size) {
+                val tail = bytes.drop((bytes.size - 16).coerceAtLeast(0))
+                    .joinToString(" ") { String.format("%02X", it) }
+                fail("子块循环越界：pos=$pos size=${bytes.size} 末尾16字节=$tail")
+            }
             val len = bytes[pos].toInt() and 0xFF
             pos++
             if (len == 0) break
-            assertTrue("子块声明 $len 字节但只剩 ${bytes.size - pos}", pos + len <= bytes.size)
+            if (pos + len > bytes.size) {
+                fail("子块声明 $len 字节但只剩 ${bytes.size - pos}")
+            }
             chunks.add(bytes.copyOfRange(pos, pos + len))
             pos += len
         }
