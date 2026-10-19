@@ -847,6 +847,10 @@ private fun ChatMessageItem(
                                 if (canRetry) {
                                     ConversationMessageAction(Icons.Rounded.PlayArrow, "继续生成", onRetry)
                                 }
+                                // 中断/停止的回复也给重新回答：不想看不连贯续写的用户可整轮重问。
+                                if (canRegenerate || canRetry) {
+                                    ConversationMessageAction(Icons.Rounded.Refresh, "重新回答", onRegenerate)
+                                }
                             } else if (canRegenerate) {
                                 ConversationMessageAction(Icons.Rounded.Refresh, "重新生成", onRegenerate, accent = true)
                             }

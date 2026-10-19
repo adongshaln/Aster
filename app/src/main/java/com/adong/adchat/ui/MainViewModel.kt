@@ -1162,7 +1162,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val assistantIndex = messages.indexOfFirst { it.id == messageId }
         if (assistantIndex < 0 || assistantIndex != messages.lastIndex) return
         val assistant = messages[assistantIndex]
-        if (assistant.role != "assistant" || assistant.isStreaming || assistant.isInterrupted || assistant.isStopped) return
+        // 中断/停止的回复也允许重新回答：不少用户不想看不连贯的续写，
+        // 宁可整轮重问。isStreaming 守卫保留，生成中仍不可操作。
+        if (assistant.role != "assistant" || assistant.isStreaming) return
         val userIndex = (assistantIndex - 1 downTo 0).firstOrNull { messages[it].role == "user" } ?: return
         val prompt = messages[userIndex].content
         // 旧回复整体带进新消息，详情里可回看，避免「重试更差」时无从比较。
