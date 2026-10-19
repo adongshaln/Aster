@@ -115,11 +115,11 @@ fun VideoToGifSheet(
                     ) { Text("重试") }
                 }
             }
-        }
-    ) {
-        when (state.phase) {
-            VideoToGifState.Phase.Idle -> {
-                GifPreset.entries.forEach { preset ->
+        },
+        content = {
+            when (state.phase) {
+                VideoToGifState.Phase.Idle -> {
+                    GifPreset.entries.forEach { preset ->
                     val selected = state.preset == preset
                     Surface(
                         color = if (selected) AccentSoft else Canvas,
