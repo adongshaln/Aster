@@ -51,17 +51,16 @@ class MediaGallerySaver(context: Context) {
     private suspend fun saveScoped(source: File, record: MediaDownloadRecord): MediaGallerySaveResult {
         val resolver = appContext.contentResolver
         val isGif = record.mimeType.equals("image/gif", ignoreCase = true)
-        val mediaColumn = if (isGif) MediaStore.Images.Media else MediaStore.Video.Media
         val values = ContentValues().apply {
-            put(mediaColumn.DISPLAY_NAME, displayName(record))
-            put(mediaColumn.MIME_TYPE, record.mimeType.ifBlank { if (isGif) "image/gif" else "video/mp4" })
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName(record))
+            put(MediaStore.MediaColumns.MIME_TYPE, record.mimeType.ifBlank { if (isGif) "image/gif" else "video/mp4" })
             put(
-                mediaColumn.RELATIVE_PATH,
+                MediaStore.MediaColumns.RELATIVE_PATH,
                 if (isGif) "${Environment.DIRECTORY_PICTURES}/Aster" else "${Environment.DIRECTORY_MOVIES}/Aster"
             )
-            put(mediaColumn.DATE_ADDED, System.currentTimeMillis() / 1_000L)
-            put(mediaColumn.DATE_TAKEN, record.createdAt)
-            put(mediaColumn.IS_PENDING, 1)
+            put(MediaStore.MediaColumns.DATE_ADDED, System.currentTimeMillis() / 1_000L)
+            put(MediaStore.MediaColumns.DATE_TAKEN, record.createdAt)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val collection = if (isGif) {
             MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
@@ -73,7 +72,7 @@ class MediaGallerySaver(context: Context) {
         return try {
             resolver.openOutputStream(uri, "w")?.use { output -> copyFile(source, output) }
                 ?: error("系统相册无法打开文件")
-            resolver.update(uri, ContentValues().apply { put(mediaColumn.IS_PENDING, 0) }, null, null)
+            resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
             MediaGallerySaveResult.Saved(uri.toString())
         } catch (error: Exception) {
             runCatching { resolver.delete(uri, null, null) }

@@ -86,10 +86,8 @@ object VideoToGifConverter {
                             } else {
                                 Bitmap.createScaledBitmap(bitmap, outWidth, outHeight, true)
                             }
-                            val pixels = scaled.getPixels(
-                                IntArray(scaled.width * scaled.height),
-                                0, scaled.width, 0, 0, scaled.width, scaled.height
-                            )
+                            val pixels = IntArray(scaled.width * scaled.height)
+                            scaled.getPixels(pixels, 0, scaled.width, 0, 0, scaled.width, scaled.height)
                             val quantized = if (i == 0) {
                                 quantizer.quantize(pixels, maxColors = 256, dither = true)
                             } else {
