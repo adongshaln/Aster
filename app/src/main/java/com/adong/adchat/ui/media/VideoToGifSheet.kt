@@ -201,7 +201,7 @@ fun VideoToGifSheet(
                 )
             }
         }
-    }
+    )
 }
 
 private fun formatGifBytes(bytes: Long): String {
