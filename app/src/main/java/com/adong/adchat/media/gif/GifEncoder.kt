@@ -378,6 +378,8 @@ class GifEncoder(
 
         // ── LZW 图像数据 ──
         val initialCodeSize = max(2, globalPaletteBits)
+        // GIF 规范：图像数据以 LZW 最小码长字节开头，再接子块序列
+        output.write(initialCodeSize)
         // encode 内部自带块终止符 0x00
         GifLzwEncoder(initialCodeSize, output).encode(indices)
         log("帧已写入：${indices.size} 像素，延时=$delayCentiseconds，透明索引=$transparentIndex")
