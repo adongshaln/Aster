@@ -707,7 +707,7 @@ private fun ChatMessageItem(
                             var overflowed by remember(message.id) { mutableStateOf(false) }
                             // Canvas 是 @Composable getter，须先在组合期取值再进 draw lambda
                             val fadeBase = Canvas
-                            Box {
+                            Column {
                                 SelectionContainer {
                                     Text(
                                         message.content,
@@ -749,6 +749,7 @@ private fun ChatMessageItem(
                                         color = Accent,
                                         modifier = Modifier
                                             .padding(top = 4.dp)
+                                            .align(Alignment.End)
                                             .clickable(
                                                 interactionSource = remember { MutableInteractionSource() },
                                                 indication = null
