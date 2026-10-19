@@ -25,6 +25,8 @@ data class VideoToGifState(
     val fullVideo: Boolean = false,
     val progress: Float = 0f,
     val result: MediaDownloadRecord? = null,
+    /** 转换元信息（尺寸/帧数/时长），供完成页展示。 */
+    val convertInfo: com.adong.adchat.media.gif.VideoToGifResult? = null,
     val error: String? = null
 ) {
     enum class Phase { Idle, Converting, Done, Failed }
@@ -69,7 +71,11 @@ class VideoToGifViewModel(app: Application) : AndroidViewModel(app) {
                     onProgress = { p -> _state.value = _state.value.copy(progress = p) }
                 )
                 val gifRecord = source.asGifRecord(result.file, result.file.length())
-                _state.value = _state.value.copy(phase = VideoToGifState.Phase.Done, result = gifRecord)
+                _state.value = _state.value.copy(
+                    phase = VideoToGifState.Phase.Done,
+                    result = gifRecord,
+                    convertInfo = result
+                )
             } catch (c: CancellationException) {
                 _state.value = _state.value.copy(phase = VideoToGifState.Phase.Idle)
                 throw c

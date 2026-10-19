@@ -181,10 +181,11 @@ fun VideoToGifSheet(
                 }
             }
             VideoToGifState.Phase.Done -> {
-                val result = state.result
-                if (result != null) {
+                val info = state.convertInfo
+                if (info != null) {
                     Text(
-                        "${result.width}×${result.height} · ${result.frameCount} 帧 · ${result.durationMs / 1000}s · ${formatGifBytes(result.fileSize)}",
+                        "${info.width}×${info.height} · ${info.frameCount} 帧 · ${info.durationMs / 1000}s" +
+                            " · ${formatGifBytes(state.result?.fileSize ?: 0L)}",
                         color = MutedInk, fontSize = 13.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()
                     )
                 }
