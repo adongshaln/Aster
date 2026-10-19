@@ -712,8 +712,7 @@ private fun ChatMessageItem(
                                     Text(
                                         message.content,
                                         Modifier
-                                            .heightIn(max = if (expanded) Infinity else 360.dp)
-                                            .onTextLayout { if (!expanded) overflowed = it.hasVisualOverflow }
+                                            .heightIn(max = if (expanded) Dp.Unspecified else 360.dp)
                                             .then(
                                                 if (overflowed && !expanded) Modifier
                                                     .drawWithContent {
@@ -739,7 +738,8 @@ private fun ChatMessageItem(
                                                     }
                                                 else Modifier
                                             ),
-                                        style = MaterialTheme.typography.bodyLarge
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        onTextLayout = { if (!expanded) overflowed = it.hasVisualOverflow }
                                     )
                                 }
                                 if (overflowed) {
