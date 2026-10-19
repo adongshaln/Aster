@@ -167,11 +167,9 @@ class GifEncoderTest {
             pos++
             if (len == 0) break
             if (pos + len > bytes.size) {
-                val tail = bytes.drop((bytes.size - 40).coerceAtLeast(0))
-                    .joinToString(" ") { String.format("%02X", it) }
+                val head = bytes.take(64).joinToString(" ") { String.format("%02X", it) }
                 fail("子块声明 $len 字节但只剩 ${bytes.size - pos}；" +
-                    "pos=$pos ics=$initialCodeSize 已收集=${chunks.size}块 " +
-                    "末尾40字节=$tail")
+                    "pos=$pos ics=$initialCodeSize 总长=${bytes.size} 前64字节=$head")
             }
             chunks.add(bytes.copyOfRange(pos, pos + len))
             pos += len
