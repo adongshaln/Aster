@@ -72,6 +72,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @Composable
@@ -81,8 +82,29 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
     var deleteCandidate by remember { mutableStateOf<MediaDownloadRecord?>(null) }
     val gifVm: VideoToGifViewModel = viewModel()
     var gifSource by remember { mutableStateOf<MediaDownloadRecord?>(null) }
+    var pendingGifGalleryRecord by remember { mutableStateOf<MediaDownloadRecord?>(null) }
+    val gifScope = rememberCoroutineScope()
     val galleryPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         vm.onGalleryPermissionResult(it)
+    }
+    val gifGalleryPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        val record = pendingGifGalleryRecord
+        pendingGifGalleryRecord = null
+        if (record == null) return@rememberLauncherForActivityResult
+        if (!granted) {
+            vm.showNotice("GIF 已生成，未获得相册权限")
+            return@rememberLauncherForActivityResult
+        }
+        gifScope.launch {
+            when (val result = gifVm.saveToGallery(record)) {
+                is MediaGallerySaveResult.Saved -> {
+                    vm.updateDownloadRecord(record.copy(galleryUri = result.uri))
+                    vm.showNotice("GIF 已保存到相册")
+                }
+                MediaGallerySaveResult.PermissionRequired -> vm.showNotice("GIF 已生成，未获得相册权限")
+                is MediaGallerySaveResult.Failed -> vm.showNotice(result.reason)
+            }
+        }
     }
 
     LaunchedEffect(state.notice) {
@@ -161,10 +183,18 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             item { DownloadSectionHeader(state.downloads.size) }
             if (state.downloads.isEmpty()) item { EmptyDownloadHistory() }
             else items(state.downloads, key = MediaDownloadRecord::id) { record ->
-                DownloadHistoryItem(record, { vm.openDownload(record) }, { vm.shareDownload(record) }, { deleteCandidate = record }) {
-                    gifSource = record
-                    gifVm.start(record)
-                }
+                DownloadHistoryItem(
+                    record = record,
+                    onOpen = { vm.openDownload(record) },
+                    onShare = { vm.shareDownload(record) },
+                    onDelete = { deleteCandidate = record },
+                    onConvertToGif = if (record.isGifFile()) null else {
+                        {
+                            gifSource = record
+                            gifVm.start(record)
+                        }
+                    }
+                )
             }
         }
     }
@@ -173,7 +203,7 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
 
     deleteCandidate?.let { record ->
         AdConfirmDialog(
-            title = "删除视频？",
+            title = if (record.isGifFile()) "删除 GIF？" else "删除视频？",
             message = if (record.galleryUri.isBlank()) "应用内文件也会被删除。" else "应用内文件会被删除，相册中的副本会保留。",
             confirmLabel = "删除", dismissLabel = "保留",
             icon = Icons.Rounded.DeleteOutline, destructive = true,
@@ -185,8 +215,17 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
     if (gifSource != null) {
         VideoToGifSheet(
             vm = gifVm,
+            onCreated = vm::addDownloadRecord,
+            onRecordUpdated = vm::updateDownloadRecord,
             onShare = { record -> gifVm.dismiss(); vm.shareDownload(record) },
-            onDismiss = { gifSource = null }
+            onRequestLegacyGalleryPermission = { record ->
+                pendingGifGalleryRecord = record
+                gifGalleryPermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            },
+            onDismiss = {
+                gifSource = null
+                pendingGifGalleryRecord = null
+            }
         )
     }
 }
@@ -503,16 +542,23 @@ private fun ErrorCard(message: String, canRetry: Boolean, onRetry: () -> Unit) {
 
 @Composable
 private fun DownloadSectionHeader(count: Int) {
-    AsterSectionHeading("已保存", if (count == 0) null else "$count 个视频", Modifier.padding(top = 8.dp))
+    AsterSectionHeading("已保存", if (count == 0) null else "$count 个文件", Modifier.padding(top = 8.dp))
 }
 
 @Composable
 private fun EmptyDownloadHistory() {
-    AsterEmptyState(Icons.Rounded.VideoLibrary, "喜欢的片刻，慢慢收集", "保存的视频会出现在这里，随时播放或分享")
+    AsterEmptyState(Icons.Rounded.VideoLibrary, "喜欢的片刻，慢慢收集", "保存的视频和 GIF 会出现在这里，随时查看或分享")
 }
 
 @Composable
-private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit, onShare: () -> Unit, onDelete: () -> Unit, onConvertToGif: () -> Unit) {
+private fun DownloadHistoryItem(
+    record: MediaDownloadRecord,
+    onOpen: () -> Unit,
+    onShare: () -> Unit,
+    onDelete: () -> Unit,
+    onConvertToGif: (() -> Unit)?
+) {
+    val isGif = record.isGifFile()
     var showActions by remember(record.id) { mutableStateOf(false) }
     Surface(
         color = Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Hairline),
@@ -520,15 +566,19 @@ private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit,
     ) {
         Row(Modifier.padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(76.dp, 48.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFFEDE9E3)), contentAlignment = Alignment.Center) {
-                MediaThumbnail(
-                    url = if (record.platform == MediaPlatform.Bilibili) BilibiliMediaPolicy.normalizeThumbnail(record.thumbnailUrl) else record.thumbnailUrl,
-                    fallbackUrl = record.thumbnailFallbackUrl,
-                    referer = record.sourceUrl,
-                    userAgent = if (record.platform == MediaPlatform.Bilibili) BILIBILI_IMAGE_USER_AGENT else "",
-                    cookieHeader = "",
-                    videoSource = record.filePath,
-                    modifier = Modifier.fillMaxSize()
-                )
+                if (isGif) {
+                    Icon(Icons.Rounded.Gif, contentDescription = "GIF", tint = Accent, modifier = Modifier.size(28.dp))
+                } else {
+                    MediaThumbnail(
+                        url = if (record.platform == MediaPlatform.Bilibili) BilibiliMediaPolicy.normalizeThumbnail(record.thumbnailUrl) else record.thumbnailUrl,
+                        fallbackUrl = record.thumbnailFallbackUrl,
+                        referer = record.sourceUrl,
+                        userAgent = if (record.platform == MediaPlatform.Bilibili) BILIBILI_IMAGE_USER_AGENT else "",
+                        cookieHeader = "",
+                        videoSource = record.filePath,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -536,27 +586,32 @@ private fun DownloadHistoryItem(record: MediaDownloadRecord, onOpen: () -> Unit,
                 Spacer(Modifier.height(4.dp))
                 Text(
                     buildString {
-                        append(record.platform.displayName)
-                        if (record.qualityLabel.isNotBlank()) append(" · ${record.qualityLabel}")
+                        append(if (isGif) "GIF" else record.platform.displayName)
+                        if (!isGif && record.qualityLabel.isNotBlank()) append(" · ${record.qualityLabel}")
                         append(" · ${formatBytes(record.fileSize)} · ${formatDate(record.createdAt)}")
                     }, color = MutedInk, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
                 )
             }
-            AsterIconButton(Icons.Rounded.MoreHoriz, "视频操作", { showActions = true })
+            AsterIconButton(Icons.Rounded.MoreHoriz, if (isGif) "GIF 操作" else "视频操作", { showActions = true })
         }
     }
     if (showActions) {
         AdActionSheet(
-            title = "视频操作", subtitle = record.title,
-            actions = listOf(
-                AdActionOption("open", "播放视频", icon = Icons.Rounded.PlayArrow),
-                AdActionOption("share", "分享", icon = Icons.Rounded.Share),
-                AdActionOption("gif", "转为 GIF", icon = Icons.Rounded.Gif),
-                AdActionOption("delete", "删除", icon = Icons.Rounded.DeleteOutline, destructive = true)
-            ),
+            title = if (isGif) "GIF 操作" else "视频操作", subtitle = record.title,
+            actions = buildList {
+                add(AdActionOption("open", if (isGif) "查看 GIF" else "播放视频", icon = if (isGif) Icons.Rounded.Gif else Icons.Rounded.PlayArrow))
+                add(AdActionOption("share", "分享", icon = Icons.Rounded.Share))
+                if (onConvertToGif != null) add(AdActionOption("gif", "转为 GIF", icon = Icons.Rounded.Gif))
+                add(AdActionOption("delete", "删除", icon = Icons.Rounded.DeleteOutline, destructive = true))
+            },
             onAction = {
                 showActions = false
-                when (it.id) { "open" -> onOpen(); "share" -> onShare(); "gif" -> onConvertToGif(); "delete" -> onDelete() }
+                when (it.id) {
+                    "open" -> onOpen()
+                    "share" -> onShare()
+                    "gif" -> onConvertToGif?.invoke()
+                    "delete" -> onDelete()
+                }
             },
             onDismiss = { showActions = false }
         )
@@ -725,5 +780,8 @@ private fun formatBytes(bytes: Long): String {
 
 private fun formatSpeed(bytesPerSecond: Long): String = "${formatBytes(bytesPerSecond)}/s"
 private fun formatDate(timestamp: Long): String = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(timestamp))
+
+private fun MediaDownloadRecord.isGifFile(): Boolean =
+    mimeType.equals("image/gif", ignoreCase = true) || fileExtension.equals("gif", ignoreCase = true)
 
 

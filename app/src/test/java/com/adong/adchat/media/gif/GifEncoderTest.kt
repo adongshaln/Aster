@@ -5,6 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayOutputStream
+import java.util.Random
 
 /**
  * [GifEncoder] / [GifColorQuantizer] 的纯 JVM 单元测试，不依赖 Android 类。
@@ -181,6 +182,59 @@ class GifEncoderTest {
         return initialCodeSize to all
     }
 
+    /** Walk the GIF block structure and collect each image's LZW stream. */
+    private fun extractAllLzwData(bytes: ByteArray): List<Pair<Int, ByteArray>> {
+        assertEquals("GIF89a", String(bytes, 0, 6, Charsets.US_ASCII))
+        var pos = 13 // signature + logical screen descriptor
+        val screenPacked = bytes[10].toInt() and 0xFF
+        if (screenPacked and 0x80 != 0) pos += 3 * (1 shl ((screenPacked and 0x07) + 1))
+        val frames = mutableListOf<Pair<Int, ByteArray>>()
+
+        while (pos < bytes.size) {
+            when (bytes[pos++].toInt() and 0xFF) {
+                0x3B -> return frames
+                0x21 -> {
+                    assertTrue("truncated extension", pos < bytes.size)
+                    pos++ // extension label
+                    while (true) {
+                        assertTrue("truncated extension sub-block", pos < bytes.size)
+                        val size = bytes[pos++].toInt() and 0xFF
+                        if (size == 0) break
+                        assertTrue("extension sub-block exceeds input", pos + size <= bytes.size)
+                        pos += size
+                    }
+                }
+                0x2C -> {
+                    assertTrue("truncated image descriptor", pos + 9 <= bytes.size)
+                    val imagePacked = bytes[pos + 8].toInt() and 0xFF
+                    pos += 9
+                    if (imagePacked and 0x80 != 0) pos += 3 * (1 shl ((imagePacked and 0x07) + 1))
+                    assertTrue("missing LZW code size", pos < bytes.size)
+                    val minCodeSize = bytes[pos++].toInt() and 0xFF
+                    val chunks = mutableListOf<ByteArray>()
+                    while (true) {
+                        assertTrue("truncated image-data sub-block", pos < bytes.size)
+                        val size = bytes[pos++].toInt() and 0xFF
+                        if (size == 0) break
+                        assertTrue("image-data sub-block exceeds input", pos + size <= bytes.size)
+                        chunks += bytes.copyOfRange(pos, pos + size)
+                        pos += size
+                    }
+                    val stream = ByteArray(chunks.sumOf { it.size })
+                    var offset = 0
+                    chunks.forEach { chunk ->
+                        chunk.copyInto(stream, offset)
+                        offset += chunk.size
+                    }
+                    frames += minCodeSize to stream
+                }
+                else -> fail("unexpected GIF block marker at ${pos - 1}")
+            }
+        }
+        fail("missing GIF trailer")
+        return emptyList()
+    }
+
     @Test
     fun lzwRoundTripSmallAlphabet() {
         val width = 40
@@ -193,6 +247,34 @@ class GifEncoderTest {
         assertEquals("解码像素数不符", expected.size, decoded.size)
         for (i in expected.indices) {
             assertEquals("像素 $i 不一致", expected[i].toInt() and 0xFF, decoded[i])
+        }
+    }
+
+    @Test
+    fun multipleFramesRemainReadableAfterDictionaryGrowthAndReset() {
+        val width = 160
+        val height = 120
+        val palette = GifPalette(IntArray(16) { 0xFF000000.toInt() or (it * 0x10101) })
+        val expectedFrames = List(3) { frame ->
+            ByteArray(width * height) { index ->
+                ((index * (frame + 3) + frame * 5 + index / width) % palette.size).toByte()
+            }
+        }
+        val output = ByteArrayOutputStream()
+        val encoder = GifEncoder(output)
+        encoder.writeHeader(width, height, palette)
+        expectedFrames.forEach { encoder.writeFrame(it, 8) }
+        encoder.finish()
+
+        val encodedFrames = extractAllLzwData(output.toByteArray())
+        assertEquals(3, encodedFrames.size)
+        encodedFrames.forEachIndexed { index, (minCodeSize, data) ->
+            val decoded = MiniLzwDecoder(data, minCodeSize).decode()
+            val expected = expectedFrames[index]
+            assertEquals("frame $index pixel count", expected.size, decoded.size)
+            expected.indices.forEach { pixel ->
+                assertEquals("frame $index pixel $pixel", expected[pixel].toInt() and 0xFF, decoded[pixel])
+            }
         }
     }
 
@@ -348,5 +430,26 @@ class GifEncoderTest {
             val idx = frame2.indices[i].toInt() and 0xFF
             assertTrue(idx in 0 until frame2.palette.size)
         }
+    }
+
+    @Test
+    fun paletteNearestSearchMatchesBruteForceRgbDistance() {
+        val random = Random(8217L)
+        val colors = IntArray(192) { 0xFF000000.toInt() or random.nextInt(0x1000000) }
+        val palette = GifPalette(colors)
+        repeat(400) {
+            val query = 0xFF000000.toInt() or random.nextInt(0x1000000)
+            val actual = palette.colors[palette.indexFor(query)]
+            val actualDistance = rgbDistance(query, actual)
+            val expectedDistance = colors.minOf { rgbDistance(query, it) }
+            assertEquals(expectedDistance, actualDistance)
+        }
+    }
+
+    private fun rgbDistance(left: Int, right: Int): Int {
+        val red = ((left ushr 16) and 0xFF) - ((right ushr 16) and 0xFF)
+        val green = ((left ushr 8) and 0xFF) - ((right ushr 8) and 0xFF)
+        val blue = (left and 0xFF) - (right and 0xFF)
+        return red * red + green * green + blue * blue
     }
 }

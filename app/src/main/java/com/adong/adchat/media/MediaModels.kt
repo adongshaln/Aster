@@ -115,5 +115,6 @@ fun MediaDownloadRecord.asGifRecord(gifFile: File, fileSize: Long): MediaDownloa
     fileSize = fileSize,
     mimeType = "image/gif",
     fileExtension = "gif",
+    qualityLabel = "",
     createdAt = System.currentTimeMillis()
 )

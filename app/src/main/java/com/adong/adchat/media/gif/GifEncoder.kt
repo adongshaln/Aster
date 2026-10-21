@@ -10,38 +10,75 @@ import kotlin.math.max
 class GifPalette(val colors: IntArray) {
 
     val size: Int get() = colors.size
+    private val exactIndices = HashMap<Int, Int>(colors.size)
+    private val nearestColorTree: NearestColorNode?
 
     init {
         require(colors.isNotEmpty()) { "调色板不能为空" }
         require(colors.size <= 256) { "GIF 调色板最多 256 色，实际 ${colors.size}" }
+        colors.forEachIndexed { index, color -> exactIndices.putIfAbsent(color, index) }
+        nearestColorTree = buildTree(colors.indices.toList(), depth = 0)
     }
 
     /**
      * 返回 [argb] 对应的调色板索引：先做精确匹配，否则按 RGB 平方距离最近邻匹配。
      * Alpha 不参与最近邻比较（GIF 不支持半透明，只有索引级单色透明）。
      */
-    fun indexFor(argb: Int): Int {
-        // 精确匹配（含 Alpha），命中直接返回
-        for (i in colors.indices) {
-            if (colors[i] == argb) return i
+    fun indexFor(argb: Int): Int = indexFor(argb, IntArray(2))
+
+    internal fun indexFor(argb: Int, searchState: IntArray): Int {
+        exactIndices[argb]?.let { return it }
+        val targetR = (argb ushr 16) and 0xFF
+        val targetG = (argb ushr 8) and 0xFF
+        val targetB = argb and 0xFF
+        searchState[0] = 0
+        searchState[1] = Int.MAX_VALUE
+        nearestColorTree?.let { search(it, targetR, targetG, targetB, searchState) }
+        return searchState[0]
+    }
+
+    private data class NearestColorNode(val index: Int, val axis: Int, val left: NearestColorNode?, val right: NearestColorNode?)
+
+    private fun buildTree(indices: List<Int>, depth: Int): NearestColorNode? {
+        if (indices.isEmpty()) return null
+        val axis = depth % 3
+        val sorted = indices.sortedBy { channel(colors[it], axis) }
+        val middle = sorted.size / 2
+        return NearestColorNode(
+            index = sorted[middle],
+            axis = axis,
+            left = buildTree(sorted.subList(0, middle), depth + 1),
+            right = buildTree(sorted.subList(middle + 1, sorted.size), depth + 1)
+        )
+    }
+
+    private fun search(node: NearestColorNode?, r: Int, g: Int, b: Int, best: IntArray) {
+        if (node == null) return
+        val color = colors[node.index]
+        val dr = r - ((color ushr 16) and 0xFF)
+        val dg = g - ((color ushr 8) and 0xFF)
+        val db = b - (color and 0xFF)
+        val distance = dr * dr + dg * dg + db * db
+        if (distance < best[1]) {
+            best[0] = node.index
+            best[1] = distance
         }
-        // 最近邻匹配，只比较 RGB
-        val target = argb and 0x00FFFFFF
-        var best = 0
-        var bestDist = Int.MAX_VALUE
-        for (i in colors.indices) {
-            val c = colors[i] and 0x00FFFFFF
-            val dr = ((target ushr 16) and 0xFF) - ((c ushr 16) and 0xFF)
-            val dg = ((target ushr 8) and 0xFF) - ((c ushr 8) and 0xFF)
-            val db = (target and 0xFF) - (c and 0xFF)
-            val d = dr * dr + dg * dg + db * db
-            if (d < bestDist) {
-                bestDist = d
-                best = i
-                if (d == 0) break
-            }
+
+        val delta = when (node.axis) {
+            0 -> dr
+            1 -> dg
+            else -> db
         }
-        return best
+        val near = if (delta <= 0) node.left else node.right
+        val far = if (delta <= 0) node.right else node.left
+        search(near, r, g, b, best)
+        if (delta * delta < best[1]) search(far, r, g, b, best)
+    }
+
+    private fun channel(color: Int, axis: Int): Int = when (axis) {
+        0 -> (color ushr 16) and 0xFF
+        1 -> (color ushr 8) and 0xFF
+        else -> color and 0xFF
     }
 }
 
@@ -63,16 +100,18 @@ class GifColorQuantizer {
         pixels: IntArray,
         maxColors: Int,
         dither: Boolean,
-        existing: GifPalette? = null
+        existing: GifPalette? = null,
+        rowWidth: Int = pixels.size
     ): GifQuantizedFrame {
         require(maxColors in 2..256) { "maxColors 须在 2..256，实际 $maxColors" }
         require(pixels.isNotEmpty()) { "像素数组不能为空" }
+        require(rowWidth > 0 && pixels.size % rowWidth == 0) { "行宽 $rowWidth 与像素数量 ${pixels.size} 不匹配" }
         // 有既有调色板时仅做映射，不重建，保证帧间调色板一致
         return if (existing != null) {
-            GifQuantizedFrame(existing, mapToPalette(pixels, existing, dither))
+            GifQuantizedFrame(existing, mapToPalette(pixels, existing, dither, rowWidth))
         } else {
             val palette = buildMedianCutPalette(pixels, maxColors)
-            GifQuantizedFrame(palette, mapToPalette(pixels, palette, dither))
+            GifQuantizedFrame(palette, mapToPalette(pixels, palette, dither, rowWidth))
         }
     }
 
@@ -195,66 +234,67 @@ class GifColorQuantizer {
     // ── 映射（含可选 Floyd–Steinberg 抖动） ───────────────────
 
     /** 把像素映射到调色板索引；开启 [dither] 时使用 Floyd–Steinberg 误差扩散 */
-    private fun mapToPalette(pixels: IntArray, palette: GifPalette, dither: Boolean): ByteArray {
-        return if (dither) mapWithDithering(pixels, palette) else mapDirect(pixels, palette)
+    private fun mapToPalette(pixels: IntArray, palette: GifPalette, dither: Boolean, rowWidth: Int): ByteArray {
+        return if (dither) mapWithDithering(pixels, palette, rowWidth) else mapDirect(pixels, palette)
     }
 
     /** 直接最近邻映射，无抖动 */
     private fun mapDirect(pixels: IntArray, palette: GifPalette): ByteArray {
         val indices = ByteArray(pixels.size)
+        val searchState = IntArray(2)
         for (i in pixels.indices) {
-            indices[i] = palette.indexFor(pixels[i]).toByte()
+            indices[i] = palette.indexFor(pixels[i], searchState).toByte()
         }
         return indices
     }
 
-    /**
-     * Floyd–Steinberg 误差扩散。调用方传入的 [pixels] 为一维 ARGB 数组，
-     * 这里以线性序列做一维退化扩散：量化误差按 7/16、5/16、3/16、1/16
-     * 向序列中的后继位置 +1/+2/+3/+4 扩散，等价于逐行展开后的近似。
-     * 所有输出索引都取自调色板最近邻，天然落在 [0, palette.size) 内。
-     */
-    private fun mapWithDithering(pixels: IntArray, palette: GifPalette): ByteArray {
-        val n = pixels.size
-        val indices = ByteArray(n)
-        // 三通道浮点误差缓冲
-        val errR = FloatArray(n + 4)
-        val errG = FloatArray(n + 4)
-        val errB = FloatArray(n + 4)
-        for (i in 0 until n) {
-            val argb = pixels[i]
-            val r = (((argb ushr 16) and 0xFF) + errR[i]).coerceIn(0f, 255f)
-            val g = (((argb ushr 8) and 0xFF) + errG[i]).coerceIn(0f, 255f)
-            val b = ((argb and 0xFF) + errB[i]).coerceIn(0f, 255f)
-            val candidate = 0xFF000000.toInt() or
-                (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
-            val idx = palette.indexFor(candidate)
-            indices[i] = idx.toByte()
-            // 量化误差按 FS 比例向后续位置扩散
-            val c = palette.colors[idx]
-            val eR = r - ((c ushr 16) and 0xFF)
-            val eG = g - ((c ushr 8) and 0xFF)
-            val eB = b - (c and 0xFF)
-            if (i + 1 < n) {
-                errR[i + 1] += eR * (7f / 16f)
-                errG[i + 1] += eG * (7f / 16f)
-                errB[i + 1] += eB * (7f / 16f)
+    /** Floyd–Steinberg diffusion with row-aware error buffers; memory stays O(width). */
+    private fun mapWithDithering(pixels: IntArray, palette: GifPalette, rowWidth: Int): ByteArray {
+        val indices = ByteArray(pixels.size)
+        var currentR = FloatArray(rowWidth + 2)
+        var currentG = FloatArray(rowWidth + 2)
+        var currentB = FloatArray(rowWidth + 2)
+        var nextR = FloatArray(rowWidth + 2)
+        var nextG = FloatArray(rowWidth + 2)
+        var nextB = FloatArray(rowWidth + 2)
+        val searchState = IntArray(2)
+
+        for (y in pixels.indices step rowWidth) {
+            for (x in 0 until rowWidth) {
+                val position = y + x
+                val errorPosition = x + 1
+                val argb = pixels[position]
+                val r = (((argb ushr 16) and 0xFF) + currentR[errorPosition]).coerceIn(0f, 255f)
+                val g = (((argb ushr 8) and 0xFF) + currentG[errorPosition]).coerceIn(0f, 255f)
+                val b = ((argb and 0xFF) + currentB[errorPosition]).coerceIn(0f, 255f)
+                val candidate = 0xFF000000.toInt() or (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
+                val index = palette.indexFor(candidate, searchState)
+                indices[position] = index.toByte()
+                val color = palette.colors[index]
+                val errorR = r - ((color ushr 16) and 0xFF)
+                val errorG = g - ((color ushr 8) and 0xFF)
+                val errorB = b - (color and 0xFF)
+
+                currentR[errorPosition + 1] += errorR * (7f / 16f)
+                currentG[errorPosition + 1] += errorG * (7f / 16f)
+                currentB[errorPosition + 1] += errorB * (7f / 16f)
+                if (x > 0) {
+                    nextR[errorPosition - 1] += errorR * (3f / 16f)
+                    nextG[errorPosition - 1] += errorG * (3f / 16f)
+                    nextB[errorPosition - 1] += errorB * (3f / 16f)
+                }
+                nextR[errorPosition] += errorR * (5f / 16f)
+                nextG[errorPosition] += errorG * (5f / 16f)
+                nextB[errorPosition] += errorB * (5f / 16f)
+                if (x + 1 < rowWidth) {
+                    nextR[errorPosition + 1] += errorR * (1f / 16f)
+                    nextG[errorPosition + 1] += errorG * (1f / 16f)
+                    nextB[errorPosition + 1] += errorB * (1f / 16f)
+                }
             }
-            if (i + 2 < n) {
-                errR[i + 2] += eR * (5f / 16f)
-                errG[i + 2] += eG * (5f / 16f)
-                errB[i + 2] += eB * (5f / 16f)
-            }
-            if (i + 3 < n) {
-                errR[i + 3] += eR * (3f / 16f)
-                errG[i + 3] += eG * (3f / 16f)
-                errB[i + 3] += eB * (3f / 16f)
-            }
-            if (i + 4 < n) {
-                errR[i + 4] += eR * (1f / 16f)
-                errG[i + 4] += eG * (1f / 16f)
-                errB[i + 4] += eB * (1f / 16f)
-            }
+            val oldR = currentR; currentR = nextR; nextR = oldR; nextR.fill(0f)
+            val oldG = currentG; currentG = nextG; nextG = oldG; nextG.fill(0f)
+            val oldB = currentB; currentB = nextB; nextB = oldB; nextB.fill(0f)
         }
         return indices
     }

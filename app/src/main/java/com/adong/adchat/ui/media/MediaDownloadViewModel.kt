@@ -27,6 +27,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 enum class MediaWorkspacePhase {
@@ -58,6 +60,8 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
     private val downloader = MediaFileDownloader(application)
     private val gallerySaver = MediaGallerySaver(application)
     private val remoteResolver = RemoteMediaResolver()
+    private val historyWriteMutex = Mutex()
+    private var historyMutationSequence = 0L
     private var requestSequence = 0L
     private var resolveJob: Job? = null
     private var downloadJob: Job? = null
@@ -68,11 +72,14 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
         private set
 
     init {
+        val initialHistoryVersion = historyMutationSequence
         viewModelScope.launch {
             val records = withContext(Dispatchers.IO) {
                 store.load().filter { File(it.filePath).exists() }
             }
-            update { copy(downloads = records) }
+            if (historyMutationSequence == initialHistoryVersion) {
+                update { copy(downloads = records) }
+            }
         }
     }
 
@@ -267,14 +274,13 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
                     is MediaGallerySaveResult.Saved -> record.copy(galleryUri = galleryResult.uri)
                     else -> record
                 }
-                val records = withContext(Dispatchers.IO) { store.add(storedRecord) }
+                writeRecord(storedRecord)
                 automaticRefreshAttempts = 0
                 update {
                     copy(
                         phase = MediaWorkspacePhase.Ready,
                         downloadProgress = MediaDownloadProgress(record.fileSize, record.fileSize, 0L),
                         savingToGallery = false,
-                        downloads = records,
                         galleryPermissionRecordId = if (galleryResult is MediaGallerySaveResult.PermissionRequired) record.id else null,
                         notice = when (galleryResult) {
                             is MediaGallerySaveResult.Saved -> if (record.watermarkFree) "无水印视频已保存到相册" else "视频已保存到相册"
@@ -320,11 +326,44 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
             val result = gallerySaver.save(record)
             if (result is MediaGallerySaveResult.Saved) {
                 val updatedRecord = record.copy(galleryUri = result.uri)
-                val records = withContext(Dispatchers.IO) { store.add(updatedRecord) }
-                update { copy(downloads = records, notice = "视频已保存到相册") }
+                writeRecord(updatedRecord)
+                update { copy(notice = if (record.isGif()) "GIF 已保存到相册" else "视频已保存到相册") }
             } else {
-                update { copy(notice = "视频已下载，相册保存失败") }
+                update { copy(notice = if (record.isGif()) "GIF 已生成，相册保存失败" else "视频已下载，相册保存失败") }
             }
+        }
+    }
+
+    /** Adds a locally generated media file to the shared download history. */
+    fun addDownloadRecord(record: MediaDownloadRecord) {
+        persistRecord(record)
+    }
+
+    /** Persists a history update, such as the gallery URI after saving a GIF. */
+    fun updateDownloadRecord(record: MediaDownloadRecord) {
+        persistRecord(record)
+    }
+
+    fun showNotice(message: String) {
+        update { copy(notice = message) }
+    }
+
+    private fun persistRecord(record: MediaDownloadRecord) {
+        viewModelScope.launch {
+            try {
+                writeRecord(record)
+            } catch (error: Exception) {
+                update { copy(notice = error.message ?: "无法更新媒体历史") }
+            }
+        }
+    }
+
+    private suspend fun writeRecord(record: MediaDownloadRecord): List<MediaDownloadRecord> {
+        historyMutationSequence++
+        return historyWriteMutex.withLock {
+            val records = withContext(Dispatchers.IO) { store.add(record) }
+            update { copy(downloads = records) }
+            records
         }
     }
 
@@ -335,8 +374,13 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
 
     fun removeDownload(id: String, deleteFile: Boolean = true) {
         viewModelScope.launch {
-            val next = withContext(Dispatchers.IO) { store.remove(id, deleteFile) }
-            update { copy(downloads = next, notice = if (deleteFile) "文件已删除" else "记录已移除") }
+            historyMutationSequence++
+            historyWriteMutex.withLock {
+                withContext(Dispatchers.IO) { store.remove(id, deleteFile) }
+                    .also { next ->
+                        update { copy(downloads = next, notice = if (deleteFile) "文件已删除" else "记录已移除") }
+                    }
+            }
         }
     }
 
@@ -374,7 +418,7 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
             clipData = ClipData.newUri(context.contentResolver, record.title, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val chooser = Intent.createChooser(send, "分享视频").apply {
+        val chooser = Intent.createChooser(send, if (record.isGif()) "分享 GIF" else "分享视频").apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
             clipData = send.clipData
         }
@@ -388,6 +432,9 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
     private inline fun update(block: MediaDownloadUiState.() -> MediaDownloadUiState) {
         state.value = state.value.block()
     }
+
+    private fun MediaDownloadRecord.isGif(): Boolean =
+        mimeType.equals("image/gif", ignoreCase = true) || fileExtension.equals("gif", ignoreCase = true)
 
     override fun onCleared() {
         resolveJob?.cancel()

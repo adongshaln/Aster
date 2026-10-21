@@ -1,7 +1,9 @@
 package com.adong.adchat.media.gif
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
+import android.os.Build
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
@@ -21,8 +23,7 @@ data class VideoToGifRequest(
     val videoPath: String,
     val outputDirectory: File,
     val baseName: String,
-    val preset: GifPreset,
-    val fullVideo: Boolean
+    val preset: GifPreset
 )
 
 data class VideoToGifResult(
@@ -43,9 +44,21 @@ object VideoToGifConverter {
     suspend fun convert(request: VideoToGifRequest, onProgress: (Float) -> Unit): VideoToGifResult =
         withContext(Dispatchers.Default) {
             val preset = request.preset
+            require(request.outputDirectory.exists() || request.outputDirectory.mkdirs()) {
+                "无法创建 GIF 输出目录：${request.outputDirectory.absolutePath}"
+            }
+            require(request.outputDirectory.isDirectory) {
+                "GIF 输出路径不是目录：${request.outputDirectory.absolutePath}"
+            }
+            val prefix = request.baseName
+                .replace(Regex("[^A-Za-z0-9_-]"), "_")
+                .trim('_')
+                .ifBlank { "aster_gif" }
+                .take(36)
+                .let { if (it.length < 2) "aster_gif" else it }
+            // Each conversion gets its own file. A retry must never destroy a GIF the user already saved.
+            val output = File.createTempFile("${prefix}_", ".gif", request.outputDirectory)
             val retriever = MediaMetadataRetriever()
-            val output = File(request.outputDirectory, "${request.baseName}.gif")
-            var succeeded = false
             try {
                 retriever.setDataSource(request.videoPath)
                 val videoWidth = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
@@ -53,67 +66,95 @@ object VideoToGifConverter {
                 val videoHeight = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
                     ?.toIntOrNull() ?: 0
                 require(videoWidth > 0 && videoHeight > 0) { "无法读取视频尺寸：$request.videoPath" }
+                val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    ?.toIntOrNull()?.mod(360) ?: 0
+                val displayRotation = rotation.takeIf { it % 90 == 0 } ?: 0
+                val (displayWidth, displayHeight) = if (displayRotation == 90 || displayRotation == 270) {
+                    videoHeight to videoWidth
+                } else {
+                    videoWidth to videoHeight
+                }
                 val videoDurationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                     ?.toLongOrNull() ?: 0L
 
-                val durationMs = minOf(videoDurationMs, preset.maxDurationMs).coerceAtLeast(0L)
-                val frameIntervalUs = 1_000_000L / preset.fps
-                val durationUs = durationMs * 1_000L
-                val frameCount = max(1L, durationUs / frameIntervalUs).toInt()
+                val requestedDurationMs = minOf(videoDurationMs, preset.maxDurationMs)
+                val timeline = GifTimeline.create(requestedDurationMs, preset.fps)
+                val frameCount = timeline.size
 
-                val outWidth = preset.widthPx
-                val outHeight = even((videoHeight.toLong() * outWidth / videoWidth).toInt())
+                val scale = minOf(1.0, preset.widthPx.toDouble() / max(displayWidth, displayHeight).toDouble())
+                val outWidth = even((displayWidth * scale).roundToInt())
+                val outHeight = even((displayHeight * scale).roundToInt())
 
                 FileOutputStream(output).use { stream ->
                     val encoder = GifEncoder(stream, loopCount = 0)
                     var globalPalette: GifPalette? = null
                     val quantizer = GifColorQuantizer()
-                    val delayCentiseconds = max(2, 100 / preset.fps)
 
-                    for (i in 0 until frameCount) {
+                    for ((i, timing) in timeline.withIndex()) {
                         ensureActive()
-                        val timeUs = i * frameIntervalUs
-                        val bitmap = if (i == 0) {
-                            // 首帧取关键帧建全局调色板
-                            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        val timeUs = timing.timestampUs
+                        val option = if (i == 0) MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                        else MediaMetadataRetriever.OPTION_CLOSEST
+                        val frameWidth = if (displayRotation == 90 || displayRotation == 270) outHeight else outWidth
+                        val frameHeight = if (displayRotation == 90 || displayRotation == 270) outWidth else outHeight
+                        val bitmap = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                            retriever.getScaledFrameAtTime(timeUs, option, frameWidth, frameHeight)
                         } else {
-                            retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                            retriever.getFrameAtTime(timeUs, option)
                         } ?: error("第 $i 帧解码失败：timeUs=$timeUs")
 
+                        var rotated: Bitmap? = null
+                        var scaled: Bitmap? = null
                         try {
-                            val scaled = if (bitmap.width == outWidth && bitmap.height == outHeight) {
+                            val frameAlreadyRotated =
+                                (displayRotation == 90 || displayRotation == 270) &&
+                                    bitmap.width == outWidth && bitmap.height == outHeight
+                            val upright = if (displayRotation == 0 || frameAlreadyRotated) {
                                 bitmap
                             } else {
-                                Bitmap.createScaledBitmap(bitmap, outWidth, outHeight, true)
+                                Bitmap.createBitmap(
+                                    bitmap,
+                                    0,
+                                    0,
+                                    bitmap.width,
+                                    bitmap.height,
+                                    Matrix().apply { postRotate(displayRotation.toFloat()) },
+                                    true
+                                ).also { rotated = it }
                             }
-                            val pixels = IntArray(scaled.width * scaled.height)
-                            scaled.getPixels(pixels, 0, scaled.width, 0, 0, scaled.width, scaled.height)
-                            val quantized = if (i == 0) {
-                                quantizer.quantize(pixels, maxColors = 256, dither = true)
+                            val outputBitmap = if (upright.width == outWidth && upright.height == outHeight) {
+                                upright
                             } else {
-                                quantizer.quantize(pixels, maxColors = 256, dither = true, existing = globalPalette)
+                                Bitmap.createScaledBitmap(upright, outWidth, outHeight, true).also { scaled = it }
+                            }
+                            val pixels = IntArray(outputBitmap.width * outputBitmap.height)
+                            outputBitmap.getPixels(pixels, 0, outputBitmap.width, 0, 0, outputBitmap.width, outputBitmap.height)
+                            val quantized = if (i == 0) {
+                                quantizer.quantize(pixels, maxColors = 256, dither = true, rowWidth = outputBitmap.width)
+                            } else {
+                                quantizer.quantize(pixels, maxColors = 256, dither = true, existing = globalPalette, rowWidth = outputBitmap.width)
                             }
                             if (i == 0) {
                                 globalPalette = quantized.palette
                                 encoder.writeHeader(outWidth, outHeight, quantized.palette)
                             }
-                            encoder.writeFrame(quantized.indices, delayCentiseconds)
-                            if (scaled !== bitmap) scaled.recycle()
+                            encoder.writeFrame(quantized.indices, timing.delayCentiseconds)
                         } finally {
-                            bitmap.recycle()
+                            scaled?.takeIf { it !== bitmap && it !== rotated }?.let { if (!it.isRecycled) it.recycle() }
+                            rotated?.takeIf { it !== bitmap }?.let { if (!it.isRecycled) it.recycle() }
+                            if (!bitmap.isRecycled) bitmap.recycle()
                         }
                         onProgress((i + 1).toFloat() / frameCount)
                     }
                     encoder.finish()
                 }
-                succeeded = true
                 onProgress(1f)
                 VideoToGifResult(
                     file = output,
                     width = outWidth,
                     height = outHeight,
                     frameCount = frameCount,
-                    durationMs = durationMs,
+                    durationMs = timeline.sumOf { it.delayCentiseconds.toLong() } * 10L,
                     preset = preset
                 )
             } catch (error: Throwable) {
@@ -123,9 +164,6 @@ object VideoToGifConverter {
                 }
                 throw error
             } finally {
-                if (!succeeded) {
-                    output.deleteOnExit()
-                }
                 runCatching { retriever.release() }
             }
         }
