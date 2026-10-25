@@ -3,15 +3,22 @@ package com.adong.adchat.ui.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -27,12 +34,16 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.*
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -49,8 +60,10 @@ import com.adong.adchat.ui.theme.*
 import kotlin.math.PI
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
-/** The toolbar keeps only this small entry; the slider lives in an independent window above it. */
+/** The popup also owns touches over its entry, so an outside dismissal cannot reopen it. */
 @Composable
 fun ComposerReasoningControl(
     model: String,
@@ -67,21 +80,14 @@ fun ComposerReasoningControl(
     val density = LocalDensity.current
     val margin = with(density) { 12.dp.roundToPx() }
     val gap = with(density) { 10.dp.roundToPx() }
-    val position = remember(margin, gap) {
-        object : PopupPositionProvider {
-            override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize,
-                layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
-                val x = (anchorBounds.center.x - popupContentSize.width / 2)
-                    .coerceIn(margin, (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin))
-                val above = anchorBounds.top - popupContentSize.height - gap
-                val y = if (above >= margin) above else
-                    (anchorBounds.bottom + gap).coerceAtMost(windowSize.height - popupContentSize.height - margin)
-                return IntOffset(x, y.coerceAtLeast(margin))
-            }
-        }
-    }
+    val position = remember(margin) { ReasoningPopupPositionProvider(margin) }
+    val expandedChangeState = rememberUpdatedState(onExpandedChange)
     BackHandler(expanded) { onExpandedChange(false) }
-    Box(modifier) {
+    Box(modifier.onGloballyPositioned { coordinates ->
+        val origin = coordinates.positionInWindow()
+        position.anchorBounds = IntRect(
+            IntOffset(origin.x.roundToInt(), origin.y.roundToInt()), coordinates.size)
+    }) {
         Surface(
             onClick = { onExpandedChange(!expanded) }, enabled = enabled,
             shape = CircleShape, color = SurfaceInset.copy(alpha = .75f), contentColor = MutedInk,
@@ -103,29 +109,81 @@ fun ComposerReasoningControl(
             val entrance = remember { Animatable(if (motion) 0f else 1f) }
             LaunchedEffect(Unit) { entrance.animateTo(1f, if (motion) AsterSpring.spatial() else snap()) }
             Popup(popupPositionProvider = position, onDismissRequest = { onExpandedChange(false) },
-                properties = PopupProperties(focusable = false, dismissOnClickOutside = true)) {
-                Surface(
-                    shape = RoundedCornerShape(25.dp), color = Surface, contentColor = Ink,
-                    border = BorderStroke(1.dp, Hairline), shadowElevation = 12.dp,
-                    modifier = Modifier.width(minOf(340.dp, (LocalConfiguration.current.screenWidthDp - 24).dp))
-                        .graphicsLayer {
-                            alpha = entrance.value.coerceIn(0f, 1f)
-                            scaleX = .94f + .06f * entrance.value
-                            scaleY = .89f + .11f * entrance.value
-                            transformOrigin = TransformOrigin(.5f, 1f)
-                        }
-                        .testTag("reasoning-popover").semantics { paneTitle = "思考强度" }
-                ) {
-                    ComposerReasoningSlider(model, effort, onEffortChange,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp),
-                        onModelClick = { onExpandedChange(false); onModelClick() })
+                properties = PopupProperties(focusable = false, dismissOnClickOutside = true,
+                    usePlatformDefaultWidth = false)) {
+                Layout(content = {
+                    // Disjoint hit regions keep taps over the entry in this window without
+                    // putting a gesture detector on top of the slider or model button.
+                    repeat(4) {
+                        Box(Modifier.pointerInput(Unit) {
+                            detectTapGestures { expandedChangeState.value(false) }
+                        })
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(25.dp), color = Surface, contentColor = Ink,
+                        border = BorderStroke(1.dp, Hairline), shadowElevation = 12.dp,
+                        modifier = Modifier.graphicsLayer {
+                                alpha = entrance.value.coerceIn(0f, 1f)
+                                scaleX = .94f + .06f * entrance.value
+                                scaleY = .89f + .11f * entrance.value
+                                transformOrigin = TransformOrigin(.5f, 1f)
+                            }
+                            .testTag("reasoning-popover").semantics { paneTitle = "思考强度" }
+                    ) {
+                        ComposerReasoningSlider(model, effort, onEffortChange,
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp, vertical = 13.dp),
+                            onModelClick = { onExpandedChange(false); onModelClick() })
+                    }
+                }) { measurables, constraints ->
+                    val anchor = position.anchorBounds
+                    val above = (anchor.top - margin).coerceAtLeast(0)
+                    val below = (constraints.maxHeight - anchor.bottom - margin).coerceAtLeast(0)
+                    val available = maxOf(above, below)
+                    val actualGap = minOf(gap, available)
+                    val width = constraints.maxWidth
+                    val cardWidth = minOf(340.dp.roundToPx(), (width - 2 * margin).coerceAtLeast(0))
+                    val card = measurables[4].measure(Constraints(
+                        minWidth = cardWidth, maxWidth = cardWidth,
+                        maxHeight = available - actualGap
+                    ))
+                    val height = anchor.height + actualGap + card.height
+                    val opensAbove = card.height + actualGap <= above
+                    val cardX = (anchor.center.x - card.width / 2)
+                        .coerceIn(margin, (width - card.width - margin).coerceAtLeast(margin))
+                    val cardY = if (opensAbove) 0 else anchor.height + actualGap
+                    val cardBottom = cardY + card.height
+                    val top = measurables[0].measure(Constraints.fixed(width, cardY))
+                    val bottom = measurables[1].measure(Constraints.fixed(width, height - cardBottom))
+                    val left = measurables[2].measure(Constraints.fixed(cardX, card.height))
+                    val rightWidth = (width - cardX - card.width).coerceAtLeast(0)
+                    val right = measurables[3].measure(Constraints.fixed(rightWidth, card.height))
+                    layout(width, height) {
+                        top.place(0, 0)
+                        bottom.place(0, cardBottom)
+                        left.place(0, cardY)
+                        right.place(cardX + card.width, cardY)
+                        card.place(cardX, cardY)
+                    }
                 }
             }
         }
     }
 }
 
-/** A native discrete slider with a broad capsule track and a separate model-default option. */
+private class ReasoningPopupPositionProvider(private val margin: Int) : PopupPositionProvider {
+    var anchorBounds by mutableStateOf(IntRect.Zero)
+
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize,
+        layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+        // Popup also refreshes this during IME adjustPan, when layout callbacks may not run.
+        this.anchorBounds = anchorBounds
+        val above = anchorBounds.bottom - popupContentSize.height
+        return IntOffset(0, if (above >= margin) above else anchorBounds.top)
+    }
+}
+
+/** Continuous while dragging; only supported effort levels are committed after release. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComposerReasoningSlider(
@@ -140,8 +198,15 @@ fun ComposerReasoningSlider(
     val levels = remember(choices) { choices.filterNot { it.id == ReasoningPolicy.DEFAULT } }
     if (levels.isEmpty()) return
     val resolved = ReasoningPolicy.choiceOf(model, effort)?.id ?: ReasoningPolicy.DEFAULT
-    var selection by remember(model, effort, enabled) { mutableStateOf(resolved) }
-    var pending by remember(model, effort, enabled) { mutableStateOf(false) }
+    var selection by remember(model) { mutableStateOf(resolved) }
+    var pending by remember(model) { mutableStateOf(false) }
+    val initialIndex = levels.indexOfFirst { it.id == resolved }.takeIf { it >= 0 } ?: levels.lastIndex / 2
+    val range = 0f..levels.lastIndex.coerceAtLeast(1).toFloat()
+    var position by remember(model) { mutableFloatStateOf(initialIndex.toFloat()) }
+    var settleJob by remember(model) { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
+    val interactionSource = remember { MutableInteractionSource() }
+    val dragging by interactionSource.collectIsDraggedAsState()
     var peakEntry by remember { mutableIntStateOf(0) }
     val haptics = LocalHapticFeedback.current
     val automatic = selection == ReasoningPolicy.DEFAULT
@@ -157,6 +222,18 @@ fun ComposerReasoningSlider(
     val inactive = SurfaceInset
     val ticks = MutedInk.copy(alpha = .44f)
     val motion = LocalAsterMotionEnabled.current
+    val thumbStretch by animateFloatAsState(if (dragging && motion) 1f else 0f,
+        animationSpec = if (motion) AsterSpring.snappy() else snap(), label = "reasoning-thumb-stretch")
+    // A saved value echo must not interrupt the release animation. A real external change does.
+    LaunchedEffect(model, resolved, enabled) {
+        if (selection != resolved || !enabled) {
+            settleJob?.cancel()
+            pending = false
+            selection = resolved
+            position = initialIndex.toFloat()
+        }
+    }
+    DisposableEffect(model) { onDispose { settleJob?.cancel() } }
     val sparkle = remember { Animatable(1f) }
     LaunchedEffect(highest, peakEntry, motion) {
         if (highest && motion) {
@@ -174,9 +251,22 @@ fun ComposerReasoningSlider(
         }
         pending = true
     }
+    fun settle(next: Int) {
+        settleJob?.cancel()
+        if (!motion) {
+            position = next.toFloat()
+        } else {
+            settleJob = scope.launch {
+                animate(position, next.toFloat(), animationSpec = AsterSpring.snappy()) { value, _ ->
+                    position = value.coerceIn(range)
+                }
+            }
+        }
+    }
     fun commit() {
         if (!enabled || !pending) return
         pending = false
+        settle(levels.indexOfFirst { it.id == selection })
         if (selection != resolved) onEffortChange(selection)
     }
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -189,10 +279,14 @@ fun ComposerReasoningSlider(
             Icon(Icons.Rounded.ChevronRight, "选择模型", Modifier.size(17.dp), tint = MutedInk)
         }
         Slider(
-            value = sliderIndex.toFloat(), onValueChange = { preview(it.roundToInt()) },
-            onValueChangeFinished = ::commit, enabled = enabled,
-            steps = (levels.size - 2).coerceAtLeast(0), valueRange = 0f..levels.lastIndex.coerceAtLeast(1).toFloat(),
-            modifier = Modifier.fillMaxWidth().height(54.dp)
+            value = position, onValueChange = {
+                settleJob?.cancel()
+                position = it.coerceIn(range)
+                preview(position.roundToInt())
+            },
+            onValueChangeFinished = ::commit, enabled = enabled, interactionSource = interactionSource,
+            steps = 0, valueRange = range,
+            modifier = Modifier.fillMaxWidth().height(54.dp).testTag("reasoning-slider")
                 .onPreviewKeyEvent { event ->
                     val direction = when (event.key) {
                         Key.DirectionRight -> if (rtl) -1 else 1
@@ -202,13 +296,18 @@ fun ComposerReasoningSlider(
                         else -> 0
                     }
                     if (!enabled || direction == 0) false else {
-                        if (event.type == KeyEventType.KeyDown) preview((sliderIndex + direction).coerceIn(levels.indices))
+                        if (event.type == KeyEventType.KeyDown) {
+                            val next = (sliderIndex + direction).coerceIn(levels.indices)
+                            preview(next)
+                            settle(next)
+                        }
                         else if (event.type == KeyEventType.KeyUp) commit()
                         true
                     }
                 }.semantics {
                     contentDescription = "思考强度滑块"
                     stateDescription = if (automatic) "自动，由模型决定" else "$label，第 ${sliderIndex + 1} 档，共 ${levels.size} 档"
+                    progressBarRangeInfo = ProgressBarRangeInfo(sliderIndex.toFloat(), range, (levels.size - 2).coerceAtLeast(0))
                     setProgress { value ->
                         if (!enabled || !value.isFinite()) false else {
                             var next = value.roundToInt().coerceIn(levels.indices)
@@ -220,7 +319,10 @@ fun ComposerReasoningSlider(
                     }
                 },
             thumb = {
-                Box(Modifier.size(36.dp).shadow(if (automatic) 0.dp else 2.dp, CircleShape)
+                Box(Modifier.size(36.dp).testTag("reasoning-thumb").graphicsLayer {
+                    scaleX = 1f + .1f * thumbStretch
+                    scaleY = 1f - .07f * thumbStretch
+                }.shadow(if (automatic) 0.dp else 2.dp, CircleShape)
                     .background(if (automatic) Color.Transparent else Color.White, CircleShape)
                     .then(if (automatic) Modifier else Modifier.border(BorderStroke(.8.dp, Color(0xFFE0DFE4)), CircleShape)))
             },
@@ -234,9 +336,12 @@ fun ComposerReasoningSlider(
                         left, 0f, size.width + radius, size.height, CornerRadius(radius))) }
                     clipPath(capsule) {
                         drawRect(inactive, topLeft = Offset(left, 0f), size = Size(width, size.height))
-                        val fraction = sliderIndex.toFloat() / levels.lastIndex.coerceAtLeast(1)
+                        val fraction = position / levels.lastIndex.coerceAtLeast(1)
                         val selectedX = if (rtl) size.width * (1f - fraction) else size.width * fraction
                         if (!automatic) {
+                            val activeLeft = if (rtl) selectedX else left
+                            val activeRight = if (rtl) size.width + radius else selectedX
+                            clipRect(left = activeLeft, right = activeRight) {
                             if (highest) {
                                 drawRect(Brush.horizontalGradient(
                                     if (rtl) listOf(Color(0xFF8244CE), Color(0xFFBA70FA), Color(0xFFDE80B9))
@@ -258,15 +363,14 @@ fun ComposerReasoningSlider(
                                         topLeft = Offset(left, 0f), size = Size(width, size.height))
                                 }
                             } else {
-                                val activeLeft = if (rtl) selectedX else left
-                                val activeWidth = if (rtl) size.width + radius - selectedX else selectedX - left
-                                drawRect(clay, Offset(activeLeft, 0f), Size(activeWidth, size.height))
+                                drawRect(clay, Offset(left, 0f), Size(width, size.height))
+                            }
                             }
                         }
                         if (!highest) for (level in levels.indices) {
                             val x = size.width * level / levels.lastIndex.coerceAtLeast(1)
                             val logicalLevel = if (rtl) levels.lastIndex - level else level
-                            drawCircle(if (!automatic && logicalLevel <= sliderIndex) Color.White.copy(alpha = .42f) else ticks,
+                            drawCircle(if (!automatic && logicalLevel <= position) Color.White.copy(alpha = .42f) else ticks,
                                 2.5.dp.toPx(), Offset(x, center.y))
                         }
                     }
@@ -274,8 +378,10 @@ fun ComposerReasoningSlider(
             }
         )
         TextButton(onClick = {
+            settleJob?.cancel()
             selection = ReasoningPolicy.DEFAULT
             pending = false
+            position = (levels.lastIndex / 2).toFloat()
             if (resolved != ReasoningPolicy.DEFAULT) onEffortChange(ReasoningPolicy.DEFAULT)
         }, enabled = enabled && !automatic, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
             modifier = Modifier.heightIn(min = 36.dp)) {
