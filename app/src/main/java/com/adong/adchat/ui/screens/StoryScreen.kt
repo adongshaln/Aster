@@ -1,5 +1,6 @@
 package com.adong.adchat.ui.screens
 
+import androidx.compose.animation.animateColorAsState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -517,23 +518,33 @@ private fun TavernPresetRow(
     onRename: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null
 ) {
+    val container by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else Surface,
+        AsterSpring.editorial(), label = "preset-selection"
+    )
+    val outline by animateColorAsState(
+        if (selected) Accent.copy(alpha = .4f) else Hairline,
+        AsterSpring.editorial(), label = "preset-outline"
+    )
     Surface(
         selected = selected,
         onClick = onClick,
         enabled = enabled,
-        color = if (selected) AccentSoft else Surface,
-        contentColor = Ink,
-        border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .4f) else Hairline),
+        color = container,
+        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else Ink,
+        border = BorderStroke(1.dp, outline),
         shape = RoundedCornerShape(18.dp),
         modifier = Modifier.fillMaxWidth()
+            .appleSpringPressable(pressedScale = .985f, enabled = enabled, enableHaptics = false)
     ) {
         Row(Modifier.padding(start = 14.dp, end = 5.dp, top = 12.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier.size(38.dp).clip(RoundedCornerShape(12.dp))
-                    .background(if (selected) Color.White.copy(alpha = .7f) else Canvas),
+                    .background(if (selected) MaterialTheme.colorScheme.surface else Canvas),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(if (selected) Icons.Rounded.Check else Icons.Rounded.Description, null, Modifier.size(19.dp), tint = if (selected) Accent else MutedInk)
+                Icon(if (selected) Icons.Rounded.Check else Icons.Rounded.Description, null, Modifier.size(19.dp),
+                    tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MutedInk)
             }
             Spacer(Modifier.width(11.dp))
             Column(Modifier.weight(1f)) {
@@ -854,14 +865,20 @@ private fun TavernSettingRow(
     onInspect: () -> Unit,
     onEnabled: (Boolean) -> Unit
 ) {
+    val modified = checked != defaultEnabled
+    val container by animateColorAsState(
+        if (modified) MaterialTheme.colorScheme.secondaryContainer else Surface,
+        AsterSpring.editorial(), label = "tavern-setting-state"
+    )
     Surface(
-        color = if (checked != defaultEnabled) AccentSoft.copy(alpha = .52f) else Surface,
+        color = container,
         shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, if (checked != defaultEnabled) Accent.copy(alpha = .3f) else Hairline),
+        border = BorderStroke(1.dp, if (modified) Accent.copy(alpha = .3f) else Hairline),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            Modifier.clickable(enabled = enabled, onClick = onInspect).padding(start = 14.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
+            Modifier.appleSpringPressable(pressedScale = .99f, enabled = enabled, enableHaptics = false)
+                .clickable(enabled = enabled, onClick = onInspect).padding(start = 14.dp, end = 8.dp, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {

@@ -3,14 +3,21 @@ package com.adong.adchat.island
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import com.adong.adchat.MainActivity
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,87 +25,207 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-/**
- * 前台服务：持有隐形灵动岛悬浮窗。
- * - 由设置开关启用/停用；启用后胶囊常驻挖孔位置；
- * - 用户复制链接后点一下胶囊 → 读剪贴板 → 展开询问卡片；
- * - [解析] 通过显式 Intent 唤起 MainActivity，路由到下载页并自动填入链接。
- */
+/** User-triggered clipboard tools, with requests isolated from ordinary conversations. */
 class IslandService : Service(), IslandView.Callbacks {
-
     companion object {
         const val ACTION_START = "com.adong.adchat.island.START"
         const val ACTION_STOP = "com.adong.adchat.island.STOP"
+        const val ACTION_OPEN_SETTINGS = "com.adong.adchat.island.OPEN_SETTINGS"
+        // Keep the existing channel and preference IDs so upgrades retain the user's choices.
         private const val CHANNEL_ID = "link_island"
         private const val NOTIFICATION_ID = 9301
+        private const val IDLE_TEXT = "点按墨线圈，处理文字或链接"
 
-        /** 启用隐形岛（设置开关 → 已授权）。 */
         fun start(context: Context) {
-            context.startForegroundService(
-                Intent(context, IslandService::class.java).setAction(ACTION_START)
-            )
+            if (!IslandPermissions.isEnabled(context) || !IslandPermissions.isReady(context)) return
+            context.startForegroundService(Intent(context, IslandService::class.java).setAction(ACTION_START))
         }
 
         fun stop(context: Context) {
-            context.startService(
-                Intent(context, IslandService::class.java).setAction(ACTION_STOP)
-            )
+            context.stopService(Intent(context, IslandService::class.java))
         }
     }
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val runner by lazy { StarIslandTaskRunner(applicationContext) }
     private var islandView: IslandView? = null
     private var resolveJob: Job? = null
-    private var shownUrl: String? = null
     private var linkGeneration = 0L
+    private var taskJob: Job? = null
+    private var taskGeneration = 0L
+    private var stopRequestedGeneration: Long? = null
+    private var currentTask: StarIslandTaskState? = null
     private var viewConfiguration: Configuration? = null
+    private var restoringView = false
+    private var shuttingDown = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                invalidateLinkResolution()
-                islandView?.destroy()
-                islandView = null
-                stopSelf()
-                return START_NOT_STICKY
-            }
-            ACTION_START -> {
-                startAsForeground()
-                obtainView().attach()
-            }
+        if (intent?.action == ACTION_STOP) {
+            IslandPermissions.setEnabled(this, false)
+            stopSelf()
+            return START_NOT_STICKY
         }
+        if (!IslandPermissions.isEnabled(this) || !IslandPermissions.isReady(this)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        // A sticky restart restores only the entry point; it never repeats a model request.
+        startAsForeground()
+        obtainView().attach()
         return START_STICKY
     }
 
-    private fun expandShortLink(link: IslandLink) {
-        resolveJob?.cancel()
-        shownUrl = link.originalUrl
-        val generation = ++linkGeneration
+    private fun obtainView(): IslandView = islandView ?: IslandView(this, this).also {
+        islandView = it
+        viewConfiguration = Configuration(resources.configuration)
+    }
+
+    private fun expandShortLink(content: StarIslandContent) {
+        val link = content.mediaLink ?: return
         if (!IslandLinkParser.isShortLink(link.originalUrl)) return
+        val generation = linkGeneration
         resolveJob = scope.launch {
             val expanded = IslandLinkResolver.expand(link.originalUrl) ?: return@launch
-            if (generation != linkGeneration || shownUrl != link.originalUrl) return@launch
-            IslandLinkParser.resolveExpanded(link, expanded)?.let { resolved ->
-                islandView?.updateCard(resolved)
-            }
+            if (generation != linkGeneration || islandView?.displayedContent?.key != content.key) return@launch
+            IslandLinkParser.resolveExpanded(link, expanded)?.let { islandView?.updateCard(it) }
         }
     }
 
     private fun invalidateLinkResolution() {
         linkGeneration++
-        shownUrl = null
         resolveJob?.cancel()
         resolveJob = null
     }
 
-    private fun obtainView(): IslandView {
-        islandView?.let { return it }
-        return IslandView(this, this).also {
-            islandView = it
-            viewConfiguration = Configuration(resources.configuration)
+    private fun invalidateTask() {
+        taskGeneration++
+        stopRequestedGeneration = null
+        taskJob?.cancel()
+        taskJob = null
+        currentTask = null
+    }
+
+    override fun onContentShown(content: StarIslandContent) {
+        if (restoringView) return
+        invalidateTask()
+        invalidateLinkResolution()
+        notifyStatus(IDLE_TEXT)
+        expandShortLink(content)
+    }
+
+    override fun onLinkShown(link: IslandLink) {
+        onContentShown(StarIslandContent(link.originalUrl, link.originalUrl, link))
+    }
+
+    override fun onActionRequested(content: StarIslandContent, action: StarIslandAction) {
+        if (islandView?.displayedContent?.key != content.key) return
+        when (action) {
+            StarIslandAction.Download -> content.mediaLink?.let(::onParseRequested)
+            StarIslandAction.OpenLink -> content.url?.let { url ->
+                val uri = Uri.parse(url)
+                if (uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank()) {
+                    openActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+                }
+            }
+            StarIslandAction.CopyLink -> (content.mediaLink?.let { it.cleanedUrl.ifBlank { it.originalUrl } }
+                ?: content.url)?.let { copyText(it, "链接已复制") }
+            StarIslandAction.Translate, StarIslandAction.Polish, StarIslandAction.Explain ->
+                if (content.kind == StarIslandKind.Text) startTask(content, action)
+            StarIslandAction.ReadWeb -> if (content.kind == StarIslandKind.Web) startTask(content, action)
         }
+    }
+
+    private fun startTask(content: StarIslandContent, action: StarIslandAction) {
+        if (currentTask?.phase == StarIslandPhase.Working) return
+        invalidateTask()
+        invalidateLinkResolution()
+        val generation = taskGeneration
+        publishTask(StarIslandTaskState(action, StarIslandPhase.Working, detail = "正在准备${action.label}"))
+        taskJob = scope.launch {
+            try {
+                runner.run(content, action) { state ->
+                    if (generation == taskGeneration) {
+                        publishTask(if (stopRequestedGeneration == generation) state.stopped() else state)
+                    }
+                }
+            } catch (error: CancellationException) {
+                if (generation == taskGeneration && stopRequestedGeneration == generation) {
+                    currentTask?.let { publishTask(it.stopped()) }
+                }
+                throw error
+            } finally {
+                if (generation == taskGeneration) taskJob = null
+            }
+        }
+    }
+
+    private fun StarIslandTaskState.stopped() = copy(
+        phase = StarIslandPhase.Stopped,
+        detail = if (output.isBlank()) "已停止" else "已停止，已保留收到的内容",
+    )
+
+    private fun publishTask(state: StarIslandTaskState) {
+        val previous = currentTask
+        currentTask = state
+        islandView?.updateTask(state)
+        if (previous?.phase != state.phase || previous?.action != state.action) {
+            notifyStatus(if (state.phase == StarIslandPhase.Working) "正在${state.action.label}" else "${state.action.label} · 点按星岛查看")
+        }
+    }
+
+    override fun onStopRequested() {
+        val task = currentTask ?: return
+        if (task.phase != StarIslandPhase.Working) return
+        // Keep this generation alive until the runner flushes its final throttled fragment.
+        stopRequestedGeneration = taskGeneration
+        taskJob?.cancel()
+        publishTask(task.stopped())
+    }
+
+    override fun onBackRequested() {
+        invalidateTask()
+        islandView?.clearTask()
+        notifyStatus(IDLE_TEXT)
+    }
+
+    override fun onCopyRequested() {
+        currentTask?.output?.takeIf { it.isNotBlank() }?.let { copyText(it, "结果已复制") }
+    }
+
+    private fun copyText(text: String, confirmation: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("星岛", text))
+        Toast.makeText(this, confirmation, Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onConfigureRequested() {
+        openActivity(Intent(this, MainActivity::class.java).setAction(ACTION_OPEN_SETTINGS))
+    }
+
+    override fun onParseRequested(link: IslandLink) {
+        openActivity(Intent(this, MainActivity::class.java).apply {
+            action = Intent.ACTION_SEND
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, link.cleanedUrl.ifBlank { link.originalUrl })
+        })
+    }
+
+    private fun openActivity(intent: Intent) {
+        try {
+            startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            islandView?.collapse()
+        } catch (_: Exception) {
+            Toast.makeText(this, "暂时无法打开，请稍后再试", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onDismissed() {
+        if (restoringView || shuttingDown) return
+        invalidateTask()
+        invalidateLinkResolution()
+        notifyStatus(IDLE_TEXT)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -107,86 +234,77 @@ class IslandService : Service(), IslandView.Callbacks {
         viewConfiguration = Configuration(newConfig)
         if (previous == null || (previous.densityDpi == newConfig.densityDpi &&
                 previous.fontScale == newConfig.fontScale && previous.locales == newConfig.locales &&
+                previous.orientation == newConfig.orientation &&
                 IslandPalette.isNight(previous) == IslandPalette.isNight(newConfig))) return
-        // A service overlay is not Activity-recreated. Rebuild density-dependent paints, text sizes,
-        // layout and the light/dark paper together instead of mixing stale values with new ones.
-        val current = islandView ?: return
-        val link = current.displayedLink
-        invalidateLinkResolution()
-        current.destroy()
-        islandView = null
-        obtainView().also { replacement ->
-            replacement.attach()
-            if (link != null) replacement.show(link)
+        val old = islandView ?: return
+        val content = old.displayedContent
+        val task = currentTask
+        restoringView = true
+        try {
+            old.destroy()
+            islandView = null
+            obtainView().also { replacement ->
+                replacement.attach()
+                if (content != null) {
+                    replacement.showContent(content)
+                    task?.let(replacement::updateTask)
+                }
+            }
+        } finally {
+            restoringView = false
         }
-    }
-
-    // ---------- IslandView.Callbacks ----------
-
-    override fun onParseRequested(link: IslandLink) {
-        invalidateLinkResolution()
-        // 显式唤起 MainActivity，走已有的分享路由：下载页自动填入链接
-        val intent = Intent(this, com.adong.adchat.MainActivity::class.java).apply {
-            action = Intent.ACTION_SEND
-            type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, link.cleanedUrl.ifBlank { link.originalUrl })
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        runCatching { startActivity(intent) }
-        islandView?.collapse()
-    }
-
-    override fun onLinkShown(link: IslandLink) {
-        expandShortLink(link)
-    }
-
-    override fun onDismissed() {
-        invalidateLinkResolution()
-        updateIdleNotification()
     }
 
     override fun onDestroy() {
+        shuttingDown = true
+        invalidateTask()
         invalidateLinkResolution()
         islandView?.destroy()
         islandView = null
         scope.cancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
-    // ---------- 通知 ----------
-
     private fun startAsForeground() {
         createChannel()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification("链接岛待命中"),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
+        val notification = buildNotification(currentTask?.takeIf { it.phase == StarIslandPhase.Working }
+            ?.let { "正在${it.action.label}" } ?: IDLE_TEXT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
-            startForeground(NOTIFICATION_ID, buildNotification("链接岛待命中"))
+            startForeground(NOTIFICATION_ID, notification)
         }
     }
 
-    private fun updateIdleNotification() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification("链接岛已收起"))
+    private fun notifyStatus(text: String) {
+        if (shuttingDown) return
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
-    private fun buildNotification(text: String): Notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
+    private fun buildNotification(text: String): Notification {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), flags)
+        val stop = PendingIntent.getService(this, 1,
+            Intent(this, IslandService::class.java).setAction(ACTION_STOP), flags)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_share)
-            .setContentTitle("Aster 链接岛")
+            .setContentTitle("Aster · 星岛")
             .setContentText(text)
+            .setContentIntent(open)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "关闭星岛", stop)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
+    }
 
     private fun createChannel() {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "链接岛", NotificationManager.IMPORTANCE_MIN).apply {
-                description = "维持链接岛悬浮窗的常驻服务"
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "星岛", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "维持星岛入口与用户主动发起的内容处理"
             }
         )
     }

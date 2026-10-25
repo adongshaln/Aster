@@ -44,15 +44,12 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
@@ -68,6 +65,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
@@ -75,6 +75,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import com.adong.adchat.ui.markdown.linkAt
 import com.adong.adchat.ui.clawd.ClawdHost
+import com.adong.adchat.ui.clawd.ClawdPileBandHeight
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -104,6 +105,7 @@ import com.adong.adchat.data.TOOL_STATUS_COMPLETED
 import com.adong.adchat.data.TOOL_STATUS_FAILED
 import com.adong.adchat.data.TOOL_STATUS_RUNNING
 import com.adong.adchat.ui.MainViewModel
+import com.adong.adchat.ui.ForegroundEffect
 import com.adong.adchat.ui.fittedImageDp
 import com.adong.adchat.ui.modelWorkingCaption
 import com.adong.adchat.ui.showModelWorkingFoot
@@ -148,6 +150,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.sin
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -193,6 +196,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val hostContext = LocalContext.current
     val contextModel = vm.chatProfile.chatModel
     val contextLimits = vm.chatProfile.modelContexts[contextModel.trim()]
+    val completedContextHistory by remember(vm) {
+        // Streaming output is excluded by contextUsage; token deltas must not retokenize history.
+        derivedStateOf { vm.messages.filterNot { it.isStreaming } }
+    }
     // 估算要走整段历史，放在后台算，避免每次重组都卡一帧；初值不为空，点进度圈立刻有反应；
     // 改完上下文长度也要立刻重算。
     val contextUsage by produceState(
@@ -201,14 +208,17 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             attachmentTokens = 0, overheadTokens = 0, omittedTurns = 0,
             lastRequestInputTokens = 0, lastRequestOutputTokens = 0, lastRequestReasoningTokens = 0
         ),
-        vm.messages.size,
-        vm.messages.lastOrNull()?.content?.length ?: 0,
+        vm.activeConversationId,
+        completedContextHistory,
+        vm.chatProfile.id,
         contextModel,
         vm.chatInput,
-        vm.chatAttachments.size,
+        vm.chatAttachments.toList(),
         vm.appConfig.systemPrompt,
         contextLimits
     ) {
+        // Coalesce typing bursts before scanning and estimating the completed history.
+        delay(120)
         value = withContext(Dispatchers.Default) {
             vm.contextUsage(vm.chatInput, vm.chatAttachments.toList())
         }
@@ -282,9 +292,14 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         if (vm.messages.isNotEmpty()) listState.scrollToItem(vm.messages.size)
     }
 
-    LaunchedEffect(userDragging) {
-        if (userDragging) autoFollow = false
-        else if (!listState.canScrollForward) autoFollow = true
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            Triple(userDragging, listState.isScrollInProgress, listState.canScrollForward)
+        }.collect { (dragging, scrolling, canScrollForward) ->
+            if (dragging) autoFollow = false
+            // Reaching the end during a fling happens after drag release; observe the end too.
+            else if (!scrolling && !canScrollForward) autoFollow = true
+        }
     }
 
     LaunchedEffect(vm.messages.size) {
@@ -346,21 +361,21 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 }
             }
         )
-        Box(Modifier.weight(1f).fillMaxWidth().imePadding()) {
+        Box(Modifier.weight(1f).fillMaxWidth().imePadding()
+            .onGloballyPositioned { chatAnchor = it.boundsInWindow() }) {
             Box(
                 Modifier.fillMaxSize()
             ) {
                 if (vm.messages.isEmpty()) {
                     EmptyChat(
                         model = vm.chatProfile.chatModel,
-                        userName = vm.appConfig.userName,
                         onConfigure = onOpenSettings,
                         modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
                     )
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize().onGloballyPositioned { chatAnchor = it.boundsInWindow() },
+                        modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
                             start = 22.dp,
                             end = 22.dp,
@@ -445,7 +460,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     focusRequester = composerFocusRequester,
                     value = vm.chatInput,
                     suggestion = vm.inputSuggestion,
-                    onSuggestionClick = { vm.acceptSuggestion() },
+                    onSuggestionClick = { autoFollow = true; vm.sendInputSuggestion() },
                     attachments = vm.chatAttachments,
                     profileName = vm.chatProfile.name,
                     model = vm.chatProfile.chatModel,
@@ -476,28 +491,39 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
                     onFocusChange = { composerFocused = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { formAnchor = it.boundsInWindow() }
+                    onSurfaceBounds = { formAnchor = it },
+                    modifier = Modifier.fillMaxWidth()
                 )
                 }
             }
-            // 三只小 Clawd + 大 Clawd：原生 Compose（像素引擎 + Kotlin 状态机），
-            // 与原版行为逐段对照（tools/clawd/host-template.html 同源）。
-            // 爪带真实占位 56dp 钉在输入框上沿（底边 = 地面 = composer 顶边），
-            // 与原版 .clawd-pile{bottom:100%} 一致；空白处触摸穿透聊天页。
-            ClawdHost(
-                modifier = Modifier.align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(bottom = composerHeight),
-                inputText = vm.chatInput,
-                inputFocused = composerFocused,
-                generating = vm.isChatLoading,
-                lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
-                formAnchor = formAnchor,
-                chatAnchor = chatAnchor,
-                scrollTick = clawdScrollTick,
-            )
+            // Use the moving shell, not the surrounding toolbar/attachment envelope, as the
+            // ground. Ghost suggestions never change this geometry or enter Clawd's input state.
+            val surface = formAnchor
+            val viewport = chatAnchor
+            if (surface != null && viewport != null) {
+                val insetPx = with(density) { 22.dp.toPx() }.coerceAtMost(surface.width * .08f)
+                val ground = androidx.compose.ui.geometry.Rect(
+                    surface.left + insetPx, surface.top, surface.right - insetPx, surface.bottom
+                )
+                val bandHeightPx = with(density) { ClawdPileBandHeight.toPx() }
+                ClawdHost(
+                    modifier = Modifier.align(AbsoluteAlignment.TopLeft)
+                        .absoluteOffset {
+                            androidx.compose.ui.unit.IntOffset(
+                                (ground.left - viewport.left).roundToInt(),
+                                (ground.top - viewport.top - bandHeightPx).roundToInt()
+                            )
+                        }
+                        .width(with(density) { ground.width.toDp() }),
+                    inputText = vm.chatInput,
+                    inputFocused = composerFocused,
+                    generating = vm.isChatLoading,
+                    lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
+                    formAnchor = ground,
+                    chatAnchor = viewport,
+                    scrollTick = clawdScrollTick,
+                )
+            }
         }
     }
     pendingEditResend?.let { candidate ->
@@ -574,17 +600,17 @@ private fun ChatHeader(
 }
 
 @Composable
-internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
-    // 极简空态：星标 + 一句时段问候，仅保留未配置模型时的引导动作。
-    // 问候按时段随机轮换：进入空态抽一句，跨时段再抽一次；每分钟只刷新时钟，重组不闪句。
+internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
+    // 星标 + 一句开场白；未配置模型时保留连接入口。
+    // 进入空态或跨时段时抽一句，重组不闪句；时段只影响候选池，不强制寒暄或称呼。
     fun nowHour() = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
     var hourOfDay by remember { mutableIntStateOf(nowHour()) }
     var band by remember { mutableIntStateOf(greetingBand(hourOfDay)) }
     var roll by remember(band) { mutableIntStateOf((0..Int.MAX_VALUE).random()) }
-    LaunchedEffect(Unit) {
+    ForegroundEffect(Unit) {
         while (true) {
-            delay(60_000L)
             hourOfDay = nowHour().also { band = greetingBand(it) }
+            delay(60_000L)
         }
     }
 
@@ -593,9 +619,11 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
     val haptics = LocalHapticFeedback.current
     var angle by remember { mutableFloatStateOf(0f) }
     var spinSpeed by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
+    val spinning by remember { derivedStateOf { spinSpeed > 0f } }
+    ForegroundEffect(spinning) {
+        if (!spinning) return@ForegroundEffect
         var last = withFrameNanos { it }
-        while (true) {
+        while (spinSpeed > 0f) {
             val now = withFrameNanos { it }
             val dt = ((now - last) / 1_000_000_000.0).toFloat()
             last = now
@@ -615,11 +643,14 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
                     .claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
+                        indication = null,
+                        role = Role.Button,
+                        onClickLabel = "旋转星标"
                     ) {
                         spinSpeed = (spinSpeed + 120f).coerceAtMost(540f)
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    },
+                    }
+                    .semantics { contentDescription = "Aster 星标" },
                 contentAlignment = Alignment.Center
             ) {
                 AsterMark(
@@ -628,7 +659,7 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             }
             Spacer(Modifier.height(22.dp))
             Text(
-                text = emptyChatGreeting(hourOfDay, userName, roll),
+                text = emptyChatGreeting(hourOfDay, roll),
                 style = MaterialTheme.typography.headlineSmall,
                 color = Ink,
                 textAlign = TextAlign.Center
@@ -700,63 +731,7 @@ private fun ChatMessageItem(
                             ConversationImages(message.attachments)
                         }
                         if (message.content.isNotBlank()) {
-                            // 超长内容折叠：折叠预览 + 底部渐隐 + 展开/收起。
-                            // 用 onTextLayout 的 hasVisualOverflow 检测溢出：
-                            // heightIn 会同时截短 onSizeChanged 的实测高度，不能用它比较阈值。
-                            var expanded by remember(message.id) { mutableStateOf(false) }
-                            var overflowed by remember(message.id) { mutableStateOf(false) }
-                            // Canvas 是 @Composable getter，须先在组合期取值再进 draw lambda
-                            val fadeBase = Canvas
-                            Column {
-                                SelectionContainer {
-                                    Text(
-                                        message.content,
-                                        Modifier
-                                            .heightIn(max = if (expanded) Dp.Unspecified else 360.dp)
-                                            .then(
-                                                if (overflowed && !expanded) Modifier
-                                                    .drawWithContent {
-                                                        drawContent()
-                                                        // 底部 36dp 七档渐隐幕，盖住被截断的正文
-                                                        val fadeH = 36.dp.toPx()
-                                                        drawRect(
-                                                            brush = Brush.verticalGradient(
-                                                                0f to Color.Transparent,
-                                                                0.15f to fadeBase.copy(alpha = 0.05f),
-                                                                0.30f to fadeBase.copy(alpha = 0.15f),
-                                                                0.45f to fadeBase.copy(alpha = 0.30f),
-                                                                0.60f to fadeBase.copy(alpha = 0.50f),
-                                                                0.75f to fadeBase.copy(alpha = 0.70f),
-                                                                0.87f to fadeBase.copy(alpha = 0.85f),
-                                                                1f to fadeBase,
-                                                                startY = size.height - fadeH,
-                                                                endY = size.height
-                                                            ),
-                                                            topLeft = Offset(0f, size.height - fadeH),
-                                                            size = Size(size.width, fadeH)
-                                                        )
-                                                    }
-                                                else Modifier
-                                            ),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        onTextLayout = { if (!expanded) overflowed = it.hasVisualOverflow }
-                                    )
-                                }
-                                if (overflowed) {
-                                    Text(
-                                        text = if (expanded) "收起" else "展开",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = Accent,
-                                        modifier = Modifier
-                                            .padding(top = 4.dp)
-                                            .align(Alignment.End)
-                                            .clickable(
-                                                interactionSource = remember { MutableInteractionSource() },
-                                                indication = null
-                                            ) { expanded = !expanded }
-                                    )
-                                }
-                            }
+                            ExpandableUserMessage(message.id, message.content)
                         }
                     }
                 }
@@ -1326,7 +1301,6 @@ private fun streamingProseText(content: String, error: Boolean) {
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
         lineHeight = READING_BODY_LINE_SP.sp,
-        fontWeight = FontWeight.Normal,
         letterSpacing = 0.sp
     )
     val splitAt = normalized.lastIndexOf("\n\n")
@@ -1659,7 +1633,6 @@ private fun MarkdownProseBlock(raw: String, showCursor: Boolean, error: Boolean)
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
         lineHeight = READING_BODY_LINE_SP.sp,
-        fontWeight = FontWeight.Normal,
         letterSpacing = 0.sp
     )
     Column(verticalArrangement = Arrangement.spacedBy(READING_BLOCK_GAP_DP.dp)) {
@@ -1952,7 +1925,6 @@ private fun MarkdownListRow(
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
         lineHeight = READING_BODY_LINE_SP.sp,
-        fontWeight = FontWeight.Normal,
         letterSpacing = 0.sp
     )
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -2025,7 +1997,6 @@ private fun AsterWritingCursorLine(error: Boolean) {
         style = MaterialTheme.typography.bodyLarge.copy(
             fontSize = READING_BODY_FONT_SP.sp,
             lineHeight = READING_BODY_LINE_SP.sp,
-            fontWeight = FontWeight.Normal,
             letterSpacing = 0.sp
         ),
         color = if (error) Danger else Ink,
@@ -2223,6 +2194,7 @@ private fun ChatComposer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onFocusChange: (Boolean) -> Unit,
+    onSurfaceBounds: (androidx.compose.ui.geometry.Rect) -> Unit,
     contextUsage: ContextUsage,
     onSelectContextWindow: (Int) -> Unit,
     onCustomizeContext: () -> Unit,
@@ -2230,17 +2202,30 @@ private fun ChatComposer(
     modifier: Modifier = Modifier
 ) {
     val focus = LocalFocusManager.current
-    var showEffortSheet by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     var showToolsSheet by remember { mutableStateOf(false) }
     var showContextSheet by remember { mutableStateOf(false) }
+    var showReasoning by remember(model) { mutableStateOf(false) }
+    var composerExpanded by remember { mutableStateOf(false) }
+    var openReasoningAfterFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(value, loading) { showReasoning = false }
+    LaunchedEffect(composerExpanded, openReasoningAfterFocus) {
+        if (composerExpanded && openReasoningAfterFocus) {
+            showReasoning = true
+            openReasoningAfterFocus = false
+        }
+    }
     val effortChoices = remember(model) { ReasoningPolicy.choices(model) }
-    val currentEffort = remember(model, reasoningEffort) { ReasoningPolicy.choiceOf(model, reasoningEffort) }
     ConversationComposer(
         value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentLoading,
         onValueChange = onValueChange, onOptionsClick = { showToolsSheet = true }, onRemoveImage = onRemoveImage,
         onSend = onSend, onStop = onStop, onFocusChange = onFocusChange,
         suggestion = suggestion, onSuggestionClick = onSuggestionClick,
-        focusRequester = focusRequester, modifier = modifier,
+        focusRequester = focusRequester, modifier = modifier, onSurfaceBounds = onSurfaceBounds,
+        onExpandedChange = { expanded ->
+            composerExpanded = expanded
+            if (!expanded) showReasoning = false
+        },
         contextAction = {
             ComposerContextRing(
                 percent = contextUsage.percent,
@@ -2254,13 +2239,14 @@ private fun ChatComposer(
         },
         reasoningAction = if (effortChoices.isEmpty()) null else {
             {
-                ComposerReasoningButton(
-                    label = compactEffortLabel(currentEffort?.label ?: "默认"),
-                    detailed = currentEffort?.id != ReasoningPolicy.DEFAULT,
-                    onClick = {
-                        focus.clearFocus()
-                        showEffortSheet = true
-                    }
+                ComposerReasoningControl(
+                    model = model,
+                    effort = reasoningEffort,
+                    expanded = showReasoning,
+                    onExpandedChange = { showReasoning = it },
+                    onModelClick = onModelClick,
+                    onEffortChange = onReasoningEffortChange,
+                    enabled = !loading,
                 )
             }
         },
@@ -2278,7 +2264,11 @@ private fun ChatComposer(
             onPickImages = { showToolsSheet = false; onPickImages() },
             onPickDocument = { showToolsSheet = false; onPickDocument() },
             onModelClick = { showToolsSheet = false; onModelClick() },
-            onReasoningClick = { showToolsSheet = false; showEffortSheet = true },
+            onReasoningClick = {
+                showToolsSheet = false
+                openReasoningAfterFocus = true
+                scope.launch { withFrameNanos { }; focusRequester.requestFocus() }
+            },
             onWebSearchToggle = onWebSearchToggle,
             onFileCreationToggle = onFileCreationToggle,
             reasoningSupported = effortChoices.isNotEmpty(),
@@ -2311,44 +2301,6 @@ private fun ChatComposer(
                 onResetContext()
             },
             onDismiss = { showContextSheet = false }
-        )
-    }
-    if (showEffortSheet) {
-        val responsesApi = apiMode == "responses"
-        val contract = ReasoningPolicy.contract(model, responsesApi)
-        AdSelectionSheet(
-            title = "思考强度",
-            subtitle = if (effortChoices.isEmpty()) "当前模型不支持调节思考强度" else "$model · ${contract.field}",
-            options = effortChoices.map { choice ->
-                AdChoiceOption(
-                    id = choice.id,
-                    title = choice.label,
-                    subtitle = choice.hint,
-                    icon = when (choice.id) {
-                        "off", "none" -> Icons.Rounded.Bolt
-                        "on" -> Icons.Rounded.Psychology
-                        "low" -> Icons.Rounded.Bolt
-                        "medium" -> Icons.Rounded.Balance
-                        "high" -> Icons.Rounded.Psychology
-                        "xhigh" -> Icons.Rounded.AccountTree
-                        "max" -> Icons.Rounded.AutoAwesome
-                        else -> Icons.Rounded.AutoAwesome
-                    },
-                    badge = when (choice.id) {
-                        "low" -> "更快"
-                        "medium" -> "推荐"
-                        "high" -> "复杂任务"
-                        "xhigh" -> "深度推理"
-                        "max" -> "最大预算"
-                        else -> null
-                    }
-                )
-            },
-            selectedId = currentEffort?.id,
-            onSelect = { onReasoningEffortChange(it.id); showEffortSheet = false },
-            onDismiss = { showEffortSheet = false },
-            searchEnabled = false,
-            headerIcon = Icons.Rounded.Psychology
         )
     }
 }
@@ -2428,18 +2380,3 @@ private fun ComposerToolToggle(
         }
     }
 }
-
-/** 输入框上的短标签，两个汉字放得下。 */
-private fun compactEffortLabel(label: String): String = when (label) {
-    "模型默认" -> "默认"
-    "极简" -> "极简"
-    "快速" -> "快速"
-    "均衡" -> "均衡"
-    "深入" -> "深入"
-    "深度" -> "深度"
-    "极致" -> "极致"
-    "关闭" -> "关闭"
-    "开启" -> "开启"
-    else -> label.take(2)
-}
-

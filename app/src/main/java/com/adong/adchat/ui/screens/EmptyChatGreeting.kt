@@ -1,95 +1,46 @@
 package com.adong.adchat.ui.screens
 
 /**
- * 聊天空状态的时段问候。
+ * 聊天空态的一句开场。时段只影响话题倾向，不猜测用户的作息或状态。
  *
- * [hourOfDay] 为本地时间 0–23；[userName] 自动 trim，空称呼时省略姓名。
- * 每个时段一组候选句（带 {name} 占位的问候句 + 固定句），按 [roll] 在组内随机轮换；
- * 由调用方在进入空态或跨时段时重新随机，同一时段内保持稳定不闪句。
- *
- * 纯函数，便于单测；不要在 Composable 重组中随机选句。
+ * 每个宽时段保留三个用途不同的入口，不把姓名和寒暄当作句式模板。
+ * 调用方在进入空态或跨时段时生成 [roll]；本函数不随机，重组时文案保持稳定。
  */
-internal fun emptyChatGreeting(hourOfDay: Int, userName: String, roll: Int = 0): String {
-    val h = ((hourOfDay % 24) + 24) % 24
-    val name = userName.trim()
-    return when (h) {
-        in 5..7 -> pick(roll, name,
-            withName = listOf(
-                "早上好，{name}",
-                "早安，{name}，新的一天从一句话开始",
-                "{name}，早。今天想先做哪件事？",
-            ),
-            fixed = listOf("晨光正好，从什么开始？"),
-        )
-        in 8..10 -> pick(roll, name,
-            withName = listOf(
-                "上午好，{name}",
-                "{name}，上午的思路最清楚，试试难题？",
-            ),
-            fixed = listOf(
-                "上午好，想聊点什么？",
-                "上午了，有什么想理清的事？",
-            ),
-        )
-        in 11..13 -> pick(roll, name, withName = emptyList(),
-            fixed = listOf(
-                "咖啡加 Aster 时间？",
-                "午饭时间，聊点轻松的？",
-                "中午了，忙里偷闲问点什么？",
-            ),
-        )
-        in 14..16 -> pick(roll, name,
-            withName = listOf(
-                "下午好，{name}",
-                "{name}，下午好。困意上来了？换个话题醒醒神",
-            ),
-            fixed = listOf("下午好，想聊点什么？"),
-        )
-        in 17..19 -> pick(roll, name,
-            withName = listOf(
-                "傍晚好，{name}，今天过得怎么样？",
-                "{name}，快到晚上了，收尾还是开始？",
-            ),
-            fixed = listOf("傍晚了，散散步，聊聊天"),
-        )
-        in 20..22 -> pick(roll, name,
-            withName = listOf(
-                "晚上好，{name}",
-                "{name}，晚上好。今晚想写点什么？",
-            ),
-            fixed = listOf(
-                "晚上好，想聊点什么？",
-                "夜色不错，来聊会儿天",
-            ),
-        )
-        else -> pick(roll, name, withName = emptyList(),
-            fixed = listOf(
-                "还没睡？要做什么？",
-                "夜深了，睡不着就聊聊",
-                "这么晚还醒着，有事在心上？",
-            ),
-        )
-    }
+internal fun emptyChatGreeting(hourOfDay: Int, roll: Int = 0): String {
+    val candidates = openings[greetingBand(hourOfDay)]
+    return candidates[((roll % candidates.size) + candidates.size) % candidates.size]
 }
 
-/** 时段编号：空态用它判断跨时段重新随机。 */
+/** 宽时段减少刷新频率，也避免为相邻时段堆叠意思相同的寒暄。 */
 internal fun greetingBand(hourOfDay: Int): Int {
-    val h = ((hourOfDay % 24) + 24) % 24
-    return when (h) {
-        in 5..7 -> 0
-        in 8..10 -> 1
-        in 11..13 -> 2
-        in 14..16 -> 3
-        in 17..19 -> 4
-        in 20..22 -> 5
-        else -> 6
+    val hour = ((hourOfDay % 24) + 24) % 24
+    return when (hour) {
+        in 5..10 -> 0
+        in 11..16 -> 1
+        in 17..22 -> 2
+        else -> 3
     }
 }
 
-private fun <T> List<T>.at(roll: Int): T = this[((roll % size) + size) % size]
-
-private fun pick(roll: Int, name: String, withName: List<String>, fixed: List<String>): String {
-    // 有称呼时优先用带称呼的句子；空称呼则退到固定句，避免“朋友”代称满天飞。
-    val pool = if (name.isNotEmpty() && withName.isNotEmpty()) withName else fixed
-    return pool.at(roll).replace("{name}", name)
-}
+private val openings = listOf(
+    listOf(
+        "今天想从哪件事开始？",
+        "有什么想弄明白的？",
+        "有个新想法？说来听听。",
+    ),
+    listOf(
+        "有件事拿不定主意？",
+        "想写点什么？",
+        "最近有什么新鲜事？",
+    ),
+    listOf(
+        "今天有什么值得记下来？",
+        "故事的下一幕，会发生什么？",
+        "换个角度看看？",
+    ),
+    listOf(
+        "随便聊聊，也很好。",
+        "没成形的想法，也可以聊。",
+        "从你想写的那句话开始。",
+    ),
+)

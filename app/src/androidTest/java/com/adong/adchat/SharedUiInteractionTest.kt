@@ -20,6 +20,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
@@ -44,6 +45,7 @@ import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRevisionState
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.screens.EmptyChat
+import com.adong.adchat.ui.screens.emptyChatGreeting
 import com.adong.adchat.ui.screens.StoryMessageItem
 import com.adong.adchat.ui.screens.StoryWorkspaceEmpty
 import com.adong.adchat.ui.screens.StructuredMessageText
@@ -57,7 +59,7 @@ import java.io.File
 /** Exercise the same controls used by both modes, without an API or story database fixture. */
 @RunWith(AndroidJUnit4::class)
 class SharedUiInteractionTest {
-    @get:Rule val rule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val rule = createAndroidComposeRule<SharedUiTestActivity>()
 
     private fun content(block: @Composable () -> Unit) {
         // Dismiss only the known cold-boot launcher ANR, never an Aster error dialog.
@@ -67,8 +69,16 @@ class SharedUiInteractionTest {
             root.findAccessibilityNodeInfosByText("Close app").firstOrNull()
                 ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
-        rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
+        // Install only the component fixture. Starting the full app here introduces
+        // unrelated onboarding windows and Clawd animations into every idling check.
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
+        // A fixture may open its own Dialog/ModalBottomSheet, which legitimately owns
+        // focus instead of the Activity. System dialogs and other apps still fail this check.
+        rule.waitUntil(10_000) {
+            rule.activity.hasWindowFocus() ||
+                InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+                    ?.packageName?.toString() == rule.activity.packageName
+        }
     }
 
     @Test fun completedStoryReplyKeepsRegenerateAction() {
@@ -301,8 +311,7 @@ class SharedUiInteractionTest {
             rule.onNodeWithTag(tag).assertIsOn()
             screenshot("skill-library-selection")
             assertTrue(runtime.selected("native-prose").isEmpty())
-            // Dismiss the modal first: it owns focus while open, so replacing Activity content
-            // through content() would wait forever for the underlying Activity to regain focus.
+            // Reopen through the same modal state, as a user would, to verify persisted selection.
             rule.onNodeWithContentDescription("关闭").performScrollTo().performClick()
             rule.onNodeWithTag(tag).assertDoesNotExist()
             rule.runOnIdle { open = true }
@@ -373,6 +382,36 @@ class SharedUiInteractionTest {
         rule.onNodeWithText("查找表达式").assertIsDisplayed()
         rule.onNodeWithText("关闭").performClick()
         screenshot("tavern-preset-configuration")
+    }
+
+    @Test fun inlineSuggestionStaysOutOfDraftAndDoesNotMoveTheCapsule() {
+        var draft by mutableStateOf("")
+        var suggestion by mutableStateOf<String?>(null)
+        var sent = ""
+        content {
+            Box(Modifier.fillMaxSize()) {
+                ConversationComposer(draft, emptyList(), false, false,
+                    { draft = it; suggestion = null }, {}, {}, { sent = draft }, {}, {},
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    suggestion = suggestion,
+                    onSuggestionClick = { sent = suggestion.orEmpty(); suggestion = null })
+            }
+        }
+        val before = rule.onNodeWithTag("chat-composer").fetchSemanticsNode().boundsInRoot
+        rule.runOnIdle { suggestion = "请给一个带注释的缓存示例" }
+        rule.onNodeWithText("请给一个带注释的缓存示例", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(before, rule.onNodeWithTag("chat-composer").fetchSemanticsNode().boundsInRoot)
+        rule.onNodeWithTag("chat-input").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+        rule.onNodeWithContentDescription("发送建议").performClick()
+        rule.runOnIdle {
+            assertEquals("请给一个带注释的缓存示例", sent)
+            assertEquals("", draft)
+            suggestion = "请说明离线修改如何合并"
+        }
+        rule.onNodeWithTag("chat-input").performTextInput("我来输入")
+        rule.onNodeWithText("请说明离线修改如何合并", useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle { assertEquals("我来输入", draft) }
     }
 
     @OptIn(ExperimentalTestApi::class)
@@ -534,7 +573,7 @@ class SharedUiInteractionTest {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (screen) {
                         0 -> BaselineEmptyChat("gemini", {}, {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
-                        1 -> EmptyChat("gemini", "小明", {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
+                        1 -> EmptyChat("gemini", {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
                         2 -> StoryWorkspaceEmpty(StoryWorkspace.Discussion, Modifier.fillMaxSize().padding(bottom = 82.dp)) { chosen = it }
                         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                             .padding(horizontal = 22.dp, vertical = 20.dp).padding(bottom = 82.dp)) {
@@ -549,8 +588,12 @@ class SharedUiInteractionTest {
         }
         screenshot("welcome-before")
         rule.runOnIdle { screen = 1 }
-        // 空态改为时段随机问候后不再有旧标题与建议卡；断言带称呼问候在随机轮换下仍可命中。
-        rule.onNode(hasAnyDescendant(hasTextSubstring("小明"))).assertExists("新空态应显示带称呼的时段问候")
+        // Selection has dedicated unit coverage; render any valid opening naturally,
+        // without coupling this screenshot test to the emulator's clock or a user name.
+        val greetings = (0..23).flatMap { hour -> (0..3).map { roll -> emptyChatGreeting(hour, roll) } }.toSet()
+        rule.onNode(SemanticsMatcher("有效时段问候") { node ->
+            node.config.getOrNull(SemanticsProperties.Text)?.any { it.text in greetings } == true
+        }).assertIsDisplayed()
         screenshot("welcome-after")
         rule.runOnIdle { screen = 2 }
         rule.onNodeWithText("故事，从想象开始。").assertIsDisplayed()
@@ -737,7 +780,7 @@ class SharedUiInteractionTest {
         rule.onNodeWithContentDescription("关闭 HTML 预览").performClick()
         rule.onNodeWithContentDescription("复制 HTML 代码").assertExists()
         rule.onNodeWithText(html).assertDoesNotExist()
-        rule.onNodeWithContentDescription("保存 HTML 文件").assertIsEnabled()
+        rule.onNodeWithText("下载 HTML").assertIsEnabled()
     }
 
     @Test fun generatedPdfAndOfficeFilesHaveRealBytesAndSurviveSaving() {

@@ -26,16 +26,18 @@ class IslandJellyBodyTest {
         assertEquals(0f, b.contentAlpha, 0f)
         assertEquals(IslandJellyBody.CONTENT_REST_SCALE, b.contentScale, 0f)
         assertEquals(0f, b.progress, 0f)
+        assertEquals(0f, b.inkTransfer, 0f)
+        assertEquals(0f, b.paperAlpha, 0f)
         assertTrue(b.isAtRest(0.0))
     }
 
     @Test fun widthLeadsWhileHeightWaitsForItsDelay() {
         val b = body()
         b.open(0.0)
-        b.update(0.05)
+        b.update(IslandJellyBody.HEIGHT_DELAY / 2.0)
         assertEquals("still a core-high strip", 26f, b.bottom - b.top, 1e-3f)
         assertEquals(19f, b.top, 1e-3f)
-        assertTrue("already stretching sideways; width=${b.right - b.left}", b.right - b.left > 60f)
+        assertTrue("width begins before height; width=${b.right - b.left}", b.right - b.left > 26f)
         var widthAt90 = -1
         var heightAt90 = -1
         for (ms in 0..1500) {
@@ -64,6 +66,10 @@ class IslandJellyBodyTest {
         assertEquals(1f, b.contentAlpha, 0f)
         assertEquals(1f, b.contentScale, 0f)
         assertEquals(1f, b.progress, 1e-4f)
+        assertEquals(1f, b.inkTransfer, 0f)
+        assertEquals(1f, b.paperAlpha, 0f)
+        assertEquals(0f, b.contourLean, 0f)
+        assertEquals(0f, b.contourWave, 0f)
         assertTrue("the drop must visibly bounce; max=$maxBottom", maxBottom > 171f + 3f)
         assertTrue(
             "bounce stays inside the reserved viewport; max=$maxBottom",
@@ -89,6 +95,8 @@ class IslandJellyBodyTest {
         assertRect(b, 187f, 19f, 213f, 45f)
         assertEquals(0f, b.contentAlpha, 0f)
         assertEquals(0f, b.progress, 1e-4f)
+        assertEquals(0f, b.inkTransfer, 0f)
+        assertEquals(0f, b.paperAlpha, 0f)
     }
 
     @Test fun reversingMidFlightKeepsMomentum() {
@@ -123,7 +131,10 @@ class IslandJellyBodyTest {
         b.open(0.0)
         for (ms in 0..1500) {
             b.update(ms / 1000.0)
-            if (b.heightProgress < 0.34f) assertEquals("ms=$ms", 0f, b.contentAlpha, 0f)
+            if (b.heightProgress < 0.4f) assertEquals("content stays hidden before the paper forms, ms=$ms", 0f, b.contentAlpha, 0f)
+            assertTrue("paper alpha at ${ms}ms", b.paperAlpha in 0f..1f)
+            assertTrue("ink transfer at ${ms}ms", b.inkTransfer in 0f..1f)
+            if (b.contentAlpha > 0f) assertTrue("paper precedes content, ms=$ms", b.paperAlpha > 0f)
         }
         assertEquals(1f, b.contentAlpha, 1e-3f)
     }

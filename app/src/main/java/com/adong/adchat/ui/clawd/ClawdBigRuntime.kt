@@ -3,7 +3,6 @@ package com.adong.adchat.ui.clawd
 import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
@@ -190,6 +189,9 @@ class ClawdBigRuntime(
     private var started = false
     private var runtimeJob: Job? = null
     private var physicsJob: Job? = null
+    private val activityGate = ClawdActivityGate()
+
+    fun setForeground(active: Boolean) = activityGate.setActive(active)
 
     private fun now() = SystemClock.elapsedRealtime()
 
@@ -210,14 +212,16 @@ class ClawdBigRuntime(
     }
     private suspend fun runtimeLoop() {
         while (scope.isActive) {
+            activityGate.awaitActive()
             tick()
-            delay(RUNTIME_TICK_MS)
+            activityGate.delayWhileActive(RUNTIME_TICK_MS)
         }
     }
 
     private suspend fun physicsLoop() {
         var last = now()
         while (scope.isActive) {
+            activityGate.awaitActive()
             val t = now()
             val dt = ((t - last) / 16.6667f).coerceIn(0.5f, 3f)
             last = t
@@ -225,7 +229,7 @@ class ClawdBigRuntime(
             // 打字节奏 / 生成倍速逐帧推进（原版 rhythm 的 rAF）
             stepRhythm(t)
             stepWriteRate(t)
-            delay(FRAME_MS)
+            activityGate.delayWhileActive(FRAME_MS)
         }
     }
 
@@ -687,7 +691,7 @@ class ClawdBigRuntime(
         setNeglected(false)
         setDrowsy(true)
         dozeTimer = scope.launch {
-            delay(DOZE_OFF_MS)
+            activityGate.delayWhileActive(DOZE_OFF_MS)
             dozeTimer = null
             if (now() - lastActivityAt <= IDLE_SLEEP_MS) return@launch
             ccDrowsy = false
@@ -725,7 +729,7 @@ class ClawdBigRuntime(
         if (!scrollHolding) return
         scrollRestTimer?.cancel()
         scrollRestTimer = scope.launch {
-            delay(CLAWD_SCROLL_REST_MS)
+            activityGate.delayWhileActive(CLAWD_SCROLL_REST_MS)
             scrollRestTimer = null
             scrollRelease()
         }
@@ -933,7 +937,7 @@ class ClawdBigRuntime(
         petTimer?.cancel()
         petting = false
         petTimer = scope.launch {
-            delay(CLAWD_PET_HOLD_MS)
+            activityGate.delayWhileActive(CLAWD_PET_HOLD_MS)
             petTimer = null
             if (!held || moved || fy < floor - .5) return@launch
             petting = clawdPet()
@@ -955,7 +959,7 @@ class ClawdBigRuntime(
             }
             setClawdC("grab", 0)
             scope.launch {
-                delay(350)
+                activityGate.delayWhileActive(350)
                 if (dragging) {
                     pickVariant("drag")
                     setClawdC("drag", 0)
@@ -1171,7 +1175,7 @@ class ClawdBigRuntime(
                 scheduleBoundsWarm()
                 if (!bal.drop) {
                     scope.launch {
-                        delay(840)
+                        activityGate.delayWhileActive(840)
                         if (flying != bal.my) return@launch
                         when {
                             throws >= 5 -> a2SulkSeq()
@@ -1193,7 +1197,7 @@ class ClawdBigRuntime(
             squashTimer?.cancel()
             val myBounce = bal.my
             squashTimer = scope.launch {
-                delay(110)
+                activityGate.delayWhileActive(110)
                 squashTimer = null
                 if (flying != myBounce) return@launch
                 sqx = 1.0; sqy = 1.0
@@ -1287,7 +1291,7 @@ class ClawdBigRuntime(
         bndReady = false
         if (bndRaf != null) return
         bndRaf = scope.launch {
-            delay(32)
+            activityGate.delayWhileActive(32)
             bndRaf = null
             if (!held) {
                 bnd = a2Walls(); bndAt = now(); bndReady = true
@@ -1379,7 +1383,7 @@ class ClawdBigRuntime(
                 return
             }
             seqOwned = true; setClawdC(steps[index].first, 0); seqOwned = false
-            scope.launch { delay(steps[index].second); run(index + 1) }
+            scope.launch { activityGate.delayWhileActive(steps[index].second); run(index + 1) }
         }
         run(0)
     }

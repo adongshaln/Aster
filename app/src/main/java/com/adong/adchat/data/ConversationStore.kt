@@ -46,10 +46,17 @@ class ConversationStore(context: Context) {
         return stored.sortedByDescending { it.updatedAt }
     }
 
+    @SuppressLint("ApplySharedPref")
     fun save(conversations: List<Conversation>, clearRecoveryMessageId: Long? = null) {
-        prefs.edit().putString(KEY, encodeConversations(conversations).toString()).apply()
-        if (clearRecoveryMessageId != null && recoveryMessageId() == clearRecoveryMessageId) {
-            recoveryPrefs.edit().remove(RECOVERY_KEY).apply()
+        val editor = prefs.edit().putString(KEY, encodeConversations(conversations).toString())
+        if (clearRecoveryMessageId != null) {
+            // These are separate preference files. Keep the recovery checkpoint until the
+            // completed conversation is durable; two apply() calls can reach disk out of order.
+            if (editor.commit() && recoveryMessageId() == clearRecoveryMessageId) {
+                recoveryPrefs.edit().remove(RECOVERY_KEY).apply()
+            }
+        } else {
+            editor.apply()
         }
     }
 
@@ -74,7 +81,7 @@ class ConversationStore(context: Context) {
             for (i in 0 until array.length()) {
                 array.optJSONObject(i)
                     ?.let(::decodeConversation)
-                    ?.takeIf { it.messages.isNotEmpty() }
+                    ?.takeIf { it.id.isNotBlank() }
                     ?.let(::add)
             }
         }

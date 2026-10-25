@@ -23,6 +23,28 @@ class ClawdFlightContactTest {
     }
 
     @Test
+    fun capsuleResizeReturnsToTheSamePositionsWithoutAccumulatingRounding() {
+        val pile = pile()
+        val initial = pile.snapshot().associate { it.name to it.x }
+        repeat(3) {
+            for (width in 399 downTo 260) pile.relayout(width)
+            for (width in 261..400) pile.relayout(width)
+        }
+        assertEquals(initial, pile.snapshot().associate { it.name to it.x })
+    }
+
+    @Test
+    fun throwingNotifiesRendererBeforeAnyPhysicsFrame() {
+        val pile = pile()
+        pile.pickUp("wizard")
+        var observedFlying = false
+        pile.onChanged = { observedFlying = pile.hasFlights }
+        pile.throwAt("wizard", 72.0, -40.0, 12.0, 40.0) { _, _, _ -> }
+        assertTrue(observedFlying)
+        assertTrue(pile.hasFlights)
+    }
+
+    @Test
     fun landingHandoffUsesHeadContactInsteadOfGroundOrPreviousX() {
         val pile = pile()
         pile.pickUp("wizard")

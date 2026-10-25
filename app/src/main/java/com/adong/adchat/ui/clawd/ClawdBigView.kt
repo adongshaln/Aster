@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +34,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.adong.adchat.ui.ForegroundEffect
 import kotlin.math.roundToInt
 
 /**
@@ -112,7 +112,7 @@ fun ClawdBigOverlay(
     var ghosts by remember { mutableStateOf<List<Ghost>>(emptyList()) }
     val ghostSpawn = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 
-    LaunchedEffect(runtime, rig, night, palWithSticks) {
+    ForegroundEffect(runtime, rig, night, palWithSticks) {
         var frameT = 0L
         while (true) {
             withFrameNanos {
@@ -160,15 +160,17 @@ fun ClawdBigOverlay(
 
     // 物理层：订阅 version（runtime.onChanged 驱动），拖拽/弹道逐帧重组
     val phys = remember(version) { runtime.visualAt(android.os.SystemClock.elapsedRealtime()) }
-    val f = frame
-    // ghost 活跃时逐帧重组（原版 Web Animations 自带时钟）
+    // ghost 活跃时使绘制失效；帧值只在 Canvas 内观察，不重组整个组件。
     var ghostTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(ghosts.isNotEmpty()) {
+    ForegroundEffect(ghosts.isNotEmpty()) {
         while (ghosts.isNotEmpty()) {
-            withFrameNanos { ghostTick++ }
+            withFrameNanos {
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
+                ghostTick++
+            }
         }
     }
-    val nowMsNow = remember(ghostTick, version, frame) { android.os.SystemClock.elapsedRealtime() }
 
     Box(modifier) {
         // ── 触摸层：与大爪同位置的 42×34 小盒（原版按钮命中区），空白处穿透 ──
@@ -206,6 +208,10 @@ fun ClawdBigOverlay(
                 .size(42.dp, 34.dp)
         ) {
             Canvas(Modifier.fillMaxSize()) {
+                // Sprite frames and ghost time affect pixels only. Reading them here confines
+                // their updates to drawing while physics still updates layout and hit targets.
+                val f = frame
+                val nowMsNow = ghostTick.let { android.os.SystemClock.elapsedRealtime() }
                 // A2 物理形变层：transform-origin 按钮中心底部（21, 34）
                 rotate(phys.rot.toFloat(), pivot = Offset(21f * d, 34f * d)) {
                     scale(phys.sqx.toFloat(), phys.sqy.toFloat(), pivot = Offset(21f * d, 34f * d)) {

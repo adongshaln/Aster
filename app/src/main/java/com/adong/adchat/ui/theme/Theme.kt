@@ -1,6 +1,5 @@
 package com.adong.adchat.ui.theme
 
-import android.graphics.Typeface
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -9,6 +8,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -16,10 +16,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontLoadingStrategy
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
@@ -31,20 +35,8 @@ import com.adong.adchat.data.FONT_WEIGHT_MIN
 import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
 import com.adong.adchat.data.THEME_MODE_SYSTEM
-import java.io.File
 
-/**
- * Aster — Claude Editorial Color System & Serif/Sans Hybrid Typography
- * ====================================================================
- * 核心视觉颠覆点：
- * 1. 修正原版 `surface = Color(0xFFFFFFDA)` 偏亮黄绿的底色与暗沉棕 `#8B5E4B`：
- *    采用正统 Anthropic Claude 视觉色板 —— Pampas 羊皮纸画布 (`#F4F3EE`)、纯净暖象牙白卡片 (`#FAF9F5`)、
- *    Warm Stone 凹陷槽 (`#EAE7DF`) 以及极具辨识度的 **Claude Terracotta 陶土赤褐 (`#D97757`)**。
- * 2. 打破原版“所有按钮、百分比数字、小标签全部塞入粗衬线体”导致的厚重感：
- *    严格遵循 Claude 的 **「正文与大标题用优雅细衬线 (Noto Serif SC)，UI 胶囊/按钮/状态栏用利落无衬线 (SansSerif)」** 混排法则，
- *    并将 `bodyLarge` 从原版臃肿的 `SemiBold` 还原为温润舒展的 `Normal` 字重。
- * 3. 全局 18 个语义色切换从机械 `tween(240)` 升级为 `AsterSpring.editorial()` 物理弹簧过渡。
- */
+/** Warm semantic colours, serif reading text and compact sans-serif controls. */
 @Immutable
 data class AsterPalette(
     val canvas: Color,
@@ -146,57 +138,98 @@ val BracketBlue @Composable get() = LocalAsterPalette.current.bracketBlue
 val NameInk @Composable get() = LocalAsterPalette.current.nameInk
 val AmberSoft @Composable get() = LocalAsterPalette.current.amberSoft
 
+// Filled controls need the foreground paired with their fill, not the page's text colour.
+val OnInk @Composable get() = MaterialTheme.colorScheme.onPrimary
+val OnAccent @Composable get() = MaterialTheme.colorScheme.onSecondary
+val OnAccentSoft @Composable get() = MaterialTheme.colorScheme.onSecondaryContainer
+val OnSage @Composable get() = MaterialTheme.colorScheme.onTertiary
+val OnSageSoft @Composable get() = MaterialTheme.colorScheme.onTertiaryContainer
+val OnDanger @Composable get() = MaterialTheme.colorScheme.onError
+val OnDangerSoft @Composable get() = MaterialTheme.colorScheme.onErrorContainer
+
 /** Apple 流体阻尼缓出曲线 */
 val AsterEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
-private fun AsterPalette.toColorScheme() = lightColorScheme(
+private val LightControlInk = Color(0xFFFFFFFF)
+private val DarkControlInk = Color(0xFF141413)
+
+/** Choose the readable side of a changing fill, including during a light/dark transition. */
+private fun contrastingContent(
+    background: Color,
+    dark: Color = DarkControlInk,
+    light: Color = LightControlInk
+): Color {
+    val luminance = background.luminance()
+    fun contrast(foreground: Color): Float {
+        val inkLuminance = foreground.luminance()
+        return (maxOf(luminance, inkLuminance) + 0.05f) / (minOf(luminance, inkLuminance) + 0.05f)
+    }
+    return if (contrast(dark) >= contrast(light)) dark else light
+}
+
+internal fun AsterPalette.toColorScheme(dark: Boolean) = (if (dark) darkColorScheme() else lightColorScheme()).copy(
     primary = ink,
-    onPrimary = warmWhite,
+    onPrimary = contrastingContent(ink),
     primaryContainer = accentSoft,
     onPrimaryContainer = ink,
     secondary = accent,
-    onSecondary = Color.White,
+    onSecondary = contrastingContent(accent),
     secondaryContainer = accentSoft,
-    onSecondaryContainer = accent,
+    onSecondaryContainer = contrastingContent(accentSoft, Color(0xFF8E3D25), AsterPaletteDark.accent),
     tertiary = sage,
+    onTertiary = contrastingContent(sage),
     tertiaryContainer = sageSoft,
-    onTertiaryContainer = sage,
+    onTertiaryContainer = contrastingContent(sageSoft, AsterPaletteLight.sage, AsterPaletteDark.sage),
     background = canvas,
     onBackground = ink,
     surface = surface,
     onSurface = ink,
     surfaceVariant = surfaceInset,
     onSurfaceVariant = mutedInk,
-    outline = hairline,
+    outline = mutedInk,
     outlineVariant = hairline,
     surfaceTint = Color.Transparent,
-    surfaceContainer = canvas,
+    inverseSurface = ink,
+    inverseOnSurface = contrastingContent(ink),
+    inversePrimary = contrastingContent(ink, Color(0xFF8E3D25), AsterPaletteDark.accent),
+    surfaceDim = if (dark) canvas else surfaceInset,
+    surfaceBright = if (dark) surfaceInset else warmWhite,
+    surfaceContainerLowest = if (dark) night else warmWhite,
+    surfaceContainer = surface,
     surfaceContainerLow = surface,
     surfaceContainerHigh = surfaceInset,
+    surfaceContainerHighest = lerp(surfaceInset, ink, 0.04f),
     error = danger,
-    errorContainer = dangerSoft
+    onError = contrastingContent(danger),
+    errorContainer = dangerSoft,
+    onErrorContainer = contrastingContent(dangerSoft, Color(0xFF9E3038), Color(0xFFFFB4AB)),
+    scrim = Color.Black
 )
 
-private fun asterFontFamily(context: android.content.Context, axisWeight: Int): FontFamily {
-    val file = File(context.cacheDir, "noto_serif_sc_variable.ttf")
-    if (file.length() < 1024) {
-        context.resources.openRawResource(R.font.noto_serif_sc_variable).use { input ->
-            file.outputStream().use { input.copyTo(it) }
-        }
+// Compose loads and caches the bundled variable font off the UI thread. Do not copy
+// the font into cacheDir during composition: the resource is about 25 MB.
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+private fun asterFontFamily(axisWeight: Int): FontFamily = FontFamily(
+    // Give each semantic weight its own real variable-font instance. A single Regular entry
+    // leaves medium/bold to synthesis and gives async fallback text a misleading light weight.
+    listOf(
+        FontWeight.Normal to 0,
+        FontWeight.Medium to 60,
+        FontWeight.SemiBold to 110,
+        FontWeight.Bold to 160
+    ).map { (weight, increase) ->
+        Font(
+            resId = R.font.noto_serif_sc_variable,
+            weight = weight,
+            loadingStrategy = FontLoadingStrategy.Async,
+            variationSettings = FontVariation.Settings(
+                FontVariation.weight((axisWeight + increase).coerceIn(200, 900))
+            )
+        )
     }
-    val face = Typeface.Builder(file)
-        .setFontVariationSettings("'wght' ${axisWeight.coerceIn(200, 900)}")
-        .build()
-    return FontFamily(face)
-}
+)
 
-/**
- * Claude 标志性「文学衬线 + 现代无衬线」混排字体阶梯：
- * - 大标题 (`displaySmall`, `headlineMedium`, `titleLarge`) 与 AI 阅读正文 (`bodyLarge`) 采用可变衬线体 [serifFont]，
- *   且将 `bodyLarge` 字重改为 `FontWeight.Normal`，呈现优雅的书籍排版质感；
- * - 控件文本 (`titleMedium`, `titleSmall`, `bodyMedium`, `bodySmall`, `label*`) 改用干净利落的 `FontFamily.SansSerif`，
- *   呈现 Apple iOS 原生控件的精致感。
- */
+/** Reading uses a fuller medium face; headings and emphasis retain separate heavier faces. */
 private fun asterTypography(serifFont: FontFamily) = Typography(
     displaySmall = TextStyle(
         fontFamily = serifFont,
@@ -241,7 +274,7 @@ private fun asterTypography(serifFont: FontFamily) = Typography(
     ),
     bodyLarge = TextStyle(
         fontFamily = serifFont,
-        fontWeight = FontWeight.Normal,
+        fontWeight = FontWeight.Medium,
         fontSize = 16.sp,
         lineHeight = 27.5.sp,
         letterSpacing = 0.1.sp,
@@ -299,9 +332,8 @@ fun AsterTheme(
     content: @Composable () -> Unit
 ) {
     val dark = themeIsDark(themeMode)
-    val context = LocalContext.current
     val normalizedWeight = fontWeight.coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX)
-    val fontFamily = remember(normalizedWeight) { asterFontFamily(context, normalizedWeight) }
+    val fontFamily = remember(normalizedWeight) { asterFontFamily(normalizedWeight) }
     val typography = remember(fontFamily) { asterTypography(fontFamily) }
     val target = if (dark) AsterPaletteDark else AsterPaletteLight
     val colorSpring = AsterSpring.editorial<Color>()
@@ -333,7 +365,7 @@ fun AsterTheme(
         LocalAsterFontFamily provides fontFamily
     ) {
         MaterialTheme(
-            colorScheme = palette.toColorScheme(),
+            colorScheme = palette.toColorScheme(dark),
             typography = typography,
             shapes = shapes,
             content = content

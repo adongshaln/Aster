@@ -1,15 +1,7 @@
 package com.adong.adchat.ui.components
 
-import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.view.ViewGroup
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -20,9 +12,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.adong.adchat.ui.theme.*
-import java.io.ByteArrayInputStream
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /** Renders fenced ```mermaid code blocks with the bundled assets/mermaid.min.js, fully offline. */
 @Composable
@@ -48,88 +43,36 @@ internal fun MermaidArtifactCard(code: String, ready: Boolean = true) {
     }
 }
 
-/** Escape mermaid source into a single-quoted JS string literal; '<' is escaped so a
- *  literal "</script>" in model output cannot terminate the host script element early. */
-private fun jsStringLiteral(source: String): String = buildString(source.length + 2) {
-    append('\'')
-    for (ch in source) when (ch) {
-        '\\' -> append("\\\\")
-        '\'' -> append("\\'")
-        '\n' -> append("\\n")
-        '\r' -> {}
-        '<' -> append("\\u003C")
-        else -> append(ch)
-    }
-    append('\'')
-}
-
-/** A literal "</script" inside an inline script would close the element; escape it.
- *  In JS source this only ever appears inside strings or regexes where "\/" is legal. */
-private fun sanitizeInlineScript(js: String): String = js.replace(Regex("</(?i:script)"), "<\\/script")
-
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun MermaidPreview(code: String, modifier: Modifier) {
-    val context = LocalContext.current
-    // Built with append() rather than string templates: minified JS contains '${'
-    // sequences that Kotlin would otherwise parse as interpolation.
-    val html = remember(code) { runCatching {
-        val mermaidJs = sanitizeInlineScript(
-            context.assets.open("mermaid.min.js").bufferedReader().use { it.readText() })
-        buildString(mermaidJs.length + 1024) {
-            append("<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
-            append("<style>body{margin:0;padding:8px;background:#fff;display:flex;justify-content:center}")
-            append("#g{max-width:100%;overflow-x:auto}</style>")
-            append("</head><body><div id=\"g\"></div>")
-            append("<script>").append(mermaidJs).append("</script>")
-            append("<script>try {")
-            append("mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'default'});")
-            append("mermaid.render('m1', ").append(jsStringLiteral(code)).append(")")
-            append(".then(r=>{document.getElementById('g').innerHTML=r.svg;});")
-            append("} catch(e) { document.getElementById('g').textContent='图表渲染失败'; }</script>")
-            append("</body></html>")
+    val context = LocalContext.current.applicationContext
+    var failed by remember(code) { mutableStateOf(false) }
+    val html by produceState<String?>(null, code, context) {
+        try {
+            val script = MermaidScriptCache.load(context)
+            value = withContext(Dispatchers.Default) { MermaidPreviewDocument.wrap(code, script) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            failed = true
         }
-    }.getOrNull() }
-    if (html == null) Box(modifier, contentAlignment = Alignment.Center) {
-        Text("预览无法显示", color = MutedInk)
-    } else AndroidView(
-        factory = { context ->
-            WebView(context).apply {
-                layoutParams = ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT)
-                settings.apply {
-                    javaScriptEnabled = true
-                    allowFileAccess = false
-                    allowContentAccess = false
-                    @Suppress("DEPRECATION")
-                    setAllowFileAccessFromFileURLs(false)
-                    @Suppress("DEPRECATION")
-                    setAllowUniversalAccessFromFileURLs(false)
-                    blockNetworkLoads = true
-                    domStorageEnabled = false
-                    databaseEnabled = false
-                    javaScriptCanOpenWindowsAutomatically = false
-                    setSupportMultipleWindows(true)
-                    mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                    mediaPlaybackRequiresUserGesture = true
-                    cacheMode = WebSettings.LOAD_NO_CACHE
-                }
-                webChromeClient = WebChromeClient()
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
-                    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse =
-                        WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                }
-                loadDataWithBaseURL("https://mermaid.local/", html, "text/html", "utf-8", null)
-            }
-        },
-        modifier = modifier,
-        onRelease = {
-            it.stopLoading()
-            it.webViewClient = WebViewClient()
-            it.removeAllViews()
-            it.destroy()
+    }
+    val document = html
+    when {
+        failed -> Box(modifier, contentAlignment = Alignment.Center) { Text("预览无法显示", color = MutedInk) }
+        document == null -> Box(modifier, contentAlignment = Alignment.Center) { AsterLoadingIndicator(size = 24.dp) }
+        else -> OfflineArtifactPreview(document, modifier, allowScripts = true, baseUrl = "https://mermaid.local/")
+    }
+}
+
+private object MermaidScriptCache {
+    private var script: String? = null
+    private val mutex = Mutex()
+
+    suspend fun load(context: android.content.Context): String = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            script ?: context.assets.open("mermaid.min.js").bufferedReader().use { it.readText() }
+                .let(MermaidPreviewDocument::sanitizeScript).also { script = it }
         }
-    )
+    }
 }

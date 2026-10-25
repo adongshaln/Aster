@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,7 +98,7 @@ fun QuickModelSwitcher(
                         RouteKind.Chat -> Icons.Rounded.Hub
                         RouteKind.Image -> Icons.Rounded.Palette
                         RouteKind.Analysis -> Icons.Rounded.Psychology
-                    }, null, Modifier.size(23.dp), tint = Accent)
+                    }, null, Modifier.size(23.dp), tint = OnAccentSoft)
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -131,26 +132,31 @@ fun QuickModelSwitcher(
                             selectedProfileId = profile.id
                             query = ""
                         },
-                        color = if (selected) Night else Surface,
-                        contentColor = if (selected) Color.White else Ink,
-                        border = if (selected) BorderStroke(1.dp, Color(0xFF494641)) else null,
+                        color = if (selected) AccentSoft else Surface,
+                        contentColor = Ink,
+                        border = if (selected) BorderStroke(1.dp, Accent.copy(alpha = .5f)) else BorderStroke(1.dp, Hairline),
                         shape = RoundedCornerShape(19.dp),
                         modifier = Modifier.width(228.dp)
                     ) {
                         Column(Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Color(0xFF3A3835) else Canvas), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp), tint = if (selected) AccentSoft else MutedInk)
+                                Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Surface else Canvas), contentAlignment = Alignment.Center) {
+                                    Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp), tint = if (selected) OnAccentSoft else MutedInk)
                                 }
                                 Spacer(Modifier.width(10.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(profile.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(if (connection.phase == ConnectionPhase.Success) "连接可用" else connection.title, color = if (selected) Color(0xFFBEB9B3) else MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                                    Text(if (connection.phase == ConnectionPhase.Success) "连接可用" else connection.title, color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                                 }
-                                Box(Modifier.size(9.dp).clip(CircleShape).background(if (connection.phase == ConnectionPhase.Success) Sage else Color(0xFFAAA49D)))
+                                Box(Modifier.size(9.dp).clip(CircleShape).background(when (connection.phase) {
+                                    ConnectionPhase.Success -> Sage
+                                    ConnectionPhase.Error -> Danger
+                                    ConnectionPhase.Testing -> Accent
+                                    ConnectionPhase.Idle -> MutedInk
+                                }))
                             }
                             Spacer(Modifier.height(11.dp))
-                            Text(profile.baseUrl, color = if (selected) Color(0xFFBEB9B3) else MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
+                            Text(profile.baseUrl, color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
                         }
                     }
                 }
@@ -210,13 +216,14 @@ fun QuickModelSwitcher(
                                 onDismiss()
                             },
                             color = if (selected) AccentSoft else Surface,
-                            border = if (selected) BorderStroke(1.dp, Color(0xFFFFB9A7)) else null,
+                            contentColor = Ink,
+                            border = if (selected) BorderStroke(1.dp, Accent.copy(alpha = .5f)) else null,
                             shape = RoundedCornerShape(18.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(if (selected) Color.White.copy(alpha = .75f) else Canvas), contentAlignment = Alignment.Center) {
-                                    Icon(if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining, null, Modifier.size(20.dp), tint = if (selected) AccentSoft else MutedInk)
+                            Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp).alpha(if (modelSelectionEnabled) 1f else .38f), verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(if (selected) Surface else Canvas), contentAlignment = Alignment.Center) {
+                                    Icon(if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining, null, Modifier.size(20.dp), tint = if (selected) OnAccentSoft else MutedInk)
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(Modifier.weight(1f)) {
@@ -224,7 +231,7 @@ fun QuickModelSwitcher(
                                     Text(model.ownedBy.ifBlank { selectedProfile.name }, color = MutedInk, style = MaterialTheme.typography.labelMedium, maxLines = 1)
                                 }
                                 if (selected) {
-                                    Surface(color = Accent, contentColor = Color.White, shape = CircleShape) {
+                                    Surface(color = Accent, contentColor = OnAccent, shape = CircleShape) {
                                         Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                                             Icon(Icons.Rounded.Check, null, Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("当前", style = MaterialTheme.typography.labelSmall)
                                         }

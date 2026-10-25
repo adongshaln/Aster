@@ -112,6 +112,8 @@ internal object AnthropicMessages {
         data class ToolCall(val call: PendingToolCall) : Event()
         /** 回合结束；stopReason 原文保留（end_turn / tool_use / max_tokens / stop_sequence）。 */
         data class MessageDone(val stopReason: String, val usage: TokenUsage) : Event()
+        /** Explicit end of the SSE response; do not wait for the HTTP connection to close. */
+        object MessageStop : Event()
         /** message_start 携带的输入侧 usage（含缓存读/写）。 */
         data class Start(val usage: TokenUsage) : Event()
         /** 服务端报错事件，按失败处理。 */
@@ -121,7 +123,7 @@ internal object AnthropicMessages {
     }
 
     fun parseEvent(payload: String, blocks: MutableMap<Int, BlockState>): Event {
-        val root = runCatching { JSONObject(payload) }.getOrNull() ?: return Event.Ignored
+        val root = parseSseObject(payload)
         return when (root.optString("type")) {
             "message_start" -> {
                 val usage = root.optJSONObject("message")?.optJSONObject("usage")
@@ -169,8 +171,7 @@ internal object AnthropicMessages {
                 val usage = root.optJSONObject("usage")?.let(::parseUsage) ?: TokenUsage()
                 Event.MessageDone(stopReason, usage)
             }
-            // message_delta 已携带 stop_reason；裸 message_stop 无更多信息。
-            "message_stop" -> Event.Ignored
+            "message_stop" -> Event.MessageStop
             "error" -> Event.Failure(
                 root.optJSONObject("error")?.optString("message")?.ifBlank { null }
                     ?: "Anthropic 流式响应返回错误事件"
@@ -179,11 +180,14 @@ internal object AnthropicMessages {
         }
     }
 
-    private fun parseUsage(usage: JSONObject): TokenUsage {
-        val input = usage.optInt("input_tokens", 0)
-        val output = usage.optInt("output_tokens", 0)
-        val cached = usage.optInt("cache_read_input_tokens", 0)
-        val cacheWrite = usage.optInt("cache_creation_input_tokens", 0)
+    internal fun parseUsage(usage: JSONObject): TokenUsage {
+        val uncached = usage.optInt("input_tokens", 0).coerceAtLeast(0)
+        val output = usage.optInt("output_tokens", 0).coerceAtLeast(0)
+        val cached = usage.optInt("cache_read_input_tokens", 0).coerceAtLeast(0)
+        val cacheWrite = usage.optInt("cache_creation_input_tokens", 0).coerceAtLeast(0)
+        // Anthropic reports cache reads/writes separately from input_tokens. Aster's input total
+        // includes them, as it does for OpenAI's prompt_tokens / cached_tokens breakdown.
+        val input = uncached + cached + cacheWrite
         return TokenUsage(
             inputTokens = input,
             cachedTokens = cached.coerceAtMost(input),

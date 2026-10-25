@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+if [[ $# -eq 0 && -n "${ASTER_UI_TEST_CLASS:-}" ]]; then
+  set -- "$ASTER_UI_TEST_CLASS"
+fi
+
 if [[ $# -eq 0 && "${GITHUB_REF:-}" == "refs/heads/design/thought-sections-fix" ]]; then
   set -- 'com.adong.adchat.SharedUiInteractionTest#storyThoughtSectionsAreIndependent,com.adong.adchat.SharedUiInteractionTest#storyProseUsesNativeSectionsAndRetainsPlanning'
 fi

@@ -4,25 +4,24 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The paper tag's silhouette, driven by two jelly springs: width leads, height follows 60ms later
- * with a visible bounce, and velocity-coupled squash keeps the volume roughly constant. Its top
- * lifts off the black core as it drops so the ink ring sits inside the tag. Every output is
- * sampled from absolute time; nothing allocates per frame.
+ * A soft sheet pulled from the lens. Width leads height slightly; their shared momentum bends
+ * the outline unequally at the shoulders and lower edge. All deformation comes from continuous
+ * spring state, including during reversals, rather than restarting a decorative wobble timer.
  */
 internal class IslandJellyBody {
     companion object {
-        const val WIDTH_RESPONSE = 0.44f
+        const val WIDTH_RESPONSE = 0.50f
         const val WIDTH_DAMPING = 0.76f
-        const val HEIGHT_RESPONSE = 0.52f
-        const val HEIGHT_DAMPING = 0.64f
-        const val HEIGHT_DELAY = 0.06
-        const val CONTENT_DELAY = 0.12
+        const val HEIGHT_RESPONSE = 0.58f
+        const val HEIGHT_DAMPING = 0.66f
+        const val HEIGHT_DELAY = 0.028
+        const val CONTENT_DELAY = 0.09
         const val SQUASH = 0.8f
-        const val CONTENT_REST_SCALE = 0.9f
+        const val CONTENT_REST_SCALE = 0.96f
         /** Upper bound of the body's growth past the card, as a fraction of the vertical travel. */
         const val MAX_HEIGHT_EXCESS = 0.12f
-        private const val CONTENT_FADE_START = 0.34f
-        private const val CONTENT_FADE_END = 0.84f
+        private const val CONTENT_FADE_START = 0.72f
+        private const val CONTENT_FADE_END = 0.98f
     }
 
     private val width = IslandJellySpring(0f, WIDTH_RESPONSE, WIDTH_DAMPING)
@@ -60,6 +59,17 @@ internal class IslandJellyBody {
         private set
     var contentScale = CONTENT_REST_SCALE
         private set
+    /** Amount of the original pen stroke that has become the card's edge. */
+    var inkTransfer = 0f
+        private set
+    var paperAlpha = 0f
+        private set
+    /** Bounded pixel displacements; settle to zero without a second animation clock. */
+    var contourLean = 0f
+        private set
+    var contourWave = 0f
+        private set
+    val seedRadius: Float get() = coreRadius
 
     private val seed: Float get() = coreRadius * 2f
 
@@ -92,7 +102,7 @@ internal class IslandJellyBody {
         opened = true
         width.set(expandedRight - expandedLeft, now, 0.0, WIDTH_RESPONSE, WIDTH_DAMPING)
         height.set(expandedBottom - expandedTop, now, HEIGHT_DELAY, HEIGHT_RESPONSE, HEIGHT_DAMPING)
-        content.set(1f, now, CONTENT_DELAY, 0.42f, 0.62f)
+        content.set(1f, now, CONTENT_DELAY, 0.40f, 0.82f)
     }
 
     /** Height retracts first, width follows: the tag slips back into the core along its own path. */
@@ -134,10 +144,22 @@ internal class IslandJellyBody {
         left = cx - renderedWidth / 2f
         right = cx + renderedWidth / 2f
         radius = minOf(cornerRadius, (bottom - top) / 2f, (right - left) / 2f)
+        inkTransfer = smooth(0f, 0.64f, progress)
+        paperAlpha = smooth(0.03f, 0.55f, heightProgress)
+        val formation = smooth(0f, 0.28f, progress)
+        contourLean = coreRadius * 0.42f * (0.7f * vw - 0.3f * vh) * formation
+        contourWave = coreRadius * 0.42f * (0.8f * vh + 0.2f * vw) * formation
         val fade = ((heightProgress - CONTENT_FADE_START) / (CONTENT_FADE_END - CONTENT_FADE_START)).coerceIn(0f, 1f)
-        contentAlpha = fade * fade * (3f - 2f * fade)
+        // The text waits for both shoulders and the lower edge. Otherwise a partially exposed
+        // button becomes a coloured wedge while the pen is still describing the silhouette.
+        contentAlpha = fade * fade * (3f - 2f * fade) * smooth(0.88f, 0.99f, widthFraction)
         contentScale = content.value(now)
     }
 
     fun contains(x: Float, y: Float): Boolean = x >= left && x <= right && y >= top && y <= bottom
+
+    private fun smooth(start: Float, end: Float, value: Float): Float {
+        val t = ((value - start) / (end - start)).coerceIn(0f, 1f)
+        return t * t * (3f - 2f * t)
+    }
 }

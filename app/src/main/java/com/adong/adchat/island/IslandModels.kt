@@ -29,7 +29,7 @@ object IslandLinkParser {
         "share_medium", "share_source", "share_token", "tt_from",
         "utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term",
         "from", "from_spm", "spm_id_from", "referfrom", "refer_flag", "is_from_webapp",
-        "with_sec_did", "msToken", "a_biaoti", "a_type", "chgd_source"
+        "with_sec_did", "mstoken", "a_biaoti", "a_type", "chgd_source"
     )
 
     /** 从分享文本中解析出可展示的链接；不识别的文本返回 null。 */
@@ -60,7 +60,7 @@ object IslandLinkParser {
     fun resolveExpanded(original: IslandLink, expandedUrl: String): IslandLink? {
         if (!isSupported(expandedUrl)) return null
         val cleaned = clean(expandedUrl) ?: expandedUrl
-        val input = MediaInputParser.parse(cleaned) ?: original.input
+        val input = MediaInputParser.parse(cleaned) ?: return null
         return original.copy(input = input, cleanedUrl = cleaned, deepLink = deepLinkFor(input, cleaned))
     }
 
@@ -88,10 +88,8 @@ object IslandLinkParser {
         MediaPlatform.Direct -> cleanedUrl
     }
 
-    private fun hostOf(url: String): String? =
-        runCatching { Uri.parse(url).host?.lowercase(Locale.ROOT) }.getOrNull()
-            ?.takeIf { it.isNotBlank() }
+    private fun hostOf(url: String): String? = runCatching { checkedHttpUrl(url).host }.getOrNull()
 
     private fun String.endsWithAnyOf(suffixes: Set<String>): Boolean =
-        suffixes.any { this == it || this.endsWith(".$it") || this.startsWith("$it.") || this.endsWith(".${it}") }
+        suffixes.any { this == it || this.endsWith(".$it") }
 }

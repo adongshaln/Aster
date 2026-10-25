@@ -3,6 +3,7 @@ package com.adong.adchat.data.story
 import android.content.Context
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -30,6 +31,35 @@ class StoryInterruptedRegenerationTest {
 
     @After
     fun tearDown() = repository.close()
+
+    @Test
+    fun cancellingEmptyRetryRestoresInterruptedReplyAndRejectsLateCleanup() {
+        repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "user", "继续写")
+        val original = repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose,
+            "assistant", "原先的片段", state = StoryRevisionState.Interrupted)
+        val retry = repository.restartGenerationRevision(original.message.id, original.revision.id, "profile", "model")
+        assertTrue(repository.cancelEmptyRegeneration(original.message.id, retry.revision.id, original.revision.id))
+        val restored = repository.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose).last()
+        assertEquals(original.revision, restored.revision)
+
+        val newerRetry = repository.restartGenerationRevision(original.message.id, original.revision.id, "profile", "model")
+        assertFalse(repository.cancelEmptyRegeneration(original.message.id, retry.revision.id, original.revision.id))
+        assertEquals(newerRetry.revision.id, repository.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose).last().revision.id)
+    }
+
+    @Test
+    fun cancellationRollbackCannotDiscardAnAlreadyCheckpointedRetry() {
+        repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose, "user", "继续写")
+        val original = repository.appendMessage(story.id, story.currentTimelineId, StoryWorkspace.Prose,
+            "assistant", "原回复", state = StoryRevisionState.Complete)
+        val retry = repository.restartGenerationRevision(original.message.id, original.revision.id, "profile", "model")
+        repository.updateActiveRevision(retry.revision.id, "新生成的片段", StoryRevisionState.Streaming)
+
+        assertFalse(repository.cancelEmptyRegeneration(original.message.id, retry.revision.id, original.revision.id))
+        val current = repository.loadMessages(story.id, story.currentTimelineId, StoryWorkspace.Prose).last()
+        assertEquals(retry.revision.id, current.revision.id)
+        assertEquals("新生成的片段", current.revision.content)
+    }
 
     @Test
     fun retryReusesUserTurnAndKeepsFailedRevision() {

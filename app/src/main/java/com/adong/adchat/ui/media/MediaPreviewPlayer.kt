@@ -32,6 +32,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -51,6 +52,18 @@ import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
+// Player instances are short lived; share their network pool across previews and retries.
+private val previewHttpClient by lazy {
+    OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(45, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .retryOnConnectionFailure(true)
+        .applyNetworkTrust()
+        .build()
+}
+
 @OptIn(markerClass = [UnstableApi::class])
 @Composable
 fun MediaPreviewPlayer(
@@ -68,21 +81,13 @@ fun MediaPreviewPlayer(
     var errorMessage by remember(media.mediaUrl, retryToken) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(media.mediaUrl, retryToken) { mutableStateOf(true) }
 
-    val player = remember(media.mediaUrl, retryToken) {
+    val player = remember(media.mediaUrl, media.userAgent, media.referer, media.cookieHeader, retryToken) {
         val headers = buildMap {
             if (media.userAgent.isNotBlank()) put("User-Agent", media.userAgent)
             if (media.referer.isNotBlank()) put("Referer", media.referer)
             if (media.cookieHeader.isNotBlank()) put("Cookie", media.cookieHeader)
         }
-        val httpClient = OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(45, TimeUnit.SECONDS)
-            .followRedirects(true)
-            .followSslRedirects(true)
-            .retryOnConnectionFailure(true)
-            .applyNetworkTrust()
-            .build()
-        val httpFactory = OkHttpDataSource.Factory(httpClient).setDefaultRequestProperties(headers)
+        val httpFactory = OkHttpDataSource.Factory(previewHttpClient).setDefaultRequestProperties(headers)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
@@ -94,7 +99,7 @@ fun MediaPreviewPlayer(
             }
     }
 
-    DisposableEffect(player, lifecycleOwner) {
+    DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 buffering = playbackState == Player.STATE_BUFFERING
@@ -127,31 +132,34 @@ fun MediaPreviewPlayer(
                 }
             }
         }
-        val lifecycleObserver = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_STOP -> player.pause()
-                Lifecycle.Event.ON_DESTROY -> player.release()
-                else -> Unit
-            }
-        }
         player.addListener(listener)
-        lifecycleOwner.lifecycle.addObserver(lifecycleObserver)
         buffering = true
         errorMessage = null
         player.prepare()
         onDispose {
-            lifecycleOwner.lifecycle.removeObserver(lifecycleObserver)
             player.removeListener(listener)
             player.release()
         }
     }
 
-    LaunchedEffect(player) {
-        while (true) {
-            positionMs = player.currentPosition.coerceAtLeast(0L)
-            val value = player.duration
-            durationMs = if (value == C.TIME_UNSET) durationMs else value.coerceAtLeast(0L)
-            delay(250)
+    DisposableEffect(player, lifecycleOwner) {
+        val lifecycle = lifecycleOwner.lifecycle
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) player.pause()
+        }
+        lifecycle.addObserver(observer)
+        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) player.pause()
+        onDispose { lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(player, playing, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            do {
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                val value = player.duration
+                durationMs = if (value == C.TIME_UNSET) durationMs else value.coerceAtLeast(0L)
+                if (playing) delay(250)
+            } while (playing)
         }
     }
 
@@ -166,11 +174,14 @@ fun MediaPreviewPlayer(
                     useController = false
                     resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setShutterBackgroundColor(AndroidColor.BLACK)
-                    keepScreenOn = true
                     this.player = player
                 }
             },
-            update = { it.player = player },
+            update = {
+                it.player = player
+                it.keepScreenOn = playing
+            },
+            onRelease = { it.player = null },
             modifier = Modifier.fillMaxSize()
         )
 
@@ -181,7 +192,7 @@ fun MediaPreviewPlayer(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("在线播放", color = Color.White.copy(alpha = .92f), modifier = Modifier.weight(1f))
-            IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+            IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
                 Icon(Icons.Rounded.Close, "关闭预览", tint = Color.White, modifier = Modifier.size(20.dp))
             }
         }
@@ -189,7 +200,7 @@ fun MediaPreviewPlayer(
         when {
             errorMessage != null -> {
                 Surface(
-                    color = Color(0xFFF9F5EF),
+                    color = com.adong.adchat.ui.theme.Surface,
                     shape = RoundedCornerShape(18.dp),
                     modifier = Modifier.align(Alignment.Center).padding(horizontal = 30.dp)
                 ) {

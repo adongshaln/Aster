@@ -1,30 +1,31 @@
-﻿package com.adong.adchat.media
+package com.adong.adchat.media
 
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.adong.adchat.data.applyNetworkTrust
+import com.adong.adchat.data.withCancellableResponse
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 
-class RemoteMediaResolver {
+class RemoteMediaResolver internal constructor(private val client: OkHttpClient) {
+    constructor() : this(defaultClient())
+
     @Volatile private var biliCookieHeader: String = ""
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        .callTimeout(35, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .applyNetworkTrust()
-        .build()
+    private val cookieMutex = Mutex()
 
     suspend fun resolve(input: MediaInput, onProgress: (String) -> Unit = {}): ResolvedMedia =
         withContext(Dispatchers.IO) {
@@ -62,7 +63,7 @@ class RemoteMediaResolver {
         )
     }
 
-    private fun resolveTwitter(input: MediaInput, onProgress: (String) -> Unit): ResolvedMedia {
+    private suspend fun resolveTwitter(input: MediaInput, onProgress: (String) -> Unit): ResolvedMedia {
         val tweetId = Regex("(?:status|statuses)/(\\d+)").find(input.sourceUrl)?.groupValues?.getOrNull(1)
             ?: input.mediaId.takeIf { it.all(Char::isDigit) }
             ?: throw MediaResolveException("无法识别 X 推文链接")
@@ -74,10 +75,14 @@ class RemoteMediaResolver {
         }
         var lastMessage = "X 没有返回可下载视频"
         endpoints.forEachIndexed { index, endpoint ->
-            ensureActiveThread()
+            ensureActiveResolution()
             onProgress(if (index == 0) "正在读取 X 视频" else "正在切换解析线路")
             runCatching { requestJson(endpoint, mapOf("Accept" to "application/json")) }
-                .onFailure { lastMessage = it.message ?: lastMessage }
+                .onFailure {
+                    if (it is CancellationException) throw it
+                    currentCoroutineContext().ensureActive()
+                    lastMessage = it.message ?: lastMessage
+                }
                 .getOrNull()
                 ?.let { json -> normalizeTwitter(json, input, tweetId)?.let { return it } }
         }
@@ -158,7 +163,7 @@ class RemoteMediaResolver {
         return MediaVariant("x-$index", label, url, "video/mp4", "mp4")
     }
 
-    private fun resolveBilibili(input: MediaInput, onProgress: (String) -> Unit): ResolvedMedia {
+    private suspend fun resolveBilibili(input: MediaInput, onProgress: (String) -> Unit): ResolvedMedia {
         onProgress("正在读取 B 站信息")
         val resolvedSource = resolveBilibiliSource(input.sourceUrl)
         val bvidOrAid = extractBiliId(resolvedSource)
@@ -197,11 +202,11 @@ class RemoteMediaResolver {
         )
     }
 
-    private fun resolveBilibiliSource(sourceUrl: String): String {
+    private suspend fun resolveBilibiliSource(sourceUrl: String): String {
         if (extractBiliId(sourceUrl) != null) return sourceUrl
         var lastError: Throwable? = null
         repeat(3) { attempt ->
-            ensureActiveThread()
+            ensureActiveResolution()
             try {
                 val request = Request.Builder()
                     .url(sourceUrl)
@@ -210,11 +215,13 @@ class RemoteMediaResolver {
                     .header("Cache-Control", "no-cache")
                     .get()
                     .build()
-                return client.newCall(request).execute().use { response ->
+                return client.newCall(request).withCancellableResponse { response ->
                     if (!response.isSuccessful) throw MediaResolveException("B 站短链接返回 ${response.code}")
                     response.request.url.toString()
                 }
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                currentCoroutineContext().ensureActive()
                 lastError = error
                 biliBackoff(attempt)
             }
@@ -222,7 +229,7 @@ class RemoteMediaResolver {
         throw MediaResolveException(lastError?.message ?: "B 站短链接解析失败")
     }
 
-    private fun resolveBiliViewData(
+    private suspend fun resolveBiliViewData(
         videoId: String,
         sourceUrl: String,
         headers: Map<String, String>,
@@ -236,13 +243,15 @@ class RemoteMediaResolver {
         )
         var apiFailure: Throwable? = null
         paths.forEachIndexed { index, path ->
-            ensureActiveThread()
+            ensureActiveResolution()
             val result = runCatching {
                 val data = requestBiliJson(path, headers, rounds = if (index == 0) 2 else 1)
                     .optJSONObject("data")
                     ?: throw MediaResolveException("B 站没有返回视频信息")
                 data.optJSONObject("View") ?: data
             }
+            result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
+            currentCoroutineContext().ensureActive()
             result.getOrNull()?.takeIf { it.has("bvid") || it.has("aid") }?.let { return it }
             apiFailure = result.exceptionOrNull() ?: apiFailure
             if (index == 0) onProgress("主接口波动，正在切换 B 站线路")
@@ -254,32 +263,33 @@ class RemoteMediaResolver {
         throw MediaResolveException(apiFailure?.message ?: "B 站视频信息暂时不可用")
     }
 
-    private fun fetchBiliPageData(sourceUrl: String, headers: Map<String, String>): JSONObject? {
+    private suspend fun fetchBiliPageData(sourceUrl: String, headers: Map<String, String>): JSONObject? {
         var lastError: Throwable? = null
         repeat(2) { attempt ->
-            ensureActiveThread()
+            ensureActiveResolution()
             try {
                 val request = Request.Builder().url(sourceUrl).get().apply {
                     headers.forEach { (name, value) -> if (value.isNotBlank()) header(name, value) }
                     header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
                     header("Cache-Control", "no-cache")
                 }.build()
-                val html = client.newCall(request).execute().use { response ->
+                val html = client.newCall(request).withCancellableResponse { response ->
                     if (!response.isSuccessful) throw MediaResolveException("B 站页面返回 ${response.code}")
                     response.body?.string().orEmpty()
                 }
                 BilibiliPageParser.extractVideoData(html)?.let { return it }
                 throw MediaResolveException("B 站页面没有包含视频状态")
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                currentCoroutineContext().ensureActive()
                 lastError = error
                 biliBackoff(attempt)
             }
         }
-        if (lastError is InterruptedException) throw lastError
         return null
     }
 
-    private fun resolveBiliVariants(
+    private suspend fun resolveBiliVariants(
         bvid: String,
         cid: Long,
         headers: Map<String, String>,
@@ -294,6 +304,8 @@ class RemoteMediaResolver {
             val root = try {
                 requestBiliJson(path, headers, rounds = 2)
             } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                currentCoroutineContext().ensureActive()
                 lastError = error
                 if (index == 0) onProgress("播放接口波动，正在切换线路")
                 return@forEachIndexed
@@ -335,11 +347,11 @@ class RemoteMediaResolver {
             ?: data.optLong("cid", 0L)
     }
 
-    private fun requestBiliJson(path: String, headers: Map<String, String>, rounds: Int): JSONObject {
+    private suspend fun requestBiliJson(path: String, headers: Map<String, String>, rounds: Int): JSONObject {
         var lastError: Throwable? = null
         repeat(rounds.coerceAtLeast(1)) { round ->
             BILI_API_BASES.forEach { base ->
-                ensureActiveThread()
+                ensureActiveResolution()
                 try {
                     val root = requestJson("$base$path", headers)
                     val code = root.optInt("code", -1)
@@ -350,6 +362,8 @@ class RemoteMediaResolver {
                     lastError = runCatching { assertBiliSuccess(root) }.exceptionOrNull()
                         ?: MediaResolveException("B 站解析失败（$code）")
                 } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    currentCoroutineContext().ensureActive()
                     lastError = error
                 }
             }
@@ -358,12 +372,14 @@ class RemoteMediaResolver {
         throw MediaResolveException(lastError?.message ?: "B 站接口暂时不可用")
     }
 
-    private fun resolveBiliAnonymousCookie(baseHeaders: Map<String, String>): String? {
+    private suspend fun resolveBiliAnonymousCookie(baseHeaders: Map<String, String>): String? {
         biliCookieHeader.takeIf(String::isNotBlank)?.let { return it }
-        synchronized(this) {
+        cookieMutex.withLock {
             biliCookieHeader.takeIf(String::isNotBlank)?.let { return it }
             BILI_API_BASES.forEach { base ->
-                val root = runCatching { requestJson("$base/x/frontend/finger/spi", baseHeaders) }.getOrNull()
+                val root = runCatching { requestJson("$base/x/frontend/finger/spi", baseHeaders) }
+                    .onFailure { if (it is CancellationException) throw it }
+                    .getOrNull()
                     ?: return@forEach
                 if (root.optInt("code", -1) != 0) return@forEach
                 val data = root.optJSONObject("data") ?: return@forEach
@@ -384,11 +400,11 @@ class RemoteMediaResolver {
         return null
     }
 
-    private fun requestJson(url: String, headers: Map<String, String>): JSONObject {
+    private suspend fun requestJson(url: String, headers: Map<String, String>): JSONObject {
         val builder = Request.Builder().url(url).get()
         headers.forEach { (name, value) -> if (value.isNotBlank()) builder.header(name, value) }
         builder.header("Cache-Control", "no-cache").header("Pragma", "no-cache")
-        return client.newCall(builder.build()).execute().use { response ->
+        return client.newCall(builder.build()).withCancellableResponse { response ->
             if (!response.isSuccessful) throw MediaResolveException("解析服务返回 ${response.code}")
             val body = response.body?.string().orEmpty()
             if (body.isBlank()) throw MediaResolveException("解析服务没有返回内容")
@@ -421,14 +437,9 @@ class RemoteMediaResolver {
         "Accept" to "application/json, text/plain, */*"
     )
 
-    private fun biliBackoff(attempt: Int) {
-        ensureActiveThread()
-        try {
-            Thread.sleep((220L shl attempt.coerceIn(0, 2)) + (System.nanoTime() and 0x7fL))
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw error
-        }
+    private suspend fun biliBackoff(attempt: Int) {
+        ensureActiveResolution()
+        delay((220L shl attempt.coerceIn(0, 2)) + (System.nanoTime() and 0x7fL))
     }
 
     private fun extractBiliId(value: String): String? = Regex("BV[0-9A-Za-z]{10}").find(value)?.value
@@ -465,8 +476,8 @@ class RemoteMediaResolver {
         "${parsed.scheme}://${parsed.host}/"
     }.getOrDefault("")
 
-    private fun ensureActiveThread() {
-        if (Thread.currentThread().isInterrupted) throw InterruptedException("解析已取消")
+    private suspend fun ensureActiveResolution() {
+        currentCoroutineContext().ensureActive()
     }
 
     private fun firstArray(vararg arrays: JSONArray?): JSONArray? = arrays.firstOrNull { it != null && it.length() > 0 }
@@ -477,6 +488,16 @@ class RemoteMediaResolver {
     }
 
     private companion object {
+        private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .callTimeout(35, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .applyNetworkTrust()
+            .build()
+
         const val MOBILE_USER_AGENT = "Mozilla/5.0 (Linux; Android 16) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Mobile Safari/537.36"
         const val DESKTOP_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
         val BILI_API_BASES = listOf("https://api.bilibili.com", "https://api.biliapi.com")

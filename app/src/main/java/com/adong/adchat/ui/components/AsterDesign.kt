@@ -5,15 +5,17 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.progressSemantics
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -27,48 +29,33 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adong.adchat.R
 import com.adong.adchat.ui.theme.*
 
-/**
- * Aster v3.0 — Claude Editorial × Apple Fluid Design System (完整 10 符号导出集)
- * ===========================================================================
- * 包含仓库全部 10 个导出组件符号，并补齐 `painterResource` / `sp` / `R` 等全部 import：
- * 1. `AsterMark`（3 处引用）— 使用 `aster_logo` 位图资源绘制品牌星标；
- *    仅当传入非默认 `tint` 时才套色（默认展示原始金白原作，错误红等语义仍可用 tint 保留）
- * 2. `AsterLoadingIndicator` — 星标缓慢旋转 + 呼吸缩放的加载指示器，替代不定的 CircularProgressIndicator
- * 3. `AsterArtwork`（1 处引用）
- * 4. `AsterWordmark`（1 处引用）
- * 5. `AsterPageHeader`（3 处引用）
- * 6. `AsterSectionHeading`（1 处引用）
- * 7. `AsterIconButton`
- * 8. `AsterPrimaryButton`
- * 9. `AsterSegmentedControl`
- * 10. `AsterModelRow`
- * 11. `AsterEmptyState`
- */
-
-// BEGIN_BRAND_AND_HEADER_COMPONENTS
 @Composable
 fun AsterMark(
     modifier: Modifier = Modifier,
@@ -99,45 +86,45 @@ fun AsterArtwork(
     }
 }
 
-/**
- * 品牌星标加载指示器：缓慢旋转 + 呼吸缩放，替代不定的 CircularProgressIndicator。
- */
+/** Continuous motion is reserved for active loading. */
 @Composable
 fun AsterLoadingIndicator(
     modifier: Modifier = Modifier,
     size: Dp,
     tint: Color = Accent
 ) {
-    val transition = rememberInfiniteTransition(label = "AsterLoading")
-    val rotation by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 6000, easing = LinearEasing)
-        ),
-        label = "AsterLoadingRotation"
-    )
-    val breath by transition.animateFloat(
-        initialValue = 0.94f,
-        targetValue = 1.06f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1600, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "AsterLoadingBreath"
-    )
+    val motion = if (LocalAsterMotionEnabled.current) {
+        val transition = rememberInfiniteTransition(label = "AsterLoading")
+        val rotation by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(tween(durationMillis = 6000, easing = LinearEasing)),
+            label = "AsterLoadingRotation"
+        )
+        val breath by transition.animateFloat(
+            initialValue = 0.97f,
+            targetValue = 1.03f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 1600, easing = AsterEase),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "AsterLoadingBreath"
+        )
+        Modifier.graphicsLayer {
+            rotationZ = rotation
+            scaleX = breath
+            scaleY = 1f + (1f - breath) * 0.65f
+        }
+    } else Modifier
     Image(
         painter = painterResource(R.drawable.aster_logo),
         contentDescription = null,
         contentScale = ContentScale.Fit,
         colorFilter = if (tint != Accent) ColorFilter.tint(tint) else null,
         modifier = modifier
+            .progressSemantics()
             .size(size)
-            .graphicsLayer {
-                rotationZ = rotation
-                scaleX = breath
-                scaleY = breath
-            }
+            .then(motion)
     )
 }
 
@@ -177,14 +164,19 @@ fun AsterIconButton(
     enabled: Boolean = true,
     tint: Color = Ink
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     IconButton(
         onClick = onClick,
-        modifier = modifier.appleSpringPressable(pressedScale = 0.88f, enabled = enabled),
-        enabled = enabled
+        modifier = modifier,
+        enabled = enabled,
+        interactionSource = interactionSource
     ) {
         Icon(
             imageVector = icon,
             contentDescription = contentDescription,
+            modifier = Modifier.appleSpringPressable(
+                pressedScale = 0.90f, enabled = enabled, interactionSource = interactionSource
+            ),
             tint = if (enabled) tint else MutedInk.copy(alpha = 0.38f)
         )
     }
@@ -198,6 +190,7 @@ fun AsterPrimaryButton(
     enabled: Boolean = true,
     icon: ImageVector? = null
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     val containerColor by animateColorAsState(
         targetValue = if (enabled) Accent else Accent.copy(alpha = 0.42f),
         animationSpec = AsterSpring.editorial(),
@@ -209,28 +202,40 @@ fun AsterPrimaryButton(
         label = "PrimaryBtnElevation"
     )
 
-    Surface(
-        onClick = onClick,
-        enabled = enabled,
-        color = containerColor,
-        contentColor = Color.White,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(0.5.dp, Color.White.copy(alpha = if (enabled) 0.22f else 0f)),
-        shadowElevation = elevation,
+    // Click and accessibility bounds stay fixed while the painted button deforms inside them.
+    Box(
         modifier = modifier
             .heightIn(min = 48.dp)
-            .appleSpringPressable(pressedScale = 0.96f, enabled = enabled)
+            .clickable(
+                interactionSource = interactionSource,
+                indication = ripple(),
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick
+            ),
+        propagateMinConstraints = true
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
+        Surface(
+            color = containerColor,
+            contentColor = OnAccent,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(0.5.dp, OnAccent.copy(alpha = if (enabled) 0.16f else 0f)),
+            shadowElevation = elevation,
+            modifier = Modifier.appleSpringPressable(
+                pressedScale = 0.96f, enabled = enabled, interactionSource = interactionSource
+            )
         ) {
-            if (icon != null) {
-                Icon(icon, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
+            Row(
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (icon != null) {
+                    Icon(icon, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                }
+                Text(text, style = MaterialTheme.typography.titleMedium)
             }
-            Text(text, style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -243,71 +248,96 @@ fun AsterSegmentedControl(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    Row(
+    if (labels.isEmpty()) return
+    val selection = selectedIndex.coerceIn(labels.indices)
+    val motionEnabled = LocalAsterMotionEnabled.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val transition = updateTransition(selection, label = "segment-selection")
+    // Leading and trailing edges respond at different speeds, then reunite at rest.
+    val start by transition.animateFloat(
+        transitionSpec = {
+            if (targetState < initialState) AsterSpring.snappy() else AsterSpring.releaseVertical()
+        },
+        label = "segment-start"
+    ) { it.toFloat() }
+    val end by transition.animateFloat(
+        transitionSpec = {
+            if (targetState > initialState) AsterSpring.snappy() else AsterSpring.releaseVertical()
+        },
+        label = "segment-end"
+    ) { it.toFloat() }
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(20.dp))
             .background(SurfaceInset)
             .selectableGroup()
-            .padding(4.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(4.dp)
     ) {
-        labels.forEachIndexed { index, label ->
-            val selected = index == selectedIndex
-            val fill by animateColorAsState(
-                targetValue = if (selected) Surface else Color.Transparent,
-                animationSpec = AsterSpring.snappy(),
-                label = "SegFill"
-            )
-            val textColor by animateColorAsState(
-                targetValue = if (selected) Ink else MutedInk,
-                animationSpec = AsterSpring.editorial(),
-                label = "SegText"
-            )
-            val pillScale by animateFloatAsState(
-                targetValue = if (selected) 1f else 0.94f,
-                animationSpec = AsterSpring.jelly(),
-                label = "SegScale"
-            )
-            val pillElevation by animateDpAsState(
-                targetValue = if (selected) 2.dp else 0.dp,
-                animationSpec = AsterSpring.snappy(),
-                label = "SegElevation"
-            )
-
+        val gap = 4.dp
+        val itemWidth = ((maxWidth - gap * (labels.size - 1)) / labels.size).coerceAtLeast(1.dp)
+        val stridePx = with(LocalDensity.current) { (itemWidth + gap).toPx() }
+        val itemWidthPx = with(LocalDensity.current) { itemWidth.toPx() }
+        val insetPx = with(LocalDensity.current) { 4.dp.toPx() }
+        Box(Modifier.matchParentSize()) {
             Surface(
-                color = fill,
+                color = Surface,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(
-                    width = 0.8.dp,
-                    color = if (selected) Hairline.copy(alpha = 0.85f) else Color.Transparent
-                ),
-                shadowElevation = pillElevation,
+                border = BorderStroke(0.8.dp, Hairline.copy(alpha = 0.85f)),
+                shadowElevation = 2.dp,
                 modifier = Modifier
-                    .weight(1f)
+                    .width(itemWidth)
+                    .fillMaxHeight()
                     .graphicsLayer {
-                        scaleX = pillScale
-                        scaleY = pillScale
+                        val startPosition = if (motionEnabled) start else selection.toFloat()
+                        val endPosition = if (motionEnabled) end else selection.toFloat()
+                        val position = ((startPosition + endPosition) * 0.5f)
+                            .coerceIn(0f, labels.lastIndex.toFloat())
+                        val edgeRoom = minOf(position, labels.lastIndex - position) * stridePx + insetPx
+                        val stretch = (1f + (endPosition - startPosition) * stridePx / itemWidthPx)
+                            .coerceIn(0.94f, minOf(1.16f, 1f + 2f * edgeRoom / itemWidthPx))
+                        translationX = position * stridePx * (if (rtl) -1f else 1f)
+                        scaleX = stretch
+                        scaleY = 1f - (stretch - 1f) * 0.18f
+                        transformOrigin = TransformOrigin.Center
                     }
-                    .appleSpringPressable(pressedScale = 0.94f, enabled = enabled)
-            ) {
+            ) {}
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
+            labels.forEachIndexed { index, label ->
+                val selected = index == selection
+                val interactionSource = remember { MutableInteractionSource() }
+                val textColor by animateColorAsState(
+                    targetValue = (if (selected) Ink else MutedInk).let {
+                        if (enabled) it else it.copy(alpha = 0.45f)
+                    },
+                    animationSpec = AsterSpring.editorial(),
+                    label = "segment-text"
+                )
                 Box(
                     modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 48.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .selectable(
                             selected = selected,
                             enabled = enabled,
                             role = Role.Tab,
+                            interactionSource = interactionSource,
+                            indication = ripple(),
                             onClick = { if (!selected) onSelect(index) }
                         )
-                        .heightIn(min = 46.dp)
                         .padding(horizontal = 8.dp, vertical = 10.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = label,
+                        modifier = Modifier.appleSpringPressable(
+                            pressedScale = 0.95f, enabled = enabled, interactionSource = interactionSource
+                        ),
                         color = textColor,
                         style = MaterialTheme.typography.labelLarge,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                        fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -325,18 +355,20 @@ fun AsterModelRow(
     modifier: Modifier = Modifier,
     icon: ImageVector = Icons.Rounded.Tune
 ) {
+    val interactionSource = remember { MutableInteractionSource() }
     Surface(
         onClick = onClick,
+        interactionSource = interactionSource,
         color = Surface,
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, Hairline.copy(alpha = 0.9f)),
         shadowElevation = 1.dp,
-        modifier = modifier
-            .fillMaxWidth()
-            .appleSpringPressable(pressedScale = 0.975f)
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 13.dp),
+            modifier = Modifier.heightIn(min = 48.dp)
+                .appleSpringPressable(pressedScale = 0.975f, interactionSource = interactionSource)
+                .padding(horizontal = 14.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -346,7 +378,7 @@ fun AsterModelRow(
                     .background(AccentSoft),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, null, Modifier.size(19.dp), tint = Accent)
+                Icon(icon, null, Modifier.size(19.dp), tint = OnAccentSoft)
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -395,7 +427,7 @@ fun AsterEmptyState(
                 .background(AccentSoft.copy(alpha = 0.65f)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(icon, null, Modifier.size(26.dp), tint = Accent)
+            Icon(icon, null, Modifier.size(26.dp), tint = OnAccentSoft)
         }
         Spacer(Modifier.height(16.dp))
         Text(

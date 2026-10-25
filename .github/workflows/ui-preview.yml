@@ -10,6 +10,11 @@ on:
       - ".github/workflows/ui-preview.yml"
       - "tools/run_ui_preview.sh"
   workflow_dispatch:
+    inputs:
+      test_class:
+        description: "Optional instrumentation class or comma-separated class#method list"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -41,6 +46,8 @@ jobs:
         run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
       - name: Verify layouts and keyboard on a 360 dp phone
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          ASTER_UI_TEST_CLASS: ${{ inputs.test_class }}
         with:
           api-level: 35
           target: google_apis

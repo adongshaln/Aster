@@ -1,12 +1,9 @@
 package com.adong.adchat.data
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.ConnectionPool
@@ -17,7 +14,6 @@ import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import okio.BufferedSource
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.EOFException
@@ -33,16 +29,10 @@ class ApiRepository internal constructor(
     private val skillLoader: SkillLoader = GitHubSkillRuntime,
     private val skillBundleLoader: SkillBundleLoader = GitHubSkillBundleRuntime,
     private val nativeSkillUploader: NativeSkillUploader = NativeSkillsApi,
-    private val preferNativeSkills: Boolean = false
+    private val preferNativeSkills: Boolean = false,
+    private val client: OkHttpClient = defaultApiClient()
 ) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(20, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
-        .applyNetworkTrust()
-        .build()
 
     // Some OpenAI-compatible gateways terminate long HTTP/2 SSE streams with RST_STREAM CANCEL.
     // A dedicated HTTP/1.1 client avoids that transport failure and tolerates long reasoning pauses.
@@ -72,7 +62,7 @@ class ApiRepository internal constructor(
         val url = resolveUrl(profile.baseUrl, profile.modelsPath)
         val started = System.nanoTime()
         val request = requestBuilder(profile, url).get().build()
-        client.newCall(request).execute().use { response ->
+        client.newCall(request).withCancellableResponse { response ->
             val text = response.body?.string().orEmpty()
             ensureSuccess(response, text)
             val root = runCatching { JSONObject(text) }
@@ -105,6 +95,7 @@ class ApiRepository internal constructor(
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
         onReasoning: suspend (String) -> Unit = {},
         onAskUser: suspend (AskUserPrompt) -> String = { "" },
+        allowReasoningContinuation: Boolean = true,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
@@ -182,6 +173,7 @@ class ApiRepository internal constructor(
                     searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
+                    allowReasoningContinuation = allowReasoningContinuation,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
                     onAskUser = onAskUser,
@@ -208,31 +200,12 @@ class ApiRepository internal constructor(
                     searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
+                    allowReasoningContinuation = allowReasoningContinuation,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
                     onAskUser = onAskUser,
                     onDelta = deltaSink
                 )
-            }
-        }
-
-        suspend fun executeWithPreDeltaRetry(
-            attemptHistory: List<ChatMessage>,
-            deltaSink: suspend (String) -> Unit
-        ): ChatCompletionResult {
-            var emittedInAttempt = false
-            val trackingSink: suspend (String) -> Unit = { delta ->
-                emittedInAttempt = true
-                deltaSink(delta)
-            }
-            return try {
-                executeAttempt(attemptHistory, trackingSink)
-            } catch (error: Throwable) {
-                if (error is CancellationException) throw error
-                currentCoroutineContext().ensureActive()
-                if (toolsActive || emittedInAttempt || !error.isRetryableStreamFailure()) throw error
-                delay(PRE_DELTA_RETRY_DELAY_MS)
-                executeAttempt(attemptHistory, deltaSink)
             }
         }
 
@@ -242,7 +215,7 @@ class ApiRepository internal constructor(
             onDelta(delta)
         }
         try {
-            val result = executeWithPreDeltaRetry(initialContext.history, initialSink)
+            val result = executeAttempt(initialContext.history, initialSink)
             return@withContext result.copy(text = combined.toString().ifBlank { result.text })
         } catch (initialError: Throwable) {
             if (initialError is CancellationException) throw initialError
@@ -256,7 +229,7 @@ class ApiRepository internal constructor(
                 ))
                 nativeSkillReference = null
                 skillLoadingEnabled = true
-                val fallback = executeWithPreDeltaRetry(initialContext.history, initialSink)
+                val fallback = executeAttempt(initialContext.history, initialSink)
                 return@withContext fallback.copy(text = combined.toString().ifBlank { fallback.text })
             }
             if (combined.isEmpty() || toolsActive || !profile.autoResumeStream || !initialError.isRetryableStreamFailure()) throw initialError
@@ -283,7 +256,7 @@ class ApiRepository internal constructor(
             deduplicator.accept(delta)
         }
         val resumedResult = try {
-            executeWithPreDeltaRetry(resumeHistory, resumedSink)
+            executeAttempt(resumeHistory, resumedSink)
         } catch (resumeError: Throwable) {
             if (resumeError is CancellationException) throw resumeError
             currentCoroutineContext().ensureActive()
@@ -321,6 +294,7 @@ class ApiRepository internal constructor(
         searchBackend: SearchBackendConfig?,
         generationOptions: ChatGenerationOptions,
         askUserEnabled: Boolean,
+        allowReasoningContinuation: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
         onAskUser: suspend (AskUserPrompt) -> String,
@@ -410,7 +384,7 @@ class ApiRepository internal constructor(
                 .header("Cache-Control", "no-cache")
                 .header("Accept-Encoding", "identity")
                 .header("Connection", "close")
-                .post(body.toString().toRequestBody(jsonMedia)).build()
+                .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
 
         suspend fun executeRound(forceSkill: Boolean, forceNoTools: Boolean): ProtocolRoundResult {
             outputComplete = false
@@ -419,9 +393,6 @@ class ApiRepository internal constructor(
             var retriedWithoutCache = false
             while (true) {
                 val call = streamingClient.newCall(requestFor(body))
-                val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
-                    try { awaitCancellation() } finally { call.cancel() }
-                }
                 val roundText = StringBuilder()
                 var roundUsage = TokenUsage()
                 var inputUsage = TokenUsage()
@@ -429,7 +400,7 @@ class ApiRepository internal constructor(
                 val toolCalls = mutableListOf<PendingToolCall>()
                 var stopReason = ""
                 try {
-                    call.execute().use { response ->
+                    call.withCancellableResponse { response ->
                         if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
                         val contentType = response.header("Content-Type").orEmpty()
                         if (contentType.contains("text/event-stream", ignoreCase = true)) {
@@ -437,6 +408,7 @@ class ApiRepository internal constructor(
                             val blocks = mutableMapOf<Int, AnthropicMessages.BlockState>()
                             var completed = false
                             readSsePayloads(source) { payload ->
+                                if (payload.trim() == "[DONE]") return@readSsePayloads false
                                 when (val event = AnthropicMessages.parseEvent(payload, blocks)) {
                                     is AnthropicMessages.Event.Start -> inputUsage = event.usage
                                     is AnthropicMessages.Event.Text -> {
@@ -458,10 +430,15 @@ class ApiRepository internal constructor(
                                         stopReason = event.stopReason
                                         // message_start 与 message_delta 都带 output_tokens（后者为最终值），
                                         // 输入侧只取 message_start，输出侧只取 message_delta，避免双计。
-                                        roundUsage = inputUsage.copy(outputTokens = 0) + event.usage
-                                        completed = true
+                                        roundUsage = inputUsage.copy(
+                                            outputTokens = event.usage.outputTokens,
+                                            totalTokens = inputUsage.inputTokens + event.usage.outputTokens,
+                                            providerUsageReported = inputUsage.providerUsageReported || event.usage.providerUsageReported
+                                        )
+                                        completed = stopReason.isNotBlank()
                                     }
-                                    is AnthropicMessages.Event.Failure -> throw IOException(event.message)
+                                    AnthropicMessages.Event.MessageStop -> return@readSsePayloads false
+                                    is AnthropicMessages.Event.Failure -> throw IllegalStateException(event.message)
                                     AnthropicMessages.Event.Ignored -> Unit
                                 }
                                 true
@@ -471,10 +448,11 @@ class ApiRepository internal constructor(
                             val text = response.body?.string().orEmpty()
                             if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
                             val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
+                            ensureNoProviderError(root)
                             val parsed = AnthropicMessages.parseContent(root)
                             toolCalls += parsed.second
                             stopReason = AnthropicMessages.stopReason(root)
-                            roundUsage = parseUsage(root)
+                            roundUsage = root.optJSONObject("usage")?.let(AnthropicMessages::parseUsage) ?: TokenUsage()
                             if (parsed.first.isNotEmpty()) {
                                 if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
                                 val piece = textAfterThought(full, parsed.first, afterThought)
@@ -488,15 +466,14 @@ class ApiRepository internal constructor(
                 } catch (error: Throwable) {
                     // 网关不认 cache_control 时去掉断点重试一次；其他错误直接抛。
                     val retryWithoutCache = cacheBreakpointsEnabled && !retriedWithoutCache &&
-                        error !is CancellationException && error.isCacheCompatibilityError()
+                        roundText.isEmpty() && reasoningTotal.length == reasoningMark && toolCalls.isEmpty() &&
+                        error.isCacheCompatibilityError()
                     if (!retryWithoutCache) throw error
                     retriedWithoutCache = true
                     cacheBreakpointsEnabled = false
                     stripCacheControl(messages)
                     body = buildBody(forceSkill, forceNoTools)
                     continue
-                } finally {
-                    cancellationWatcher.cancel()
                 }
                 outputComplete = stopReason != "max_tokens" && stopReason != "tool_use"
                 val producedReasoning = reasoningTotal.substring(reasoningMark)
@@ -518,6 +495,7 @@ class ApiRepository internal constructor(
         }
 
         var completedNormally = false
+        var stoppedAfterReasoning = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
         var delegatedSearchCalls = 0
@@ -536,6 +514,11 @@ class ApiRepository internal constructor(
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.reasoningOnly) {
+                if (!allowReasoningContinuation) {
+                    stoppedAfterReasoning = true
+                    outputComplete = false
+                    break
+                }
                 // Messages API 不回写伪装的助手思考轮；以用户提示让模型继续输出正文。
                 messages.put(JSONObject().put("role", "user").put("content", REASONING_CONTINUE_PROMPT))
                 continue
@@ -604,7 +587,7 @@ class ApiRepository internal constructor(
             messages.put(AnthropicMessages.toolResultMessage(results))
             forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
-        if (!completedNormally) {
+        if (!completedNormally && !stoppedAfterReasoning) {
             throw IllegalStateException("请求未在 ${MAX_TOOL_ROUNDS} 轮内完成。若模型连续多轮只输出思考没有正文，可能是输出预算（max_tokens）被思考耗尽，请提高输出上限或降低思考强度后重试。")
         }
         val duration = elapsedMs(started)
@@ -621,7 +604,7 @@ class ApiRepository internal constructor(
         )
         val resultText = full.toString().ifBlank {
             generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
-                ?: throw IllegalStateException("Streaming response contained no text")
+                ?: if (stoppedAfterReasoning) "" else throw IllegalStateException("Streaming response contained no text")
         }
         return ChatCompletionResult(
             text = resultText,
@@ -647,6 +630,7 @@ class ApiRepository internal constructor(
         searchBackend: SearchBackendConfig?,
         generationOptions: ChatGenerationOptions,
         askUserEnabled: Boolean,
+        allowReasoningContinuation: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
         onAskUser: suspend (AskUserPrompt) -> String,
@@ -743,12 +727,9 @@ class ApiRepository internal constructor(
                 .header("Cache-Control", "no-cache")
                 .header("Accept-Encoding", "identity")
                 .header("Connection", "close")
-                .post(body.toString().toRequestBody(jsonMedia)).build()
+                .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val call = streamingClient.newCall(request)
             val reasoningMark = reasoningTotal.length
-            val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
-                try { awaitCancellation() } finally { call.cancel() }
-            }
             val roundText = StringBuilder()
             var roundUsage = TokenUsage()
             val roundCitations = linkedMapOf<String, ChatCitation>()
@@ -761,66 +742,63 @@ class ApiRepository internal constructor(
                 full.append(piece)
                 onDelta(piece)
             }
-            try {
-                call.execute().use { response ->
-                    if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
-                    val contentType = response.header("Content-Type").orEmpty()
-                    if (contentType.contains("text/event-stream", ignoreCase = true)) {
-                        val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
-                        var completed = false
-                        readSsePayloads(source) { payload ->
-                            if (payload.trim() == "[DONE]") {
-                                completed = true
-                                return@readSsePayloads false
-                            }
-                            val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
-                            toolAccumulator.accept(root)
-                            parseCitations(root).forEach { roundCitations[it.url] = it }
-                            noteWebSearch(root)
-                            val choices = root.optJSONArray("choices")
-                            val choice = choices?.optJSONObject(0)
-                            if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
-                                completed = true
-                                outputComplete = choice.optString("finish_reason") == "stop"
-                            }
-                            if (root.has("usage") && !root.isNull("usage")) {
-                                roundUsage = parseUsage(root)
-                                if (choices != null && choices.length() == 0) completed = true
-                            }
-                            val delta = parseStreamDelta(root)
-                            val reasoning = parseReasoningDelta(root)
-                            if (delta.isNotEmpty()) {
-                                if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                                appendRound(delta)
-                            }
-                            if (reasoning.isNotBlank()) {
-                                emitReasoning(reasoning)
-                                if (delta.isEmpty() && full.isNotEmpty()) afterThought = true
-                            }
-                            true
+            call.withCancellableResponse { response ->
+                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                val contentType = response.header("Content-Type").orEmpty()
+                if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                    val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
+                    var completed = false
+                    readSsePayloads(source) { payload ->
+                        if (payload.trim() == "[DONE]") {
+                            completed = true
+                            return@readSsePayloads false
                         }
-                        if (!completed) throw IOException("Streaming connection ended before completion")
-                    } else {
-                        val text = response.body?.string().orEmpty()
-                        if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
-                        val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
-                        outputComplete = root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason") == "stop"
+                        val root = parseSseObject(payload)
+                        ensureNoProviderError(root)
                         toolAccumulator.accept(root)
                         parseCitations(root).forEach { roundCitations[it.url] = it }
                         noteWebSearch(root)
-                        val result = runCatching { parseMessageContent(root) }.getOrDefault("")
-                        if (result.isNotEmpty()) {
-                            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                            appendRound(result)
+                        val choices = root.optJSONArray("choices")
+                        val choice = choices?.optJSONObject(0)
+                        if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
+                            completed = true
+                            outputComplete = choice.optString("finish_reason") == "stop"
                         }
+                        if (root.has("usage") && !root.isNull("usage")) {
+                            roundUsage = parseUsage(root)
+                        }
+                        val delta = parseStreamDelta(root)
                         val reasoning = parseReasoningDelta(root)
-                        emitReasoning(reasoning)
-                        if (reasoning.isNotBlank() && result.isEmpty() && full.isNotEmpty()) afterThought = true
-                        roundUsage = parseUsage(root)
+                        if (delta.isNotEmpty()) {
+                            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                            appendRound(delta)
+                        }
+                        if (reasoning.isNotBlank()) {
+                            emitReasoning(reasoning)
+                            if (delta.isEmpty() && full.isNotEmpty()) afterThought = true
+                        }
+                        true
                     }
+                    if (!completed) throw IOException("Streaming connection ended before completion")
+                } else {
+                    val text = response.body?.string().orEmpty()
+                    if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
+                    val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON response") }
+                    ensureNoProviderError(root)
+                    outputComplete = root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason") == "stop"
+                    toolAccumulator.accept(root)
+                    parseCitations(root).forEach { roundCitations[it.url] = it }
+                    noteWebSearch(root)
+                    val result = runCatching { parseMessageContent(root) }.getOrDefault("")
+                    if (result.isNotEmpty()) {
+                        if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                        appendRound(result)
+                    }
+                    val reasoning = parseReasoningDelta(root)
+                    emitReasoning(reasoning)
+                    if (reasoning.isNotBlank() && result.isEmpty() && full.isNotEmpty()) afterThought = true
+                    roundUsage = parseUsage(root)
                 }
-            } finally {
-                cancellationWatcher.cancel()
             }
             val calls = toolAccumulator.completedCalls()
             val producedReasoning = reasoningTotal.substring(reasoningMark)
@@ -839,6 +817,7 @@ class ApiRepository internal constructor(
         }
 
         var completedNormally = false
+        var stoppedAfterReasoning = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
         var delegatedSearchCalls = 0
@@ -857,6 +836,11 @@ class ApiRepository internal constructor(
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.reasoningOnly) {
+                if (!allowReasoningContinuation) {
+                    stoppedAfterReasoning = true
+                    outputComplete = false
+                    break
+                }
                 // 模型持续回传思考就持续续轮，不主动中断；
                 // 总轮数仍由 MAX_TOOL_ROUNDS 兜底，防止模型无限空转。
                 messages.put(JSONObject()
@@ -941,7 +925,7 @@ class ApiRepository internal constructor(
             }
             forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
-        if (!completedNormally) {
+        if (!completedNormally && !stoppedAfterReasoning) {
             throw IllegalStateException("请求未在 ${MAX_TOOL_ROUNDS} 轮内完成。若模型连续多轮只输出思考没有正文，可能是输出预算（max_tokens）被思考耗尽，请提高输出上限或降低思考强度后重试。")
         }
         if (activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
@@ -957,7 +941,7 @@ class ApiRepository internal constructor(
         )
         val resultText = full.toString().ifBlank {
             generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
-                ?: throw IllegalStateException("Streaming response contained no text")
+                ?: if (stoppedAfterReasoning) "" else throw IllegalStateException("Streaming response contained no text")
         }
         return ChatCompletionResult(
             text = resultText,
@@ -1064,11 +1048,8 @@ class ApiRepository internal constructor(
                 .header("Cache-Control", "no-cache")
                 .header("Accept-Encoding", "identity")
                 .header("Connection", "close")
-                .post(body.toString().toRequestBody(jsonMedia)).build()
+                .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val call = streamingClient.newCall(request)
-            val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
-                try { awaitCancellation() } finally { call.cancel() }
-            }
             val roundText = StringBuilder()
             var roundUsage = TokenUsage()
             var responseId = ""
@@ -1083,90 +1064,90 @@ class ApiRepository internal constructor(
                 full.append(piece)
                 onDelta(piece)
             }
-            try {
-                call.execute().use { response ->
-                    if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
-                    val contentType = response.header("Content-Type").orEmpty()
-                    if (contentType.contains("text/event-stream", ignoreCase = true)) {
-                        val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
-                        var completed = false
-                        readSsePayloads(source) { payload ->
-                            if (payload.trim() == "[DONE]") {
-                                completed = true
-                                return@readSsePayloads false
-                            }
-                            val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@readSsePayloads true
-                            toolAccumulator.accept(root)
-                            parseCitations(root).forEach { roundCitations[it.url] = it }
-                            when (root.optString("type")) {
-                                "response.created" -> responseId = root.optJSONObject("response")?.optString("id").orEmpty()
-                                "response.output_text.delta" -> {
-                                    val delta = root.optString("delta")
-                                    if (delta.isNotEmpty()) {
-                                        if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                                        appendRound(delta)
-                                    }
+            call.withCancellableResponse { response ->
+                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                val contentType = response.header("Content-Type").orEmpty()
+                if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                    val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
+                    var completed = false
+                    readSsePayloads(source) { payload ->
+                        if (payload.trim() == "[DONE]") {
+                            completed = true
+                            return@readSsePayloads false
+                        }
+                        val root = parseSseObject(payload)
+                        toolAccumulator.accept(root)
+                        parseCitations(root).forEach { roundCitations[it.url] = it }
+                        when (root.optString("type")) {
+                            "response.created" -> responseId = root.optJSONObject("response")?.optString("id").orEmpty()
+                            "response.output_text.delta" -> {
+                                val delta = root.optString("delta")
+                                if (delta.isNotEmpty()) {
+                                    if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                                    appendRound(delta)
                                 }
-                                // 思考增量：官方为 response.reasoning_summary_text.delta，
-                                // 部分兼容网关用 response.reasoning_text.delta 或自定义 reasoning.*.delta。
-                                "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
-                                    val thought = root.optString("delta").ifBlank { reasoningEventText(root) }
+                            }
+                            // 思考增量：官方为 response.reasoning_summary_text.delta，
+                            // 部分兼容网关用 response.reasoning_text.delta 或自定义 reasoning.*.delta。
+                            "response.reasoning_summary_text.delta", "response.reasoning_text.delta" -> {
+                                val thought = root.optString("delta").ifBlank { reasoningEventText(root) }
+                                emitReasoning(thought)
+                                if (thought.isNotBlank() && full.isNotEmpty()) afterThought = true
+                            }
+                            "response.web_search_call.in_progress", "response.web_search_call.searching" -> {
+                                usedWebSearch = true
+                                recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
+                                if (full.isNotEmpty()) afterThought = true
+                            }
+                            "response.web_search_call.completed" -> {
+                                usedWebSearch = true
+                                recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
+                            }
+                            "response.completed" -> {
+                                val completedResponse = root.optJSONObject("response") ?: root
+                                outputComplete = completedResponse.optString("status").let { it.isBlank() || it == "completed" }
+                                responseId = completedResponse.optString("id").ifBlank { responseId }
+                                roundUsage = parseUsage(completedResponse)
+                                usedWebSearch = usedWebSearch || responseUsedWebSearch(root)
+                                completed = true
+                            }
+                            "response.failed", "response.incomplete" -> throw IllegalStateException(root.optJSONObject("response")?.optJSONObject("error")?.optString("message").orEmpty().ifBlank { "Responses API failed" })
+                            "error" -> throw IllegalStateException(root.optString("message").ifBlank { "Responses API failed" })
+                            else -> {
+                                val type = root.optString("type")
+                                if (type.contains("reasoning", ignoreCase = true) && type.endsWith(".delta")) {
+                                    val thought = reasoningEventText(root)
                                     emitReasoning(thought)
                                     if (thought.isNotBlank() && full.isNotEmpty()) afterThought = true
                                 }
-                                "response.web_search_call.in_progress", "response.web_search_call.searching" -> {
-                                    usedWebSearch = true
-                                    recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "正在搜索网页", TOOL_STATUS_RUNNING))
-                                    if (full.isNotEmpty()) afterThought = true
-                                }
-                                "response.web_search_call.completed" -> {
-                                    usedWebSearch = true
-                                    recordActivity(ChatToolActivity("web_search", WEB_SEARCH_TOOL, "已完成网页搜索", TOOL_STATUS_COMPLETED))
-                                }
-                                "response.completed" -> {
-                                    val completedResponse = root.optJSONObject("response") ?: root
-                                    outputComplete = completedResponse.optString("status").let { it.isBlank() || it == "completed" }
-                                    responseId = completedResponse.optString("id").ifBlank { responseId }
-                                    roundUsage = parseUsage(completedResponse)
-                                    usedWebSearch = usedWebSearch || responseUsedWebSearch(root)
-                                    completed = true
-                                }
-                                "response.failed", "response.incomplete" -> throw IllegalStateException(root.optJSONObject("response")?.optJSONObject("error")?.optString("message").orEmpty().ifBlank { "Responses API failed" })
-                                "error" -> throw IllegalStateException(root.optString("message").ifBlank { "Responses API failed" })
-                                else -> {
-                                    val type = root.optString("type")
-                                    if (type.contains("reasoning", ignoreCase = true) && type.endsWith(".delta")) {
-                                        val thought = reasoningEventText(root)
-                                        emitReasoning(thought)
-                                        if (thought.isNotBlank() && full.isNotEmpty()) afterThought = true
-                                    }
-                                }
                             }
-                            !completed
                         }
-                        if (!completed) throw IOException("Streaming connection ended before completion")
-                    } else {
-                        val text = response.body?.string().orEmpty()
-                        if (text.isBlank()) throw IllegalStateException("Responses API returned an empty response")
-                        val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON from Responses API") }
-                        outputComplete = root.optString("status") == "completed"
-                        toolAccumulator.acceptResponse(root)
-                        parseCitations(root).forEach { roundCitations[it.url] = it }
-                        responseId = root.optString("id")
-                        usedWebSearch = responseUsedWebSearch(root)
-                        val result = runCatching { parseResponsesText(root) }.getOrDefault("")
-                        if (result.isNotEmpty()) {
-                            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
-                            appendRound(result)
-                        }
-                        val reasoning = parseResponsesReasoning(root)
-                        emitReasoning(reasoning)
-                        if (reasoning.isNotBlank() && result.isEmpty() && full.isNotEmpty()) afterThought = true
-                        roundUsage = parseUsage(root)
+                        !completed
                     }
+                    if (!completed) throw IOException("Streaming connection ended before completion")
+                } else {
+                    val text = response.body?.string().orEmpty()
+                    if (text.isBlank()) throw IllegalStateException("Responses API returned an empty response")
+                    val root = runCatching { JSONObject(text) }.getOrElse { throw IllegalStateException("Invalid JSON from Responses API") }
+                    ensureNoProviderError(root)
+                    if (root.optString("status") == "failed") {
+                        throw IllegalStateException("Responses API ended with status: ${root.optString("status")}")
+                    }
+                    outputComplete = root.optString("status") == "completed"
+                    toolAccumulator.acceptResponse(root)
+                    parseCitations(root).forEach { roundCitations[it.url] = it }
+                    responseId = root.optString("id")
+                    usedWebSearch = responseUsedWebSearch(root)
+                    val result = runCatching { parseResponsesText(root) }.getOrDefault("")
+                    if (result.isNotEmpty()) {
+                        if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+                        appendRound(result)
+                    }
+                    val reasoning = parseResponsesReasoning(root)
+                    emitReasoning(reasoning)
+                    if (reasoning.isNotBlank() && result.isEmpty() && full.isNotEmpty()) afterThought = true
+                    roundUsage = parseUsage(root)
                 }
-            } finally {
-                cancellationWatcher.cancel()
             }
             val calls = toolAccumulator.completedCalls()
             if (roundText.isBlank() && calls.isEmpty()) throw IllegalStateException("Responses API returned no text or tool call")
@@ -1319,7 +1300,7 @@ class ApiRepository internal constructor(
                 else -> quietProfile.chatPath
             }
             val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path), anthropicApi)
-                .post(body.toString().toRequestBody(jsonMedia)).build()
+                .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("标题接口返回的不是有效 JSON") }
             val text = when {
@@ -1355,7 +1336,7 @@ class ApiRepository internal constructor(
                 else -> quietProfile.chatPath
             }
             val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path), anthropicApi)
-                .post(body.toString().toRequestBody(jsonMedia)).build()
+                .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("设定接口返回的不是有效 JSON") }
             when {
@@ -1366,22 +1347,23 @@ class ApiRepository internal constructor(
         }
 
     /**
-     * 输入建议：小请求（60 tokens），思考强度取该模型家族支持的最低档。失败由调用方静默处理。
+     * 输入建议：短输出预算，思考强度取该模型家族支持的最低档。失败由调用方静默处理。
      * [model] 由设置指定（ApiProfile.suggestionModel）；为空白视为功能关闭，直接返回 null。
      * 与 completePlain 的差异：不走 applyReasoningPolicy（避免叠加 profile 的思考强度），
      * 而是显式写入 minimalEffort 档位。
      */
     suspend fun suggestNextMessage(profile: ApiProfile, model: String, history: List<ChatMessage>): String? {
-        if (model.isBlank()) return null
+        if (model.isBlank() || history.isEmpty()) return null
         return withContext(Dispatchers.IO) {
             validateProfile(profile)
+            val outputTokens = 128
             val responsesApi = profile.usesResponses(model)
             val anthropicApi = profile.usesAnthropicMessages(model)
             val body = if (anthropicApi) {
                 val messages = JSONArray()
                 history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
                 messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
-                JSONObject().put("model", model).put("max_tokens", 60)
+                JSONObject().put("model", model).put("max_tokens", outputTokens)
                     .put("system", InputSuggester.SUGGESTION_INSTRUCTION)
                     .put("messages", messages)
             } else if (responsesApi) {
@@ -1391,24 +1373,36 @@ class ApiRepository internal constructor(
                 }
                 input.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
                 JSONObject().put("model", model).put("instructions", InputSuggester.SUGGESTION_INSTRUCTION)
-                    .put("input", input).put("max_output_tokens", 60)
+                    .put("input", input).put("max_output_tokens", outputTokens)
             } else {
                 val messages = JSONArray()
                     .put(JSONObject().put("role", "system").put("content", InputSuggester.SUGGESTION_INSTRUCTION))
                 history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
                 messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
-                JSONObject().put("model", model).put("max_tokens", 60).put("messages", messages)
+                JSONObject().put("model", model).put("max_tokens", outputTokens).put("messages", messages)
             }
-            ReasoningPolicy.write(body, model, ReasoningPolicy.minimalEffort(model), responsesApi, outputTokenLimit = 60)
+            ReasoningPolicy.write(body, model, ReasoningPolicy.minimalEffort(model), responsesApi, outputTokenLimit = outputTokens)
             val path = when {
                 anthropicApi -> profile.messagesPath
                 responsesApi -> profile.responsesPath
                 else -> profile.chatPath
             }
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, path), anthropicApi)
-                .post(body.toString().toRequestBody(jsonMedia)).build()
+                .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("输入建议接口返回的不是有效 JSON") }
+            // Never offer a sentence that the provider explicitly stopped partway through.
+            val finish = when {
+                anthropicApi -> root.optString("stop_reason")
+                responsesApi -> root.optString("status")
+                else -> root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason").orEmpty()
+            }
+            val complete = when {
+                anthropicApi -> finish in setOf("", "end_turn", "stop_sequence")
+                responsesApi -> finish in setOf("", "completed") && root.optJSONObject("incomplete_details") == null
+                else -> finish in setOf("", "stop")
+            }
+            if (!complete) return@withContext null
             when {
                 anthropicApi -> AnthropicMessages.parseContent(root).first
                 responsesApi -> parseResponsesText(root)
@@ -1443,7 +1437,7 @@ $query"""
         }
         if (backend.model.isStepModel()) {
             val searchRequest = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, "/v1/search"))
-                .post(stepSearchRequest(query).toString().toRequestBody(jsonMedia))
+                .postModelRequest(stepSearchRequest(query).toString().toRequestBody(jsonMedia))
                 .build()
             val searchRaw = executeTextCall(client.newCall(searchRequest))
             val searchRoot = runCatching { JSONObject(searchRaw) }.getOrElse { throw IllegalStateException("Step 搜索返回的不是有效 JSON") }
@@ -1456,12 +1450,16 @@ $query"""
                     summaryCall.header("anthropic-version", "2023-06-01")
                 }
                 val summaryRequest = summaryCall
-                    .post(stepResearchRequest(backend.model, query, evidence).toString().toRequestBody(jsonMedia))
+                    .postModelRequest(stepResearchRequest(backend.model, query, evidence).toString().toRequestBody(jsonMedia))
                     .build()
                 val summaryRaw = executeTextCall(client.newCall(summaryRequest))
                 val summaryRoot = JSONObject(summaryRaw)
                 parseAnthropicSearch(summaryRoot).first
-            }.getOrDefault("")
+            }.getOrElse { error ->
+                if (error is CancellationException) throw error
+                currentCoroutineContext().ensureActive()
+                ""
+            }
             return@runCatching DelegatedSearchResult(
                 output = delegatedSearchToolOutput(query, normalizedSource, backend.model, research.ifBlank { evidence }, sources),
                 citations = sources,
@@ -1486,7 +1484,7 @@ $query"""
             searchCall.header("x-api-key", backend.profile.apiKey.trim())
             searchCall.header("anthropic-version", "2023-06-01")
         }
-        val request = searchCall.post(body.toString().toRequestBody(jsonMedia)).build()
+        val request = searchCall.postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
         val raw = executeTextCall(client.newCall(request))
         val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("联网搜索后端返回的不是有效 JSON") }
         val research: String
@@ -1511,6 +1509,8 @@ $query"""
                 TOOL_STATUS_COMPLETED)
         )
     }.getOrElse { error ->
+        if (error is CancellationException) throw error
+        currentCoroutineContext().ensureActive()
         DelegatedSearchResult(
             output = JSONObject()
                 .put("ok", false)
@@ -1643,10 +1643,10 @@ $query"""
     }
 
     private fun Throwable.isCacheCompatibilityError(): Boolean {
-        val value = generateSequence(this) { it.cause }.joinToString(" ") { it.message.orEmpty() }.lowercase()
+        if (this !is ApiHttpException || statusCode !in listOf(400, 422)) return false
+        val value = generateSequence<Throwable>(this) { it.cause }.joinToString(" ") { it.message.orEmpty() }.lowercase()
         return value.contains("prompt_cache") || value.contains("cache breakpoint") ||
-            value.contains("cache_control") || value.contains("unsupported parameter") ||
-            value.contains("http 404") || value.contains("接口不存在")
+            value.contains("cache_control")
     }
 
     /** 缓存兼容性重试时剥掉消息数组里已写入的所有 cache_control 断点。 */
@@ -1662,51 +1662,10 @@ $query"""
         }
     }
 
-    private suspend fun readSsePayloads(
-        source: BufferedSource,
-        onPayload: suspend (String) -> Boolean
-    ) {
-        val pending = StringBuilder()
-        suspend fun flushPending(): Boolean {
-            if (pending.isEmpty()) return true
-            val payload = pending.toString()
-            pending.clear()
-            return onPayload(payload)
-        }
-
-        while (true) {
-            currentCoroutineContext().ensureActive()
-            val line = source.readUtf8Line() ?: break
-            when {
-                line.isEmpty() -> if (!flushPending()) return
-                line.startsWith(":") -> Unit // SSE heartbeat/comment
-                line.startsWith("data:") -> {
-                    if (pending.isNotEmpty() && pending.isStandaloneSsePayload()) {
-                        if (!flushPending()) return
-                    }
-                    if (pending.isNotEmpty()) pending.append('\n')
-                    pending.append(line.substring(5).removePrefix(" "))
-                    if (pending.length > SSE_MAX_EVENT_CHARS) {
-                        throw IOException("SSE event exceeded the safety limit")
-                    }
-                }
-                line.trimStart().startsWith("{") || line.trim() == "[DONE]" -> {
-                    if (!flushPending()) return
-                    if (!onPayload(line.trim())) return
-                }
-            }
-        }
-        flushPending()
-    }
-
-    private fun StringBuilder.isStandaloneSsePayload(): Boolean {
-        val value = toString().trim()
-        return value == "[DONE]" || runCatching { JSONObject(value) }.isSuccess
-    }
-
     private fun Throwable.isRetryableStreamFailure(): Boolean {
         val causes = generateSequence(this) { it.cause }.toList()
         if (causes.any { it is CancellationException || it is SSLException }) return false
+        if (causes.none { it is IOException }) return false
         if (causes.any { it is EOFException || it is ProtocolException || it is SocketTimeoutException }) return true
         val value = causes.joinToString(" ") { it.message.orEmpty() }.lowercase()
         return value.contains("stream was reset") || value.contains("unexpected end of stream") ||
@@ -1735,14 +1694,14 @@ $query"""
             val body = JSONObject().put("model", model).put("prompt", prompt).put("n", 1).put("size", size)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imagePath))
                 .applyIdempotencyKey(requestKey)
-                .post(body.toString().toRequestBody(jsonMedia))
+                .postModelRequest(body.toString().toRequestBody(jsonMedia))
                 .build()
             executeTextCall(imageClient.newCall(request))
         } else {
             val multipart = buildImageEditMultipart(model, prompt, size, references)
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.imageEditPath))
                 .applyIdempotencyKey(requestKey)
-                .post(multipart)
+                .postModelRequest(multipart)
                 .build()
             executeTextCall(imageClient.newCall(request))
         }
@@ -1787,33 +1746,22 @@ $query"""
             .header("Accept-Encoding", "identity")
             .header("Connection", "close")
             .applyIdempotencyKey(requestKey)
-            .post(body.toString().toRequestBody(jsonMedia))
+            .postModelRequest(body.toString().toRequestBody(jsonMedia))
             .build()
         return executeGeminiImageCall(imageClient.newCall(request))
     }
 
     private suspend fun executeGeminiImageCall(call: Call): List<String> {
-        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
-            try {
-                awaitCancellation()
-            } finally {
-                call.cancel()
+        return call.withCancellableResponse { response ->
+            if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+            val body = response.body ?: throw IllegalStateException("Gemini 图片接口返回了空响应")
+            if (response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
+                val collector = GeminiImageResponseCollector()
+                readSsePayloads(body.source(), onPayload = collector::accept)
+                collector.result()
+            } else {
+                parseGeminiImageResponse(JSONObject(body.string()))
             }
-        }
-        return try {
-            call.execute().use { response ->
-                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
-                val body = response.body ?: throw IllegalStateException("Gemini 图片接口返回了空响应")
-                if (response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
-                    val collector = GeminiImageResponseCollector()
-                    readSsePayloads(body.source(), collector::accept)
-                    collector.result()
-                } else {
-                    parseGeminiImageResponse(JSONObject(body.string()))
-                }
-            }
-        } finally {
-            cancellationWatcher.cancel()
         }
     }
 
@@ -1864,7 +1812,7 @@ $query"""
             .header("Accept-Encoding", "identity")
             .header("Connection", "close")
             .applyIdempotencyKey(requestKey)
-            .post(body.toString().toRequestBody(jsonMedia))
+            .postModelRequest(body.toString().toRequestBody(jsonMedia))
             .build()
         val text = executeMangaAnalysisCall(
             call = mangaAnalysisClient.newCall(request),
@@ -1874,50 +1822,28 @@ $query"""
     }
 
     private suspend fun executeMangaAnalysisCall(call: Call, responsesApi: Boolean): String {
-        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
-            try {
-                awaitCancellation()
-            } finally {
-                call.cancel()
+        return call.withCancellableResponse { response ->
+            if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+            val body = response.body ?: throw IllegalStateException("漫画辅助模型返回了空响应")
+            if (response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
+                val collector = MangaAnalysisStreamCollector(responsesApi)
+                readSsePayloads(body.source(), onPayload = collector::accept)
+                collector.requireResult()
+            } else {
+                val text = body.string()
+                val root = runCatching { JSONObject(text) }
+                    .getOrElse { throw IllegalStateException("辅助模型返回的不是有效 JSON 响应") }
+                if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
             }
-        }
-        return try {
-            call.execute().use { response ->
-                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
-                val body = response.body ?: throw IllegalStateException("漫画辅助模型返回了空响应")
-                if (response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
-                    val collector = MangaAnalysisStreamCollector(responsesApi)
-                    readSsePayloads(body.source(), collector::accept)
-                    collector.requireResult()
-                } else {
-                    val text = body.string()
-                    val root = runCatching { JSONObject(text) }
-                        .getOrElse { throw IllegalStateException("辅助模型返回的不是有效 JSON 响应") }
-                    if (responsesApi) parseResponsesText(root) else parseMessageContent(root)
-                }
-            }
-        } finally {
-            cancellationWatcher.cancel()
         }
     }
 
     private suspend fun executeTextCall(call: Call): String {
-        val cancellationWatcher = CoroutineScope(currentCoroutineContext()).launch {
-            try {
-                awaitCancellation()
-            } finally {
-                call.cancel()
-            }
-        }
-        return try {
-            call.execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                ensureSuccess(response, text)
-                if (text.isBlank()) throw IllegalStateException("服务器返回了空响应")
-                text
-            }
-        } finally {
-            cancellationWatcher.cancel()
+        return call.withCancellableResponse { response ->
+            val text = response.body?.string().orEmpty()
+            ensureSuccess(response, text)
+            if (text.isBlank()) throw IllegalStateException("服务器返回了空响应")
+            text
         }
     }
 
@@ -2052,8 +1978,19 @@ $query"""
             in 500..599 -> "服务端暂时不可用"
             else -> "请求失败"
         }
-        throw IllegalStateException("$hint（HTTP ${response.code}）${apiMessage?.let { "：$it" }.orEmpty()}")
+        val requestId = (response.header("x-request-id") ?: response.header("request-id"))
+            ?.takeIf { it.isNotBlank() }?.take(160)
+        throw ApiHttpException(response.code,
+            "$hint（HTTP ${response.code}）${apiMessage?.let { "：$it" }.orEmpty()}" +
+                requestId?.let { " [request-id: $it]" }.orEmpty())
     }
+
+    private fun ensureNoProviderError(root: JSONObject) {
+        val error = root.optJSONObject("error") ?: return
+        throw IllegalStateException(error.optString("message").ifBlank { "模型服务返回错误" })
+    }
+
+    private class ApiHttpException(val statusCode: Int, message: String) : IllegalStateException(message)
 
     private fun validateProfile(profile: ApiProfile) {
         require(profile.baseUrl.startsWith("http://") || profile.baseUrl.startsWith("https://")) { "Base URL 必须以 http:// 或 https:// 开头" }
@@ -2155,12 +2092,10 @@ $query"""
 
     private companion object {
         const val MAX_MID_STREAM_RECOVERY_ATTEMPTS = 1
-        const val PRE_DELTA_RETRY_DELAY_MS = 800L
         const val MID_STREAM_RECOVERY_DELAY_MS = 900L
         const val RESUME_MIN_PROBE_CHARS = 96
         const val RESUME_MAX_PROBE_CHARS = 1_200
         const val RESUME_OVERLAP_WINDOW_CHARS = 2_400
-        const val SSE_MAX_EVENT_CHARS = 4 * 1024 * 1024
         const val STREAM_RESUME_INSTRUCTION = "[ADCHAT_STREAM_RESUME]\n\u4e0a\u4e00\u6b21\u6d41\u5f0f\u4f20\u8f93\u5728\u6b64\u5904\u4e2d\u65ad\u3002\u8bf7\u53ea\u4ece\u5df2\u8f93\u51fa\u5185\u5bb9\u7684\u6700\u540e\u4e00\u4e2a\u8bed\u4e49\u4f4d\u7f6e\u7ee7\u7eed\uff0c\u4e0d\u5f97\u91cd\u590d\u4efb\u4f55\u5df2\u8f93\u51fa\u6587\u672c\uff0c\u4e0d\u8981\u89e3\u91ca\u4e2d\u65ad\u539f\u56e0\u3002"
     }
 }
@@ -2196,3 +2131,12 @@ private fun String.isGpt56Family(): Boolean {
     val value = lowercase()
     return value.contains("gpt-5.6") || value.contains("gpt-5_6")
 }
+
+/** Retain safe connect-route fallback; each model POST supplies a one-shot request body. */
+private fun defaultApiClient(): OkHttpClient = OkHttpClient.Builder()
+    .connectTimeout(20, TimeUnit.SECONDS)
+    .readTimeout(180, TimeUnit.SECONDS)
+    .writeTimeout(60, TimeUnit.SECONDS)
+    .retryOnConnectionFailure(true)
+    .applyNetworkTrust()
+    .build()

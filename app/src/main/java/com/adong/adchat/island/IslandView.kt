@@ -9,10 +9,15 @@ import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.Point
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RenderEffect
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.Drawable
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.Handler
@@ -32,7 +37,9 @@ import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.adong.adchat.R
 import com.adong.adchat.media.MediaPlatform
 import kotlin.math.abs
@@ -42,16 +49,22 @@ import kotlin.math.roundToInt
 
 /**
  * One overlay, one anchored island. At rest a pen-drawn clay ring sits around the camera. A
- * recognised link pulls a paper tag out of that ring: jelly springs stretch it sideways, then drop
- * it with a bounce, and it closes back along the same path. The ring keeps its position and size
- * throughout, as the tag's eyelet. The window is resized only before opening and after the tag has
- * come to rest closed; one vsync clock samples every spring from absolute time.
+ * recognised selection unfolds that same ink stroke into the paper edge, then returns it along
+ * the same path. The camera backing keeps its position and size throughout. The window is resized
+ * only before opening and after the tag has come to rest closed; one vsync clock samples every
+ * spring from absolute time.
  */
 class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
     interface Callbacks {
         fun onParseRequested(link: IslandLink)
         fun onLinkShown(link: IslandLink)
         fun onDismissed()
+        fun onContentShown(content: StarIslandContent) { content.mediaLink?.let(::onLinkShown) }
+        fun onActionRequested(content: StarIslandContent, action: StarIslandAction) {}
+        fun onStopRequested() {}
+        fun onBackRequested() {}
+        fun onCopyRequested() {}
+        fun onConfigureRequested() {}
     }
 
     companion object {
@@ -78,7 +91,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     sealed class State {
         data object Hidden : State()
-        data class Card(val link: IslandLink) : State()
+        data class Card(val content: StarIslandContent, val task: StarIslandTaskState? = null) : State()
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -103,13 +116,13 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var bodyMoving = false
     private var gulped = true
     private var idleFeedbackRunning = false
-    private var renderedPlatform: MediaPlatform? = null
-    private var deferredCardLink: IslandLink? = null
-    private var lastHandledLink: String? = null
+    private var deferredCardRender = false
+    private var renderedIconKey: String? = null
     private var lastPressDownUptimeMs = 0L
     private var gestureDownX = 0f
     private var gestureDownY = 0f
     private var swipeDismissed = false
+    private var gestureInOutput = false
     private var blurStep = -1
     private val configuredCard = FloatArray(4) { Float.NaN }
     private val inkSpring = IslandJellySpring(1f, 0.3f, 0.5f)
@@ -119,6 +132,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var clock: TimeAnimator? = null
     private val hideRunnable: Runnable = Runnable { collapse() }
     private val releaseSpringRunnable = Runnable { pressRing(down = false) }
+    private val emptyFeedbackHaptic = Runnable {
+        if (state == State.Hidden && !expandedViewport) hapticBounceTick(first = false)
+    }
     private var clipboardReadPending = false
     private val readClipboardRunnable: Runnable = Runnable {
         if (clipboardReadPending && hasWindowFocus()) {
@@ -141,11 +157,16 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private val platformIcon: ImageView
     private val cardTitle: TextView
     private val cardSummary: TextView
-    private val parseButton: TextView
-    private val cancelButton: TextView
+    private val actionGrid: LinearLayout
+    private val outputScroll: ScrollView
+    private val outputText: TextView
+    private val actionButtons = mutableListOf<Pair<TextView, Boolean>>()
+    private var renderedActions: String? = null
     private var breathAnimator: ValueAnimator? = null
 
-    internal val displayedLink: IslandLink? get() = (state as? State.Card)?.link
+    internal val displayedContent: StarIslandContent? get() = (state as? State.Card)?.content
+    internal val displayedTask: StarIslandTaskState? get() = (state as? State.Card)?.task
+    internal val displayedLink: IslandLink? get() = displayedContent?.mediaLink
     internal val expansionProgress: Float get() = surface.body.progress
     internal val cardTitleText: CharSequence get() = cardTitle.text
     internal val cardSummaryText: CharSequence get() = cardSummary.text
@@ -162,14 +183,15 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         platformIcon = card.icon
         cardTitle = card.title
         cardSummary = card.summary
-        parseButton = card.parse
-        cancelButton = card.cancel
+        actionGrid = card.actions
+        outputScroll = card.outputScroll
+        outputText = card.outputText
         surface.addView(cardHost)
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         ringView = IslandInkRingView(context).apply {
             inkColor = palette.clay
             isHapticFeedbackEnabled = true
-            contentDescription = "链接灵动岛，点按读取剪贴板"
+            contentDescription = "星岛，点按读取剪贴板"
             isClickable = true
             setOnTouchListener { _, event -> handlePillTouch(event) }
             setOnClickListener { requestClipboardRead() }
@@ -187,12 +209,14 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     fun attach(): Unit = onMain { ensureAttached() }
 
-    fun show(link: IslandLink): Unit = onMain {
+    fun show(link: IslandLink): Unit = showContent(StarIslandContent(link.originalUrl, link.originalUrl, link))
+
+    fun showContent(content: StarIslandContent): Unit = onMain {
         if (!ensureAttached()) return@onMain
-        val previous = displayedLink
-        deferredCardLink = null
-        state = State.Card(link)
-        renderCard(link)
+        val previous = displayedContent
+        deferredCardRender = false
+        state = State.Card(content)
+        renderCard()
         mainHandler.removeCallbacks(hideRunnable)
         cancelClipboardRead()
         cancelIdleFeedback()
@@ -211,17 +235,41 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             hapticDoublePulse()
         }
         // Short-link resolution runs in parallel, never on the drawing/animation path.
-        if (previous?.originalUrl != link.originalUrl) callbacks.onLinkShown(link)
+        callbacks.onContentShown(content)
     }
 
     /** Late or stale short-link results must NEVER reopen or replace a dismissed/different island. */
     fun updateCard(link: IslandLink): Unit = onMain {
         val shown = displayedLink ?: return@onMain
         if (shown.originalUrl != link.originalUrl) return@onMain
-        state = State.Card(link)
+        val card = state as? State.Card ?: return@onMain
+        state = card.copy(content = card.content.copy(mediaLink = link))
         // Avoid rerasterising the hardware-cached text layer while the tag is moving.
-        if (bodyMoving || pendingMorph != null) deferredCardLink = link
-        else renderCard(link)
+        if (bodyMoving || pendingMorph != null) deferredCardRender = true
+        else renderCard()
+    }
+
+    fun updateTask(task: StarIslandTaskState): Unit = onMain {
+        val card = state as? State.Card ?: return@onMain
+        val enteringTask = card.task == null
+        state = card.copy(task = task)
+        mainHandler.removeCallbacks(hideRunnable)
+        if (enteringTask) {
+            outputText.text = ""
+            outputScroll.scrollTo(0, 0)
+        }
+        renderCard()
+        // Only the ready/task transition changes geometry. A text delta never resizes the window.
+        if (enteringTask) prepareExpandedViewport()
+    }
+
+    fun clearTask(): Unit = onMain {
+        val card = state as? State.Card ?: return@onMain
+        if (card.task == null) return@onMain
+        state = card.copy(task = null)
+        renderCard()
+        prepareExpandedViewport()
+        scheduleReadyTimeout()
     }
 
     fun collapse(): Unit = onMain {
@@ -229,11 +277,13 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (state == State.Hidden) return@onMain
         state = State.Hidden
         pendingMorph = null
-        deferredCardLink = null
+        deferredCardRender = false
         mainHandler.removeCallbacks(hideRunnable)
         cancelClipboardRead()
         mainHandler.removeCallbacks(releaseSpringRunnable)
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        // Cancellation follows the user's dismissal immediately, not the spring's last frame.
+        callbacks.onDismissed()
         // Closed before the tag was ever laid out: nothing to animate back.
         if (surface.active) startBody(open = false) else finishClosed()
     }
@@ -245,8 +295,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         mainHandler.removeCallbacksAndMessages(null)
         breathAnimator?.cancel()
         stopClock()
-        parseButton.animate().cancel()
-        cancelButton.animate().cancel()
+        secondBounceAt = Double.NaN
+        bounceTicksAt.fill(Double.NaN)
+        surface.active = false
+        ringView.inkVisible = true
+        actionButtons.forEach { (button, _) -> button.animate().cancel() }
         if (attached) {
             runCatching { windowManager.removeViewImmediate(this@IslandView) }
             attached = false
@@ -264,18 +317,18 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private data class CardParts(
         val host: LinearLayout, val icon: ImageView, val title: TextView,
-        val summary: TextView, val parse: TextView, val cancel: TextView
+        val summary: TextView, val actions: LinearLayout, val outputScroll: ScrollView,
+        val outputText: TextView,
     )
 
     private fun buildCard(): CardParts {
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            // The top inset clears the ink ring, the tag's eyelet, with 6dp to spare.
             setPadding(dp(18), dp(47), dp(18), dp(18))
         }
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
         }
         val icon = ImageView(context).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -287,12 +340,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             imageTintList = ColorStateList.valueOf(palette.glyph)
         }
         headerRow.addView(icon, LinearLayout.LayoutParams(dp(38), dp(38)))
-        val texts = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-        }
+        val texts = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         val title = TextView(context).apply {
             textSize = 16f
-            // The app's own serif replaces this once it has loaded off the main thread.
             typeface = Typeface.SERIF
             letterSpacing = 0.0125f
             setTextColor(palette.ink)
@@ -305,48 +355,69 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setTextColor(palette.muted)
             includeFontPadding = false
-            maxLines = 1
-            ellipsize = TextUtils.TruncateAt.MIDDLE
+            setLines(3)
+            ellipsize = TextUtils.TruncateAt.END
         }
         texts.addView(title, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         texts.addView(summary, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(3)
+            topMargin = dp(5)
         })
         headerRow.addView(texts, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
             marginStart = dp(12)
         })
-        val buttonRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        val output = TextView(context).apply {
+            textSize = 14f
+            setTextColor(palette.ink)
+            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setLineSpacing(dpF(3f), 1f)
+            // Copying is explicit; streaming does not repeatedly move a text selection.
+            importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         }
-        val cancel = actionButton("收起", primary = false) { hapticTick(); collapse() }
-        val parse = actionButton("解析链接", primary = true) {
-            hapticClick()
-            displayedLink?.let { callbacks.onParseRequested(it) }
+        val scroll = ScrollView(context).apply {
+            visibility = GONE
+            isFillViewport = true
+            isVerticalScrollBarEnabled = true
+            background = GradientDrawable().apply {
+                setColor(palette.well)
+                cornerRadius = dpF(14f)
+            }
+            addView(output, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
-        buttonRow.addView(cancel, LinearLayout.LayoutParams(0, dp(44), 1f))
-        buttonRow.addView(parse, LinearLayout.LayoutParams(0, dp(44), 1f).apply {
-            marginStart = dp(10)
+        val actions = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        body.addView(scroll, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(180)).apply { topMargin = dp(12) })
+        body.addView(actions, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            topMargin = dp(14)
         })
         host.addView(headerRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        host.addView(buttonRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(16)
-        })
-        return CardParts(host, icon, title, summary, parse, cancel)
+        host.addView(body, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        return CardParts(host, icon, title, summary, actions, scroll, output)
     }
 
+    private data class CardAction(
+        val label: String,
+        val primary: Boolean = false,
+        val enabled: Boolean = true,
+        val run: () -> Unit,
+    )
+
     @SuppressLint("ClickableViewAccessibility")
-    private fun actionButton(text: String, primary: Boolean, onClick: () -> Unit): TextView = TextView(context).apply {
-        this.text = text
+    private fun actionButton(action: CardAction): TextView = TextView(context).apply {
+        text = action.label
+        contentDescription = action.label
         textSize = 14f
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         includeFontPadding = false
         gravity = Gravity.CENTER
         maxLines = 1
-        setTextColor(if (primary) palette.onClay else palette.ink)
+        ellipsize = TextUtils.TruncateAt.END
+        minimumHeight = dp(48)
+        setPadding(dp(5), dp(8), dp(5), dp(8))
+        setTextColor(if (action.primary) palette.onClay else palette.ink)
+        alpha = if (action.enabled) 1f else 0.45f
         background = GradientDrawable().apply {
-            setColor(if (primary) palette.clay else palette.well)
-            // Concentric with the 40dp tag at an 18dp inset.
+            setColor(if (action.primary) palette.clay else palette.well)
             cornerRadius = dpF(22f)
         }
         setOnTouchListener { v, event ->
@@ -356,7 +427,38 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             }
             false
         }
-        setOnClickListener { onClick() }
+        setOnClickListener { hapticTick(); action.run() }
+    }
+
+    private fun renderActions(key: String, actions: List<CardAction>, reserveTwoRows: Boolean = false) {
+        if (renderedActions == key) return
+        renderedActions = key
+        actionButtons.forEach { (button, _) -> button.animate().cancel() }
+        actionButtons.clear()
+        actionGrid.removeAllViews()
+        val rows = actions.chunked(2)
+        val rowCount = if (reserveTwoRows) 2 else rows.size
+        val rowHeight = max(dp(48), (resources.displayMetrics.scaledDensity * 18 + dp(20)).roundToInt())
+        repeat(rowCount) { index ->
+            val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+            rows.getOrNull(index).orEmpty().forEachIndexed { column, action ->
+                val button = actionButton(action)
+                actionButtons += button to action.enabled
+                row.addView(button, LinearLayout.LayoutParams(0, rowHeight, 1f).apply {
+                    if (column > 0) marginStart = dp(8)
+                })
+            }
+            if (row.childCount == 0) row.visibility = INVISIBLE
+            actionGrid.addView(row, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, rowHeight).apply {
+                if (index > 0) topMargin = dp(8)
+            })
+        }
+        updateActionEnabled()
+    }
+
+    private fun updateActionEnabled() {
+        val actionable = state is State.Card && surface.body.opened && surface.body.contentAlpha > 0.9f
+        actionButtons.forEach { (button, enabled) -> button.isEnabled = actionable && enabled }
     }
 
     private fun animateButton(view: View, target: Float) {
@@ -377,22 +479,121 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
     }
 
-    private fun renderCard(link: IslandLink) {
-        if (renderedPlatform != link.platform) {
-            renderedPlatform = link.platform
-            platformIcon.setImageResource(
-                when (link.platform) {
+    private fun renderCard() {
+        val card = state as? State.Card ?: return
+        val content = card.content
+        val task = card.task
+        val title = if (task == null) IslandCardText.title(content) else when (task.phase) {
+            StarIslandPhase.Working -> "${task.action.label}中…"
+            StarIslandPhase.Complete -> "${task.action.label}完成"
+            StarIslandPhase.Stopped -> "已停止${task.action.label}"
+            StarIslandPhase.Error -> "${task.action.label}未完成"
+        }
+        if (cardTitle.text.toString() != title) cardTitle.text = title
+        val summary = IslandCardText.summary(content)
+        if (cardSummary.text.toString() != summary) cardSummary.text = summary
+        val iconKey = "${content.kind}:${content.mediaLink?.platform}"
+        if (renderedIconKey != iconKey) {
+            renderedIconKey = iconKey
+            platformIcon.contentDescription = IslandCardText.title(content)
+            if (content.kind == StarIslandKind.Media) {
+                platformIcon.setImageResource(when (checkNotNull(content.mediaLink).platform) {
                     MediaPlatform.Douyin -> R.drawable.ic_island_douyin
                     MediaPlatform.Bilibili -> R.drawable.ic_island_bilibili
                     MediaPlatform.Twitter -> R.drawable.ic_island_x
                     MediaPlatform.Direct -> R.drawable.ic_island_link
-                }
-            )
-            platformIcon.contentDescription = link.displayName
-            cardTitle.text = IslandCardText.title(link.platform)
+                })
+            } else platformIcon.setImageDrawable(ContentGlyph(content.kind))
         }
-        val summary = IslandCardText.summary(link.cleanedUrl.ifBlank { link.originalUrl })
-        if (cardSummary.text.toString() != summary) cardSummary.text = summary
+
+        outputScroll.visibility = if (task == null) GONE else VISIBLE
+        if (task != null) {
+            val nearEnd = !outputScroll.canScrollVertically(1) ||
+                outputText.height - outputScroll.height - outputScroll.scrollY < dp(28)
+            val body = task.output.ifBlank {
+                task.detail.ifBlank {
+                    when (task.phase) {
+                        StarIslandPhase.Working -> "正在准备内容…"
+                        StarIslandPhase.Complete -> "已完成"
+                        StarIslandPhase.Stopped -> "已停止，本次没有生成内容"
+                        StarIslandPhase.Error -> "暂时无法完成，请重试"
+                    }
+                }
+            }.let { output ->
+                if (task.output.isNotBlank() && task.detail.isNotBlank() && task.phase != StarIslandPhase.Working)
+                    "$output\n\n${task.detail}" else output
+            }
+            if (outputText.text.toString() != body) {
+                outputText.text = body
+                if (nearEnd && task.phase == StarIslandPhase.Working) outputScroll.post { outputScroll.fullScroll(FOCUS_DOWN) }
+            }
+        }
+        val actionKey = "${content.kind}:${task?.phase}:${task?.needsConfiguration}:${task?.output?.isBlank()}"
+        val dismiss = CardAction("收起") { collapse() }
+        fun request(action: StarIslandAction, primary: Boolean = false) = CardAction(action.label, primary) {
+            displayedContent?.let { callbacks.onActionRequested(it, action) }
+        }
+        val actions = if (task == null) when (content.kind) {
+            StarIslandKind.Text -> listOf(request(StarIslandAction.Translate, true), request(StarIslandAction.Polish),
+                request(StarIslandAction.Explain), dismiss)
+            StarIslandKind.Web -> listOf(request(StarIslandAction.ReadWeb, true), request(StarIslandAction.OpenLink),
+                request(StarIslandAction.CopyLink), dismiss)
+            StarIslandKind.Media -> listOf(request(StarIslandAction.Download, true), request(StarIslandAction.OpenLink),
+                request(StarIslandAction.CopyLink), dismiss)
+        } else when (task.phase) {
+            StarIslandPhase.Working -> listOf(CardAction("停止", true) { callbacks.onStopRequested() }, dismiss)
+            StarIslandPhase.Complete, StarIslandPhase.Stopped -> listOf(
+                CardAction("复制结果", true, task.output.isNotBlank()) { callbacks.onCopyRequested() },
+                CardAction("返回") { callbacks.onBackRequested() }, dismiss)
+            StarIslandPhase.Error -> buildList {
+                add(if (task.needsConfiguration) CardAction("打开 Aster", true) { callbacks.onConfigureRequested() }
+                    else CardAction("重试", true) {
+                        val shown = state as? State.Card
+                        if (shown?.task != null) callbacks.onActionRequested(shown.content, shown.task.action)
+                    })
+                add(CardAction("返回") { callbacks.onBackRequested() })
+                if (task.output.isNotBlank()) add(CardAction("复制结果") { callbacks.onCopyRequested() })
+                add(dismiss)
+            }
+        }
+        // Two fixed rows across every task phase keep final/error transitions from resizing the tag.
+        renderActions(actionKey, actions, reserveTwoRows = true)
+    }
+
+    /** Small vector-like ink glyphs keep text and web cards distinct without another bitmap asset. */
+    private inner class ContentGlyph(private val kind: StarIslandKind) : Drawable() {
+        private val pen = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = palette.glyph
+            style = Paint.Style.STROKE
+            strokeWidth = 1.8f
+            strokeCap = Paint.Cap.ROUND
+        }
+        override fun draw(canvas: Canvas) {
+            val save = canvas.save()
+            canvas.translate(bounds.left.toFloat(), bounds.top.toFloat())
+            canvas.scale(bounds.width() / 24f, bounds.height() / 24f)
+            if (kind == StarIslandKind.Web) {
+                canvas.drawCircle(12f, 12f, 9f, pen)
+                canvas.drawOval(7f, 3f, 17f, 21f, pen)
+                canvas.drawLine(3f, 12f, 21f, 12f, pen)
+            } else {
+                canvas.drawRoundRect(4f, 3f, 20f, 21f, 2f, 2f, pen)
+                canvas.drawLine(8f, 8f, 16f, 8f, pen)
+                canvas.drawLine(8f, 12f, 16f, 12f, pen)
+                canvas.drawLine(8f, 16f, 13f, 16f, pen)
+            }
+            canvas.restoreToCount(save)
+        }
+        override fun setAlpha(alpha: Int) { pen.alpha = alpha; invalidateSelf() }
+        override fun setColorFilter(colorFilter: ColorFilter?) { pen.colorFilter = colorFilter; invalidateSelf() }
+        @Deprecated("Deprecated in Java") override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+        override fun getIntrinsicWidth() = 24
+        override fun getIntrinsicHeight() = 24
+    }
+
+    private fun scheduleReadyTimeout() {
+        mainHandler.removeCallbacks(hideRunnable)
+        if (state is State.Card && displayedTask == null) mainHandler.postDelayed(hideRunnable, CARD_TIMEOUT_MS)
     }
 
     // ---------- Touch, clipboard and focus ----------
@@ -407,12 +608,19 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             gestureDownX = event.rawX
             gestureDownY = event.rawY
             swipeDismissed = false
-            if (state is State.Card && !surface.body.contains(event.x, event.y)) {
+            val outputLocation = IntArray(2)
+            outputScroll.getLocationOnScreen(outputLocation)
+            val outputBounds = Rect(outputLocation[0], outputLocation[1],
+                outputLocation[0] + outputScroll.width, outputLocation[1] + outputScroll.height)
+            gestureInOutput = outputScroll.visibility == VISIBLE &&
+                outputBounds.contains(event.rawX.roundToInt(), event.rawY.roundToInt())
+            scheduleReadyTimeout()
+            if (state is State.Card && !surface.containsPoint(event.x, event.y)) {
                 collapse()
                 return true
             }
         }
-        if (state is State.Card && event.actionMasked == MotionEvent.ACTION_MOVE &&
+        if (state is State.Card && !gestureInOutput && event.actionMasked == MotionEvent.ACTION_MOVE &&
             gestureDownY - event.rawY > dp(20) &&
             gestureDownY - event.rawY > abs(event.rawX - gestureDownX)
         ) {
@@ -481,24 +689,23 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun readClipboardAndHandle() {
         if (!attached || state is State.Card) return
-        val link = currentClipText()?.let { IslandLinkParser.parse(it) }
-        if (link == null) {
+        try {
+            val content = currentClipText()?.let(StarIslandContentParser::parse)
+            if (content == null) playEmptyFeedback() else showContent(content)
+        } catch (error: IllegalArgumentException) {
+            Toast.makeText(context, error.message ?: "这段内容暂时无法处理", Toast.LENGTH_LONG).show()
             playEmptyFeedback()
-        } else {
-            val key = link.cleanedUrl.ifBlank { link.originalUrl }
-            if (key == lastHandledLink) playEmptyFeedback() else {
-                lastHandledLink = key
-                show(link)
-            }
+        } finally {
+            setWindowFocusable(false)
         }
-        setWindowFocusable(false)
     }
 
     private fun currentClipText(): String? = runCatching {
         val item = clipboard.primaryClip?.getItemAt(0) ?: return@runCatching null
         // coerceToText may open/read an arbitrary content provider synchronously on the UI thread.
-        // Media sharing needs only actual text or the URI itself, never provider contents.
-        item.text?.take(16_384)?.toString() ?: item.uri?.toString()?.take(16_384)
+        // Read actual text or the URI only. The parser rejects oversized input explicitly;
+        // truncating here would silently send a different selection to the model.
+        item.text?.toString() ?: item.uri?.toString()
     }.getOrNull()
 
     private fun setWindowFocusable(focusable: Boolean) {
@@ -516,10 +723,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         breathAnimator?.cancel()
         if (state != State.Hidden || expandedViewport || windowVisibility != VISIBLE) return
         if (!ValueAnimator.areAnimatorsEnabled()) {
-            ringView.alpha = 0.95f
+            ringView.inkAlpha = 1f
             return
         }
-        val startAlpha = ringView.alpha
+        val startAlpha = ringView.inkAlpha
         var entering = true
         breathAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = BREATH_PERIOD_MS
@@ -528,9 +735,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             interpolator = LinearInterpolator()
             addUpdateListener {
                 val p = it.animatedFraction
-                // Only this cached 64dp layer changes alpha: the idle ring costs no redraw.
+                // Only the ink fades. The black camera backing stays fully opaque and stationary.
                 val wave = 0.95f + 0.05f * cos(2.0 * Math.PI * p).toFloat()
-                ringView.alpha = if (entering && p < 0.15f) {
+                ringView.inkAlpha = if (entering && p < 0.15f) {
                     lerp(startAlpha, wave, IslandSpring.progress(p / 0.15f)).coerceIn(0f, 1f)
                 } else {
                     entering = false
@@ -543,6 +750,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun cancelIdleFeedback() {
         mainHandler.removeCallbacks(releaseSpringRunnable)
+        mainHandler.removeCallbacks(emptyFeedbackHaptic)
         breathAnimator?.cancel()
         idleFeedbackRunning = false
     }
@@ -554,7 +762,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (down) {
             cancelIdleFeedback()
             idleFeedbackRunning = true
-            ringView.alpha = 1f
+            ringView.inkAlpha = 1f
         }
         inkSpring.set(
             if (down) PRESS_INK else 1f, now, 0.0,
@@ -578,14 +786,14 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (state != State.Hidden || expandedViewport) return
         cancelIdleFeedback()
         idleFeedbackRunning = true
-        ringView.alpha = 1f
+        ringView.inkAlpha = 1f
         val now = now()
         inkSpring.set(1f, now, 0.0, 0.34f, 0.5f)
         if (!ValueAnimator.areAnimatorsEnabled()) {
             inkSpring.jump(1f, now)
             ringView.ink = 1f
             hapticBounceTick(first = true)
-            mainHandler.postDelayed({ hapticBounceTick(first = false) }, (BOUNCE_GAP_S * 1000).toLong())
+            mainHandler.postDelayed(emptyFeedbackHaptic, (BOUNCE_GAP_S * 1000).toLong())
             idleFeedbackRunning = false
             startBreathing()
             return
@@ -603,7 +811,6 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val now = now()
         secondBounceAt = Double.NaN
         bounceTicksAt.fill(Double.NaN)
-        ringView.alpha = 1f
         inkSpring.set(1f, now, 0.0, 0.34f, 0.42f)
         if (ValueAnimator.areAnimatorsEnabled()) {
             ensureClock()
@@ -638,7 +845,38 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         clock = null
     }
 
+    /** The surface and resident ring never draw the same stroke in the same frame. */
+    private fun syncInkOwnership() {
+        surface.setInkState(ringView.ink, ringView.bounce, ringView.inkAlpha)
+        ringView.inkVisible = !(expandedViewport && surface.active)
+    }
+
+    private fun finishMotionWithoutAnimation(now: Double, targetOpen: Boolean = surface.body.opened) {
+        secondBounceAt = Double.NaN
+        bounceTicksAt.fill(Double.NaN)
+        mainHandler.removeCallbacks(releaseSpringRunnable)
+        mainHandler.removeCallbacks(emptyFeedbackHaptic)
+        inkSpring.jump(1f, now)
+        bounceSpring.jump(1f, now)
+        ringView.ink = 1f
+        ringView.bounce = 1f
+        ringView.inkAlpha = 1f
+        idleFeedbackRunning = false
+        if (bodyMoving) {
+            surface.body.snap(targetOpen, now)
+            onBodyAtRest(now)
+        } else {
+            syncInkOwnership()
+        }
+        stopClock()
+    }
+
     private fun onFrame(now: Double) {
+        // Animator scale can change while an opening or closing spring is already running.
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            finishMotionWithoutAnimation(now)
+            return
+        }
         if (!secondBounceAt.isNaN() && now >= secondBounceAt) {
             bounceSpring.kick(BOUNCE_KICK, secondBounceAt)
             secondBounceAt = Double.NaN
@@ -651,6 +889,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
         ringView.ink = inkSpring.value(now)
         ringView.bounce = bounceSpring.value(now)
+        // The closing ink impulse may outlast the body's movement; keep it on the same outline.
+        syncInkOwnership()
         if (bodyMoving) {
             renderBody(now)
             val body = surface.body
@@ -665,6 +905,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (ringAtRest) {
             ringView.ink = inkSpring.target
             ringView.bounce = bounceSpring.target
+            syncInkOwnership()
             if (idleFeedbackRunning && inkSpring.target == 1f) {
                 idleFeedbackRunning = false
                 startBreathing()
@@ -680,8 +921,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val body = surface.body
         bodyMoving = true
         if (!ValueAnimator.areAnimatorsEnabled()) {
-            body.snap(open, now)
-            onBodyAtRest(now)
+            finishMotionWithoutAnimation(now, open)
             return
         }
         if (open) body.open(now) else body.close(now)
@@ -698,10 +938,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         renderBody(now)
         cardHost.setLayerType(View.LAYER_TYPE_NONE, null)
         if (body.opened && state is State.Card) {
-            deferredCardLink?.let { renderCard(it) }
-            deferredCardLink = null
-            mainHandler.removeCallbacks(hideRunnable)
-            mainHandler.postDelayed(hideRunnable, CARD_TIMEOUT_MS)
+            if (deferredCardRender) renderCard()
+            deferredCardRender = false
+            scheduleReadyTimeout()
         } else if (!body.opened && state == State.Hidden) {
             finishClosed()
         }
@@ -710,11 +949,11 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun finishClosed() {
         applyIdleViewport()
         startBreathing()
-        callbacks.onDismissed()
     }
 
     private fun renderBody(now: Double) {
         if (!surface.active) return
+        syncInkOwnership()
         surface.render(now)
         val body = surface.body
         // Content is laid out once at its final position; the growing paper reveals and clips it.
@@ -722,9 +961,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         cardHost.scaleX = body.contentScale
         cardHost.scaleY = body.contentScale
         applyContentBlur(1f - body.contentAlpha)
-        val actionable = state is State.Card && body.opened && body.contentAlpha > 0.9f
-        if (parseButton.isEnabled != actionable) parseButton.isEnabled = actionable
-        if (cancelButton.isEnabled != actionable) cancelButton.isEnabled = actionable
+        updateActionEnabled()
     }
 
     private fun applyContentBlur(amount: Float) {
@@ -795,6 +1032,20 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = tagTop
         }
+        if (displayedTask != null) {
+            // Fit a stable reading viewport after accounting for large fonts and both action rows.
+            val outputParams = outputScroll.layoutParams as LinearLayout.LayoutParams
+            outputParams.height = 0
+            outputScroll.layoutParams = outputParams
+            cardHost.measure(
+                MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            )
+            val availableTagHeight = ((screenSize.y - dp(64) - tagTop - dp(28)) /
+                (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()
+            outputParams.height = minOf(dp(180), (availableTagHeight - cardHost.measuredHeight).coerceAtLeast(dp(48)))
+            outputScroll.layoutParams = outputParams
+        }
         cardHost.measure(
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
             MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
@@ -843,13 +1094,17 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
                 cardLeft, cardTop, cardRight, cardBottom, dpF(ISLAND_RADIUS_DP)
             )
             surface.active = true
+            syncInkOwnership()
             val now = now()
             if (reshaped && body.opened) {
                 // A late font or text change resized the open card: retarget from the current motion.
                 startBody(open = true)
             }
             renderBody(now)
-        } else surface.active = false
+        } else {
+            surface.active = false
+            syncInkOwnership()
+        }
         val start = pendingMorph
         pendingMorph = null
         start?.invoke()
@@ -861,9 +1116,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         expandedViewport = false
         // Remove the tag before shrinking the overlay so no last frame of paper covers the ring.
         surface.active = false
+        syncInkOwnership()
         cardHost.alpha = 0f
-        parseButton.isEnabled = false
-        cancelButton.isEnabled = false
+        actionButtons.forEach { (button, _) -> button.isEnabled = false }
         ringView.isClickable = true
         ringView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         params.width = size

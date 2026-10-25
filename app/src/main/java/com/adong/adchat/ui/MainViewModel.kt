@@ -20,6 +20,7 @@ import com.adong.adchat.ui.markdown.NARRATIVE_NAME_MARK_INSTRUCTION
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -32,6 +33,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -97,6 +99,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     val modelCache = mutableStateMapOf<String, List<ApiModel>>()
     val connectionStates = mutableStateMapOf<String, ConnectionUiState>()
+    private val profileTestJobs = mutableMapOf<String, Job>()
+    private val profileTestEpochs = mutableMapOf<String, Long>()
     var chatInput by mutableStateOf("")
         private set
     val chatAttachments = mutableStateListOf<ChatImageAttachment>()
@@ -175,6 +179,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var questionAwaiting: CompletableDeferred<String>? = null
     private var chatJob: Job? = null
     private var suggestionJob: Job? = null
+    private data class InputSuggestionSource(val conversationKey: String, val messageId: Long, val profile: ApiProfile)
+    private var inputSuggestionSource: InputSuggestionSource? = null
+    private val titleSummaryJobs = mutableMapOf<String, Job>()
     private var chatStopRequested = false
     private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
     private val imageTaskJobs = linkedMapOf<String, Job>()
@@ -203,6 +210,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     val profiles: List<ApiProfile> get() = appConfig.profiles
+    /** Settings edits the default route; the chat toolbar edits the current conversation. */
+    val defaultChatProfile: ApiProfile get() = appConfig.chatProfile()
 
     /** API profiles whose stored key could not be decrypted and must be filled in again. */
     val profilesWithUndecryptableKeys: Set<String> get() = store.profilesWithUndecryptableKeys()
@@ -286,12 +295,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveProfile(profile: ApiProfile) {
         val cleaned = profile.normalized()
+        if (cleaned.id == suggestionProfile.id || cleaned.id == chatProfile.id) clearInputSuggestion()
+        invalidateProfileTest(cleaned.id)
         val previous = appConfig.profiles.firstOrNull { it.id == cleaned.id }
         val exists = previous != null
-        val connectionChanged = previous != null && (previous.baseUrl != cleaned.baseUrl || previous.apiKey != cleaned.apiKey || previous.modelsPath != cleaned.modelsPath || previous.extraHeaders != cleaned.extraHeaders)
+        val connectionChanged = previous != null && !previous.normalized().hasSameTestConnection(cleaned)
         val profiles = if (exists) appConfig.profiles.map { if (it.id == cleaned.id) cleaned else it } else appConfig.profiles + cleaned
         if (cleaned.cachedModels.isNotEmpty()) modelCache[cleaned.id] = cleaned.cachedModels else modelCache.remove(cleaned.id)
         if (connectionChanged && cleaned.cachedModels.isEmpty()) connectionStates[cleaned.id] = ConnectionUiState(title = "等待重新测试", detail = "连接参数已更新")
+        else if (connectionStates[cleaned.id]?.phase == ConnectionPhase.Testing) {
+            connectionStates[cleaned.id] = ConnectionUiState(
+                title = if (cleaned.cachedModels.isEmpty()) "尚未验证" else "已缓存 ${cleaned.cachedModels.size} 个模型",
+                detail = "配置已保存，可重新测试连接",
+                latencyMs = cleaned.lastLatencyMs,
+                modelCount = cleaned.cachedModels.size
+            )
+        }
         appConfig = appConfig.copy(profiles = profiles)
         persist()
         notice = if (exists) "已更新 ${cleaned.name}" else "已添加 ${cleaned.name}"
@@ -308,6 +327,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             notice = "当前对话正在使用此 API，请等待生成完成后再删除"
             return
         }
+        if (profileId == suggestionProfile.id || profileId == chatProfile.id) clearInputSuggestion()
+        invalidateProfileTest(profileId)
         val affectedConversationIds = conversations
             .filter { conversation ->
                 resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId).profileId == profileId
@@ -351,6 +372,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         bindCurrentConversationRoute(profile, model)
     }
 
+    fun selectDefaultChatProfile(profileId: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        if (appConfig.activeChatProfileId == profile.id) return
+        appConfig = appConfig.copy(activeChatProfileId = profile.id)
+        persist()
+        notice = "新对话与星岛默认使用 ${profile.name}"
+    }
+
+    fun selectDefaultChatModel(profileId: String, model: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        val selected = model.trim().takeIf { it.isNotBlank() } ?: return
+        updateProfile(profile.id) { it.copy(chatModel = selected) }
+        appConfig = appConfig.copy(activeChatProfileId = profile.id)
+        persist()
+        notice = "新对话与星岛默认使用 ${profile.name} · $selected"
+    }
+
     fun selectImageProfile(profileId: String) {
         if (profiles.none { it.id == profileId }) return
         appConfig = appConfig.copy(activeImageProfileId = profileId)
@@ -373,16 +411,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSuggestionProfile(profileId: String) {
         val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        if (suggestionProfile.id != profileId) clearInputSuggestion()
         appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
         persist(); notice = "输入建议已切换到 ${profile.name}"
     }
 
     fun selectSuggestionModel(profileId: String, model: String) {
+        if (profiles.none { it.id == profileId }) return
         val selected = model.trim()
-        if (selected.isBlank()) return
+        if (suggestionProfile.id != profileId || suggestionProfile.suggestionModel != selected) clearInputSuggestion()
         updateProfile(profileId) { it.copy(suggestionModel = selected) }
         appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
-        persist(); notice = "输入建议模型已设置为 $selected"
+        persist(); notice = if (selected.isBlank()) "已关闭输入建议" else "输入建议模型已设置为 $selected"
     }
 
     fun setAllowXSearch(enabled: Boolean) {
@@ -551,6 +591,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun testProfile(profile: ApiProfile, onUpdatedDraft: ((ApiProfile) -> Unit)? = null) {
         val tested = profile.normalized()
+        val epoch = invalidateProfileTest(tested.id)
+        val savedAtStart = profiles.firstOrNull { it.id == tested.id }?.normalized()
+        fun isCurrentTest(): Boolean {
+            if (profileTestEpochs[tested.id] != epoch) return false
+            val current = profiles.firstOrNull { it.id == tested.id }?.normalized()
+            val expected = if (onUpdatedDraft == null) tested else savedAtStart
+            return if (expected == null) current == null else current?.hasSameTestConnection(expected) == true
+        }
         val invalidHeaders = tested.invalidExtraHeaderLines()
         val validationError = when {
             !tested.hasValidBaseUrl() -> "Base URL 需要包含完整的 http:// 或 https:// 主机地址"
@@ -558,64 +606,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else -> null
         }
         onUpdatedDraft?.invoke(tested)
+        if (!isCurrentTest()) return
         if (validationError != null) {
             connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Error, "配置不完整", validationError)
             return
         }
         connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Testing, "正在连接", "验证认证并获取模型列表…")
         val startedAt = SystemClock.elapsedRealtime()
-        viewModelScope.launch {
-            runCatching { repository.fetchModels(tested) }
-                .onSuccess { result ->
-                    modelCache[tested.id] = result.models
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = repository.fetchModels(tested)
+                if (!isCurrentTest()) return@launch
+                modelCache[tested.id] = result.models
+                connectionStates[tested.id] = ConnectionUiState(
+                    ConnectionPhase.Success,
+                    "连接成功",
+                    if (result.models.isEmpty()) "服务可访问，但模型列表为空" else "已同步 ${result.models.size} 个模型",
+                    result.latencyMs,
+                    result.models.size
+                )
+                if (onUpdatedDraft == null) {
+                    updateProfile(tested.id) { mergeProfileTestResult(it, tested, result.models, result.latencyMs) }
+                    persist()
+                }
+                notice = "${tested.name} 已获取 ${result.models.size} 个模型"
+                onUpdatedDraft?.invoke(mergeProfileTestResult(tested, tested, result.models, result.latencyMs))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (!isCurrentTest()) return@launch
+                val raw = generateSequence<Throwable>(error) { it.cause }.joinToString(" ") { it.message.orEmpty() }
+                val modelsEndpointUnavailable = raw.contains("HTTP 404", true) || raw.contains("HTTP 405", true)
+                if (modelsEndpointUnavailable) {
+                    val latency = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
                     connectionStates[tested.id] = ConnectionUiState(
                         ConnectionPhase.Success,
-                        "连接成功",
-                        if (result.models.isEmpty()) "服务可访问，但模型列表为空" else "已同步 ${result.models.size} 个模型",
-                        result.latencyMs,
-                        result.models.size
+                        "服务可访问",
+                        "模型列表接口不可用，请手动填写模型 ID",
+                        latency,
+                        0
                     )
-                    val chatCandidate = result.models.firstOrNull { !it.id.isImageLike() }?.id
-                    val imageCandidate = result.models.firstOrNull { it.id.isImageLike() }?.id
-                    var updated = tested.copy(cachedModels = result.models, lastLatencyMs = result.latencyMs)
-                    if (tested.chatModel.isBlank() && chatCandidate != null) updated = updated.copy(chatModel = chatCandidate)
-                    if (tested.imageModel.isBlank() && imageCandidate != null) updated = updated.copy(imageModel = imageCandidate)
-                    if (tested.mangaAnalysisModel.isBlank() && chatCandidate != null) updated = updated.copy(mangaAnalysisModel = chatCandidate)
-                    if (onUpdatedDraft == null && profiles.any { it.id == updated.id }) {
-                        updateProfile(updated.id) { updated }
+                    if (onUpdatedDraft == null) {
+                        updateProfile(tested.id) { it.copy(lastLatencyMs = latency) }
                         persist()
                     }
-                    onUpdatedDraft?.invoke(updated)
-                    notice = "${tested.name} 已获取 ${result.models.size} 个模型"
+                    notice = "${tested.name} 已连通，需手动填写模型"
+                    onUpdatedDraft?.invoke(tested.copy(lastLatencyMs = latency))
+                } else {
+                    connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Error, "连接失败", friendlyError(error))
                 }
-                .onFailure { error ->
-                    val raw = generateSequence(error) { it.cause }.joinToString(" ") { it.message.orEmpty() }
-                    val modelsEndpointUnavailable = raw.contains("HTTP 404", true) || raw.contains("HTTP 405", true)
-                    if (modelsEndpointUnavailable) {
-                        val latency = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
-                        val updated = tested.copy(lastLatencyMs = latency)
-                        connectionStates[tested.id] = ConnectionUiState(
-                            ConnectionPhase.Success,
-                            "服务可访问",
-                            "模型列表接口不可用，请手动填写模型 ID",
-                            latency,
-                            0
-                        )
-                        if (onUpdatedDraft == null && profiles.any { it.id == updated.id }) {
-                            updateProfile(updated.id) { updated }
-                            persist()
-                        }
-                        onUpdatedDraft?.invoke(updated)
-                        notice = "${tested.name} 已连通，需手动填写模型"
-                    } else {
-                        connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Error, "连接失败", friendlyError(error))
-                    }
-                }
+            } finally {
+                if (profileTestEpochs[tested.id] == epoch) profileTestJobs.remove(tested.id)
+            }
         }
+        profileTestJobs[tested.id] = job
+        job.start()
     }
 
+    private fun invalidateProfileTest(profileId: String): Long {
+        val epoch = (profileTestEpochs[profileId] ?: 0L) + 1L
+        profileTestEpochs[profileId] = epoch
+        profileTestJobs.remove(profileId)?.cancel()
+        return epoch
+    }
+
+    private fun ApiProfile.hasSameTestConnection(other: ApiProfile): Boolean =
+        baseUrl == other.baseUrl && apiKey == other.apiKey && modelsPath == other.modelsPath &&
+            extraHeaders == other.extraHeaders && apiFormat == other.apiFormat
+
+    private fun mergeProfileTestResult(current: ApiProfile, tested: ApiProfile, models: List<ApiModel>, latency: Long): ApiProfile {
+        val chatCandidate = models.firstOrNull { !it.id.isImageLike() }?.id
+        val imageCandidate = models.firstOrNull { it.id.isImageLike() }?.id
+        // Model selection may change independently while the connection test is running.
+        fun fillUnchangedBlank(currentModel: String, testedModel: String, candidate: String?): String =
+            if (testedModel.isBlank() && currentModel == testedModel) candidate ?: currentModel else currentModel
+        return current.copy(
+            cachedModels = models,
+            lastLatencyMs = latency,
+            chatModel = fillUnchangedBlank(current.chatModel, tested.chatModel, chatCandidate),
+            imageModel = fillUnchangedBlank(current.imageModel, tested.imageModel, imageCandidate),
+            mangaAnalysisModel = fillUnchangedBlank(current.mangaAnalysisModel, tested.mangaAnalysisModel, chatCandidate)
+        )
+    }
 
     fun discardProfileDraft(profileId: String) {
+        invalidateProfileTest(profileId)
         val saved = profiles.firstOrNull { it.id == profileId }
         if (saved == null) {
             modelCache.remove(profileId)
@@ -732,7 +807,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun updateChatInput(value: String) {
         chatInput = value
         // 建议只服务于空输入框：一旦用户动手改输入内容，预测即作废（含在途请求）。
-        if (inputSuggestion != null) clearInputSuggestion()
+        clearInputSuggestion()
         val key = currentChatKey()
         if (value.isBlank()) chatDrafts.remove(key) else chatDrafts[key] = value
         scheduleSessionSave()
@@ -740,6 +815,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun attachChatDocument(uri: Uri) {
         if (isChatAttachmentLoading || isChatLoading) return
+        clearInputSuggestion()
         val conversation = activeConversationId
         isChatAttachmentLoading = true
         viewModelScope.launch {
@@ -754,6 +830,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun attachChatImages(uris: List<Uri>) {
+        if (isChatAttachmentLoading || isChatLoading) return
+        clearInputSuggestion()
         val remaining = (MAX_CHAT_IMAGES - chatAttachments.size).coerceAtLeast(0)
         if (remaining == 0) {
             notice = "最多添加 $MAX_CHAT_IMAGES 张图片"
@@ -805,16 +883,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?.let(chatAttachments::removeAt)
     }
 
-    fun sendMessage(textOverride: String? = null, assistantSeed: ChatMessage? = null, systemNote: Boolean = false) {
+    fun sendMessage(
+        textOverride: String? = null,
+        assistantSeed: ChatMessage? = null,
+        systemNote: Boolean = false,
+        attachmentsOverride: List<ChatImageAttachment>? = null
+    ) {
         val fromComposer = textOverride == null
         val text = (textOverride ?: chatInput).trim()
-        if ((text.isEmpty() && (textOverride != null || chatAttachments.isEmpty())) || isChatLoading || isChatAttachmentLoading) return
+        val attachments = attachmentsOverride ?: if (fromComposer) chatAttachments.toList() else emptyList()
+        if ((text.isEmpty() && attachments.isEmpty()) || isChatLoading || isChatAttachmentLoading) return
         // 发送即作废上一条建议：在途请求直接取消，建议条也不能撑到新回复生成期间。
-        suggestionJob?.cancel()
-        inputSuggestion = null
+        clearInputSuggestion()
         val profile = chatProfile
         val model = profile.chatModel
-        val attachments = if (fromComposer) chatAttachments.toList() else emptyList()
         if (fromComposer) {
             clearCurrentDraft()
             chatAttachments.clear()
@@ -842,6 +924,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ?.replace(Regex("\\s+"), " ")?.trim()?.take(24)?.ifBlank { null }
             ?: "\u65b0\u5bf9\u8bdd"
         val recoveryCreatedAt = recoveryBase?.createdAt ?: System.currentTimeMillis()
+        val systemPrompt = listOf(
+            appConfig.systemPrompt,
+            NARRATIVE_NAME_MARK_INSTRUCTION,
+            COVER_IMAGE_INSTRUCTION
+        ).filter(String::isNotBlank).joinToString("\n\n")
+        val searchBackend = searchBackendConfig()
+        val requestCacheKey = "adchat-$recoveryConversationId"
         isChatLoading = true
         chatStopRequested = false
         chatJob = viewModelScope.launch {
@@ -857,14 +946,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val result = repository.streamChat(
                     profile = profile,
                     model = model,
-                    systemPrompt = listOf(
-                        appConfig.systemPrompt,
-                        NARRATIVE_NAME_MARK_INSTRUCTION,
-                        COVER_IMAGE_INSTRUCTION
-                    ).filter(String::isNotBlank).joinToString("\n\n"),
+                    systemPrompt = systemPrompt,
                     history = requestHistory,
-                    cacheKey = "adchat-${activeConversationId ?: profile.id}",
-                    searchBackend = searchBackendConfig(),
+                    cacheKey = requestCacheKey,
+                    searchBackend = searchBackend,
                     onContextTrim = { count -> withContext(Dispatchers.Main) { notice = "本次已省略最早的 $count 轮对话以适配模型上下文；本地记录仍保留。" } },
                     onRecovery = { event ->
                         automaticRecoveryCount = maxOf(automaticRecoveryCount, event.attempt)
@@ -942,9 +1027,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         content = result.text,
                         // 续传场景下 result.reasoning 只含续传部分，保留界面上较长的那份思考记录。
-                        reasoning = if (result.reasoning.length > it.reasoning.length) result.reasoning else it.reasoning,
+                        reasoning = if (result.reasoning.length >= reasoned.length) result.reasoning else reasoned.toString(),
                         isStreaming = false,
-                        isInterrupted = false,
+                        isInterrupted = !result.outputComplete,
                         isStopped = false,
                         isRecovering = false,
                         streamRecoveryCount = maxOf(automaticRecoveryCount, result.usage.streamRecoveryCount),
@@ -956,7 +1041,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         toolActivities = result.toolActivities
                     )
                 }
-                summarizeTitle = true
+                summarizeTitle = result.outputComplete
+                if (!result.outputComplete) notice = "回复未确认完整结束，已保留内容，可继续生成。"
             } catch (error: Throwable) {
                 val partial = streamed.toString().trimEnd()
                 val reasonedText = reasoned.toString().trimEnd()
@@ -1070,33 +1156,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 回复结束后后台预测用户的下一句输入；切换会话/再次发送时旧的预测直接作废。 */
     private fun scheduleInputSuggestion() {
-        suggestionJob?.cancel()
-        val job = viewModelScope.launch {
-            val history = InputSuggester.buildSuggestHistory(messages.toList())
-            if (history.isEmpty()) {
-                inputSuggestion = null
-                return@launch
+        clearInputSuggestion()
+        val profile = suggestionProfile
+        if (chatInput.isNotEmpty() || chatAttachments.isNotEmpty() || isChatAttachmentLoading || profile.suggestionModel.isBlank()) return
+        val history = InputSuggester.buildSuggestHistory(messages.toList())
+        if (history.isEmpty()) return
+        val source = InputSuggestionSource(currentChatKey(), messages.last().id, profile)
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = try {
+                    withTimeoutOrNull(10_000) { repository.suggestNextMessage(profile, profile.suggestionModel, history) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
+                if (isActive && isCurrentSuggestionSource(source)) {
+                    val suggestion = InputSuggester.cleanSuggestion(result, history)
+                    inputSuggestionSource = source.takeIf { suggestion != null }
+                    inputSuggestion = suggestion
+                }
+            } finally {
+                if (suggestionJob === coroutineContext[Job]) suggestionJob = null
             }
-            val result = runCatching {
-                repository.suggestNextMessage(suggestionProfile, suggestionProfile.suggestionModel, history)
-            }.getOrNull()
-            // runCatching 会吞掉取消异常：被换掉后回来的旧任务不能再覆盖新建议。
-            if (!isActive) return@launch
-            inputSuggestion = InputSuggester.cleanSuggestion(result)
         }
         suggestionJob = job
+        job.start()
     }
 
-    /** 点建议条：只在输入框为空时填入，填过即消失（建议预测的是空输入框场景）。 */
-    fun acceptSuggestion() {
-        val suggestion = inputSuggestion ?: return
-        if (!chatInput.isBlank()) return
+    /** 空输入框的预测文字由发送键提交，与普通用户输入走同一条发送路径。 */
+    fun sendInputSuggestion() {
+        val suggestion = validInputSuggestion() ?: return
         updateChatInput(suggestion)
-        inputSuggestion = null
+        sendMessage()
     }
+
+    fun acceptSuggestion() {
+        val suggestion = validInputSuggestion() ?: return
+        updateChatInput(suggestion)
+    }
+
+    private fun validInputSuggestion(): String? {
+        val source = inputSuggestionSource ?: return null
+        if (!isCurrentSuggestionSource(source)) {
+            clearInputSuggestion()
+            return null
+        }
+        return InputSuggester.cleanSuggestion(inputSuggestion, InputSuggester.buildSuggestHistory(messages.toList()))
+    }
+
+    private fun isCurrentSuggestionSource(source: InputSuggestionSource): Boolean =
+        currentChatKey() == source.conversationKey && messages.lastOrNull()?.id == source.messageId &&
+            suggestionProfile.matchesSuggestionRequest(source.profile) && source.profile.suggestionModel.isNotBlank() &&
+            chatInput.isEmpty() && chatAttachments.isEmpty() && !isChatLoading && !isChatAttachmentLoading
+
+    // Cache refreshes or the chat's effort slider do not change a completed suggestion request.
+    private fun ApiProfile.matchesSuggestionRequest(other: ApiProfile): Boolean =
+        id == other.id && baseUrl == other.baseUrl && apiKey == other.apiKey &&
+            extraHeaders == other.extraHeaders && apiFormat == other.apiFormat &&
+            chatPath == other.chatPath && responsesPath == other.responsesPath &&
+            messagesPath == other.messagesPath && suggestionModel == other.suggestionModel
 
     private fun clearInputSuggestion() {
         suggestionJob?.cancel()
+        suggestionJob = null
+        inputSuggestionSource = null
         inputSuggestion = null
     }
 
@@ -1147,18 +1271,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             deferred.await()
         } finally {
-            withContext(Dispatchers.Main.immediate) {
-                if (questionAwaiting === deferred) {
-                    pendingQuestion = null
-                    questionAwaiting = null
-                    questionDraft = ""
+            withContext(NonCancellable) {
+                withContext(Dispatchers.Main.immediate) {
+                    if (questionAwaiting === deferred) {
+                        pendingQuestion = null
+                        questionAwaiting = null
+                        questionDraft = ""
+                    }
                 }
             }
         }
     }
 
     fun regenerateMessage(messageId: Long) {
-        if (isChatLoading) return
+        if (isChatLoading || isChatAttachmentLoading) return
         val assistantIndex = messages.indexOfFirst { it.id == messageId }
         if (assistantIndex < 0 || assistantIndex != messages.lastIndex) return
         val assistant = messages[assistantIndex]
@@ -1166,19 +1292,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // 宁可整轮重问。isStreaming 守卫保留，生成中仍不可操作。
         if (assistant.role != "assistant" || assistant.isStreaming) return
         val userIndex = (assistantIndex - 1 downTo 0).firstOrNull { messages[it].role == "user" } ?: return
-        val prompt = messages[userIndex].content
+        val user = messages[userIndex]
         // 旧回复整体带进新消息，详情里可回看，避免「重试更差」时无从比较。
         val stash = assistant.copy(previousContent = assistant.content, previousReasoning = assistant.reasoning)
         messages.removeAt(assistantIndex)
         messages.removeAt(userIndex)
         persistCurrentConversation()
-        sendMessage(prompt, assistantSeed = stash)
+        sendMessage(user.content, assistantSeed = stash, systemNote = user.isContinuation, attachmentsOverride = user.attachments)
     }
 
     /** 编辑重发：移除该条用户消息及其后的全部对话，正文与图片载入输入框等待修改。 */
     fun editUserMessage(messageId: Long) {
-        if (isChatLoading) {
-            notice = "请等待当前回复完成后再编辑"
+        if (isChatLoading || isChatAttachmentLoading) {
+            notice = "请等待当前回复或附件读取完成后再编辑"
             return
         }
         val index = messages.indexOfFirst { it.id == messageId }
@@ -1188,11 +1314,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stashCurrentDraft()
         clearInputSuggestion()
         messages.removeRange(index, messages.size)
-        chatInput = content
-        // 原消息带的图一起载回输入框：只搬正文的话，重发后模型看不到图，
-        // 通常会回答「我看不到图片」，而用户以为自己发过。
-        val room = (MAX_CHAT_IMAGES - chatAttachments.size).coerceAtLeast(0)
-        val restoring = images.take(room)
+        updateChatInput(content)
+        // 编辑历史消息时恢复该消息的附件，避免混入当前未发送草稿的图片。
+        chatAttachments.clear()
+        val restoring = images.take(MAX_CHAT_IMAGES)
         chatAttachments.addAll(restoring)
         val droppedImages = images.size - restoring.size
         scheduleSessionSave(immediate = true)
@@ -1205,6 +1330,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun retryMessage(messageId: Long) {
+        if (isChatLoading || isChatAttachmentLoading) return
         val index = messages.indexOfFirst { it.id == messageId }
         if (index < 0) return
         // 只接受最后一条：重试会把该问答追加到列表末尾，对中间消息操作会打乱顺序。
@@ -1221,7 +1347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val previousUser = messages.take(index).lastOrNull { it.role == "user" } ?: return
         messages.removeAt(index)
         messages.indexOfLast { it.id == previousUser.id }.takeIf { it >= 0 }?.let(messages::removeAt)
-        sendMessage(previousUser.content)
+        sendMessage(previousUser.content, systemNote = previousUser.isContinuation, attachmentsOverride = previousUser.attachments)
     }
 
     fun newConversation() {
@@ -1293,6 +1419,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val index = conversations.indexOfFirst { it.id == id }
         if (index < 0) return
+        titleSummaryJobs.remove(id)?.cancel()
         recentlyDeletedDraft = chatDrafts[id].orEmpty()
         recentlyDeletedConversation = conversations.removeAt(index) to index
         chatDrafts.remove(id)
@@ -1326,6 +1453,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun renameConversation(id: String, title: String) {
         val index = conversations.indexOfFirst { it.id == id }
         if (index < 0 || title.isBlank()) return
+        titleSummaryJobs.remove(id)?.cancel()
         conversations[index] = conversations[index].copy(
             title = title.trim(),
             titleSummarized = true,
@@ -2016,7 +2144,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun persistCurrentConversation(clearRecoveryMessageId: Long? = null) {
         val stableMessages = messages.filterNot { it.isStreaming }
-        if (stableMessages.isEmpty()) return
+        // Editing the first turn can leave an existing conversation empty. Persist that
+        // truncation as well, while keeping its route and draft available after a restart.
+        if (stableMessages.isEmpty() && activeConversationId == null) return
         val now = System.currentTimeMillis()
         val wasNewConversation = activeConversationId == null
         val id = activeConversationId ?: UUID.randomUUID().toString().also { activeConversationId = it }
@@ -2051,6 +2181,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun scheduleTitleSummary() {
         val id = activeConversationId ?: return
+        if (titleSummaryJobs[id]?.isActive == true) return
         val snapshot = conversations.firstOrNull { it.id == id } ?: return
         if (snapshot.titleSummarized || userRounds(snapshot.messages) < 3) return
         if (!isAutomaticTitle(snapshot.title, snapshot.messages)) {
@@ -2070,22 +2201,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val who = if (message.role == "user") "用户" else "助手"
             "$who：${message.content.replace(Regex("\\s+"), " ").trim().take(180)}"
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            val title = runCatching { repository.summarizeConversationTitle(profile, model, transcript) }.getOrNull()
-            withContext(Dispatchers.Main) {
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val title = try {
+                    repository.summarizeConversationTitle(profile, model, transcript)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    null
+                }
                 val index = conversations.indexOfFirst { it.id == id }
-                if (index < 0 || conversations[index].titleSummarized) return@withContext
-                val current = conversations[index]
-                conversations[index] = current.copy(
-                    title = title?.takeIf(String::isNotBlank) ?: current.title,
-                    titleSummarized = true
-                )
-                sortAndSaveConversations()
+                if (index >= 0 && !conversations[index].titleSummarized) {
+                    val current = conversations[index]
+                    conversations[index] = current.copy(
+                        title = title?.takeIf(String::isNotBlank) ?: current.title,
+                        titleSummarized = true
+                    )
+                    sortAndSaveConversations()
+                }
+            } finally {
+                if (titleSummaryJobs[id] === coroutineContext[Job]) titleSummaryJobs.remove(id)
             }
         }
+        titleSummaryJobs[id] = job
+        job.start()
     }
 
     private fun bindCurrentConversationRoute(profile: ApiProfile, model: String) {
+        clearInputSuggestion()
         val conversationId = activeConversationId
         if (conversationId == null) {
             updateProfile(profile.id) { it.copy(chatModel = model) }

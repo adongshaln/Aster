@@ -4,27 +4,24 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RectF
 import android.os.Build
 import android.widget.FrameLayout
 
-/**
- * The paper tag: one rounded sheet with a fine edge and a soft shadow that clips the card content.
- * Its shape comes from [body]; layout never changes while the outline moves.
- */
+/** One evolving outline owns the pen stroke, paper fill and content clipping. */
 internal class IslandSurfaceView(context: Context) : FrameLayout(context) {
     val body = IslandJellyBody()
     private val density = resources.displayMetrics.density
-    private val bounds = RectF()
-    private val edgeBounds = RectF()
+    private val contour = IslandInkContour()
     private val clip = Path()
+    private val inkPath = Path()
     private val paperPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = density
-    }
+    private val inkPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var palette = IslandPalette.Light
     private var shadowStep = -1
+    private var shapeDirty = true
+    private var inkWeight = 1f
+    private var inkBounce = 1f
+    private var inkAlpha = 1f
     var active = false
         set(value) {
             field = value
@@ -42,53 +39,107 @@ internal class IslandSurfaceView(context: Context) : FrameLayout(context) {
     fun setPalette(palette: IslandPalette) {
         this.palette = palette
         paperPaint.color = palette.paper
-        edgePaint.color = palette.edge
         shadowStep = -1
-        applyShadow()
+        shapeDirty = true
         invalidate()
     }
 
-    /** Samples the body at [now] (seconds) and redraws; called once per frame by the island clock. */
+    fun setInkState(weight: Float, bounce: Float, alpha: Float) {
+        if (inkWeight == weight && inkBounce == bounce && inkAlpha == alpha) return
+        inkWeight = weight
+        inkBounce = bounce
+        inkAlpha = alpha
+        shapeDirty = true
+        invalidate()
+    }
+
+    /** Geometry changes, never the measured card. All paths and arrays are reused. */
     fun render(now: Double) {
         body.update(now)
-        bounds.set(body.left, body.top, body.right, body.bottom)
-        clip.rewind()
-        clip.addRoundRect(bounds, body.radius, body.radius, Path.Direction.CW)
-        applyShadow()
+        shapeDirty = true
         invalidate()
+    }
+
+    private fun updateShape() {
+        if (!shapeDirty) return
+        shapeDirty = false
+        contour.update(body, density, inkWeight, inkBounce)
+        clip.rewind()
+        inkPath.rewind()
+        for (i in 0..IslandInkRing.SAMPLES) {
+            val x = contour.outerX[i]
+            val y = contour.outerY[i]
+            if (i == 0) {
+                clip.moveTo(x, y)
+                inkPath.moveTo(x, y)
+            } else {
+                clip.lineTo(x, y)
+                inkPath.lineTo(x, y)
+            }
+        }
+        clip.close()
+        for (i in IslandInkRing.SAMPLES downTo 0) inkPath.lineTo(contour.innerX[i], contour.innerY[i])
+        inkPath.close()
+        paperPaint.alpha = (body.paperAlpha * 255f).toInt().coerceIn(0, 255)
+        inkPaint.color = mixColor(palette.clay, palette.edge, body.inkTransfer * 0.28f)
+        inkPaint.alpha = (inkAlpha * (1f - body.inkTransfer * 0.12f) * 255f).toInt().coerceIn(0, 255)
+        applyShadow()
     }
 
     private fun applyShadow() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
-        // Fade the shadow in as the tag leaves the core, so no shadow halo rings the lens at rest.
-        val fraction = ((bounds.width() - 26f * density) / (48f * density)).coerceIn(0f, 1f)
-        val step = (fraction * 32f).toInt()
+        val step = (body.paperAlpha * 32f).toInt()
         if (step == shadowStep) return
         shadowStep = step
         if (step == 0) {
             paperPaint.clearShadowLayer()
         } else {
             val alpha = (((palette.shadow ushr 24) and 0xFF) * step / 32f).toInt()
-            paperPaint.setShadowLayer(14f * density, 0f, 6f * density, (palette.shadow and 0x00FFFFFF) or (alpha shl 24))
+            paperPaint.setShadowLayer(14f * density, 0f, 6f * density,
+                (palette.shadow and 0x00FFFFFF) or (alpha shl 24))
         }
+    }
+
+    /** Match the winding fill, including the pen's small overlap at the upper-right shoulder. */
+    fun containsPoint(x: Float, y: Float): Boolean {
+        if (!active) return false
+        updateShape()
+        var winding = 0
+        var previous = IslandInkRing.SAMPLES
+        for (i in 0..IslandInkRing.SAMPLES) {
+            val x0 = contour.outerX[previous]
+            val y0 = contour.outerY[previous]
+            val x1 = contour.outerX[i]
+            val y1 = contour.outerY[i]
+            val side = (x1 - x0) * (y - y0) - (x - x0) * (y1 - y0)
+            if (y0 <= y && y1 > y && side > 0f) winding++
+            else if (y0 > y && y1 <= y && side < 0f) winding--
+            previous = i
+        }
+        return winding != 0
     }
 
     override fun onDraw(canvas: Canvas) {
         if (!active) return
-        canvas.drawRoundRect(bounds, body.radius, body.radius, paperPaint)
+        updateShape()
+        if (paperPaint.alpha > 0) canvas.drawPath(clip, paperPaint)
     }
 
     override fun dispatchDraw(canvas: Canvas) {
         if (!active) return
+        updateShape()
         val save = canvas.save()
         canvas.clipPath(clip)
         super.dispatchDraw(canvas)
         canvas.restoreToCount(save)
-        // The fine edge sits on top of the content, inset half a stroke so it stays on the sheet.
-        val inset = edgePaint.strokeWidth / 2f
-        edgeBounds.set(bounds)
-        edgeBounds.inset(inset, inset)
-        val r = (body.radius - inset).coerceAtLeast(0f)
-        canvas.drawRoundRect(edgeBounds, r, r, edgePaint)
+        canvas.drawPath(inkPath, inkPaint)
+    }
+
+    private fun mixColor(from: Int, to: Int, amount: Float): Int {
+        fun channel(shift: Int): Int {
+            val start = (from ushr shift) and 0xff
+            return (start + (((to ushr shift) and 0xff) - start) * amount).toInt()
+        }
+        return (0xff shl 24) or (channel(16) shl 16) or (channel(8) shl 8) or channel(0)
     }
 }

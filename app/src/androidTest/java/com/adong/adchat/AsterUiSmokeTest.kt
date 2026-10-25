@@ -72,22 +72,32 @@ class AsterUiSmokeTest {
         screenshot("07-downloads")
         rule.onNodeWithContentDescription("打开侧栏").performClick()
         rule.onNodeWithText("设置").performClick()
-        rule.onNodeWithText("我的服务").assertIsDisplayed()
-        screenshot("08-model-settings")
+        rule.onNodeWithText("服务与连接").assertIsDisplayed()
+        rule.onNodeWithText("我的服务").assertDoesNotExist()
+        screenshot("08-settings-home")
+        rule.onNodeWithText("服务与连接").performClick()
+        rule.onNodeWithText("我的服务").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithContentDescription("返回设置").performClick()
         rule.onNodeWithText("默认模型").performScrollTo().performClick()
-        screenshot("09-service-settings")
-        rule.onNodeWithText("默认模型").performScrollTo().performClick()
+        rule.onNodeWithText("默认对话模型用于新对话和星岛。已有对话的模型在对话页单独切换。").assertIsDisplayed()
+        screenshot("09-default-models")
+        rule.onNodeWithContentDescription("返回设置").performClick()
         rule.onNodeWithText("助手偏好").performScrollTo().performClick()
         rule.onNodeWithText("修改自动保存，仅用于对话。").performScrollTo().assertIsDisplayed()
         screenshot("10-assistant-settings")
     }
 
     @Test fun settingsEditorKeepsAdvancedOptionsCollapsed() {
+        val profileName = rule.runOnIdle {
+            ViewModelProvider(rule.activity)[MainViewModel::class.java].profiles.first().name
+        }
         rule.onNodeWithContentDescription("打开侧栏").performClick()
         rule.onNodeWithText("设置").performClick()
-        rule.onNodeWithText("我的服务").assertIsDisplayed()
+        rule.onNodeWithText("服务与连接").assertIsDisplayed()
         screenshot("11-settings-home")
-        rule.onAllNodesWithText("编辑")[0].performClick()
+        rule.onNodeWithText("服务与连接").performClick()
+        rule.onNodeWithText("我的服务").performScrollTo().assertIsDisplayed()
+        rule.onAllNodesWithText(profileName)[0].performScrollTo().performClick()
         rule.onNodeWithText("连接信息").assertIsDisplayed()
         rule.onNodeWithText("GPT-5.6 Sol 优化").assertDoesNotExist()
         rule.onNodeWithText("额外请求头").assertDoesNotExist()
@@ -96,7 +106,10 @@ class AsterUiSmokeTest {
         rule.onNodeWithText("额外请求头").performScrollTo().assertIsDisplayed()
         screenshot("13-settings-advanced")
         rule.onNodeWithContentDescription("返回").performClick()
-        rule.onNodeWithText("我的服务").assertIsDisplayed()
+        rule.onNodeWithText("服务与连接").assertIsDisplayed()
+        rule.onNodeWithText("我的服务").performScrollTo().assertIsDisplayed()
+        rule.onNodeWithContentDescription("返回设置").performClick()
+        rule.onNodeWithText("默认模型").assertIsDisplayed()
     }
 
     private fun imeVisible(): Boolean = ViewCompat.getRootWindowInsets(rule.activity.window.decorView)

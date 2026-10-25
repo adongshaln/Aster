@@ -459,6 +459,30 @@ class StoryRepository(context: Context) : AutoCloseable {
         StoryMessageWithRevision(current.message.copy(activeRevisionId = revision.id), revision)
     }
 
+    /** Roll back a retry stopped before any text, preserving the original reply and its provenance. */
+    fun cancelEmptyRegeneration(messageId: String, generatingRevisionId: String, previousRevisionId: String): Boolean =
+        helper.writableDatabase.inTransaction { db ->
+            val current = queryMessageWithRevision(db, messageId) ?: return@inTransaction false
+            if (current.revision.id != generatingRevisionId || current.revision.state != StoryRevisionState.Streaming ||
+                current.revision.content.isNotBlank()) return@inTransaction false
+            val previous = db.query(StorySchema.REVISIONS, null, "id = ? AND message_id = ?",
+                arrayOf(previousRevisionId, messageId), null, null, null).use { cursor ->
+                if (cursor.moveToFirst()) cursor.toRevision() else null
+            } ?: return@inTransaction false
+            if (previous.state !in setOf(StoryRevisionState.Complete, StoryRevisionState.Interrupted)) return@inTransaction false
+            db.update(StorySchema.REVISIONS, ContentValues().apply { put("state", StoryRevisionState.Stopped.dbValue) },
+                "id = ?", arrayOf(generatingRevisionId))
+            val now = System.currentTimeMillis()
+            if (previous.state == StoryRevisionState.Complete) {
+                activateRevision(db, current, previous, now)
+            } else {
+                check(db.update(StorySchema.MESSAGES, ContentValues().apply { put("active_revision_id", previous.id) },
+                    "id = ? AND active_revision_id = ?", arrayOf(messageId, generatingRevisionId)) == 1)
+                touchStory(db, current.message.storyId, now)
+            }
+            true
+        }
+
     /** Retain revision provenance but remove this message from active conversation queries. */
     fun removeConversationMessage(messageId: String, expectedRevisionId: String) = helper.writableDatabase.inTransaction { db ->
         val current = queryMessageWithRevision(db, messageId) ?: error("消息已删除")
