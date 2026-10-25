@@ -9,13 +9,14 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
@@ -67,7 +68,6 @@ import com.adong.adchat.ui.components.AdConfirmDialog
 import com.adong.adchat.ui.components.QuickModelSwitcher
 import com.adong.adchat.ui.components.RouteKind
 import com.adong.adchat.ui.components.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import com.adong.adchat.ui.theme.*
 
 import kotlinx.coroutines.delay
@@ -337,7 +337,11 @@ private fun MangaTranslationToggle(
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         AsterSegmentedControl(listOf("图像创作", "漫画翻译"), if (active) 1 else 0,
             onSelect = { if ((it == 1) != active) onToggle(it == 1) }, enabled = !locked)
-        AnimatedVisibility(active) {
+        AnimatedVisibility(
+            active,
+            enter = expandVertically(AsterSpring.spatial()) + fadeIn(AsterSpring.editorial()),
+            exit = shrinkVertically(AsterSpring.spatial()) + fadeOut(AsterSpring.editorial())
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("理解剧情与称谓，保留原画的表达。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
                 AsterModelRow("剧情分析模型", analysisModel, onSelectAnalysisModel, icon = Icons.Rounded.Psychology)
@@ -392,8 +396,7 @@ private fun PromptStudio(
         contentColor = Ink,
         shape = RoundedCornerShape(28.dp),
         border = BorderStroke(1.dp, Hairline),
-        shadowElevation = 0.dp,
-        modifier = Modifier.animateContentSize(tween(220, easing = FastOutSlowInEasing))
+        shadowElevation = 0.dp
     ) {
         Column(Modifier.padding(18.dp)) {
             if (!mangaTranslation) {
@@ -544,18 +547,27 @@ private fun PromptStudio(
             }
             Spacer(Modifier.height(18.dp))
             if (!mangaTranslation) {
+                val optionsRotation by animateFloatAsState(
+                    if (showCanvasOptions) 180f else 0f, AsterSpring.jelly(), label = "canvas-options-arrow"
+                )
                 Surface(onClick = { showCanvasOptions = !showCanvasOptions }, color = Canvas,
-                    shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = .985f, enableHaptics = false)) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Tune, null, Modifier.size(19.dp), tint = MutedInk)
                         Text("画面设置", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.labelLarge)
                         Text("${when (size) { "1536x1024" -> "3:2"; "1024x1536" -> "2:3"; else -> "1:1" }} · $style",
                             color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                        Icon(if (showCanvasOptions) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                            if (showCanvasOptions) "收起画面设置" else "展开画面设置", Modifier.size(20.dp), tint = MutedInk)
+                        Icon(Icons.Rounded.ExpandMore,
+                            if (showCanvasOptions) "收起画面设置" else "展开画面设置",
+                            Modifier.size(20.dp).graphicsLayer { rotationZ = optionsRotation }, tint = MutedInk)
                     }
                 }
-                AnimatedVisibility(showCanvasOptions) {
+                AnimatedVisibility(
+                    showCanvasOptions,
+                    enter = expandVertically(AsterSpring.spatial()) + fadeIn(AsterSpring.editorial()),
+                    exit = shrinkVertically(AsterSpring.spatial()) + fadeOut(AsterSpring.editorial())
+                ) {
                     Column(Modifier.padding(top = 16.dp)) {
                 StudioLabel("风格")
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -797,34 +809,44 @@ private fun StudioLabel(text: String) {
 
 @Composable
 private fun StyleChoiceCard(text: String, detail: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
+    val container by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else Canvas, AsterSpring.editorial(), label = "style-container"
+    )
+    val foreground by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.onPrimary else Ink, AsterSpring.editorial(), label = "style-foreground"
+    )
     Surface(
         onClick = onClick,
-        color = if (selected) Night else Canvas,
-        contentColor = if (selected) Color.White else Ink,
-        border = if (selected) BorderStroke(1.dp, Color(0xFF47433F)) else null,
+        color = container,
+        contentColor = foreground,
+        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else Hairline),
         shape = RoundedCornerShape(17.dp),
-        modifier = Modifier.width(112.dp)
+        modifier = Modifier.width(112.dp).appleSpringPressable(pressedScale = .97f, enableHaptics = false)
     ) {
         Column(Modifier.padding(12.dp)) {
-            Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(if (selected) Color(0xFF3A3835) else Surface), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(18.dp), tint = if (selected) Accent else MutedInk)
+            Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(if (selected) foreground.copy(alpha = .12f) else Surface), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(18.dp), tint = if (selected) foreground else MutedInk)
             }
             Spacer(Modifier.height(10.dp))
             Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            Text(detail, color = if (selected) Color(0xFFBDB8B2) else MutedInk, style = MaterialTheme.typography.labelSmall)
+            Text(detail, color = if (selected) foreground.copy(alpha = .76f) else MutedInk, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
 
 @Composable
 private fun CanvasChoiceCard(value: String, label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val container by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else Canvas,
+        AsterSpring.editorial(), label = "canvas-container"
+    )
     Surface(
         onClick = onClick,
-        color = if (selected) AccentSoft else Canvas,
-        contentColor = Ink,
-        border = if (selected) BorderStroke(1.dp, Color(0xFFFFB9A7)) else null,
+        color = container,
+        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else Ink,
+        border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .5f) else Hairline),
         shape = RoundedCornerShape(17.dp),
-        modifier = modifier
+        modifier = modifier.appleSpringPressable(pressedScale = .97f, enableHaptics = false)
     ) {
         Column(Modifier.padding(vertical = 11.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Box(Modifier.height(30.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -834,7 +856,9 @@ private fun CanvasChoiceCard(value: String, label: String, selected: Boolean, on
                     else -> Modifier.size(30.dp)
                 }
                 Box(frame.clip(RoundedCornerShape(5.dp)).background(if (selected) Accent else SurfaceInset))
-                if (selected) Box(Modifier.align(Alignment.TopEnd).padding(end = 9.dp).size(17.dp).clip(CircleShape).background(Accent), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Check, null, Modifier.size(12.dp), tint = Color.White) }
+                if (selected) Box(Modifier.align(Alignment.TopEnd).padding(end = 9.dp).size(17.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Check, null, Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSecondary)
+                }
             }
             Spacer(Modifier.height(7.dp))
             Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
@@ -858,13 +882,14 @@ private fun MangaArtworkSeriesCard(
     onDelete: (GeneratedImage) -> Unit
 ) {
     var expanded by rememberSaveable(collection.seriesId) { mutableStateOf(false) }
-    val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, tween(220), label = "series-arrow")
+    val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, AsterSpring.jelly(), label = "series-arrow")
     val first = collection.images.first()
     Column(modifier) {
         Surface(color = Surface, shape = RoundedCornerShape(24.dp), shadowElevation = 1.dp) {
             Column {
                 Row(
-                    Modifier.fillMaxWidth().clickable { expanded = !expanded }
+                    Modifier.fillMaxWidth().appleSpringPressable(pressedScale = .985f, enableHaptics = false)
+                        .clickable { expanded = !expanded }
                         .padding(horizontal = 15.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {

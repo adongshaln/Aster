@@ -8,6 +8,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -15,6 +16,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -146,35 +149,72 @@ val BracketBlue @Composable get() = LocalAsterPalette.current.bracketBlue
 val NameInk @Composable get() = LocalAsterPalette.current.nameInk
 val AmberSoft @Composable get() = LocalAsterPalette.current.amberSoft
 
+// Filled controls need the foreground paired with their fill, not the page's text colour.
+val OnInk @Composable get() = MaterialTheme.colorScheme.onPrimary
+val OnAccent @Composable get() = MaterialTheme.colorScheme.onSecondary
+val OnAccentSoft @Composable get() = MaterialTheme.colorScheme.onSecondaryContainer
+val OnSage @Composable get() = MaterialTheme.colorScheme.onTertiary
+val OnSageSoft @Composable get() = MaterialTheme.colorScheme.onTertiaryContainer
+val OnDanger @Composable get() = MaterialTheme.colorScheme.onError
+val OnDangerSoft @Composable get() = MaterialTheme.colorScheme.onErrorContainer
+
 /** Apple 流体阻尼缓出曲线 */
 val AsterEase = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
 
-private fun AsterPalette.toColorScheme() = lightColorScheme(
+private val LightControlInk = Color(0xFFFFFFFF)
+private val DarkControlInk = Color(0xFF141413)
+
+/** Choose the readable side of a changing fill, including during a light/dark transition. */
+private fun contrastingContent(
+    background: Color,
+    dark: Color = DarkControlInk,
+    light: Color = LightControlInk
+): Color {
+    val luminance = background.luminance()
+    fun contrast(foreground: Color): Float {
+        val inkLuminance = foreground.luminance()
+        return (maxOf(luminance, inkLuminance) + 0.05f) / (minOf(luminance, inkLuminance) + 0.05f)
+    }
+    return if (contrast(dark) >= contrast(light)) dark else light
+}
+
+internal fun AsterPalette.toColorScheme(dark: Boolean) = (if (dark) darkColorScheme() else lightColorScheme()).copy(
     primary = ink,
-    onPrimary = warmWhite,
+    onPrimary = contrastingContent(ink),
     primaryContainer = accentSoft,
     onPrimaryContainer = ink,
     secondary = accent,
-    onSecondary = Color.White,
+    onSecondary = contrastingContent(accent),
     secondaryContainer = accentSoft,
-    onSecondaryContainer = accent,
+    onSecondaryContainer = contrastingContent(accentSoft, Color(0xFF8E3D25), AsterPaletteDark.accent),
     tertiary = sage,
+    onTertiary = contrastingContent(sage),
     tertiaryContainer = sageSoft,
-    onTertiaryContainer = sage,
+    onTertiaryContainer = contrastingContent(sageSoft, AsterPaletteLight.sage, AsterPaletteDark.sage),
     background = canvas,
     onBackground = ink,
     surface = surface,
     onSurface = ink,
     surfaceVariant = surfaceInset,
     onSurfaceVariant = mutedInk,
-    outline = hairline,
+    outline = mutedInk,
     outlineVariant = hairline,
     surfaceTint = Color.Transparent,
-    surfaceContainer = canvas,
+    inverseSurface = ink,
+    inverseOnSurface = contrastingContent(ink),
+    inversePrimary = contrastingContent(ink, Color(0xFF8E3D25), AsterPaletteDark.accent),
+    surfaceDim = if (dark) canvas else surfaceInset,
+    surfaceBright = if (dark) surfaceInset else warmWhite,
+    surfaceContainerLowest = if (dark) night else warmWhite,
+    surfaceContainer = surface,
     surfaceContainerLow = surface,
     surfaceContainerHigh = surfaceInset,
+    surfaceContainerHighest = lerp(surfaceInset, ink, 0.04f),
     error = danger,
-    errorContainer = dangerSoft
+    onError = contrastingContent(danger),
+    errorContainer = dangerSoft,
+    onErrorContainer = contrastingContent(dangerSoft, Color(0xFF9E3038), Color(0xFFFFB4AB)),
+    scrim = Color.Black
 )
 
 // Compose loads and caches the bundled variable font off the UI thread. Do not copy
@@ -330,7 +370,7 @@ fun AsterTheme(
         LocalAsterFontFamily provides fontFamily
     ) {
         MaterialTheme(
-            colorScheme = palette.toColorScheme(),
+            colorScheme = palette.toColorScheme(dark),
             typography = typography,
             shapes = shapes,
             content = content

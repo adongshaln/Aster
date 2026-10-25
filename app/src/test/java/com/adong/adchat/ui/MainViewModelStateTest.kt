@@ -30,6 +30,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
 import java.time.Duration
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -174,6 +175,114 @@ class MainViewModelStateTest {
         assertEquals(1, titleRequests.get())
         assertEquals(3, server.requestCount)
         assertEquals("自动标题", vm.conversations.single().title)
+    }
+
+    @Test fun changingDefaultProfilePreservesHistoricalRouteAndDraftForItsNextVisit() {
+        val config = ConfigStore(application).load()
+        val nextProfile = config.chatProfile().copy(id = "next-profile", name = "另一个接口", chatModel = "next-model")
+        ConfigStore(application).save(config.copy(profiles = config.profiles + nextProfile))
+        val old = savedConversationWithDraft()
+        val vm = createViewModel()
+        val draftImage = ChatImageAttachment(uri = "file:///draft.jpg", name = "draft.jpg")
+        vm.chatAttachments += draftImage
+
+        vm.selectDefaultChatProfile(nextProfile.id)
+
+        assertEquals(nextProfile.id, ConfigStore(application).load().chatProfile().id)
+        assertEquals(old.id, vm.activeConversationId)
+        assertEquals(old.profileId, vm.chatProfile.id)
+        assertEquals(old.model, vm.chatProfile.chatModel)
+        assertEquals(old.messages, vm.messages.toList())
+        assertEquals("历史会话的未发送草稿", vm.chatInput)
+        assertEquals(listOf(draftImage), vm.chatAttachments)
+        assertEquals(old, ConversationStore(application).load().single())
+
+        vm.newConversation()
+        assertNull(vm.activeConversationId)
+        assertEquals(nextProfile.id, vm.chatProfile.id)
+        assertEquals(nextProfile.chatModel, vm.chatProfile.chatModel)
+        assertEquals("新会话的未发送草稿", vm.chatInput)
+
+        vm.selectConversation(old.id)
+        assertEquals(old.model, vm.chatProfile.chatModel)
+        assertEquals("历史会话的未发送草稿", vm.chatInput)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test fun changingDefaultModelOnTheHistoricalProfileOnlyAffectsNewConversations() {
+        val old = savedConversationWithDraft()
+        val vm = createViewModel()
+        vm.updateChatInput("继续编辑中的历史草稿")
+
+        vm.selectDefaultChatModel(old.profileId, "  replacement-model  ")
+
+        val persistedDefault = ConfigStore(application).load().chatProfile()
+        assertEquals(old.profileId, persistedDefault.id)
+        assertEquals("replacement-model", persistedDefault.chatModel)
+        assertEquals(old.id, vm.activeConversationId)
+        assertEquals(old.model, vm.chatProfile.chatModel)
+        assertEquals(old.messages, vm.messages.toList())
+        assertEquals("继续编辑中的历史草稿", vm.chatInput)
+        assertEquals(old, ConversationStore(application).load().single())
+
+        vm.newConversation()
+        assertEquals("replacement-model", vm.chatProfile.chatModel)
+        assertEquals("新会话的未发送草稿", vm.chatInput)
+        vm.selectConversation(old.id)
+        assertEquals(old.model, vm.chatProfile.chatModel)
+        assertEquals("继续编辑中的历史草稿", vm.chatInput)
+        await { ChatSessionStore(application).load().drafts[old.id] == "继续编辑中的历史草稿" }
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test fun savingProfileInvalidatesAnInFlightConnectionTest() {
+        val releaseResponse = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                releaseResponse.await(8, TimeUnit.SECONDS)
+                return MockResponse().setHeader("Content-Type", "application/json")
+                    .setBody("""{"data":[{"id":"stale-model"}]}""")
+            }
+        }
+        val vm = createViewModel()
+        val original = vm.profiles.single()
+        try {
+            vm.testProfile(original)
+            await { server.requestCount == 1 }
+            val edited = original.copy(
+                name = "修改后的服务", baseUrl = server.url("/updated").toString(),
+                modelsPath = "/new-models", extraHeaders = "X-New: value", chatModel = "chosen-model"
+            )
+            vm.saveProfile(edited)
+            val savedState = vm.connectionFor(edited.id)
+            val savedNotice = vm.notice
+
+            releaseResponse.countDown()
+            await { idle(vm) }
+
+            assertEquals(edited, vm.profiles.single())
+            assertEquals(edited, ConfigStore(application).load().profiles.single())
+            assertTrue(vm.modelsFor(edited.id).isEmpty())
+            assertEquals(ConnectionPhase.Idle, savedState.phase)
+            assertEquals(savedState, vm.connectionFor(edited.id))
+            assertEquals(savedNotice, vm.notice)
+        } finally {
+            releaseResponse.countDown()
+        }
+    }
+
+    private fun savedConversationWithDraft(): Conversation {
+        val conversation = Conversation(
+            id = "historical-route", title = "历史会话", profileId = "test", model = "historical-model",
+            messages = listOf(ChatMessage(id = 100, role = "user", content = "原问题"),
+                ChatMessage(id = 101, role = "assistant", content = "原回答"))
+        )
+        ConversationStore(application).save(listOf(conversation))
+        ChatSessionStore(application).save(mapOf(
+            conversation.id to "历史会话的未发送草稿",
+            ChatSessionStore.NEW_CONVERSATION_KEY to "新会话的未发送草稿"
+        ), conversation.id)
+        return conversation
     }
 
     private fun configure(suggestions: Boolean) {

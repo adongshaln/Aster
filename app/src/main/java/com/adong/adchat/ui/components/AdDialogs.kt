@@ -2,7 +2,6 @@ package com.adong.adchat.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -17,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
@@ -32,7 +32,7 @@ fun AdModalDialog(
     modifier: Modifier = Modifier,
     subtitle: String? = null,
     icon: ImageVector? = null,
-    iconTint: Color = Accent,
+    iconTint: Color = OnAccentSoft,
     iconContainerColor: Color = AccentSoft,
     content: @Composable ColumnScope.() -> Unit,
     actions: @Composable RowScope.() -> Unit
@@ -108,12 +108,13 @@ fun AdConfirmDialog(
     destructive: Boolean = false
 ) {
     val emphasis = if (destructive) Danger else Accent
+    val onEmphasis = if (destructive) OnDanger else OnAccent
     val soft = if (destructive) DangerSoft else AccentSoft
     AdModalDialog(
         title = title,
         subtitle = if (destructive) "\u8bf7\u786e\u8ba4\u540e\u518d\u7ee7\u7eed" else null,
         icon = icon,
-        iconTint = emphasis,
+        iconTint = if (destructive) OnDangerSoft else OnAccentSoft,
         iconContainerColor = soft,
         onDismiss = onDismiss,
         content = {
@@ -140,7 +141,7 @@ fun AdConfirmDialog(
                 onClick = onConfirm,
                 modifier = Modifier.weight(1f).height(50.dp),
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = emphasis, contentColor = Color.White)
+                colors = ButtonDefaults.buttonColors(containerColor = emphasis, contentColor = onEmphasis)
             ) {
                 Text(confirmLabel, fontWeight = FontWeight.Bold)
             }
@@ -159,29 +160,41 @@ fun AdToggleCard(
     dark: Boolean = false,
     warning: Boolean = false
 ) {
-    val selectedColor = if (dark) Color(0xFF393735) else AccentSoft
-    val idleColor = if (dark) Color(0xFF302F2D) else Surface
+    val colors = if (dark) AsterPaletteDark.toColorScheme(dark = true) else MaterialTheme.colorScheme
+    val selectedColor = colors.secondaryContainer
+    val idleColor = colors.surface
     val container by animateColorAsState(
         targetValue = if (checked) selectedColor else idleColor,
-        animationSpec = tween(180),
+        animationSpec = AsterSpring.editorial(),
         label = "toggleContainer"
     )
     val track by animateColorAsState(
-        targetValue = if (checked) Accent else if (dark) Color(0xFF55514D) else Hairline,
-        animationSpec = tween(180),
+        targetValue = when {
+            !enabled -> colors.onSurface.copy(alpha = .12f).compositeOver(container)
+            checked -> colors.secondary
+            else -> colors.surfaceVariant
+        },
+        animationSpec = AsterSpring.editorial(),
         label = "toggleTrack"
     )
     val thumbOffset by animateDpAsState(
         targetValue = if (checked) 20.dp else 3.dp,
-        animationSpec = tween(180),
+        animationSpec = AsterSpring.snappy(),
         label = "toggleThumb"
     )
-    val titleColor = if (dark) Color.White else Ink
+    val titleColor = if (enabled) colors.onSurface else colors.onSurface.copy(alpha = .38f)
     val subtitleColor = when {
-        warning && checked -> if (dark) Color(0xFFFFB4A5) else Danger
-        dark -> Color(0xFFBDB8B2)
-        else -> MutedInk
+        !enabled -> colors.onSurface.copy(alpha = .38f)
+        warning && checked -> colors.onErrorContainer
+        else -> colors.onSurfaceVariant
     }
+    val thumbColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> colors.onSurface.copy(alpha = .38f).compositeOver(track)
+            checked -> colors.onSecondary
+            else -> colors.onSurfaceVariant
+        }, animationSpec = AsterSpring.editorial(), label = "toggleThumbColor"
+    )
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -189,7 +202,7 @@ fun AdToggleCard(
         enabled = enabled,
         color = container,
         contentColor = titleColor,
-        border = if (checked && !dark) BorderStroke(1.dp, Color(0xFFFFB9A7)) else null,
+        border = BorderStroke(1.dp, if (checked && enabled) colors.secondary.copy(alpha = .5f) else colors.outlineVariant),
         shape = RoundedCornerShape(18.dp)
     ) {
         Row(
@@ -207,7 +220,7 @@ fun AdToggleCard(
                 contentAlignment = Alignment.CenterStart
             ) {
                 Box(
-                    Modifier.offset { IntOffset(thumbOffset.roundToPx(), 0) }.size(22.dp).clip(CircleShape).background(Color.White)
+                    Modifier.offset { IntOffset(thumbOffset.roundToPx(), 0) }.size(22.dp).clip(CircleShape).background(thumbColor)
                 )
             }
         }

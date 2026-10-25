@@ -11,10 +11,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -22,6 +24,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
@@ -40,13 +43,18 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.LayoutDirection
 import kotlin.math.abs
 import com.adong.adchat.data.Conversation
 import com.adong.adchat.island.IslandService
@@ -67,9 +75,6 @@ import com.adong.adchat.ui.media.MediaDownloadViewModel
 import com.adong.adchat.ui.story.StoryViewModel
 import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -94,16 +99,18 @@ class MainActivity : ComponentActivity() {
                 )
             }
             AsterTheme(themeMode = themeMode, fontWeight = viewModel.appConfig.fontWeight) {
-                AsterApp(
-                    vm = viewModel,
-                    incomingMediaText = pendingMediaShare,
-                    onMediaTextConsumed = { pendingMediaShare = null },
-                    openIslandSettings = pendingIslandSettings,
-                    onIslandSettingsConsumed = {
-                        pendingIslandSettings = false
-                        if (intent?.action == IslandService.ACTION_OPEN_SETTINGS) intent.action = null
-                    }
-                )
+                CompositionLocalProvider(LocalAsterMotionEnabled provides rememberAsterMotionEnabled()) {
+                    AsterApp(
+                        vm = viewModel,
+                        incomingMediaText = pendingMediaShare,
+                        onMediaTextConsumed = { pendingMediaShare = null },
+                        openIslandSettings = pendingIslandSettings,
+                        onIslandSettingsConsumed = {
+                            pendingIslandSettings = false
+                            if (intent?.action == IslandService.ACTION_OPEN_SETTINGS) intent.action = null
+                        }
+                    )
+                }
             }
         }
     }
@@ -190,7 +197,6 @@ private fun AsterApp(
     LaunchedEffect(openIslandSettings) {
         if (openIslandSettings) {
             navigate(AppPage.Settings)
-            onIslandSettingsConsumed()
         }
     }
 
@@ -244,15 +250,31 @@ private fun AsterApp(
                     .drawerEdgeSwipe(drawerOpen),
                 contentAlignment = Alignment.TopCenter
             ) {
+                val motionEnabled = LocalAsterMotionEnabled.current
+                val pageTravelPx = with(LocalDensity.current) { 28.dp.roundToPx() }
                 AnimatedContent(
                     targetState = page,
                     modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
                     transitionSpec = {
-                        val forward = targetState.ordinal > initialState.ordinal
-                        val enterOffset: (Int) -> Int = { width -> if (forward) width / 18 else -width / 18 }
-                        val exitOffset: (Int) -> Int = { width -> if (forward) -width / 22 else width / 22 }
-                        (fadeIn(tween(280, easing = AsterEase)) + slideInHorizontally(tween(340, easing = AsterEase), initialOffsetX = enterOffset)) togetherWith
-                            (fadeOut(tween(180, easing = AsterEase)) + slideOutHorizontally(tween(240, easing = AsterEase), targetOffsetX = exitOffset))
+                        val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                        val enter = if (motionEnabled) {
+                            fadeIn(tween(180, easing = AsterEase)) +
+                                slideInHorizontally(AsterSpring.spatial()) { width ->
+                                    minOf(width / 14, pageTravelPx) * direction
+                                } +
+                                scaleIn(
+                                    AsterSpring.settle(), initialScale = 0.986f,
+                                    transformOrigin = TransformOrigin(0.5f, 0.35f)
+                                )
+                        } else EnterTransition.None
+                        val exit = if (motionEnabled) {
+                            fadeOut(tween(120, easing = AsterEase)) +
+                                slideOutHorizontally(tween(180, easing = AsterEase)) { width ->
+                                    -minOf(width / 32, pageTravelPx / 2) * direction
+                                }
+                        } else ExitTransition.None
+                        // Only navigation changes this transition; streaming text never resizes it.
+                        (enter togetherWith exit).using(null)
                     },
                     label = "page-transition"
                 ) { target ->
@@ -268,7 +290,12 @@ private fun AsterApp(
                             )
                             AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
                             AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
-                            AppPage.Settings -> SettingsScreen(vm, onOpenDrawer = openDrawer)
+                            AppPage.Settings -> SettingsScreen(
+                                vm,
+                                onOpenDrawer = openDrawer,
+                                openIslandSettings = openIslandSettings,
+                                onIslandSettingsConsumed = onIslandSettingsConsumed
+                            )
                         }
                     }
                 }
@@ -278,8 +305,8 @@ private fun AsterApp(
                         .padding(top = 82.dp, start = 16.dp, end = 16.dp).widthIn(max = 640.dp)
                 ) { data ->
                     Snackbar(
-                        containerColor = Night,
-                        contentColor = Color.White,
+                        containerColor = MaterialTheme.colorScheme.inverseSurface,
+                        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth().clickable { data.dismiss() }
                     ) {
@@ -287,11 +314,11 @@ private fun AsterApp(
                             Text(data.visuals.message, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                             data.visuals.actionLabel?.let { action ->
                                 TextButton(onClick = { data.performAction() }) {
-                                    Text(action, color = Color.White, fontWeight = FontWeight.Bold)
+                                    Text(action, color = MaterialTheme.colorScheme.inversePrimary, fontWeight = FontWeight.Bold)
                                 }
                             }
                             Spacer(Modifier.width(if (data.visuals.actionLabel != null) 2.dp else 12.dp))
-                            Icon(Icons.Rounded.Close, "关闭提示", Modifier.size(18.dp), tint = Color.White.copy(alpha = .82f))
+                            Icon(Icons.Rounded.Close, "关闭提示", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.inverseOnSurface)
                         }
                     }
                 }
@@ -347,25 +374,25 @@ private fun AsterApp(
                     enabled = storyTitle.isNotBlank() && vm.chatProfile.chatModel.isNotBlank(),
                     modifier = Modifier.weight(1f).height(50.dp),
                     shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent)
                 ) { Text("创建", fontWeight = FontWeight.Bold) }
             }
         )
     }
 }
 
-/**
- * Opens the drawer for a clearly horizontal, deliberate drag anywhere on
- * screen: horizontal travel must dominate the vertical one and exceed
- * [triggerPx] before the drawer responds. Light or diagonal drags never
- * open it.
- */
+/** Only a deliberate inward drag from the starting edge opens the drawer. */
 private fun Modifier.drawerEdgeSwipe(onOpen: () -> Unit): Modifier = composed {
     val density = LocalDensity.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val currentOnOpen by rememberUpdatedState(onOpen)
+    val edgePx = with(density) { 24.dp.toPx() }
     val triggerPx = with(density) { 72.dp.toPx() }
-    pointerInput(Unit) {
+    pointerInput(edgePx, triggerPx, rtl) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
+            val beganAtEdge = if (rtl) down.position.x >= size.width - edgePx else down.position.x <= edgePx
+            if (!beganAtEdge) return@awaitEachGesture
             var dx = 0f
             var dy = 0f
             while (true) {
@@ -374,9 +401,12 @@ private fun Modifier.drawerEdgeSwipe(onOpen: () -> Unit): Modifier = composed {
                 if (change.isConsumed) break
                 dx += change.positionChange().x
                 dy += change.positionChange().y
-                if (abs(dx) > abs(dy) * 2f && abs(dx) >= triggerPx) {
+                val inwardTravel = if (rtl) -dx else dx
+                if (inwardTravel < -viewConfiguration.touchSlop ||
+                    (abs(dy) > viewConfiguration.touchSlop && abs(dy) >= abs(dx))) break
+                if (inwardTravel > abs(dy) * 2f && inwardTravel >= triggerPx) {
                     change.consume()
-                    onOpen()
+                    currentOnOpen()
                     break
                 }
                 if (event.changes.none { it.pressed }) break
@@ -455,19 +485,23 @@ internal fun AppDrawer(
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         pair.forEach { item ->
                             val selected = currentPage == item
-                            // 选中态是高频反馈，硬切会显得没有落点；给 160ms 的颜色过渡。
+                            val interactionSource = remember { MutableInteractionSource() }
                             val selectionBg by animateColorAsState(
                                 if (selected) AccentSoft else Color.Transparent,
-                                tween(160, easing = FastOutSlowInEasing), label = "nav-bg"
+                                AsterSpring.editorial(), label = "nav-bg"
                             )
                             val selectionInk by animateColorAsState(
-                                if (selected) Accent else MutedInk,
-                                tween(160, easing = FastOutSlowInEasing), label = "nav-ink"
+                                if (selected) OnAccentSoft else MutedInk,
+                                AsterSpring.editorial(), label = "nav-ink"
                             )
-                            Surface(onClick = { onNavigate(item) }, modifier = Modifier.weight(1f),
+                            Surface(onClick = { onNavigate(item) },
+                                modifier = Modifier.weight(1f).semantics { this.selected = selected },
+                                interactionSource = interactionSource,
                                 color = selectionBg,
                                 contentColor = selectionInk, shape = RoundedCornerShape(12.dp)) {
-                                Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp, vertical = 10.dp),
+                                Row(Modifier.heightIn(min = 48.dp)
+                                    .appleSpringPressable(pressedScale = 0.96f, interactionSource = interactionSource)
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Icon(item.icon, null, Modifier.size(18.dp))
                                     Text(item.label, Modifier.padding(start = 10.dp), style = MaterialTheme.typography.labelLarge)
@@ -514,14 +548,24 @@ internal fun AppDrawer(
                 }
             }
             HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = Hairline)
+            val settingsSelected = currentPage == AppPage.Settings
+            val settingsInteraction = remember { MutableInteractionSource() }
+            val settingsFill by animateColorAsState(
+                if (settingsSelected) AccentSoft else Color.Transparent,
+                AsterSpring.editorial(), label = "settings-nav-color"
+            )
             Surface(
                 onClick = { onNavigate(AppPage.Settings) },
-                color = if (currentPage == AppPage.Settings) AccentSoft else Color.Transparent,
+                interactionSource = settingsInteraction,
+                color = settingsFill,
+                contentColor = if (settingsSelected) OnAccentSoft else Ink,
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.padding(12.dp)
+                modifier = Modifier.padding(12.dp).semantics { selected = settingsSelected }
             ) {
-                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Tune, null, Modifier.size(21.dp), tint = MutedInk)
+                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .appleSpringPressable(pressedScale = 0.96f, interactionSource = settingsInteraction)
+                    .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.Tune, null, Modifier.size(21.dp))
                     Text("设置", Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.labelLarge)
                     Text("Aster ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelSmall)
                 }
@@ -595,7 +639,7 @@ internal fun AppDrawer(
                     enabled = renameText.isNotBlank(),
                     modifier = Modifier.weight(1f).height(50.dp),
                     shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent)
                 ) { Text("保存", fontWeight = FontWeight.Bold) }
             }
         )
@@ -612,15 +656,22 @@ private fun ConversationRow(
     onDelete: () -> Unit
 ) {
     var showActions by remember { mutableStateOf(false) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val fill by animateColorAsState(
+        if (selected) Surface else Color.Transparent,
+        AsterSpring.editorial(), label = "conversation-selection"
+    )
     val preview = remember(conversation.messages, generating) {
         if (generating) "正在生成…" else conversation.messages.lastOrNull { it.content.isNotBlank() }
             ?.content?.take(180)?.replace(Regex("\\s+"), " ")?.trim().orEmpty().ifBlank { "还没有消息" }
     }
-    Surface(onClick = onClick, color = if (selected) Surface else Color.Transparent,
+    Surface(onClick = onClick, color = fill, interactionSource = interactionSource,
         shape = RoundedCornerShape(14.dp),
         border = if (selected) BorderStroke(1.dp, Hairline) else null,
-        modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(start = 10.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
+        modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .appleSpringPressable(pressedScale = 0.975f, interactionSource = interactionSource)
+            .padding(start = 10.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(3.dp).height(26.dp).clip(RoundedCornerShape(2.dp))
                 .background(if (selected) Accent else Color.Transparent))

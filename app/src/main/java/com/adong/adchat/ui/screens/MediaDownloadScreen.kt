@@ -8,10 +8,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -24,8 +24,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -45,7 +43,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
@@ -149,9 +146,19 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             item {
                 AnimatedContent(
                     targetState = state.phase,
+                    // Progress/verification updates belong to the existing card. Retain its
+                    // WebView/card state instead of crossfading two copies of the workspace.
+                    contentKey = { phase -> when (phase) {
+                        MediaWorkspacePhase.Verification -> MediaWorkspacePhase.Resolving
+                        MediaWorkspacePhase.Downloading -> MediaWorkspacePhase.Ready
+                        else -> phase
+                    } },
                     transitionSpec = {
-                        (fadeIn(tween(180)) + slideInVertically(tween(230, easing = FastOutSlowInEasing)) { it / 14 }) togetherWith
-                            (fadeOut(tween(110)) + slideOutVertically(tween(150)) { -it / 18 })
+                        ((fadeIn(AsterSpring.editorial()) + slideInVertically(AsterSpring.spatial()) { it / 20 }) togetherWith
+                            (fadeOut(AsterSpring.editorial()) + slideOutVertically(AsterSpring.spatial()) { -it / 24 }))
+                            // Verification owns its height animation; avoid nesting another
+                            // workspace size spring around the WebView and progress updates.
+                            .using(null)
                     },
                     label = "media-workspace"
                 ) { phase ->
@@ -333,7 +340,7 @@ private fun DouyinResolverCard(
     Surface(
         color = Surface, shape = RoundedCornerShape(22.dp), border = BorderStroke(1.dp, Hairline),
         shadowElevation = if (verificationVisible) 5.dp else 1.dp,
-        modifier = Modifier.fillMaxWidth().animateContentSize()
+        modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -352,7 +359,11 @@ private fun DouyinResolverCard(
             }
             Spacer(Modifier.height(10.dp))
             Box(
-                Modifier.fillMaxWidth().height(if (verificationVisible) 500.dp else 150.dp).clip(RoundedCornerShape(17.dp)).background(Canvas)
+                // Animate the viewport around one measured WebView, not its browser layout on
+                // every frame. Resolver text/progress updates cannot restart this size change.
+                Modifier.fillMaxWidth().animateContentSize(AsterSpring.spatial())
+                    .height(if (verificationVisible) 500.dp else 150.dp)
+                    .clip(RoundedCornerShape(17.dp)).background(Canvas)
             ) {
                 DouyinResolverWebView(request, Modifier.fillMaxSize(), onProgress, onVerificationRequired, onResolved, onFailure)
                 if (!verificationVisible) {
@@ -389,7 +400,10 @@ private fun ResolvedMediaCard(
         Column {
             AnimatedContent(
                 targetState = previewVisible,
-                transitionSpec = { (fadeIn(tween(190)) + scaleIn(tween(210), initialScale = .98f)) togetherWith fadeOut(tween(120)) },
+                transitionSpec = {
+                    ((fadeIn(AsterSpring.editorial()) + scaleIn(AsterSpring.spatial(), initialScale = .98f)) togetherWith
+                        fadeOut(AsterSpring.editorial())).using(SizeTransform { _, _ -> AsterSpring.spatial() })
+                },
                 label = "preview"
             ) { showingPreview ->
                 if (showingPreview) {
@@ -397,7 +411,8 @@ private fun ResolvedMediaCard(
                 } else {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(
-                            Modifier.width(124.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).background(Color(0xFFEDE9E3)).clickable { previewVisible = true },
+                            Modifier.width(124.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).background(SurfaceInset)
+                                .appleSpringPressable(pressedScale = .97f, enableHaptics = false).clickable { previewVisible = true },
                             contentAlignment = Alignment.Center
                         ) {
                             MediaThumbnail(
@@ -483,13 +498,12 @@ private fun ResolvedMediaCard(
 
 @Composable
 private fun PrimaryButton(text: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    val scale by animateFloatAsState(if (pressed) .97f else 1f, spring(dampingRatio = .78f, stiffness = 620f), label = "primary-scale")
     Button(
-        onClick = onClick, interactionSource = interaction,
-        modifier = modifier.height(46.dp).graphicsLayer { scaleX = scale; scaleY = scale },
-        shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White)
+        onClick = onClick,
+        modifier = modifier.height(48.dp).appleSpringPressable(pressedScale = .97f, enableHaptics = false),
+        shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.secondary, contentColor = MaterialTheme.colorScheme.onSecondary
+        )
     ) {
         Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(text, fontWeight = FontWeight.Bold)
     }
@@ -497,14 +511,17 @@ private fun PrimaryButton(text: String, icon: ImageVector, modifier: Modifier = 
 
 @Composable
 private fun DownloadProgressBlock(progress: MediaDownloadProgress, savingToGallery: Boolean, onCancel: () -> Unit) {
-    val animatedProgress by animateFloatAsState(progress.fraction, spring(dampingRatio = .85f, stiffness = 420f), label = "download-progress")
+    // Progress represents received bytes; it must not bounce past the reported value or 100%.
+    val animatedProgress by animateFloatAsState(
+        progress.fraction.coerceIn(0f, 1f), tween(180, easing = LinearEasing), label = "download-progress"
+    )
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
                     when {
                         savingToGallery -> "正在保存到相册"
-                        progress.totalBytes > 0L -> "${(animatedProgress * 100).toInt()}%"
+                        progress.totalBytes > 0L -> "${(progress.fraction.coerceIn(0f, 1f) * 100).toInt()}%"
                         else -> "正在连接"
                     },
                     fontWeight = FontWeight.Bold

@@ -9,22 +9,26 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.List
@@ -37,13 +41,16 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -54,7 +61,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.adong.adchat.data.API_FORMAT_ANTHROPIC
 import com.adong.adchat.data.API_FORMAT_OPENAI
 import com.adong.adchat.data.ApiModel
@@ -93,216 +99,196 @@ import com.adong.adchat.ui.theme.*
 import kotlin.math.roundToInt
 
 @Composable
-fun SettingsScreen(vm: MainViewModel, onOpenDrawer: () -> Unit) {
+fun SettingsScreen(
+    vm: MainViewModel,
+    onOpenDrawer: () -> Unit,
+    openIslandSettings: Boolean = false,
+    onIslandSettingsConsumed: () -> Unit = {}
+) {
     var editing by remember { mutableStateOf<ApiProfile?>(null) }
     var editingIsNew by remember { mutableStateOf(false) }
-    if (editing != null) {
-        ProfileEditor(
-            initial = editing!!,
-            isNew = editingIsNew,
-            models = vm.modelsFor(editing!!.id),
-            state = vm.connectionFor(editing!!.id),
-            searchBackendConfigured = vm.searchProfile.searchModel.isNotBlank(),
-            keyNeedsReentry = editing!!.id in vm.profilesWithUndecryptableKeys,
-            onBack = {
-                editing?.id?.let(vm::discardProfileDraft)
-                editing = null
-            },
-            onTest = { draft, onUpdated -> vm.testProfile(draft, onUpdated) },
-            onSave = { vm.saveProfile(it); editing = null }
-        )
-    } else {
-        SettingsHome(vm = vm, onOpenDrawer = onOpenDrawer, onEdit = { editingIsNew = false; editing = it }, onCreate = { editingIsNew = true; editing = it })
+    val homeState = rememberSaveableStateHolder()
+    LaunchedEffect(openIslandSettings) { if (openIslandSettings) editing = null }
+    AnimatedContent(
+        targetState = editing,
+        contentKey = { it?.id },
+        modifier = Modifier.fillMaxSize(),
+        transitionSpec = {
+            val forward = targetState != null
+            (fadeIn(AsterSpring.editorial()) + slideInHorizontally(AsterSpring.spatial()) { if (forward) it / 10 else -it / 14 }) togetherWith
+                (fadeOut(AsterSpring.editorial()) + slideOutHorizontally(AsterSpring.snappy()) { if (forward) -it / 14 else it / 10 })
+        },
+        label = "settings-editor"
+    ) { profile ->
+        if (profile != null) {
+            ProfileEditor(
+                initial = profile,
+                isNew = editingIsNew,
+                isActive = editing?.id == profile.id,
+                models = vm.modelsFor(profile.id),
+                state = vm.connectionFor(profile.id),
+                searchBackendConfigured = vm.searchProfile.searchModel.isNotBlank(),
+                keyNeedsReentry = profile.id in vm.profilesWithUndecryptableKeys,
+                onBack = { vm.discardProfileDraft(profile.id); editing = null },
+                onTest = { draft, onUpdated -> vm.testProfile(draft, onUpdated) },
+                onSave = { vm.saveProfile(it); editing = null }
+            )
+        } else {
+            homeState.SaveableStateProvider("settings-home") {
+                SettingsHome(vm = vm, isActive = editing == null, onOpenDrawer = onOpenDrawer,
+                    openIslandSettings = openIslandSettings, onIslandSettingsConsumed = onIslandSettingsConsumed,
+                    onEdit = { editingIsNew = false; editing = it },
+                    onCreate = { editingIsNew = true; editing = it })
+            }
+        }
     }
 }
 
 @Composable
-private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (ApiProfile) -> Unit, onCreate: (ApiProfile) -> Unit) {
+private fun SettingsHome(
+    vm: MainViewModel, isActive: Boolean, onOpenDrawer: () -> Unit,
+    openIslandSettings: Boolean, onIslandSettingsConsumed: () -> Unit,
+    onEdit: (ApiProfile) -> Unit, onCreate: (ApiProfile) -> Unit
+) {
     var addMenu by remember { mutableStateOf(false) }
-    var showTransferActions by remember { mutableStateOf(false) }
     var deleteCandidate by remember { mutableStateOf<ApiProfile?>(null) }
     var transferMode by remember { mutableStateOf<String?>(null) }
     var includeApiKeys by remember { mutableStateOf(false) }
     var importText by remember { mutableStateOf("") }
     var importError by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        AsterPageHeader("设置", onOpenDrawer, Modifier.padding(horizontal = 8.dp)) {
-            AsterIconButton(Icons.Rounded.MoreHoriz, "配置管理", { showTransferActions = true })
-        }
-        LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().imePadding(),
-            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("我的服务", style = MaterialTheme.typography.titleLarge, color = Ink)
-                        Text("连接 API，开始使用你的模型", style = MaterialTheme.typography.bodySmall, color = MutedInk)
-                    }
-                    TextButton(onClick = { addMenu = true }) {
-                        Icon(Icons.Rounded.Add, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("添加")
-                    }
-                }
-            }
-            items(vm.profiles, key = { it.id }) { profile ->
-                ProfileCard(
-                    profile, vm.connectionFor(profile.id), vm.modelsFor(profile.id).size,
-                    profile.id == vm.chatProfile.id, profile.id == vm.imageProfile.id,
-                    vm.profiles.size > 1, { vm.testProfile(profile) }, { onEdit(profile) },
-                    { vm.duplicateProfile(profile.id) }, { deleteCandidate = profile }
-                )
-            }
-            item {
-                Spacer(Modifier.height(12.dp))
-                SettingsDisclosure("默认模型", "对话 · " + vm.chatProfile.chatModel.ifBlank { "未选择" }, Icons.Rounded.Tune) {
-                    RouteAssignmentCard(RouteKind.Chat, vm.chatProfile, vm.profiles,
-                        vm.modelsFor(vm.chatProfile.id), vm::selectChatProfile,
-                        { vm.selectChatModel(vm.chatProfile.id, it) })
-                    RouteAssignmentCard(RouteKind.Image, vm.imageProfile, vm.profiles,
-                        vm.modelsFor(vm.imageProfile.id), vm::selectImageProfile,
-                        { vm.selectImageModel(vm.imageProfile.id, it) })
-                }
-            }
-            item {
-                SettingsDisclosure(
-                    "联网搜索后端",
-                    vm.searchProfile.searchModel.takeIf(String::isNotBlank)?.let { "${vm.searchProfile.name} · $it" } ?: "未配置 · Chat 模型将使用自身兼容能力",
-                    Icons.Rounded.TravelExplore
-                ) {
-                    SearchBackendCard(
-                        profile = vm.searchProfile,
-                        profiles = vm.profiles,
-                        models = vm.modelsFor(vm.searchProfile.id),
-                        allowXSearch = vm.allowXSearch,
-                        onProfile = vm::selectSearchProfile,
-                        onModel = { vm.selectSearchModel(vm.searchProfile.id, it) },
-                        onAllowX = vm::setAllowXSearch
-                    )
-                }
-            }
-            item {
-                SettingsDisclosure(
-                    "输入建议",
-                    vm.suggestionProfile.suggestionModel.takeIf(String::isNotBlank)?.let { "${vm.suggestionProfile.name} · ${vm.suggestionProfile.suggestionModel}" } ?: "未配置 · 回复结束后不预测输入",
-                    Icons.Rounded.AutoAwesome
-                ) {
-                    InputSuggestionCard(
-                        profile = vm.suggestionProfile,
-                        profiles = vm.profiles,
-                        models = vm.modelsFor(vm.suggestionProfile.id),
-                        onProfile = vm::selectSuggestionProfile,
-                        onModel = { vm.selectSuggestionModel(vm.suggestionProfile.id, it) }
-                    )
-                }
-            }
-            item {
-                SettingsDisclosure("助手偏好", "角色、语气与回答习惯", Icons.Rounded.EditNote) {
-                    var editingName by remember { mutableStateOf(false) }
-                    if (editingName) {
-                        UserNamePromptDialog(
-                            mode = UserNamePromptMode.Edit,
-                            currentName = vm.appConfig.userName,
-                            onConfirm = { vm.setUserName(it); editingName = false },
-                            onSkip = { editingName = false }
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("我的称呼", style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                if (vm.appConfig.userName.isBlank()) "未设置；首页问候不带称呼" else "首页问候会称呼您「${vm.appConfig.userName}」",
-                                color = MutedInk, style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        TextButton(onClick = { editingName = true }) {
-                            Text(if (vm.appConfig.userName.isBlank()) "设置" else "修改")
-                        }
-                    }
-                    Spacer(Modifier.height(14.dp))
-                    OutlinedTextField(
-                        value = vm.appConfig.systemPrompt, onValueChange = vm::updateSystemPrompt,
-                        modifier = Modifier.fillMaxWidth(), minLines = 4, maxLines = 8,
-                        placeholder = { Text("定义助手的角色与回答风格") },
-                        shape = RoundedCornerShape(15.dp), colors = editorFieldColors()
-                    )
-                    Text("修改自动保存，仅用于对话。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                }
-            }
-            item {
-                SettingsDisclosure("网络安全", "默认校验服务器证书", Icons.Rounded.Lock) {
-                    SettingSwitch(
-                        title = "关闭证书校验",
-                        subtitle = "允许自签名或不受信任的证书。只在你信任当前网络时打开，否则连接可能被窃听。",
-                        checked = vm.appConfig.allowInsecureCertificates,
-                        onCheckedChange = vm::setAllowInsecureCertificates
-                    )
-                }
-            }
-            item {
-                SettingsDisclosure("外观", "浅色、深色或跟随系统 · 阅读字重可调", Icons.Rounded.Palette) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        ThemeModeCard("浅色", THEME_MODE_ASTER, AsterPaletteLight,
-                            vm.appConfig.themeMode, vm::setThemeMode, Modifier.width(148.dp))
-                        ThemeModeCard("深色", THEME_MODE_DARK, AsterPaletteDark,
-                            vm.appConfig.themeMode, vm::setThemeMode, Modifier.width(148.dp))
-                        ThemeModeCard("跟随系统", THEME_MODE_SYSTEM, null,
-                            vm.appConfig.themeMode, vm::setThemeMode, Modifier.width(168.dp))
-                    }
-                    Spacer(Modifier.height(18.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("阅读字重", style = MaterialTheme.typography.titleSmall)
-                            Text("拖动滑轨即时调整普通界面文字的粗细", color = MutedInk, style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text(vm.appConfig.fontWeight.toString(), style = MaterialTheme.typography.labelLarge, color = Accent)
-                    }
-                    Slider(
-                        value = vm.appConfig.fontWeight.toFloat(),
-                        onValueChange = { vm.setFontWeight(it.roundToInt(), save = false) },
-                        onValueChangeFinished = vm::commitFontWeight,
-                        valueRange = FONT_WEIGHT_MIN.toFloat()..FONT_WEIGHT_MAX.toFloat(),
-                        steps = FONT_WEIGHT_MAX - FONT_WEIGHT_MIN - 1,
-                        modifier = Modifier.fillMaxWidth().semantics {
-                            stateDescription = "阅读字重 ${vm.appConfig.fontWeight}"
-                        }
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("细", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                        Text("标准", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                        Text("粗", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                    }
-                    TextButton(
-                        onClick = { vm.setFontWeight(DEFAULT_FONT_WEIGHT) },
-                        modifier = Modifier.align(Alignment.End)
-                    ) { Text("恢复默认") }
-                }
-            }
-            item {
-                SettingsDisclosure("星岛", "点按墨线圈，翻译文字、阅读网页或解析媒体", Icons.Rounded.WorkspacePremium) {
-                    StarIslandSettingsCard()
-                }
-            }
-            item { com.adong.adchat.ui.components.SkillPickerEntry(null) }
-            item {
-                Text("Aster ${BuildConfig.VERSION_NAME}", Modifier.fillMaxWidth().padding(top = 20.dp),
-                    color = MutedInk, style = MaterialTheme.typography.labelMedium,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            }
+    var destination by rememberSaveable { mutableStateOf(SettingsDestination.Home) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var showSkills by remember { mutableStateOf(false) }
+    val pageStates = rememberSaveableStateHolder()
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(openIslandSettings, isActive) {
+        if (openIslandSettings && isActive) {
+            destination = SettingsDestination.Island
+            onIslandSettingsConsumed()
         }
     }
-    if (showTransferActions) {
-        AdActionSheet(title = "配置管理", subtitle = "在设备之间迁移你的服务配置",
-            actions = listOf(
-                AdActionOption("import", "导入配置", "从 JSON 恢复服务与模型", Icons.Rounded.FileUpload),
-                AdActionOption("export", "导出配置", "备份当前的服务配置", Icons.Rounded.FileDownload)
-            ), onAction = { showTransferActions = false; transferMode = it.id; importError = null },
-            onDismiss = { showTransferActions = false })
+    fun navigate(target: SettingsDestination) {
+        keyboard?.hide()
+        if (target == SettingsDestination.Skills) showSkills = true else destination = target
+    }
+    BackHandler(isActive && destination != SettingsDestination.Home) { destination = destination.parent }
+    if (showSkills) SkillLibrarySheet(null, onDismiss = { showSkills = false })
+    Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        if (destination == SettingsDestination.Home) {
+            AsterPageHeader("设置", onOpenDrawer, Modifier.padding(horizontal = 8.dp))
+        } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                AsterIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "返回设置", { destination = destination.parent })
+                Text(destination.title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = Ink)
+            }
+        }
+        AnimatedContent(
+            targetState = destination,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            transitionSpec = {
+                val forward = targetState.depth > initialState.depth
+                (fadeIn(AsterSpring.editorial()) + slideInHorizontally(AsterSpring.spatial()) { if (forward) it / 10 else -it / 14 }) togetherWith
+                    (fadeOut(AsterSpring.editorial()) + slideOutHorizontally(AsterSpring.snappy()) { if (forward) -it / 14 else it / 10 })
+            },
+            label = "settings-destination"
+        ) { target ->
+            pageStates.SaveableStateProvider(target.name) {
+                LazyColumn(
+                    Modifier.fillMaxSize().imePadding(),
+                    state = rememberLazyListState(),
+                    contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    when (target) {
+                        SettingsDestination.Home -> {
+                            item(key = "search") {
+                                OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(),
+                                    placeholder = { Text("搜索设置，如模型、外观、星岛") },
+                                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                                    trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Rounded.Close, "清除搜索") } },
+                                    singleLine = true, shape = RoundedCornerShape(20.dp), colors = editorFieldColors())
+                            }
+                            val matches = SettingsDestination.entries.filter { it != SettingsDestination.Home && it.matches(query) }
+                            if (query.isNotBlank()) {
+                                if (matches.isEmpty()) item { Text("没有匹配的设置，试试“模型”或“主题”。", color = MutedInk, modifier = Modifier.padding(12.dp)) }
+                                items(matches, key = { it.name }) { item ->
+                                    SettingsNavigationRow(item, settingsSummary(item, vm)) { navigate(item) }
+                                }
+                            } else {
+                                item { SettingsGroupLabel("模型与连接") }
+                                item { SettingsNavigationRow(SettingsDestination.Connections, settingsSummary(SettingsDestination.Connections, vm)) { navigate(SettingsDestination.Connections) } }
+                                item { SettingsNavigationRow(SettingsDestination.Models, settingsSummary(SettingsDestination.Models, vm)) { navigate(SettingsDestination.Models) } }
+                                item { SettingsGroupLabel("使用体验") }
+                                item { SettingsNavigationRow(SettingsDestination.Appearance, settingsSummary(SettingsDestination.Appearance, vm)) { navigate(SettingsDestination.Appearance) } }
+                                item { SettingsNavigationRow(SettingsDestination.Assistant, "称呼、角色与回答风格") { navigate(SettingsDestination.Assistant) } }
+                                item { SettingsNavigationRow(SettingsDestination.Island, "文字处理、网页阅读与媒体下载") { navigate(SettingsDestination.Island) } }
+                                item { SettingsNavigationRow(SettingsDestination.Skills, "安装与管理助手技能") { navigate(SettingsDestination.Skills) } }
+                                item { SettingsGroupLabel("应用管理") }
+                                item { SettingsNavigationRow(SettingsDestination.Transfer, "导入、导出服务配置") { navigate(SettingsDestination.Transfer) } }
+                                item { SettingsNavigationRow(SettingsDestination.Security, settingsSummary(SettingsDestination.Security, vm)) { navigate(SettingsDestination.Security) } }
+                                item { Text("Aster ${BuildConfig.VERSION_NAME}", Modifier.fillMaxWidth().padding(top = 12.dp),
+                                    color = MutedInk, style = MaterialTheme.typography.labelMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
+                            }
+                        }
+                        SettingsDestination.Connections -> {
+                            item { SettingsNavigationRow(SettingsDestination.Search, settingsSummary(SettingsDestination.Search, vm)) { navigate(SettingsDestination.Search) } }
+                            item { SettingsNavigationRow(SettingsDestination.Suggestions, settingsSummary(SettingsDestination.Suggestions, vm)) { navigate(SettingsDestination.Suggestions) } }
+                            item {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("我的服务", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Ink)
+                                    TextButton(onClick = { addMenu = true }) { Icon(Icons.Rounded.Add, null, Modifier.size(18.dp)); Text("添加") }
+                                }
+                            }
+                            items(vm.profiles, key = { it.id }) { profile ->
+                                ProfileCard(profile, vm.connectionFor(profile.id), vm.modelsFor(profile.id).size,
+                                    profile.id == vm.defaultChatProfile.id, profile.id == vm.imageProfile.id,
+                                    vm.profiles.size > 1, { vm.testProfile(profile) }, { onEdit(profile) },
+                                    { vm.duplicateProfile(profile.id) }, { deleteCandidate = profile })
+                            }
+                        }
+                        SettingsDestination.Models -> {
+                            item { Text("默认对话模型用于新对话和星岛。已有对话的模型在对话页单独切换。", color = MutedInk, style = MaterialTheme.typography.bodyMedium) }
+                            item { RouteAssignmentCard(RouteKind.Chat, vm.defaultChatProfile, vm.profiles,
+                                vm.modelsFor(vm.defaultChatProfile.id), vm::selectDefaultChatProfile,
+                                { vm.selectDefaultChatModel(vm.defaultChatProfile.id, it) }) }
+                            item { RouteAssignmentCard(RouteKind.Image, vm.imageProfile, vm.profiles,
+                                vm.modelsFor(vm.imageProfile.id), vm::selectImageProfile,
+                                { vm.selectImageModel(vm.imageProfile.id, it) }) }
+                        }
+                        SettingsDestination.Search -> item {
+                            SearchBackendCard(vm.searchProfile, vm.profiles, vm.modelsFor(vm.searchProfile.id), vm.allowXSearch,
+                                vm::selectSearchProfile, { vm.selectSearchModel(vm.searchProfile.id, it) }, vm::setAllowXSearch)
+                        }
+                        SettingsDestination.Suggestions -> item {
+                            InputSuggestionCard(vm.suggestionProfile, vm.profiles, vm.modelsFor(vm.suggestionProfile.id),
+                                vm::selectSuggestionProfile, { vm.selectSuggestionModel(vm.suggestionProfile.id, it) })
+                        }
+                        SettingsDestination.Assistant -> item {
+                            SettingsContentCard { AssistantSettings(vm) }
+                        }
+                        SettingsDestination.Appearance -> item {
+                            SettingsContentCard { AppearanceSettings(vm) }
+                        }
+                        SettingsDestination.Island -> item {
+                            SettingsContentCard { StarIslandSettingsCard() }
+                        }
+                        SettingsDestination.Security -> item {
+                            SettingsContentCard {
+                                SettingSwitch("关闭证书校验", "允许自签名或不受信任的证书。仅在确认服务可信时开启。",
+                                    vm.appConfig.allowInsecureCertificates, onCheckedChange = vm::setAllowInsecureCertificates)
+                                Text(if (vm.appConfig.allowInsecureCertificates) "当前已关闭证书校验" else "当前使用正常的服务器证书校验", color = if (vm.appConfig.allowInsecureCertificates) Danger else MutedInk, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        SettingsDestination.Transfer -> {
+                            item { Text("迁移服务地址、模型与接口参数。API Key 默认不包含在导出内容中。", color = MutedInk, style = MaterialTheme.typography.bodyMedium) }
+                            item { SettingsActionRow("导入配置", "把 JSON 中的服务追加到当前配置", Icons.Rounded.FileUpload) { transferMode = "import"; importError = null } }
+                            item { SettingsActionRow("导出配置", "备份当前服务，可选择是否包含密钥", Icons.Rounded.FileDownload) { transferMode = "export"; importError = null } }
+                        }
+                        SettingsDestination.Skills -> Unit // Opens the existing skill library directly.
+                    }
+                }
+            }
+        }
     }
     if (addMenu) {
         AdActionSheet(
@@ -364,6 +350,160 @@ private fun SettingsHome(vm: MainViewModel, onOpenDrawer: () -> Unit, onEdit: (A
     }
 }
 
+private enum class SettingsDestination(val title: String, val keywords: String = "", val depth: Int = 1) {
+    Home("设置", depth = 0),
+    Connections("服务与连接", "API 地址 URL Key 密钥 添加 编辑 连接 服务"),
+    Models("默认模型", "默认 对话 绘图 图像 选择 模型"),
+    Search("联网搜索", "联网 搜索 网页 X Search 后端", 2),
+    Suggestions("输入建议", "输入 建议 补全 预测", 2),
+    Appearance("外观与阅读", "主题 深色 浅色 系统 阅读 字重 字体"),
+    Assistant("助手偏好", "称呼 姓名 角色 提示词 system prompt 风格"),
+    Island("星岛", "星岛 悬浮窗 通知 翻译 润色 解释 网页 下载"),
+    Skills("技能", "技能 Skill 安装 ZIP"),
+    Transfer("备份与迁移", "导入 导出 备份 迁移 JSON"),
+    Security("网络与安全", "安全 证书 SSL TLS 校验 自签名");
+
+    val parent get() = if (this == Search || this == Suggestions) Connections else Home
+    fun matches(query: String): Boolean = query.trim().split(Regex("\\s+"))
+        .all { (title + " " + keywords).contains(it, ignoreCase = true) }
+}
+
+private fun settingsIcon(destination: SettingsDestination): ImageVector = when (destination) {
+    SettingsDestination.Connections -> Icons.Rounded.Dns
+    SettingsDestination.Models -> Icons.Rounded.Tune
+    SettingsDestination.Search -> Icons.Rounded.TravelExplore
+    SettingsDestination.Suggestions -> Icons.Rounded.AutoAwesome
+    SettingsDestination.Appearance -> Icons.Rounded.Palette
+    SettingsDestination.Assistant -> Icons.Rounded.EditNote
+    SettingsDestination.Island -> Icons.Rounded.WorkspacePremium
+    SettingsDestination.Skills -> Icons.Rounded.Extension
+    SettingsDestination.Transfer -> Icons.Rounded.ImportExport
+    SettingsDestination.Security -> Icons.Rounded.Lock
+    SettingsDestination.Home -> Icons.Rounded.Settings
+}
+
+private fun settingsSummary(destination: SettingsDestination, vm: MainViewModel): String = when (destination) {
+    SettingsDestination.Connections -> "${vm.profiles.size} 个服务 · 联网搜索与输入建议"
+    SettingsDestination.Models -> vm.defaultChatProfile.chatModel.ifBlank { "尚未选择默认对话模型" }
+    SettingsDestination.Search -> vm.searchProfile.searchModel.ifBlank { "未配置独立搜索模型" }
+    SettingsDestination.Suggestions -> vm.suggestionProfile.suggestionModel.ifBlank { "未配置输入建议模型" }
+    SettingsDestination.Appearance -> when (vm.appConfig.themeMode) { THEME_MODE_DARK -> "深色"; THEME_MODE_SYSTEM -> "跟随系统"; else -> "浅色" } + " · 字重 ${vm.appConfig.fontWeight}"
+    SettingsDestination.Security -> if (vm.appConfig.allowInsecureCertificates) "证书校验已关闭" else "正常校验服务器证书"
+    SettingsDestination.Assistant -> "称呼、角色与回答风格"
+    SettingsDestination.Island -> "文字处理、网页阅读与媒体下载"
+    SettingsDestination.Skills -> "安装与管理助手技能"
+    SettingsDestination.Transfer -> "导入、导出服务配置"
+    SettingsDestination.Home -> ""
+}
+
+@Composable
+private fun SettingsGroupLabel(text: String) {
+    Text(text, Modifier.padding(start = 4.dp, top = 8.dp), color = MutedInk, style = MaterialTheme.typography.labelMedium)
+}
+
+@Composable
+private fun SettingsNavigationRow(destination: SettingsDestination, summary: String, onClick: () -> Unit) =
+    SettingsActionRow(destination.title, summary, settingsIcon(destination), onClick)
+
+@Composable
+private fun SettingsActionRow(title: String, summary: String, icon: ImageVector, onClick: () -> Unit) {
+    Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f),
+        color = Surface, contentColor = Ink, shape = RoundedCornerShape(22.dp)) {
+        Row(Modifier.heightIn(min = 76.dp).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(20.dp), tint = OnAccentSoft)
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(summary, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(Icons.Rounded.ChevronRight, null, Modifier.size(20.dp), tint = MutedInk)
+        }
+    }
+}
+
+@Composable
+private fun SettingsContentCard(content: @Composable ColumnScope.() -> Unit) {
+    Surface(color = Surface, contentColor = Ink, shape = RoundedCornerShape(24.dp)) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
+    }
+}
+
+@Composable
+private fun ColumnScope.AssistantSettings(vm: MainViewModel) {
+    var editingName by remember { mutableStateOf(false) }
+    if (editingName) {
+        UserNamePromptDialog(
+            mode = UserNamePromptMode.Edit,
+            currentName = vm.appConfig.userName,
+            onConfirm = { vm.setUserName(it); editingName = false },
+            onSkip = { editingName = false }
+        )
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("我的称呼", style = MaterialTheme.typography.titleSmall)
+            Text(
+                if (vm.appConfig.userName.isBlank()) "未设置；欢迎语会自然呈现" else "欢迎语可以使用「${vm.appConfig.userName}」",
+                color = MutedInk, style = MaterialTheme.typography.bodySmall
+            )
+        }
+        TextButton(onClick = { editingName = true }) {
+            Text(if (vm.appConfig.userName.isBlank()) "设置" else "修改")
+        }
+    }
+    Spacer(Modifier.height(14.dp))
+    OutlinedTextField(
+        value = vm.appConfig.systemPrompt, onValueChange = vm::updateSystemPrompt,
+        modifier = Modifier.fillMaxWidth(), minLines = 4, maxLines = 8,
+        placeholder = { Text("定义助手的角色与回答风格") },
+        shape = RoundedCornerShape(15.dp), colors = editorFieldColors()
+    )
+    Text("修改自动保存，仅用于对话。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+}
+
+@Composable
+private fun ColumnScope.AppearanceSettings(vm: MainViewModel) {
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        ThemeModeCard("浅色", THEME_MODE_ASTER, AsterPaletteLight,
+            vm.appConfig.themeMode, vm::setThemeMode, Modifier.weight(1f))
+        ThemeModeCard("深色", THEME_MODE_DARK, AsterPaletteDark,
+            vm.appConfig.themeMode, vm::setThemeMode, Modifier.weight(1f))
+        ThemeModeCard("跟随系统", THEME_MODE_SYSTEM, null,
+            vm.appConfig.themeMode, vm::setThemeMode, Modifier.weight(1f))
+    }
+    Spacer(Modifier.height(18.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("阅读字重", style = MaterialTheme.typography.titleSmall)
+            Text("拖动滑轨即时调整普通界面文字的粗细", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+        }
+        Text(vm.appConfig.fontWeight.toString(), style = MaterialTheme.typography.labelLarge, color = Accent)
+    }
+    Slider(
+        value = vm.appConfig.fontWeight.toFloat(),
+        onValueChange = { vm.setFontWeight(it.roundToInt(), save = false) },
+        onValueChangeFinished = vm::commitFontWeight,
+        valueRange = FONT_WEIGHT_MIN.toFloat()..FONT_WEIGHT_MAX.toFloat(),
+        steps = FONT_WEIGHT_MAX - FONT_WEIGHT_MIN - 1,
+        modifier = Modifier.fillMaxWidth().semantics {
+            stateDescription = "阅读字重 ${vm.appConfig.fontWeight}"
+        }
+    )
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("细", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+        Text("标准", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+        Text("粗", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+    }
+    TextButton(
+        onClick = { vm.setFontWeight(DEFAULT_FONT_WEIGHT) },
+        modifier = Modifier.align(Alignment.End)
+    ) { Text("恢复默认") }
+}
+
 @Composable
 private fun ProfileTransferDialog(
     mode: String,
@@ -413,7 +553,7 @@ private fun ProfileTransferDialog(
                             if (text.isNotBlank()) onImportText(text)
                         },
                         color = AccentSoft,
-                        contentColor = Accent,
+                        contentColor = OnAccentSoft,
                         shape = RoundedCornerShape(12.dp)
                     ) {
                         Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -457,7 +597,7 @@ private fun ProfileTransferDialog(
                 enabled = exporting || importText.isNotBlank(),
                 modifier = Modifier.weight(1f).height(50.dp),
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = if (exporting) Ink else Accent)
+                colors = ButtonDefaults.buttonColors(containerColor = if (exporting) Ink else Accent, contentColor = if (exporting) OnInk else OnAccent)
             ) {
                 Icon(if (exporting) Icons.Rounded.ContentCopy else Icons.Rounded.FileUpload, null, Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
@@ -492,7 +632,7 @@ private fun RouteAssignmentCard(
         if (configured.isNotBlank() && candidates.none { it.id == configured }) add(ApiModel(configured))
         addAll(candidates)
     }.distinctBy { it.id }
-    val accent = if (kind == RouteKind.Chat) Accent else Sage
+    val accent = if (kind == RouteKind.Chat) OnAccentSoft else OnSageSoft
     val soft = if (kind == RouteKind.Chat) AccentSoft else SageSoft
 
     Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
@@ -504,7 +644,7 @@ private fun RouteAssignmentCard(
                 Spacer(Modifier.width(11.dp))
                 Column(Modifier.weight(1f)) {
                     Text(if (kind == RouteKind.Chat) "对话模型" else "图像模型", style = MaterialTheme.typography.titleMedium)
-                    Text(if (kind == RouteKind.Chat) "用于当前这段对话" else "用于图像创作与漫画翻译", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                    Text(if (kind == RouteKind.Chat) "用于新对话与星岛" else "用于图像创作与漫画翻译", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                 }
                 Surface(color = soft, contentColor = accent, shape = CircleShape) {
                     Text(if (kind == RouteKind.Chat) "对话" else "创作", Modifier.padding(horizontal = 9.dp, vertical = 5.dp), style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
@@ -669,10 +809,10 @@ private fun InputSuggestionCard(
                 }
             }
             RouteValueButton("API", profile.name, Icons.Rounded.Dns, Accent) { showProfileSheet = true }
-            RouteValueButton("建议模型", profile.suggestionModel.ifBlank { "未选择" }, Icons.Rounded.AutoAwesome, Accent) { showModelSheet = true }
+            RouteValueButton("建议模型", profile.suggestionModel.ifBlank { "已关闭" }, Icons.Rounded.AutoAwesome, Accent) { showModelSheet = true }
             Text(
                 if (profile.suggestionModel.isBlank()) {
-                    "选择一个响应快、成本低的模型（如 DeepSeek Flash、GPT Luna 级别）。模型负责在回复结束后预测你可能的下一句输入，点按即可填入。留空则关闭该功能。"
+                    "选择一个响应快、成本低的模型，在回复结束后生成下一句输入建议。也可以保持关闭。"
                 } else {
                     "已配置 ${profile.suggestionModel}。思考强度自动使用该模型支持的最低档位；每次预测只携带最近两轮对话。"
                 },
@@ -700,7 +840,7 @@ private fun InputSuggestionCard(
         AdSelectionSheet(
             title = "选择建议模型",
             subtitle = if (displayModels.isEmpty()) "请先测试 API 并同步模型" else "Grok 模型优先显示，也可以选择其他兼容模型",
-            options = displayModels.map { model ->
+            options = listOf(AdChoiceOption("", "关闭输入建议", "不再为输入建议发送模型请求", Icons.Rounded.DoNotDisturbOn)) + displayModels.map { model ->
                 AdChoiceOption(model.id, model.id, model.ownedBy.ifBlank { profile.name }, Icons.Rounded.AutoAwesome,
                     if (model.id == profile.suggestionModel) "当前" else null)
             },
@@ -715,7 +855,7 @@ private fun InputSuggestionCard(
 
 @Composable
 private fun RouteValueButton(label: String, value: String, icon: ImageVector, accent: Color, onClick: () -> Unit) {
-    Surface(onClick = onClick, color = Canvas, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+    Surface(onClick = onClick, color = Canvas, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.98f)) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Surface), contentAlignment = Alignment.Center) {
                 Icon(icon, null, Modifier.size(18.dp), tint = accent)
@@ -756,52 +896,28 @@ private fun ProfileCard(
         animationSpec = tween(180),
         label = "profile-status"
     )
-    Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Box(Modifier.size(44.dp).clip(RoundedCornerShape(15.dp)).background(Canvas), contentAlignment = Alignment.Center) {
-                    if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 19.dp, tint = Accent)
-                    else Icon(Icons.Rounded.Dns, null, tint = statusColor, modifier = Modifier.size(21.dp))
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(profile.name, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Spacer(Modifier.height(3.dp))
-                    Text(profile.baseUrl, color = MutedInk, style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (usedForChat || usedForImage) {
-                        Spacer(Modifier.height(8.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            if (usedForChat) StatusBadge("对话中", AccentSoft, Accent)
-                            if (usedForImage) StatusBadge("绘图中", SageSoft, Sage)
-                        }
-                    }
-                }
-                IconButton(
-                    onClick = { showActions = true },
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Canvas, contentColor = MutedInk),
-                    modifier = Modifier.size(38.dp)
-                ) { Icon(Icons.Rounded.MoreHoriz, "更多", Modifier.size(20.dp)) }
+    Surface(onClick = onEdit, color = Surface, contentColor = Ink,
+        shape = RoundedCornerShape(22.dp),
+        modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f)) {
+        Row(Modifier.padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(Canvas), contentAlignment = Alignment.Center) {
+                if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 19.dp, tint = statusColor)
+                else Icon(Icons.Rounded.Dns, null, tint = statusColor, modifier = Modifier.size(20.dp))
             }
-            Spacer(Modifier.height(13.dp))
-            Text(state.title + if (modelCount > 0) " · $modelCount 个模型" else "",
-                color = statusColor, style = MaterialTheme.typography.labelMedium)
-            if (state.phase == ConnectionPhase.Error || (state.phase == ConnectionPhase.Success && modelCount == 0)) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    state.detail,
-                    color = if (state.phase == ConnectionPhase.Error) Danger else MutedInk,
-                    style = MaterialTheme.typography.labelMedium
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onTest, enabled = state.phase != ConnectionPhase.Testing, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp)) {
-                    Icon(Icons.Rounded.NetworkCheck, null, Modifier.size(17.dp)); Spacer(Modifier.width(6.dp)); Text("测试并同步")
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(profile.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(profile.baseUrl, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(state.title + if (modelCount > 0) " · $modelCount 个模型" else "",
+                    color = statusColor, style = MaterialTheme.typography.labelMedium)
+                if (usedForChat || usedForImage) {
+                    Text(listOfNotNull(if (usedForChat) "默认对话" else null, if (usedForImage) "默认绘图" else null).joinToString(" · "),
+                        color = MutedInk, style = MaterialTheme.typography.labelSmall)
                 }
-                Button(onClick = onEdit, modifier = Modifier.weight(1f), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)) {
-                    Icon(Icons.Rounded.Edit, null, Modifier.size(16.dp)); Spacer(Modifier.width(6.dp)); Text("编辑")
+                if (state.phase == ConnectionPhase.Error) {
+                    Text(state.detail, color = Danger, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
+            AsterIconButton(Icons.Rounded.MoreHoriz, "更多", { showActions = true })
         }
     }
     if (showActions) {
@@ -809,12 +925,19 @@ private fun ProfileCard(
             title = profile.name,
             subtitle = "管理这个 API 配置",
             actions = listOf(
+                AdActionOption("edit", "编辑服务", "地址、密钥与模型参数", Icons.Rounded.Edit),
+                AdActionOption("test", "测试并同步", "验证连接并刷新模型列表", Icons.Rounded.NetworkCheck, enabled = state.phase != ConnectionPhase.Testing),
                 AdActionOption("duplicate", "复制配置", "保留当前参数创建副本", Icons.Rounded.ContentCopy),
                 AdActionOption("delete", "删除配置", if (canDelete) "删除 URL、Key 和模型缓存" else "至少需要保留一个 API", Icons.Rounded.DeleteOutline, destructive = true, enabled = canDelete)
             ),
             onAction = { action ->
                 showActions = false
-                if (action.id == "duplicate") onDuplicate() else if (action.id == "delete") onDelete()
+                when (action.id) {
+                    "edit" -> onEdit()
+                    "test" -> onTest()
+                    "duplicate" -> onDuplicate()
+                    "delete" -> onDelete()
+                }
             },
             onDismiss = { showActions = false },
             headerIcon = Icons.Rounded.Dns
@@ -826,9 +949,9 @@ private fun ProfileCard(
 private fun ImageProtocolOption(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.appleSpringPressable(pressedScale = 0.975f).semantics { this.selected = selected },
         color = if (selected) AccentSoft else Canvas,
-        contentColor = if (selected) Accent else Ink,
+        contentColor = if (selected) OnAccentSoft else Ink,
         border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .48f) else Hairline),
         shape = RoundedCornerShape(13.dp)
     ) {
@@ -847,6 +970,7 @@ private fun ImageProtocolOption(text: String, selected: Boolean, modifier: Modif
 private fun ProfileEditor(
     initial: ApiProfile,
     isNew: Boolean,
+    isActive: Boolean,
     models: List<ApiModel>,
     state: ConnectionUiState,
     searchBackendConfigured: Boolean,
@@ -861,11 +985,9 @@ private fun ProfileEditor(
     var confirmDiscard by remember { mutableStateOf(false) }
     var contextEditor by remember { mutableStateOf(false) }
     val normalizedDraft = draft.normalized()
-    val normalizedInitial = initial.normalized()
-    val connectionChanged = normalizedDraft.baseUrl != normalizedInitial.baseUrl ||
-        normalizedDraft.apiKey != normalizedInitial.apiKey ||
-        normalizedDraft.modelsPath != normalizedInitial.modelsPath ||
-        normalizedDraft.extraHeaders != normalizedInitial.extraHeaders
+    var testedConnection by remember { mutableStateOf(initial.normalized()) }
+    val connectionChanged = !normalizedDraft.hasSameConnection(testedConnection)
+    val availableModels = if (connectionChanged) emptyList() else models
     val invalidHeaders = draft.invalidExtraHeaderLines()
     val validBaseUrl = draft.hasValidBaseUrl()
     val visibleState = if (connectionChanged) {
@@ -884,7 +1006,7 @@ private fun ProfileEditor(
             draft = draft.copy(modelContexts = if (limits == null) draft.modelContexts - model else draft.modelContexts + (model to limits))
             contextEditor = false
         })
-    BackHandler { if (draft != initial) confirmDiscard = true else onBack() }
+    BackHandler(isActive) { if (draft != initial) confirmDiscard = true else onBack() }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { if (draft != initial) confirmDiscard = true else onBack() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回") }
@@ -893,7 +1015,7 @@ private fun ProfileEditor(
                 Text("连接服务，选择默认模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
             AnimatedVisibility(draft != initial) {
-                StatusBadge("未保存", AccentSoft, Accent)
+                StatusBadge("未保存", AccentSoft, OnAccentSoft)
             }
             Spacer(Modifier.width(4.dp))
             TextButton(onClick = { onSave(normalizedDraft) }, enabled = valid) {
@@ -939,13 +1061,45 @@ private fun ProfileEditor(
                             )
                         }
                     }
+                    Text("接口格式", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ImageProtocolOption("OpenAI", draft.apiFormat != API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
+                            draft = draft.copy(apiFormat = API_FORMAT_OPENAI, cachedModels = emptyList(), lastLatencyMs = null)
+                        }
+                        ImageProtocolOption("Anthropic", draft.apiFormat == API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
+                            draft = draft.copy(apiFormat = API_FORMAT_ANTHROPIC, cachedModels = emptyList(), lastLatencyMs = null)
+                        }
+                    }
+                    Text(
+                        if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
+                            "非 GPT/Grok 模型使用 Messages；GPT/Grok 仍使用 Responses。"
+                        } else {
+                            "GPT/Grok 使用 Responses，其他模型使用 Chat Completions。"
+                        },
+                        color = MutedInk, style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
             item {
                 ConnectionEditorCard(
                     state = visibleState, canTest = testDisabledReason == null,
                     disabledReason = testDisabledReason,
-                    onTest = { onTest(normalizedDraft) { updated -> draft = updated } }
+                    onTest = {
+                        val tested = draft.normalized()
+                        testedConnection = tested
+                        onTest(tested) { updated ->
+                            // A slow connection test must not overwrite edits made while it ran.
+                            if (draft.normalized().hasSameConnection(tested)) {
+                                draft = draft.copy(
+                                    cachedModels = updated.cachedModels,
+                                    lastLatencyMs = updated.lastLatencyMs,
+                                    chatModel = if (draft.chatModel == tested.chatModel) updated.chatModel else draft.chatModel,
+                                    imageModel = if (draft.imageModel == tested.imageModel) updated.imageModel else draft.imageModel,
+                                    mangaAnalysisModel = if (draft.mangaAnalysisModel == tested.mangaAnalysisModel) updated.mangaAnalysisModel else draft.mangaAnalysisModel
+                                )
+                            }
+                        }
+                    }
                 )
             }
             item {
@@ -957,7 +1111,7 @@ private fun ProfileEditor(
                             else -> "其他模型 · Chat Completions"
                         },
                         color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                    EditorModelField("对话模型", draft.chatModel, models.filterNot { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
+                    EditorModelField("对话模型", draft.chatModel, availableModels.filterNot { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
                     val limits = draft.modelContexts[draft.chatModel.trim()]
                     OutlinedButton(onClick = { contextEditor = true }, enabled = draft.chatModel.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Outlined.Tune, null, Modifier.size(18.dp))
@@ -965,7 +1119,7 @@ private fun ProfileEditor(
                         Text(limits?.let { "上下文 ${it.windowTokens} · 输出 ${it.outputTokens} Token" } ?: "设置此模型的上下文长度")
                     }
                     Text("按模型独立保存，普通对话与故事共用。切换上方模型可编辑其他模型。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                    EditorModelField("绘图模型（可选）", draft.imageModel, models.filter { it.id.isImageLike() }.ifEmpty { models }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
+                    EditorModelField("绘图模型（可选）", draft.imageModel, availableModels.filter { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
                 }
             }
             item {
@@ -1056,24 +1210,6 @@ private fun ProfileEditor(
                     EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
                     EditorField("Chat / Gemini 路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
                     EditorField("Responses 路径", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)
-                    Text("接口格式", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ImageProtocolOption("OpenAI", draft.apiFormat != API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
-                            draft = draft.copy(apiFormat = API_FORMAT_OPENAI)
-                        }
-                        ImageProtocolOption("Anthropic", draft.apiFormat == API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
-                            draft = draft.copy(apiFormat = API_FORMAT_ANTHROPIC)
-                        }
-                    }
-                    Text(
-                        if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
-                            "非 GPT/Grok 模型的对话改走 Messages API（含工具调用与提示缓存）；GPT/Grok 仍走 Responses。选为联网搜索后端时用 Messages 的 web_search。"
-                        } else {
-                            "GPT 与 Grok 的对话和默认搜索走 Responses；其他模型走 Chat Completions。"
-                        },
-                        color = MutedInk,
-                        style = MaterialTheme.typography.bodySmall
-                    )
                     if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
                         EditorField("Messages 路径", draft.messagesPath, { draft = draft.copy(messagesPath = it) }, "/v1/messages", Icons.Outlined.Forum)
                     }
@@ -1127,9 +1263,9 @@ private fun ConnectionEditorCard(
                 onClick = onTest,
                 enabled = canTest && state.phase != ConnectionPhase.Testing,
                 shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)
+                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = OnInk)
             ) {
-                if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 16.dp, tint = WarmWhite)
+                if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 16.dp, tint = LocalContentColor.current)
                 else Text("测试并同步")
             }
         }
@@ -1142,6 +1278,8 @@ private fun SettingsDisclosure(
     content: @Composable ColumnScope.() -> Unit
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
+    val arrow by androidx.compose.animation.core.animateFloatAsState(
+        if (expanded) 180f else 0f, AsterSpring.jelly(), label = "settings-disclosure-arrow")
     Surface(
         color = Surface,
         shape = RoundedCornerShape(22.dp),
@@ -1150,17 +1288,19 @@ private fun SettingsDisclosure(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
-            Row(Modifier.fillMaxWidth().clickable { expanded = !expanded }.padding(16.dp),
+            Row(Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f).clickable { expanded = !expanded }.padding(16.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Icon(icon, null, Modifier.size(22.dp), tint = Accent)
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                     Text(title, style = MaterialTheme.typography.titleSmall, color = Ink)
                     Text(summary, style = MaterialTheme.typography.bodySmall, color = MutedInk)
                 }
-                Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                    if (expanded) "收起" else "展开", tint = MutedInk)
+                Icon(Icons.Rounded.ExpandMore, if (expanded) "收起" else "展开",
+                    Modifier.rotate(arrow), tint = MutedInk)
             }
-            AnimatedVisibility(expanded) {
+            AnimatedVisibility(expanded,
+                enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                exit = fadeOut(AsterSpring.editorial()) + shrinkVertically(AsterSpring.snappy())) {
                 Column(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
             }
@@ -1275,45 +1415,15 @@ private fun EditorModelField(label: String, value: String, models: List<ApiModel
             )
         }
         Spacer(Modifier.height(7.dp))
-        if (models.isNotEmpty()) {
-            Surface(
-                onClick = { showSheet = true },
-                color = AccentSoft,
-                contentColor = Ink,
-                border = BorderStroke(1.dp, Color(0xFFFFC3B4)),
-                shape = RoundedCornerShape(18.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(Color.White.copy(alpha = .72f)), contentAlignment = Alignment.Center) {
-                        Icon(icon, null, Modifier.size(20.dp), tint = Accent)
-                    }
-                    Spacer(Modifier.width(11.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("从已同步模型选择", color = Accent, style = MaterialTheme.typography.labelMedium)
-                        Text(value.ifBlank { "尚未选择" }, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Surface(color = Color.White.copy(alpha = .72f), contentColor = Accent, shape = RoundedCornerShape(11.dp)) {
-                        Row(Modifier.padding(horizontal = 9.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("选择", style = MaterialTheme.typography.labelMedium)
-                            Spacer(Modifier.width(3.dp))
-                            Icon(Icons.Rounded.UnfoldMore, null, Modifier.size(16.dp))
-                        }
-                    }
-                }
-            }
-            Spacer(Modifier.height(9.dp))
-            Text("或手动填写模型 ID", color = MutedInk, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(start = 3.dp))
-            Spacer(Modifier.height(6.dp))
-        }
         OutlinedTextField(
             value = value,
             onValueChange = onValue,
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("填写模型 ID") },
-            leadingIcon = {
-                Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(Canvas), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.Code, null, Modifier.size(18.dp), tint = MutedInk)
+            leadingIcon = { Icon(icon, null, Modifier.size(20.dp), tint = MutedInk) },
+            trailingIcon = {
+                if (models.isNotEmpty()) IconButton(onClick = { showSheet = true }) {
+                    Icon(Icons.Rounded.UnfoldMore, "选择已同步模型", tint = OnAccentSoft)
                 }
             },
             singleLine = true,
@@ -1390,7 +1500,7 @@ private fun ThemeModeCard(
             color = Canvas,
             shape = RoundedCornerShape(16.dp),
             border = BorderStroke(2.dp, if (isSelected) Accent else Hairline.copy(alpha = .55f)),
-            modifier = Modifier.fillMaxWidth().semantics {
+            modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.975f, enableHaptics = false).semantics {
                 selected = isSelected
                 stateDescription = if (isSelected) "已选择" else "未选择"
             }
@@ -1416,19 +1526,18 @@ private fun ThemeModeCard(
 
 @Composable
 private fun MiniComposer(palette: com.adong.adchat.ui.theme.AsterPalette, modifier: Modifier = Modifier) {
-    Surface(color = palette.canvas, shape = RoundedCornerShape(12.dp), modifier = modifier) {
-        Surface(
-            color = palette.surface,
-            shape = RoundedCornerShape(9.dp),
-            border = BorderStroke(1.dp, palette.hairline.copy(alpha = .7f)),
-            modifier = Modifier.padding(7.dp).fillMaxWidth()
-        ) {
-            Row(Modifier.padding(horizontal = 9.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("写点什么…", style = MaterialTheme.typography.labelSmall, color = palette.mutedInk, modifier = Modifier.weight(1f))
-                Surface(color = palette.accent, shape = CircleShape, modifier = Modifier.size(16.dp)) {
-                    Icon(Icons.Rounded.ArrowUpward, null, Modifier.padding(4.dp), tint = palette.canvas)
-                }
-            }
+    Column(modifier.height(72.dp).clip(RoundedCornerShape(10.dp)).background(palette.canvas).padding(5.dp),
+        verticalArrangement = Arrangement.SpaceBetween) {
+        Box(Modifier.fillMaxWidth(.65f).height(5.dp).clip(CircleShape).background(palette.mutedInk.copy(alpha = .4f)))
+        Box(Modifier.fillMaxWidth(.85f).height(5.dp).clip(CircleShape).background(palette.hairline))
+        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(7.dp)).background(palette.surface).padding(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f).height(3.dp).clip(CircleShape).background(palette.mutedInk.copy(alpha = .45f)))
+            Box(Modifier.size(9.dp).clip(CircleShape).background(palette.accent))
         }
     }
 }
+
+private fun ApiProfile.hasSameConnection(other: ApiProfile): Boolean =
+    baseUrl == other.baseUrl && apiKey == other.apiKey && modelsPath == other.modelsPath &&
+        extraHeaders == other.extraHeaders && apiFormat == other.apiFormat

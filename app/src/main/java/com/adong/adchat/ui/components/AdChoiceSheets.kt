@@ -1,10 +1,8 @@
 package com.adong.adchat.ui.components
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -144,7 +143,16 @@ fun AdActionSheet(
 ) {
     AsterOptionsSheet(title = title, subtitle = subtitle, onDismiss = onDismiss, headerIcon = headerIcon) {
             actions.forEach { action ->
-                val actionColor = if (action.destructive) Danger else Ink
+                val actionColor = when {
+                    !action.enabled -> Ink.copy(alpha = .38f)
+                    action.destructive -> OnDangerSoft
+                    else -> Ink
+                }
+                val subtitleColor = when {
+                    !action.enabled -> Ink.copy(alpha = .38f)
+                    action.destructive -> OnDangerSoft
+                    else -> MutedInk
+                }
                 Surface(
                     onClick = { if (action.enabled) onAction(action) },
                     enabled = action.enabled,
@@ -156,13 +164,13 @@ fun AdActionSheet(
                     Row(Modifier.padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             Modifier.size(40.dp).clip(RoundedCornerShape(13.dp))
-                                .background(if (action.destructive) Color(0xFFFFD8D4) else Canvas),
+                                .background(if (action.destructive) Danger.copy(alpha = .08f).compositeOver(DangerSoft) else Canvas),
                             contentAlignment = Alignment.Center
                         ) { Icon(action.icon, null, Modifier.size(20.dp), tint = actionColor) }
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(action.title, fontWeight = FontWeight.SemiBold)
-                            action.subtitle?.let { Text(it, color = if (action.destructive) Danger else MutedInk, style = MaterialTheme.typography.labelMedium) }
+                            action.subtitle?.let { Text(it, color = subtitleColor, style = MaterialTheme.typography.labelMedium) }
                         }
                     }
                 }
@@ -177,7 +185,7 @@ internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector
             Box(
                 Modifier.size(46.dp).clip(RoundedCornerShape(15.dp)).background(AccentSoft),
                 contentAlignment = Alignment.Center
-            ) { Icon(icon, null, Modifier.size(22.dp), tint = Accent) }
+            ) { Icon(icon, null, Modifier.size(22.dp), tint = OnAccentSoft) }
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
@@ -193,10 +201,10 @@ internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector
 
 @Composable
 private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> Unit) {
-    val container by animateColorAsState(if (selected) AccentSoft else Surface, tween(170), label = "choiceContainer")
-    val iconContainer by animateColorAsState(if (selected) Color.White.copy(alpha = .72f) else Canvas, tween(170), label = "choiceIconContainer")
-    val iconTint by animateColorAsState(if (selected) Accent else MutedInk, tween(170), label = "choiceIconTint")
-    val indicator by animateColorAsState(if (selected) Accent else Hairline, tween(170), label = "choiceIndicator")
+    val container by animateColorAsState(if (selected) AccentSoft else Surface, AsterSpring.editorial(), label = "choiceContainer")
+    val iconContainer by animateColorAsState(if (selected) Surface else Canvas, AsterSpring.editorial(), label = "choiceIconContainer")
+    val iconTint by animateColorAsState(if (selected) OnAccentSoft else MutedInk, AsterSpring.editorial(), label = "choiceIconTint")
+    val indicator by animateColorAsState(if (selected) Accent else Hairline, AsterSpring.editorial(), label = "choiceIndicator")
     Surface(
         selected = selected,
         onClick = onClick,
@@ -222,8 +230,8 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
                     Text(option.title, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     option.badge?.let {
                         Spacer(Modifier.width(8.dp))
-                        Surface(color = if (selected) Color.White.copy(alpha = .7f) else Canvas, shape = CircleShape) {
-                            Text(it, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = if (selected) Accent else MutedInk, style = MaterialTheme.typography.labelSmall)
+                        Surface(color = if (selected) Surface else Canvas, shape = CircleShape) {
+                            Text(it, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = if (selected) OnAccentSoft else MutedInk, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
@@ -237,7 +245,7 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
                 Modifier.size(26.dp).clip(CircleShape).background(indicator),
                 contentAlignment = Alignment.Center
             ) {
-                if (selected) Icon(Icons.Rounded.Check, null, Modifier.size(16.dp), tint = Color.White)
+                if (selected) Icon(Icons.Rounded.Check, null, Modifier.size(16.dp), tint = OnAccent)
             }
         }
     }

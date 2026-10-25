@@ -132,17 +132,7 @@ fun ConversationComposer(
     val enabledToSend = value.isNotBlank() || attachments.isNotEmpty() || configureRequired
     val cardShape = RoundedCornerShape(26.dp)
 
-    // Apple 阻尼抬升 + 果冻微张感：聚焦时输入框轻微舒展并加深柔和阴影
-    val composerScaleX by animateFloatAsState(
-        targetValue = if (isFocused) 1f else 0.992f,
-        animationSpec = AsterSpring.jelly(),
-        label = "ComposerScaleX"
-    )
-    val composerScaleY by animateFloatAsState(
-        targetValue = if (isFocused) 1f else 0.988f,
-        animationSpec = AsterSpring.spatial(),
-        label = "ComposerScaleY"
-    )
+    // Focus changes elevation and outline; the editable text keeps a stable scale and baseline.
     val composerElevation by animateDpAsState(
         targetValue = if (isFocused) 6.dp else 2.dp,
         animationSpec = AsterSpring.spatial(),
@@ -184,8 +174,8 @@ fun ConversationComposer(
         }
 
         // 3.3 输入建议条：极简 Claude 悬浮轻胶囊 + Apple 果冻弹簧弹出
-        var shownSuggestion by remember { mutableStateOf<String?>(null) }
-        if (suggestion != null) shownSuggestion = suggestion
+        var shownSuggestion by remember { mutableStateOf(suggestion) }
+        LaunchedEffect(suggestion) { if (suggestion != null) shownSuggestion = suggestion }
         AnimatedVisibility(
             visible = suggestion != null && value.isBlank(),
             enter = slideInVertically(
@@ -228,7 +218,7 @@ fun ConversationComposer(
                     )
                     Spacer(Modifier.width(7.dp))
                     Text(
-                        shownSuggestion.orEmpty(),
+                        (suggestion ?: shownSuggestion).orEmpty(),
                         Modifier.weight(1f, fill = false),
                         color = Ink.copy(alpha = 0.88f),
                         style = MaterialTheme.typography.bodyMedium,
@@ -254,10 +244,6 @@ fun ConversationComposer(
             shadowElevation = composerElevation,
             modifier = Modifier
                 .fillMaxWidth()
-                .graphicsLayer {
-                    scaleX = composerScaleX
-                    scaleY = composerScaleY
-                }
                 .testTag("${testTag}-composer")
         ) {
             Column(Modifier.fillMaxWidth()) {
@@ -379,15 +365,19 @@ fun ConversationComposer(
                     val canTrigger = loading || (enabledToSend && !attachmentLoading)
                     val sendContainerColor by animateColorAsState(
                         targetValue = when {
-                            loading -> Night
-                            canTrigger -> Accent
+                            loading -> MaterialTheme.colorScheme.primary
+                            canTrigger -> MaterialTheme.colorScheme.secondary
                             else -> SurfaceInset
                         },
                         animationSpec = AsterSpring.editorial(),
                         label = "SendBtnColor"
                     )
                     val sendContentColor by animateColorAsState(
-                        targetValue = if (canTrigger) Color.White else MutedInk.copy(alpha = 0.45f),
+                        targetValue = when {
+                            loading -> MaterialTheme.colorScheme.onPrimary
+                            canTrigger -> MaterialTheme.colorScheme.onSecondary
+                            else -> MutedInk.copy(alpha = 0.45f)
+                        },
                         animationSpec = AsterSpring.editorial(),
                         label = "SendContentColor"
                     )
@@ -414,7 +404,7 @@ fun ConversationComposer(
                                 scaleX = sendScale
                                 scaleY = sendScale
                             }
-                            .appleSpringPressable(pressedScale = 0.84f, enabled = canTrigger),
+                            .appleSpringPressable(pressedScale = 0.92f, enabled = canTrigger, enableHaptics = false),
                         shape = CircleShape,
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = sendContainerColor,
@@ -427,11 +417,11 @@ fun ConversationComposer(
                             targetState = loading,
                             transitionSpec = {
                                 (scaleIn(
-                                    initialScale = 0.55f,
+                                    initialScale = 0.82f,
                                     animationSpec = AsterSpring.jelly()
                                 ) + fadeIn(animationSpec = AsterSpring.editorial())) togetherWith
                                     (scaleOut(
-                                        targetScale = 0.55f,
+                                        targetScale = 0.88f,
                                         animationSpec = AsterSpring.snappy()
                                     ) + fadeOut(animationSpec = tween(100)))
                             },

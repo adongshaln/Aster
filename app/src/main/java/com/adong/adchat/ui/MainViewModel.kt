@@ -98,6 +98,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     val modelCache = mutableStateMapOf<String, List<ApiModel>>()
     val connectionStates = mutableStateMapOf<String, ConnectionUiState>()
+    private val profileTestJobs = mutableMapOf<String, Job>()
+    private val profileTestEpochs = mutableMapOf<String, Long>()
     var chatInput by mutableStateOf("")
         private set
     val chatAttachments = mutableStateListOf<ChatImageAttachment>()
@@ -205,6 +207,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     val profiles: List<ApiProfile> get() = appConfig.profiles
+    /** Settings edits the default route; the chat toolbar edits the current conversation. */
+    val defaultChatProfile: ApiProfile get() = appConfig.chatProfile()
 
     /** API profiles whose stored key could not be decrypted and must be filled in again. */
     val profilesWithUndecryptableKeys: Set<String> get() = store.profilesWithUndecryptableKeys()
@@ -288,12 +292,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveProfile(profile: ApiProfile) {
         val cleaned = profile.normalized()
+        invalidateProfileTest(cleaned.id)
         val previous = appConfig.profiles.firstOrNull { it.id == cleaned.id }
         val exists = previous != null
-        val connectionChanged = previous != null && (previous.baseUrl != cleaned.baseUrl || previous.apiKey != cleaned.apiKey || previous.modelsPath != cleaned.modelsPath || previous.extraHeaders != cleaned.extraHeaders)
+        val connectionChanged = previous != null && !previous.normalized().hasSameTestConnection(cleaned)
         val profiles = if (exists) appConfig.profiles.map { if (it.id == cleaned.id) cleaned else it } else appConfig.profiles + cleaned
         if (cleaned.cachedModels.isNotEmpty()) modelCache[cleaned.id] = cleaned.cachedModels else modelCache.remove(cleaned.id)
         if (connectionChanged && cleaned.cachedModels.isEmpty()) connectionStates[cleaned.id] = ConnectionUiState(title = "等待重新测试", detail = "连接参数已更新")
+        else if (connectionStates[cleaned.id]?.phase == ConnectionPhase.Testing) {
+            connectionStates[cleaned.id] = ConnectionUiState(
+                title = if (cleaned.cachedModels.isEmpty()) "尚未验证" else "已缓存 ${cleaned.cachedModels.size} 个模型",
+                detail = "配置已保存，可重新测试连接",
+                latencyMs = cleaned.lastLatencyMs,
+                modelCount = cleaned.cachedModels.size
+            )
+        }
         appConfig = appConfig.copy(profiles = profiles)
         persist()
         notice = if (exists) "已更新 ${cleaned.name}" else "已添加 ${cleaned.name}"
@@ -310,6 +323,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             notice = "当前对话正在使用此 API，请等待生成完成后再删除"
             return
         }
+        invalidateProfileTest(profileId)
         val affectedConversationIds = conversations
             .filter { conversation ->
                 resolveConversationRoute(conversation, profiles, appConfig.activeChatProfileId).profileId == profileId
@@ -353,6 +367,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         bindCurrentConversationRoute(profile, model)
     }
 
+    fun selectDefaultChatProfile(profileId: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        if (appConfig.activeChatProfileId == profile.id) return
+        appConfig = appConfig.copy(activeChatProfileId = profile.id)
+        persist()
+        notice = "新对话与星岛默认使用 ${profile.name}"
+    }
+
+    fun selectDefaultChatModel(profileId: String, model: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        val selected = model.trim().takeIf { it.isNotBlank() } ?: return
+        updateProfile(profile.id) { it.copy(chatModel = selected) }
+        appConfig = appConfig.copy(activeChatProfileId = profile.id)
+        persist()
+        notice = "新对话与星岛默认使用 ${profile.name} · $selected"
+    }
+
     fun selectImageProfile(profileId: String) {
         if (profiles.none { it.id == profileId }) return
         appConfig = appConfig.copy(activeImageProfileId = profileId)
@@ -380,11 +411,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSuggestionModel(profileId: String, model: String) {
+        if (profiles.none { it.id == profileId }) return
         val selected = model.trim()
-        if (selected.isBlank()) return
         updateProfile(profileId) { it.copy(suggestionModel = selected) }
         appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
-        persist(); notice = "输入建议模型已设置为 $selected"
+        persist(); notice = if (selected.isBlank()) "已关闭输入建议" else "输入建议模型已设置为 $selected"
     }
 
     fun setAllowXSearch(enabled: Boolean) {
@@ -553,6 +584,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun testProfile(profile: ApiProfile, onUpdatedDraft: ((ApiProfile) -> Unit)? = null) {
         val tested = profile.normalized()
+        val epoch = invalidateProfileTest(tested.id)
+        val savedAtStart = profiles.firstOrNull { it.id == tested.id }?.normalized()
+        fun isCurrentTest(): Boolean {
+            if (profileTestEpochs[tested.id] != epoch) return false
+            val current = profiles.firstOrNull { it.id == tested.id }?.normalized()
+            val expected = if (onUpdatedDraft == null) tested else savedAtStart
+            return if (expected == null) current == null else current?.hasSameTestConnection(expected) == true
+        }
         val invalidHeaders = tested.invalidExtraHeaderLines()
         val validationError = when {
             !tested.hasValidBaseUrl() -> "Base URL 需要包含完整的 http:// 或 https:// 主机地址"
@@ -560,64 +599,91 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             else -> null
         }
         onUpdatedDraft?.invoke(tested)
+        if (!isCurrentTest()) return
         if (validationError != null) {
             connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Error, "配置不完整", validationError)
             return
         }
         connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Testing, "正在连接", "验证认证并获取模型列表…")
         val startedAt = SystemClock.elapsedRealtime()
-        viewModelScope.launch {
-            runCatching { repository.fetchModels(tested) }
-                .onSuccess { result ->
-                    modelCache[tested.id] = result.models
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            try {
+                val result = repository.fetchModels(tested)
+                if (!isCurrentTest()) return@launch
+                modelCache[tested.id] = result.models
+                connectionStates[tested.id] = ConnectionUiState(
+                    ConnectionPhase.Success,
+                    "连接成功",
+                    if (result.models.isEmpty()) "服务可访问，但模型列表为空" else "已同步 ${result.models.size} 个模型",
+                    result.latencyMs,
+                    result.models.size
+                )
+                if (onUpdatedDraft == null) {
+                    updateProfile(tested.id) { mergeProfileTestResult(it, tested, result.models, result.latencyMs) }
+                    persist()
+                }
+                notice = "${tested.name} 已获取 ${result.models.size} 个模型"
+                onUpdatedDraft?.invoke(mergeProfileTestResult(tested, tested, result.models, result.latencyMs))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (!isCurrentTest()) return@launch
+                val raw = generateSequence<Throwable>(error) { it.cause }.joinToString(" ") { it.message.orEmpty() }
+                val modelsEndpointUnavailable = raw.contains("HTTP 404", true) || raw.contains("HTTP 405", true)
+                if (modelsEndpointUnavailable) {
+                    val latency = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
                     connectionStates[tested.id] = ConnectionUiState(
                         ConnectionPhase.Success,
-                        "连接成功",
-                        if (result.models.isEmpty()) "服务可访问，但模型列表为空" else "已同步 ${result.models.size} 个模型",
-                        result.latencyMs,
-                        result.models.size
+                        "服务可访问",
+                        "模型列表接口不可用，请手动填写模型 ID",
+                        latency,
+                        0
                     )
-                    val chatCandidate = result.models.firstOrNull { !it.id.isImageLike() }?.id
-                    val imageCandidate = result.models.firstOrNull { it.id.isImageLike() }?.id
-                    var updated = tested.copy(cachedModels = result.models, lastLatencyMs = result.latencyMs)
-                    if (tested.chatModel.isBlank() && chatCandidate != null) updated = updated.copy(chatModel = chatCandidate)
-                    if (tested.imageModel.isBlank() && imageCandidate != null) updated = updated.copy(imageModel = imageCandidate)
-                    if (tested.mangaAnalysisModel.isBlank() && chatCandidate != null) updated = updated.copy(mangaAnalysisModel = chatCandidate)
-                    if (onUpdatedDraft == null && profiles.any { it.id == updated.id }) {
-                        updateProfile(updated.id) { updated }
+                    if (onUpdatedDraft == null) {
+                        updateProfile(tested.id) { it.copy(lastLatencyMs = latency) }
                         persist()
                     }
-                    onUpdatedDraft?.invoke(updated)
-                    notice = "${tested.name} 已获取 ${result.models.size} 个模型"
+                    notice = "${tested.name} 已连通，需手动填写模型"
+                    onUpdatedDraft?.invoke(tested.copy(lastLatencyMs = latency))
+                } else {
+                    connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Error, "连接失败", friendlyError(error))
                 }
-                .onFailure { error ->
-                    val raw = generateSequence(error) { it.cause }.joinToString(" ") { it.message.orEmpty() }
-                    val modelsEndpointUnavailable = raw.contains("HTTP 404", true) || raw.contains("HTTP 405", true)
-                    if (modelsEndpointUnavailable) {
-                        val latency = (SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
-                        val updated = tested.copy(lastLatencyMs = latency)
-                        connectionStates[tested.id] = ConnectionUiState(
-                            ConnectionPhase.Success,
-                            "服务可访问",
-                            "模型列表接口不可用，请手动填写模型 ID",
-                            latency,
-                            0
-                        )
-                        if (onUpdatedDraft == null && profiles.any { it.id == updated.id }) {
-                            updateProfile(updated.id) { updated }
-                            persist()
-                        }
-                        onUpdatedDraft?.invoke(updated)
-                        notice = "${tested.name} 已连通，需手动填写模型"
-                    } else {
-                        connectionStates[tested.id] = ConnectionUiState(ConnectionPhase.Error, "连接失败", friendlyError(error))
-                    }
-                }
+            } finally {
+                if (profileTestEpochs[tested.id] == epoch) profileTestJobs.remove(tested.id)
+            }
         }
+        profileTestJobs[tested.id] = job
+        job.start()
     }
 
+    private fun invalidateProfileTest(profileId: String): Long {
+        val epoch = (profileTestEpochs[profileId] ?: 0L) + 1L
+        profileTestEpochs[profileId] = epoch
+        profileTestJobs.remove(profileId)?.cancel()
+        return epoch
+    }
+
+    private fun ApiProfile.hasSameTestConnection(other: ApiProfile): Boolean =
+        baseUrl == other.baseUrl && apiKey == other.apiKey && modelsPath == other.modelsPath &&
+            extraHeaders == other.extraHeaders && apiFormat == other.apiFormat
+
+    private fun mergeProfileTestResult(current: ApiProfile, tested: ApiProfile, models: List<ApiModel>, latency: Long): ApiProfile {
+        val chatCandidate = models.firstOrNull { !it.id.isImageLike() }?.id
+        val imageCandidate = models.firstOrNull { it.id.isImageLike() }?.id
+        // Model selection may change independently while the connection test is running.
+        fun fillUnchangedBlank(currentModel: String, testedModel: String, candidate: String?): String =
+            if (testedModel.isBlank() && currentModel == testedModel) candidate ?: currentModel else currentModel
+        return current.copy(
+            cachedModels = models,
+            lastLatencyMs = latency,
+            chatModel = fillUnchangedBlank(current.chatModel, tested.chatModel, chatCandidate),
+            imageModel = fillUnchangedBlank(current.imageModel, tested.imageModel, imageCandidate),
+            mangaAnalysisModel = fillUnchangedBlank(current.mangaAnalysisModel, tested.mangaAnalysisModel, chatCandidate)
+        )
+    }
 
     fun discardProfileDraft(profileId: String) {
+        invalidateProfileTest(profileId)
         val saved = profiles.firstOrNull { it.id == profileId }
         if (saved == null) {
             modelCache.remove(profileId)
