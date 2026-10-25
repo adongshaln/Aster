@@ -1344,10 +1344,11 @@ private fun StarIslandSettingsCard() {
             }
         }
     }
-    Column {
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        StarIslandUsageDemo()
         SettingSwitch(
             title = "启用星岛",
-            subtitle = "复制文字或链接后，点按摄像头旁的墨线圈。文字可翻译、润色、解释；网页可阅读；媒体可解析下载。仅在点按时读取剪贴板，文字与网页处理使用默认对话模型。",
+            subtitle = "复制文字或链接后，点按摄像头旁的墨线圈；星岛只在点按时读取剪贴板。",
             checked = enabled,
             onCheckedChange = { want ->
                 if (want) {
