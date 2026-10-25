@@ -1301,7 +1301,6 @@ private fun streamingProseText(content: String, error: Boolean) {
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
         lineHeight = READING_BODY_LINE_SP.sp,
-        fontWeight = FontWeight.Normal,
         letterSpacing = 0.sp
     )
     val splitAt = normalized.lastIndexOf("\n\n")
@@ -1634,7 +1633,6 @@ private fun MarkdownProseBlock(raw: String, showCursor: Boolean, error: Boolean)
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
         lineHeight = READING_BODY_LINE_SP.sp,
-        fontWeight = FontWeight.Normal,
         letterSpacing = 0.sp
     )
     Column(verticalArrangement = Arrangement.spacedBy(READING_BLOCK_GAP_DP.dp)) {
@@ -1927,7 +1925,6 @@ private fun MarkdownListRow(
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
         fontSize = READING_BODY_FONT_SP.sp,
         lineHeight = READING_BODY_LINE_SP.sp,
-        fontWeight = FontWeight.Normal,
         letterSpacing = 0.sp
     )
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -2000,7 +1997,6 @@ private fun AsterWritingCursorLine(error: Boolean) {
         style = MaterialTheme.typography.bodyLarge.copy(
             fontSize = READING_BODY_FONT_SP.sp,
             lineHeight = READING_BODY_LINE_SP.sp,
-            fontWeight = FontWeight.Normal,
             letterSpacing = 0.sp
         ),
         color = if (error) Danger else Ink,
@@ -2209,6 +2205,16 @@ private fun ChatComposer(
     val scope = rememberCoroutineScope()
     var showToolsSheet by remember { mutableStateOf(false) }
     var showContextSheet by remember { mutableStateOf(false) }
+    var showReasoning by remember(model) { mutableStateOf(false) }
+    var composerExpanded by remember { mutableStateOf(false) }
+    var openReasoningAfterFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(value, loading) { showReasoning = false }
+    LaunchedEffect(composerExpanded, openReasoningAfterFocus) {
+        if (composerExpanded && openReasoningAfterFocus) {
+            showReasoning = true
+            openReasoningAfterFocus = false
+        }
+    }
     val effortChoices = remember(model) { ReasoningPolicy.choices(model) }
     ConversationComposer(
         value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentLoading,
@@ -2216,6 +2222,10 @@ private fun ChatComposer(
         onSend = onSend, onStop = onStop, onFocusChange = onFocusChange,
         suggestion = suggestion, onSuggestionClick = onSuggestionClick,
         focusRequester = focusRequester, modifier = modifier, onSurfaceBounds = onSurfaceBounds,
+        onExpandedChange = { expanded ->
+            composerExpanded = expanded
+            if (!expanded) showReasoning = false
+        },
         contextAction = {
             ComposerContextRing(
                 percent = contextUsage.percent,
@@ -2229,9 +2239,12 @@ private fun ChatComposer(
         },
         reasoningAction = if (effortChoices.isEmpty()) null else {
             {
-                ComposerReasoningSlider(
+                ComposerReasoningControl(
                     model = model,
                     effort = reasoningEffort,
+                    expanded = showReasoning,
+                    onExpandedChange = { showReasoning = it },
+                    onModelClick = onModelClick,
                     onEffortChange = onReasoningEffortChange,
                     enabled = !loading,
                 )
@@ -2253,6 +2266,7 @@ private fun ChatComposer(
             onModelClick = { showToolsSheet = false; onModelClick() },
             onReasoningClick = {
                 showToolsSheet = false
+                openReasoningAfterFocus = true
                 scope.launch { withFrameNanos { }; focusRequester.requestFocus() }
             },
             onWebSearchToggle = onWebSearchToggle,

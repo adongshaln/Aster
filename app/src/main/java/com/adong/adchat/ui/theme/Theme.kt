@@ -36,18 +36,7 @@ import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
 import com.adong.adchat.data.THEME_MODE_SYSTEM
 
-/**
- * Aster — Claude Editorial Color System & Serif/Sans Hybrid Typography
- * ====================================================================
- * 核心视觉颠覆点：
- * 1. 修正原版 `surface = Color(0xFFFFFFDA)` 偏亮黄绿的底色与暗沉棕 `#8B5E4B`：
- *    采用正统 Anthropic Claude 视觉色板 —— Pampas 羊皮纸画布 (`#F4F3EE`)、纯净暖象牙白卡片 (`#FAF9F5`)、
- *    Warm Stone 凹陷槽 (`#EAE7DF`) 以及极具辨识度的 **Claude Terracotta 陶土赤褐 (`#D97757`)**。
- * 2. 打破原版“所有按钮、百分比数字、小标签全部塞入粗衬线体”导致的厚重感：
- *    严格遵循 Claude 的 **「正文与大标题用优雅细衬线 (Noto Serif SC)，UI 胶囊/按钮/状态栏用利落无衬线 (SansSerif)」** 混排法则，
- *    并将 `bodyLarge` 从原版臃肿的 `SemiBold` 还原为温润舒展的 `Normal` 字重。
- * 3. 全局 18 个语义色切换从机械 `tween(240)` 升级为 `AsterSpring.editorial()` 物理弹簧过渡。
- */
+/** Warm semantic colours, serif reading text and compact sans-serif controls. */
 @Immutable
 data class AsterPalette(
     val canvas: Color,
@@ -221,20 +210,26 @@ internal fun AsterPalette.toColorScheme(dark: Boolean) = (if (dark) darkColorSch
 // the font into cacheDir during composition: the resource is about 25 MB.
 @OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
 private fun asterFontFamily(axisWeight: Int): FontFamily = FontFamily(
-    Font(
-        resId = R.font.noto_serif_sc_variable,
-        loadingStrategy = FontLoadingStrategy.Async,
-        variationSettings = FontVariation.Settings(FontVariation.weight(axisWeight.coerceIn(200, 900)))
-    )
+    // Give each semantic weight its own real variable-font instance. A single Regular entry
+    // leaves medium/bold to synthesis and gives async fallback text a misleading light weight.
+    listOf(
+        FontWeight.Normal to 0,
+        FontWeight.Medium to 60,
+        FontWeight.SemiBold to 110,
+        FontWeight.Bold to 160
+    ).map { (weight, increase) ->
+        Font(
+            resId = R.font.noto_serif_sc_variable,
+            weight = weight,
+            loadingStrategy = FontLoadingStrategy.Async,
+            variationSettings = FontVariation.Settings(
+                FontVariation.weight((axisWeight + increase).coerceIn(200, 900))
+            )
+        )
+    }
 )
 
-/**
- * Claude 标志性「文学衬线 + 现代无衬线」混排字体阶梯：
- * - 大标题 (`displaySmall`, `headlineMedium`, `titleLarge`) 与 AI 阅读正文 (`bodyLarge`) 采用可变衬线体 [serifFont]，
- *   且将 `bodyLarge` 字重改为 `FontWeight.Normal`，呈现优雅的书籍排版质感；
- * - 控件文本 (`titleMedium`, `titleSmall`, `bodyMedium`, `bodySmall`, `label*`) 改用干净利落的 `FontFamily.SansSerif`，
- *   呈现 Apple iOS 原生控件的精致感。
- */
+/** Reading uses a fuller medium face; headings and emphasis retain separate heavier faces. */
 private fun asterTypography(serifFont: FontFamily) = Typography(
     displaySmall = TextStyle(
         fontFamily = serifFont,
@@ -279,7 +274,7 @@ private fun asterTypography(serifFont: FontFamily) = Typography(
     ),
     bodyLarge = TextStyle(
         fontFamily = serifFont,
-        fontWeight = FontWeight.Normal,
+        fontWeight = FontWeight.Medium,
         fontSize = 16.sp,
         lineHeight = 27.5.sp,
         letterSpacing = 0.1.sp,

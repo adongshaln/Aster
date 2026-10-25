@@ -379,14 +379,12 @@ fun ConversationComposer(
                     val context = measurables.first { it.layoutId == "context" }.measure(
                         Constraints(maxWidth = (width - buttonSize * 3 - 12.dp.roundToPx()).coerceAtLeast(0), maxHeight = buttonSize)
                     )
-                    val reasoningWidth = (width - 28.dp.roundToPx()).coerceAtLeast(0)
+                    val reasoningWidth = (width - buttonSize * 3 - context.width - 12.dp.roundToPx()).coerceAtLeast(0)
                     val reasoning = measurables.first { it.layoutId == "reasoning" }.measure(
-                        Constraints(minWidth = reasoningWidth, maxWidth = reasoningWidth)
+                        Constraints(maxWidth = reasoningWidth, maxHeight = buttonSize)
                     )
                     val toolbarTop = 14.dp.roundToPx() + field.height + 4.dp.roundToPx()
-                    val reasoningTop = toolbarTop + buttonSize + 4.dp.roundToPx()
-                    val expandedHeight = if (reasoning.height > 0) reasoningTop + reasoning.height + 10.dp.roundToPx()
-                        else toolbarTop + buttonSize + 6.dp.roundToPx()
+                    val expandedHeight = toolbarTop + buttonSize + 6.dp.roundToPx()
                     // The shell may overshoot slightly; text constraints and control positions do not.
                     val height = constraints.constrainHeight(
                         (collapsedHeight + (expandedHeight - collapsedHeight) * shellProgress).roundToInt()
@@ -400,7 +398,8 @@ fun ConversationComposer(
                         if (keepTools) {
                             context.placeRelative(54.dp.roundToPx(), toolbarTop)
                             expand.placeRelative(width - 2 * buttonSize - 6.dp.roundToPx(), toolbarTop)
-                            reasoning.placeRelative(14.dp.roundToPx(), reasoningTop)
+                            reasoning.placeRelative(54.dp.roundToPx() + context.width,
+                                toolbarTop + (buttonSize - reasoning.height) / 2)
                         }
                     }
                 }
