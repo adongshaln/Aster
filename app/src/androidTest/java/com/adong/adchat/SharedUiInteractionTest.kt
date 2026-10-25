@@ -20,6 +20,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Density
 import androidx.core.view.ViewCompat
@@ -44,6 +45,7 @@ import com.adong.adchat.data.story.StoryMessageWithRevision
 import com.adong.adchat.data.story.StoryRevisionState
 import com.adong.adchat.data.story.StoryWorkspace
 import com.adong.adchat.ui.screens.EmptyChat
+import com.adong.adchat.ui.screens.emptyChatGreeting
 import com.adong.adchat.ui.screens.StoryMessageItem
 import com.adong.adchat.ui.screens.StoryWorkspaceEmpty
 import com.adong.adchat.ui.screens.StructuredMessageText
@@ -545,7 +547,7 @@ class SharedUiInteractionTest {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (screen) {
                         0 -> BaselineEmptyChat("gemini", {}, {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
-                        1 -> EmptyChat("gemini", "小明", {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
+                        1 -> EmptyChat("gemini", {}, Modifier.fillMaxSize().padding(bottom = 82.dp))
                         2 -> StoryWorkspaceEmpty(StoryWorkspace.Discussion, Modifier.fillMaxSize().padding(bottom = 82.dp)) { chosen = it }
                         else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                             .padding(horizontal = 22.dp, vertical = 20.dp).padding(bottom = 82.dp)) {
@@ -560,8 +562,12 @@ class SharedUiInteractionTest {
         }
         screenshot("welcome-before")
         rule.runOnIdle { screen = 1 }
-        // 空态改为时段随机问候后不再有旧标题与建议卡；断言带称呼问候在随机轮换下仍可命中。
-        rule.onNodeWithText("小明", substring = true).assertExists("新空态应显示带称呼的时段问候")
+        // Selection has dedicated unit coverage; render any valid opening naturally,
+        // without coupling this screenshot test to the emulator's clock or a user name.
+        val greetings = (0..23).flatMap { hour -> (0..3).map { roll -> emptyChatGreeting(hour, roll) } }.toSet()
+        rule.onNode(SemanticsMatcher("有效时段问候") { node ->
+            node.config.getOrNull(SemanticsProperties.Text)?.any { it.text in greetings } == true
+        }).assertIsDisplayed()
         screenshot("welcome-after")
         rule.runOnIdle { screen = 2 }
         rule.onNodeWithText("故事，从想象开始。").assertIsDisplayed()

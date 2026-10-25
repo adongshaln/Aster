@@ -18,8 +18,9 @@
 | 草稿与恢复 | 编辑首条消息后空会话不保存；正文和恢复点分别异步写入，存在恢复点先清除的窗口 | 保存已有空会话及编辑草稿；正文确认落盘后再清理恢复点 | `MainViewModelStateTest` 及原有会话持久化测试 |
 | 故事流式刷新 | 每约 110 ms 写 SQLite 并重新加载工作区 | UI 在内存中更新当前 revision；恢复检查点间隔约 1.4 s；完成/停止强制保存并刷新后再允许下一次生成 | `StoryViewModelStreamTest`、`StoryStreamStateTest` |
 | 故事取消与读取 | 重生成首段文本前停止会删掉原回复；迟到的异步读取可能覆盖新状态 | 事务恢复原 revision；旧读取使用 epoch/序号失效；取消落盘并清除加载态 | `StoryInterruptedRegenerationTest`、`StoryViewModelStreamTest` |
-| 动画 | 首页静止星标、小爪无弹道时仍逐帧执行；后台仍有吉祥物定时工作；等待动画在组合阶段读帧值 | 静止时退出帧循环，视觉工作受前台生命周期控制；定时任务后台挂起；动画值移到绘制阶段读取 | `ClawdActivityGateTest`、`ClawdFlightContactTest` 与原有吉祥物测试 |
+| 动画 | 首页星标没有旋转、小爪无弹道时仍逐帧计算物理状态；后台仍有吉祥物定时工作；等待动画在组合阶段读帧值 | 空闲时退出旋转/弹道计算循环，相关视觉工作受前台生命周期控制；定时任务后台挂起；动画值移到绘制阶段读取 | `ClawdActivityGateTest`、`ClawdFlightContactTest` 与原有吉祥物测试 |
 | 长消息与滚动 | 固定像素高度裁切大字号文本，展开按钮触控区域小，惯性滚动到底后跟随恢复不完整 | 按完整 12 行折叠，可恢复展开状态，48 dp 按钮；观察滚动结束恢复跟随；上下文估算轻度防抖 | `OptimizedChatUiTest`、现有输入框与阅读交互测试 |
+| 空态文案 | 相邻时段寒暄重复，多数句子围绕时间和姓名，还会猜测用户困倦或失眠 | 按用户反馈精简为 12 句开场，覆盖问题、想法、写作、选择和日常；四个宽时段只影响话题倾向，不强制称呼，不评判作息 | `EmptyChatGreetingTest` 检查轮换边界和文案约束；原生测试接受有效开场句，不绑定 CI 时钟或姓名 |
 | 冷启动 | 组合阶段复制约 25 MB 字体并同步构建 Typeface；吉祥物 JSON 在组合中读取解析 | Compose 异步资源字体；悬浮层通过字体资源 XML 保留字重 560；吉祥物数据异步共享缓存 | 编译、Lint、原生 UI 字体及阅读回归 |
 | HTML / Mermaid | source 改变时创建了新 WebView，但原 AndroidView 不更新；3.4 MB Mermaid 脚本逐卡在主线程读取处理 | factory 创建单个引擎，update 更新文档，释放时销毁；脚本异步一次缓存；文档后台构造；失败可见 | `OfflineArtifactViewTest`、`MermaidPreviewDocumentTest`、HTML 原生 UI 测试 |
 | 预览回调 | JavaScript bridge 在 Chromium 线程回调；旧页面排队动作可能进入新页面回调 | 主线程交付，限制长度，不同文档的 bridge 失效；保持离线网络和 iframe 限制 | `OfflineArtifactViewTest`、`HtmlPreviewDocumentTest` |
@@ -29,7 +30,7 @@
 
 - 原始静态检查：4 个错误、37 个警告，其中 3 个错误来自字体资源使用，1 个来自下载页未应用 Scaffold padding。
 - 最终静态检查：0 个错误、37 个警告；没有关闭检查或新增 suppress 来掩盖这 4 个错误。
-- 完整 JVM / Robolectric / MockWebServer 单测：613 项通过，0 失败，0 跳过。
+- 完整 JVM / Robolectric / MockWebServer 单测：607 项通过，0 失败，0 跳过。欢迎语改版将旧的 12 项姓名/寒暄断言替换为 6 项轮换、边界与文案约束测试；请求、状态和动画回归测试保留。
 - 本地检查命令：`./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease assembleDebugAndroidTest` 全部成功；覆盖 Release 构建与 Android instrumentation 测试包编译。
 - 原生 UI 通过仓库 `Native UI preview` 工作流运行；手动触发可使用 `test_class` 选择测试，避免为不同修复硬编码更多分支。
 - 云端完整测试及签名 Release 构建已通过：[Android build](https://github.com/adongshaln/Aster/actions/runs/40157144795)。签名 APK 留在 Actions 制品，本地生成的 APK 已清理。

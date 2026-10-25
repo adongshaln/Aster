@@ -365,7 +365,6 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 if (vm.messages.isEmpty()) {
                     EmptyChat(
                         model = vm.chatProfile.chatModel,
-                        userName = vm.appConfig.userName,
                         onConfigure = onOpenSettings,
                         modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
                     )
@@ -586,9 +585,9 @@ private fun ChatHeader(
 }
 
 @Composable
-internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
-    // 极简空态：星标 + 一句时段问候，仅保留未配置模型时的引导动作。
-    // 问候按时段随机轮换：进入空态抽一句，跨时段再抽一次；每分钟只刷新时钟，重组不闪句。
+internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
+    // 星标 + 一句开场白；未配置模型时保留连接入口。
+    // 进入空态或跨时段时抽一句，重组不闪句；时段只影响候选池，不强制寒暄或称呼。
     fun nowHour() = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
     var hourOfDay by remember { mutableIntStateOf(nowHour()) }
     var band by remember { mutableIntStateOf(greetingBand(hourOfDay)) }
@@ -645,7 +644,7 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
             }
             Spacer(Modifier.height(22.dp))
             Text(
-                text = emptyChatGreeting(hourOfDay, userName, roll),
+                text = emptyChatGreeting(hourOfDay, roll),
                 style = MaterialTheme.typography.headlineSmall,
                 color = Ink,
                 textAlign = TextAlign.Center
