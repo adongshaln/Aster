@@ -8,13 +8,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.adong.adchat.ui.ForegroundEffect
 import com.adong.adchat.ui.theme.LocalThemeDark
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Clawd 宿主挂载点：三只小爪 + 大 Clawd 同一张画布。
@@ -44,12 +54,13 @@ fun ClawdHost(
     val night = LocalThemeDark.current
     val density = LocalDensity.current.density
 
-    val dataJson = remember { clawdDataJson(context) }
-    val data = remember(dataJson) {
-        ClawdBundle(
-            rig = ClawdLoader.loadRigData(dataJson),
-            pile = ClawdLoader.loadPileData(dataJson),
-        )
+    val bundle by produceState(ClawdBundleCache.cached, context.applicationContext) {
+        value = ClawdBundleCache.load(context.applicationContext)
+    }
+    val data = bundle ?: run {
+        // Keep the composer in place while the bundled sprites are parsed off the main thread.
+        Box(modifier.height(ClawdPileBandHeight).offset(y = 7.dp))
+        return
     }
     val scope = rememberCoroutineScope()
     val pile = remember(data, scope) {
@@ -65,6 +76,22 @@ fun ClawdHost(
             pile = pile,
             scope = scope,
         )
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, pile, runtime) {
+        fun updateVisibility() {
+            val active = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            pile.setForeground(active)
+            runtime.setForeground(active)
+        }
+        updateVisibility()
+        val observer = LifecycleEventObserver { _, _ -> updateVisibility() }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            pile.setForeground(false)
+            runtime.setForeground(false)
+        }
     }
 
     // 视口尺寸（dp）：band 所在窗口的宽高，最后防线用
@@ -92,7 +119,7 @@ fun ClawdHost(
     }
 
     // 大爪位置变化同步给 pile（它要知道障碍在哪；大爪在输入框上才算障碍）
-    LaunchedEffect(runtime) {
+    ForegroundEffect(runtime) {
         while (true) {
             kotlinx.coroutines.delay(100)
             pile.setBigGrounded(runtime.isBigGrounded(), runtime.bigLeftInBand(), walking = runtime.isWalking())
@@ -100,7 +127,7 @@ fun ClawdHost(
     }
 
     // band 宽度（dp）：seat cx 用 pile 本地坐标系，runtime.x 用右侧偏移坐标系，桥接用
-    LaunchedEffect(Unit) {
+    ForegroundEffect(pile, runtime) {
         while (true) {
             kotlinx.coroutines.delay(50)
             if (pile.width > 0) {
@@ -146,7 +173,19 @@ fun ClawdHost(
     }
 }
 
-private fun clawdDataJson(context: android.content.Context): String =
-    context.assets.open("clawd/clawd_data.json").bufferedReader().use { it.readText() }
-
 private data class ClawdBundle(val rig: RigData, val pile: PileData)
+
+private object ClawdBundleCache {
+    @Volatile var cached: ClawdBundle? = null
+        private set
+    private val mutex = Mutex()
+
+    suspend fun load(context: android.content.Context): ClawdBundle = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            cached ?: run {
+                val json = context.assets.open("clawd/clawd_data.json").bufferedReader().use { it.readText() }
+                ClawdBundle(ClawdLoader.loadRigData(json), ClawdLoader.loadPileData(json)).also { cached = it }
+            }
+        }
+    }
+}

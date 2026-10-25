@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -35,6 +34,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.adong.adchat.ui.ForegroundEffect
 import kotlin.math.roundToInt
 
 /**
@@ -112,7 +112,7 @@ fun ClawdBigOverlay(
     var ghosts by remember { mutableStateOf<List<Ghost>>(emptyList()) }
     val ghostSpawn = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 
-    LaunchedEffect(runtime, rig, night, palWithSticks) {
+    ForegroundEffect(runtime, rig, night, palWithSticks) {
         var frameT = 0L
         while (true) {
             withFrameNanos {
@@ -163,9 +163,13 @@ fun ClawdBigOverlay(
     val f = frame
     // ghost 活跃时逐帧重组（原版 Web Animations 自带时钟）
     var ghostTick by remember { mutableIntStateOf(0) }
-    LaunchedEffect(ghosts.isNotEmpty()) {
+    ForegroundEffect(ghosts.isNotEmpty()) {
         while (ghosts.isNotEmpty()) {
-            withFrameNanos { ghostTick++ }
+            withFrameNanos {
+                val nowMs = android.os.SystemClock.elapsedRealtime()
+                ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
+                ghostTick++
+            }
         }
     }
     val nowMsNow = remember(ghostTick, version, frame) { android.os.SystemClock.elapsedRealtime() }

@@ -61,6 +61,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 class StoryViewModel(application: Application) : AndroidViewModel(application) {
     private val store = StoryRepository(application)
@@ -94,6 +95,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
     var undoBusy by mutableStateOf(false)
         private set
     private val workspaceMessages = mutableStateMapOf<StoryWorkspace, List<StoryMessageWithRevision>>()
+    private data class WorkspaceReadVersion(val epoch: Long, val sequence: Long)
+    private val workspaceReadSequence = AtomicLong()
+    private val workspaceReadTokens = ConcurrentHashMap<StoryWorkspace, WorkspaceReadVersion>()
     private val workspaceStates = mutableStateMapOf<StoryWorkspace, StoryWorkspaceState>()
     private val loadingKeys = mutableStateMapOf<String, Boolean>()
     private val errors = mutableStateMapOf<StoryWorkspace, String>()
@@ -1200,6 +1204,7 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val streamed = StringBuilder()
             val reasoned = StringBuilder()
             var lastPersistAt = 0L
+            var lastUiPushAt = 0L
             var lastReasoningPushAt = 0L
             try {
                 // Request-side source of truth: freeze the persisted Tavern selection and regex
@@ -1301,18 +1306,35 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 ) { delta ->
                     streamed.append(delta)
                     val now = SystemClock.elapsedRealtime()
-                    if (lastPersistAt == 0L || now - lastPersistAt >= 110L) {
-                        lastPersistAt = now
+                    val uiDue = lastUiPushAt == 0L || now - lastUiPushAt >= 110L
+                    val checkpointDue = lastPersistAt == 0L || now - lastPersistAt >= 1_400L
+                    if (uiDue || checkpointDue) {
+                        val snapshot = streamed.toString()
                         assistant?.revision?.id?.let { revisionId ->
-                            store.updateActiveRevision(
-                                revisionId = revisionId,
-                                content = streamed.toString(),
-                                state = StoryRevisionState.Streaming,
-                                profileName = profile.name,
-                                model = routeModel
-                            )
+                            if (checkpointDue) {
+                                lastPersistAt = now
+                                store.updateActiveRevision(
+                                    revisionId = revisionId,
+                                    content = snapshot,
+                                    state = StoryRevisionState.Streaming,
+                                    profileName = profile.name,
+                                    model = routeModel
+                                )
+                            }
+                            if (uiDue) {
+                                lastUiPushAt = now
+                                withContext(Dispatchers.Main) {
+                                    if (activeStoryId == story.id && activeStory?.currentTimelineId == story.currentTimelineId) {
+                                        val rows = workspaceMessages[workspace].orEmpty()
+                                        val updated = updateStreamingStoryRevision(rows, revisionId, snapshot)
+                                        if (updated !== rows) {
+                                            advanceWorkspaceVersion(stateEpoch, workspace)
+                                            workspaceMessages[workspace] = updated
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        refreshWorkspaceIfVisible(story.id, workspace)
                     }
                 }
                 val finalText = result.text.ifBlank { streamed.toString() }
@@ -1338,7 +1360,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 when {
                     key in stopRequested -> {
                         when (storyStopCleanupFor(partial)) {
-                            StoryStopCleanup.RemoveAssistant -> assistant?.message?.id?.let(store::deleteMessage)
+                            StoryStopCleanup.RemoveAssistant -> assistant?.let { generated ->
+                                if (retryTarget != null) {
+                                    store.cancelEmptyRegeneration(generated.message.id, generated.revision.id, retryTarget.revision.id)
+                                } else {
+                                    store.deleteMessage(generated.message.id)
+                                }
+                            }
                             StoryStopCleanup.KeepStoppedPartial -> revisionId?.let {
                                 store.updateActiveRevision(
                                     revisionId = it,
@@ -1350,7 +1378,24 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
-                    error is CancellationException -> throw error
+                    error is CancellationException -> {
+                        // A scope cancellation can occur between checkpoints. Finalize the
+                        // in-memory partial before allowing the ViewModel/database to close.
+                        assistant?.let { generated ->
+                            if (retryTarget != null && partial.isBlank()) {
+                                store.cancelEmptyRegeneration(generated.message.id, generated.revision.id, retryTarget.revision.id)
+                            } else {
+                                store.updateActiveRevision(
+                                    revisionId = generated.revision.id,
+                                    content = partial,
+                                    state = StoryRevisionState.Interrupted,
+                                    profileName = profile.name,
+                                    model = routeModel
+                                )
+                            }
+                        }
+                        throw error
+                    }
                     revisionId != null -> {
                         store.updateActiveRevision(
                             revisionId = revisionId,
@@ -1368,14 +1413,22 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             } finally {
-                withContext(NonCancellable + Dispatchers.Main) {
-                    stopRequested.remove(key)
-                    jobs.remove(key)
-                    loadingKeys.remove(key)
-                    workspaceReasoning.remove(workspace)
+                withContext(NonCancellable) {
+                    try {
+                        // Keep the generation locked until its terminal snapshot is visible.
+                        refreshWorkspaceIfVisible(story.id, workspace)
+                        refreshStory(story.id)
+                    } finally {
+                        withContext(Dispatchers.Main) {
+                            stopRequested.remove(key)
+                            jobs.remove(key)
+                            loadingKeys.remove(key)
+                            if (activeStoryId == story.id && activeStory?.currentTimelineId == story.currentTimelineId) {
+                                workspaceReasoning.remove(workspace)
+                            }
+                        }
+                    }
                 }
-                refreshWorkspaceIfVisible(story.id, workspace)
-                refreshStory(story.id)
             }
         }
         jobs[key] = job
@@ -1573,6 +1626,9 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadActiveStoryState(story: Story) {
         val epoch = stateEpoch
+        val readTokens = StoryWorkspace.entries.associateWith { workspace ->
+            advanceWorkspaceVersion(epoch, workspace)
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val loadedMessages = StoryWorkspace.entries.associateWith { workspace ->
                 store.loadMessages(story.id, story.currentTimelineId, workspace)
@@ -1586,8 +1642,13 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
             val status = memoryStore.jobStatus(story.id, story.currentTimelineId)
             withContext(Dispatchers.Main) {
                 if (epoch != stateEpoch || activeStoryId != story.id || activeStory?.currentTimelineId != story.currentTimelineId) return@withContext
-                workspaceMessages.putAll(loadedMessages)
-                workspaceStates.putAll(loadedStates)
+                loadedMessages.forEach { (workspace, rows) ->
+                    if (workspaceReadTokens[workspace] == readTokens[workspace]) workspaceMessages[workspace] = rows
+                }
+                loadedStates.forEach { (workspace, loaded) ->
+                    val current = workspaceStates[workspace]
+                    if (current == null || loaded.updatedAt >= current.updatedAt) workspaceStates[workspace] = loaded
+                }
                 archiveRecords.clear(); archiveConflicts.clear()
                 archiveProposals.clear()
                 archiveRecords.addAll(records)
@@ -1598,16 +1659,25 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun refreshWorkspaceIfVisible(storyId: String, workspace: StoryWorkspace) {
+    private suspend fun refreshWorkspaceIfVisible(storyId: String, workspace: StoryWorkspace) {
         val epoch = stateEpoch
         if (activeStoryId != storyId) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val story = store.getStory(storyId) ?: return@launch
-            val rows = store.loadMessages(storyId, story.currentTimelineId, workspace)
-            withContext(Dispatchers.Main) {
-                if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == story.currentTimelineId) workspaceMessages[workspace] = rows
-            }
+        val readToken = advanceWorkspaceVersion(epoch, workspace)
+        val story = store.getStory(storyId) ?: return
+        val rows = store.loadMessages(storyId, story.currentTimelineId, workspace)
+        withContext(Dispatchers.Main) {
+            if (epoch == stateEpoch && activeStoryId == storyId && activeStory?.currentTimelineId == story.currentTimelineId &&
+                workspaceReadTokens[workspace] == readToken) workspaceMessages[workspace] = rows
         }
+    }
+
+    private fun advanceWorkspaceVersion(epoch: Long, workspace: StoryWorkspace): WorkspaceReadVersion {
+        val next = WorkspaceReadVersion(epoch, workspaceReadSequence.incrementAndGet())
+        workspaceReadTokens.compute(workspace) { _, current ->
+            if (current == null || next.epoch > current.epoch ||
+                (next.epoch == current.epoch && next.sequence > current.sequence)) next else current
+        }
+        return next
     }
 
     private suspend fun refreshArchive(storyId: String, timelineId: String) {

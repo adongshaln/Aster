@@ -217,6 +217,7 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
             val drawerOpen: () -> Unit = { drawerScope.launch { drawerState.open() } }
             Box(
                 Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
+                    .consumeWindowInsets(PaddingValues(bottom = pageBottomPadding))
                     .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas)))
                     .drawerEdgeSwipe(drawerOpen),
                 contentAlignment = Alignment.TopCenter

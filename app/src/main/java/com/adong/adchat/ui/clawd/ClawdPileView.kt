@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
@@ -42,6 +41,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.adong.adchat.ui.ForegroundEffect
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -107,7 +107,10 @@ fun ClawdPileOverlay(
 
     // 被拎着的两帧蹬腿
     var dangleFrame by remember { mutableIntStateOf(0) }
-    LaunchedEffect(Unit) {
+    val hasFlights = remember(version) { pile.hasFlights }
+    val dangling = dragInfo != null || hasFlights
+    ForegroundEffect(dangling) {
+        if (!dangling) return@ForegroundEffect
         while (true) {
             kotlinx.coroutines.delay(360)
             dangleFrame = 1 - dangleFrame
@@ -117,16 +120,17 @@ fun ClawdPileOverlay(
     // 动画时钟：hop/squash/Z 飘/星星按 elapsed 采样（原版 Web Animations）
     // 必须与 hopAt/squashAt 的 elapsedRealtime 同域——nanoTime 域相减恒负，动作全部冻结
     var animNow by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
+    ForegroundEffect(pile) {
         while (true) {
             withFrameNanos { animNow = android.os.SystemClock.elapsedRealtime() }
         }
     }
 
     // 弹道帧：有在飞的小爪时驱动 stepFlights（原版 rAF 逐帧积分）
-    LaunchedEffect(pile) {
+    ForegroundEffect(pile, hasFlights) {
+        if (!hasFlights) return@ForegroundEffect
         var last = 0L
-        while (true) {
+        while (pile.hasFlights) {
             withFrameNanos { ns: Long ->
                 val nowMs = ns / 1_000_000
                 val dt = if (last > 0) ((nowMs - last) / 16.6667f).coerceIn(0.5f, 3f) else 1f

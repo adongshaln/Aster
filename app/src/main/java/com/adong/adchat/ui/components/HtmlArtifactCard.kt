@@ -1,9 +1,7 @@
 package com.adong.adchat.ui.components
 
-import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.webkit.*
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,17 +16,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
 
 /** Used by fenced HTML in both workspaces and by create_file attachments. */
 @Composable
@@ -108,7 +101,9 @@ internal fun HtmlArtifactCard(
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+private data class HtmlPreviewInput(val source: String, val scripts: Boolean, val panelBridge: Boolean)
+private data class PreparedHtmlPreview(val input: HtmlPreviewInput, val html: String)
+
 @Composable
 private fun HtmlPreview(
     source: String,
@@ -116,91 +111,22 @@ private fun HtmlPreview(
     allowScripts: Boolean,
     panelActions: ((String) -> Unit)? = null
 ) {
-    val context = LocalContext.current
-    val lifecycle = LocalLifecycleOwner.current.lifecycle
-    var failed by remember(source, allowScripts, panelActions) { mutableStateOf(false) }
-    val view = remember(source, allowScripts, panelActions) { runCatching {
-        WebView(context).apply {
-            layoutParams = android.view.ViewGroup.LayoutParams(
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.MATCH_PARENT)
-            settings.apply {
-                javaScriptEnabled = allowScripts
-                allowFileAccess = false
-                allowContentAccess = false
-                @Suppress("DEPRECATION")
-                setAllowFileAccessFromFileURLs(false)
-                @Suppress("DEPRECATION")
-                setAllowUniversalAccessFromFileURLs(false)
-                blockNetworkLoads = true
-                domStorageEnabled = false
-                databaseEnabled = false
-                javaScriptCanOpenWindowsAutomatically = false
-                setSupportMultipleWindows(true)
-                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                mediaPlaybackRequiresUserGesture = true
-                cacheMode = WebSettings.LOAD_NO_CACHE
-            }
-            if (panelActions != null) {
-                addJavascriptInterface(
-                    object { @JavascriptInterface fun onPanelAction(text: String) { panelActions(text) } },
-                    "Aster"
-                )
-            }
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, false)
-            webChromeClient = WebChromeClient()
-            webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String?) {
-                    // DOM completion precedes Chromium's first drawable frame.
-                    view.postVisualStateCallback(0, object : WebView.VisualStateCallback() {
-                        override fun onComplete(requestId: Long) {
-                            view.invalidate()
-                            view.rootView.postInvalidateOnAnimation()
-                        }
-                    })
-                }
-                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?) = true
-                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse =
-                    WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-                    failed = true
-                    return true
-                }
-            }
+    val panelBridge = panelActions != null
+    val input = remember(source, allowScripts, panelBridge) { HtmlPreviewInput(source, allowScripts, panelBridge) }
+    val document by produceState<PreparedHtmlPreview?>(null, input) {
+        val html = withContext(Dispatchers.Default) {
+            HtmlPreviewDocument.wrap(input.source, input.scripts, input.panelBridge)
         }
-    }.getOrNull() }
-    DisposableEffect(view, lifecycle) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) view?.onResume()
-            if (event == Lifecycle.Event.ON_PAUSE) view?.onPause()
-        }
-        lifecycle.addObserver(observer)
-        onDispose {
-            lifecycle.removeObserver(observer)
-        }
+        value = PreparedHtmlPreview(input, html)
     }
-    if (view == null || failed) Box(modifier, contentAlignment = Alignment.Center) {
-        Text("预览无法显示，可保存后用其他应用打开", color = MutedInk)
-    } else AndroidView(
-        factory = {
-            view.apply {
-                // Let the surrounding Compose window submit its first frame before
-                // Chromium starts drawing; otherwise a new dialog's toolbar can stay blank.
-                postOnAnimation {
-                    post { loadDataWithBaseURL(
-                        null,
-                        HtmlPreviewDocument.wrap(source, allowScripts, panelBridge = panelActions != null),
-                        "text/html", "utf-8", null
-                    ) }
-                }
-            }
-        },
-        modifier = modifier,
-        onRelease = {
-            it.stopLoading()
-            it.webViewClient = WebViewClient()
-            it.removeAllViews()
-            it.destroy()
+    val prepared = document
+    if (prepared == null) Box(modifier, contentAlignment = Alignment.Center) {
+        AsterLoadingIndicator(size = 24.dp)
+    } else OfflineArtifactPreview(prepared.html, modifier, allowScripts, panelActions = panelActions?.let { action ->
+        { text ->
+            // produceState retains the old document while preparing the new source.
+            // Its still-visible buttons must not invoke the new document's callback.
+            if (prepared.input == input) action(text)
         }
-    )
+    })
 }

@@ -550,7 +550,7 @@ class SharedUiInteractionTest {
         screenshot("welcome-before")
         rule.runOnIdle { screen = 1 }
         // 空态改为时段随机问候后不再有旧标题与建议卡；断言带称呼问候在随机轮换下仍可命中。
-        rule.onNode(hasAnyDescendant(hasTextSubstring("小明"))).assertExists("新空态应显示带称呼的时段问候")
+        rule.onNodeWithText("小明", substring = true).assertExists("新空态应显示带称呼的时段问候")
         screenshot("welcome-after")
         rule.runOnIdle { screen = 2 }
         rule.onNodeWithText("故事，从想象开始。").assertIsDisplayed()
@@ -737,7 +737,7 @@ class SharedUiInteractionTest {
         rule.onNodeWithContentDescription("关闭 HTML 预览").performClick()
         rule.onNodeWithContentDescription("复制 HTML 代码").assertExists()
         rule.onNodeWithText(html).assertDoesNotExist()
-        rule.onNodeWithContentDescription("保存 HTML 文件").assertIsEnabled()
+        rule.onNodeWithText("下载 HTML").assertIsEnabled()
     }
 
     @Test fun generatedPdfAndOfficeFilesHaveRealBytesAndSurviveSaving() {

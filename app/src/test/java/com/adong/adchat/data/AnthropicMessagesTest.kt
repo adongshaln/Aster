@@ -109,7 +109,7 @@ class AnthropicMessagesTest {
         val parsed = events.map { AnthropicMessages.parseEvent(it, blocks) }
 
         val start = parsed.filterIsInstance<AnthropicMessages.Event.Start>().single()
-        assertEquals(120, start.usage.inputTokens)
+        assertEquals(216, start.usage.inputTokens)
         assertEquals(64, start.usage.cachedTokens)
         assertEquals(32, start.usage.cacheWriteTokens)
 
@@ -131,7 +131,8 @@ class AnthropicMessagesTest {
         val blocks = mutableMapOf<Int, AnthropicMessages.BlockState>()
         assertTrue(AnthropicMessages.parseEvent("""{"type":"ping"}""", blocks) is AnthropicMessages.Event.Ignored)
         assertTrue(AnthropicMessages.parseEvent("""{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{}}}""", blocks) is AnthropicMessages.Event.Ignored)
-        assertTrue(AnthropicMessages.parseEvent("not json", blocks) is AnthropicMessages.Event.Ignored)
+        val failure = runCatching { AnthropicMessages.parseEvent("not json", blocks) }.exceptionOrNull()
+        assertTrue(failure is IllegalStateException)
     }
 
     @Test fun errorEventBecomesFailure() {
@@ -202,10 +203,11 @@ class AnthropicMessagesTest {
 
             assertEquals("你好，世界", result.text)
             assertEquals("你好，世界", deltas.toString())
-            assertEquals(2100, result.usage.inputTokens)
+            assertEquals(4148, result.usage.inputTokens)
             assertEquals(1024, result.usage.cachedTokens)
             assertEquals(1024, result.usage.cacheWriteTokens)
             assertEquals(12, result.usage.outputTokens)
+            assertEquals(4160, result.usage.totalTokens)
             assertEquals("claude-breakpoints", result.usage.cacheStrategy)
             assertTrue(result.outputComplete)
 

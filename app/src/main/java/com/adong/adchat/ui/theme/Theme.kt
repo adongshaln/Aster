@@ -1,6 +1,5 @@
 package com.adong.adchat.ui.theme
 
-import android.graphics.Typeface
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -16,10 +15,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontLoadingStrategy
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
@@ -31,7 +32,6 @@ import com.adong.adchat.data.FONT_WEIGHT_MIN
 import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
 import com.adong.adchat.data.THEME_MODE_SYSTEM
-import java.io.File
 
 /**
  * Aster — Claude Editorial Color System & Serif/Sans Hybrid Typography
@@ -177,18 +177,16 @@ private fun AsterPalette.toColorScheme() = lightColorScheme(
     errorContainer = dangerSoft
 )
 
-private fun asterFontFamily(context: android.content.Context, axisWeight: Int): FontFamily {
-    val file = File(context.cacheDir, "noto_serif_sc_variable.ttf")
-    if (file.length() < 1024) {
-        context.resources.openRawResource(R.font.noto_serif_sc_variable).use { input ->
-            file.outputStream().use { input.copyTo(it) }
-        }
-    }
-    val face = Typeface.Builder(file)
-        .setFontVariationSettings("'wght' ${axisWeight.coerceIn(200, 900)}")
-        .build()
-    return FontFamily(face)
-}
+// Compose loads and caches the bundled variable font off the UI thread. Do not copy
+// the font into cacheDir during composition: the resource is about 25 MB.
+@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
+private fun asterFontFamily(axisWeight: Int): FontFamily = FontFamily(
+    Font(
+        resId = R.font.noto_serif_sc_variable,
+        loadingStrategy = FontLoadingStrategy.Async,
+        variationSettings = FontVariation.Settings(FontVariation.weight(axisWeight.coerceIn(200, 900)))
+    )
+)
 
 /**
  * Claude 标志性「文学衬线 + 现代无衬线」混排字体阶梯：
@@ -299,9 +297,8 @@ fun AsterTheme(
     content: @Composable () -> Unit
 ) {
     val dark = themeIsDark(themeMode)
-    val context = LocalContext.current
     val normalizedWeight = fontWeight.coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX)
-    val fontFamily = remember(normalizedWeight) { asterFontFamily(context, normalizedWeight) }
+    val fontFamily = remember(normalizedWeight) { asterFontFamily(normalizedWeight) }
     val typography = remember(fontFamily) { asterTypography(fontFamily) }
     val target = if (dark) AsterPaletteDark else AsterPaletteLight
     val colorSpring = AsterSpring.editorial<Color>()

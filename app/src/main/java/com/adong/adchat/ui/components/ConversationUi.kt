@@ -474,7 +474,7 @@ fun ConversationThinkingIndicator() {
         animationSpec = infiniteRepeatable(tween(1100, easing = FastOutSlowInEasing), repeatMode = RepeatMode.Reverse),
         label = "aster-thinking-scale"
     )
-    val lift = with(density) { 2.5.dp.toPx() } * sin(PI * float).toFloat()
+    val liftPx = with(density) { 2.5.dp.toPx() }
 
     Row(
         Modifier
@@ -487,7 +487,7 @@ fun ConversationThinkingIndicator() {
                 Modifier
                     .size(22.dp)
                     .graphicsLayer {
-                        translationY = -lift
+                        translationY = -liftPx * sin(PI * float).toFloat()
                         rotationZ = sway
                         scaleX = pulseScale
                         scaleY = pulseScale

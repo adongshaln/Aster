@@ -129,7 +129,7 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
             }
         }
     ) { scaffoldPadding ->
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(Modifier.fillMaxSize().padding(scaffoldPadding).consumeWindowInsets(scaffoldPadding)) {
             AsterPageHeader("下载", onOpenDrawer, Modifier.padding(horizontal = 8.dp))
         LazyColumn(
             modifier = Modifier.weight(1f).fillMaxWidth().imePadding(),
@@ -161,8 +161,10 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
                             state.resolveRequest?.let { request ->
                                 DouyinResolverCard(
                                     request, phase == MediaWorkspacePhase.Verification, state.resolverMessage,
-                                    vm::onResolverProgress, vm::onVerificationRequired, vm::onResolved,
-                                    vm::onResolveFailed, vm::cancelResolve
+                                    { vm.onResolverProgress(it, request.token) },
+                                    { vm.onVerificationRequired(it, request.token) },
+                                    { vm.onResolved(it, request.token) },
+                                    { vm.onResolveFailed(it, request.token) }, vm::cancelResolve
                                 )
                             } ?: RemoteResolverCard(state.detectedPlatform, state.resolverMessage, vm::cancelResolve)
                         }

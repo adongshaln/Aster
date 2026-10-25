@@ -46,13 +46,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
@@ -68,6 +64,9 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.TextLinkStyles
@@ -104,6 +103,7 @@ import com.adong.adchat.data.TOOL_STATUS_COMPLETED
 import com.adong.adchat.data.TOOL_STATUS_FAILED
 import com.adong.adchat.data.TOOL_STATUS_RUNNING
 import com.adong.adchat.ui.MainViewModel
+import com.adong.adchat.ui.ForegroundEffect
 import com.adong.adchat.ui.fittedImageDp
 import com.adong.adchat.ui.modelWorkingCaption
 import com.adong.adchat.ui.showModelWorkingFoot
@@ -193,6 +193,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     val hostContext = LocalContext.current
     val contextModel = vm.chatProfile.chatModel
     val contextLimits = vm.chatProfile.modelContexts[contextModel.trim()]
+    val completedContextHistory by remember(vm) {
+        // Streaming output is excluded by contextUsage; token deltas must not retokenize history.
+        derivedStateOf { vm.messages.filterNot { it.isStreaming } }
+    }
     // 估算要走整段历史，放在后台算，避免每次重组都卡一帧；初值不为空，点进度圈立刻有反应；
     // 改完上下文长度也要立刻重算。
     val contextUsage by produceState(
@@ -201,14 +205,17 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             attachmentTokens = 0, overheadTokens = 0, omittedTurns = 0,
             lastRequestInputTokens = 0, lastRequestOutputTokens = 0, lastRequestReasoningTokens = 0
         ),
-        vm.messages.size,
-        vm.messages.lastOrNull()?.content?.length ?: 0,
+        vm.activeConversationId,
+        completedContextHistory,
+        vm.chatProfile.id,
         contextModel,
         vm.chatInput,
-        vm.chatAttachments.size,
+        vm.chatAttachments.toList(),
         vm.appConfig.systemPrompt,
         contextLimits
     ) {
+        // Coalesce typing bursts before scanning and estimating the completed history.
+        delay(120)
         value = withContext(Dispatchers.Default) {
             vm.contextUsage(vm.chatInput, vm.chatAttachments.toList())
         }
@@ -282,9 +289,14 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         if (vm.messages.isNotEmpty()) listState.scrollToItem(vm.messages.size)
     }
 
-    LaunchedEffect(userDragging) {
-        if (userDragging) autoFollow = false
-        else if (!listState.canScrollForward) autoFollow = true
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            Triple(userDragging, listState.isScrollInProgress, listState.canScrollForward)
+        }.collect { (dragging, scrolling, canScrollForward) ->
+            if (dragging) autoFollow = false
+            // Reaching the end during a fling happens after drag release; observe the end too.
+            else if (!scrolling && !canScrollForward) autoFollow = true
+        }
     }
 
     LaunchedEffect(vm.messages.size) {
@@ -581,10 +593,10 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
     var hourOfDay by remember { mutableIntStateOf(nowHour()) }
     var band by remember { mutableIntStateOf(greetingBand(hourOfDay)) }
     var roll by remember(band) { mutableIntStateOf((0..Int.MAX_VALUE).random()) }
-    LaunchedEffect(Unit) {
+    ForegroundEffect(Unit) {
         while (true) {
-            delay(60_000L)
             hourOfDay = nowHour().also { band = greetingBand(it) }
+            delay(60_000L)
         }
     }
 
@@ -593,9 +605,11 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
     val haptics = LocalHapticFeedback.current
     var angle by remember { mutableFloatStateOf(0f) }
     var spinSpeed by remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(Unit) {
+    val spinning by remember { derivedStateOf { spinSpeed > 0f } }
+    ForegroundEffect(spinning) {
+        if (!spinning) return@ForegroundEffect
         var last = withFrameNanos { it }
-        while (true) {
+        while (spinSpeed > 0f) {
             val now = withFrameNanos { it }
             val dt = ((now - last) / 1_000_000_000.0).toFloat()
             last = now
@@ -615,11 +629,14 @@ internal fun EmptyChat(model: String, userName: String, onConfigure: () -> Unit,
                     .claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
-                        indication = null
+                        indication = null,
+                        role = Role.Button,
+                        onClickLabel = "旋转星标"
                     ) {
                         spinSpeed = (spinSpeed + 120f).coerceAtMost(540f)
                         haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    },
+                    }
+                    .semantics { contentDescription = "Aster 星标" },
                 contentAlignment = Alignment.Center
             ) {
                 AsterMark(
@@ -700,63 +717,7 @@ private fun ChatMessageItem(
                             ConversationImages(message.attachments)
                         }
                         if (message.content.isNotBlank()) {
-                            // 超长内容折叠：折叠预览 + 底部渐隐 + 展开/收起。
-                            // 用 onTextLayout 的 hasVisualOverflow 检测溢出：
-                            // heightIn 会同时截短 onSizeChanged 的实测高度，不能用它比较阈值。
-                            var expanded by remember(message.id) { mutableStateOf(false) }
-                            var overflowed by remember(message.id) { mutableStateOf(false) }
-                            // Canvas 是 @Composable getter，须先在组合期取值再进 draw lambda
-                            val fadeBase = Canvas
-                            Column {
-                                SelectionContainer {
-                                    Text(
-                                        message.content,
-                                        Modifier
-                                            .heightIn(max = if (expanded) Dp.Unspecified else 360.dp)
-                                            .then(
-                                                if (overflowed && !expanded) Modifier
-                                                    .drawWithContent {
-                                                        drawContent()
-                                                        // 底部 36dp 七档渐隐幕，盖住被截断的正文
-                                                        val fadeH = 36.dp.toPx()
-                                                        drawRect(
-                                                            brush = Brush.verticalGradient(
-                                                                0f to Color.Transparent,
-                                                                0.15f to fadeBase.copy(alpha = 0.05f),
-                                                                0.30f to fadeBase.copy(alpha = 0.15f),
-                                                                0.45f to fadeBase.copy(alpha = 0.30f),
-                                                                0.60f to fadeBase.copy(alpha = 0.50f),
-                                                                0.75f to fadeBase.copy(alpha = 0.70f),
-                                                                0.87f to fadeBase.copy(alpha = 0.85f),
-                                                                1f to fadeBase,
-                                                                startY = size.height - fadeH,
-                                                                endY = size.height
-                                                            ),
-                                                            topLeft = Offset(0f, size.height - fadeH),
-                                                            size = Size(size.width, fadeH)
-                                                        )
-                                                    }
-                                                else Modifier
-                                            ),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        onTextLayout = { if (!expanded) overflowed = it.hasVisualOverflow }
-                                    )
-                                }
-                                if (overflowed) {
-                                    Text(
-                                        text = if (expanded) "收起" else "展开",
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = Accent,
-                                        modifier = Modifier
-                                            .padding(top = 4.dp)
-                                            .align(Alignment.End)
-                                            .clickable(
-                                                interactionSource = remember { MutableInteractionSource() },
-                                                indication = null
-                                            ) { expanded = !expanded }
-                                    )
-                                }
-                            }
+                            ExpandableUserMessage(message.id, message.content)
                         }
                     }
                 }

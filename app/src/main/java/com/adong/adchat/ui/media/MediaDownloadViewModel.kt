@@ -104,8 +104,13 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
     fun resolve() {
         if (state.value.phase == MediaWorkspacePhase.Downloading) return
         if (!pendingAutoDownload) automaticRefreshAttempts = 0
+        // Invalidate the previous page/HTTP callbacks even when the new input is invalid.
+        requestSequence += 1L
+        resolveJob?.cancel()
+        resolveJob = null
         val input = MediaInputParser.parse(state.value.input)
         if (input == null) {
+            pendingAutoDownload = false
             update {
                 copy(
                     phase = MediaWorkspacePhase.Error,
@@ -118,8 +123,6 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
             return
         }
 
-        resolveJob?.cancel()
-        requestSequence += 1L
         if (input.platform == MediaPlatform.Douyin) {
             val link = DouyinUrlParser.parse(input.sourceUrl)
             if (link == null) {
@@ -166,7 +169,7 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
                     try {
                         media = remoteResolver.resolve(input) { message ->
                             viewModelScope.launch(Dispatchers.Main.immediate) {
-                                if (requestSequence == activeToken) onResolverProgress(message)
+                                onResolverProgress(message, activeToken)
                             }
                         }
                     } catch (error: CancellationException) {
@@ -174,33 +177,39 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
                     } catch (error: Exception) {
                         lastError = error
                         if (attempt < maxAttempts - 1) {
-                            onResolverProgress("B 站接口波动，正在自动重试 ${attempt + 2}/$maxAttempts")
+                            onResolverProgress("B 站接口波动，正在自动重试 ${attempt + 2}/$maxAttempts", activeToken)
                             delay(BILIBILI_RETRY_DELAY_MS * (attempt + 1L))
                         }
                     }
                 }
                 val resolved = media ?: throw lastError ?: IllegalStateException("解析失败")
-                if (requestSequence == activeToken) onResolved(resolved)
+                onResolved(resolved, activeToken)
             } catch (_: CancellationException) {
                 if (requestSequence == activeToken) update { copy(phase = MediaWorkspacePhase.Idle, resolverMessage = "") }
             } catch (error: Exception) {
-                if (requestSequence == activeToken) onResolveFailed(error.message ?: "解析失败，请稍后重试")
+                onResolveFailed(error.message ?: "解析失败，请稍后重试", activeToken)
             }
         }
     }
 
-    fun onResolverProgress(message: String) {
+    private fun acceptsResolverCallback(token: Long): Boolean = token == requestSequence &&
+        state.value.phase in setOf(MediaWorkspacePhase.Resolving, MediaWorkspacePhase.Verification)
+
+    fun onResolverProgress(message: String, token: Long) {
+        if (!acceptsResolverCallback(token)) return
         update { copy(resolverMessage = message) }
     }
 
-    fun onVerificationRequired(message: String) {
+    fun onVerificationRequired(message: String, token: Long) {
+        if (!acceptsResolverCallback(token)) return
         update {
             if (phase != MediaWorkspacePhase.Resolving && phase != MediaWorkspacePhase.Verification) this
             else copy(phase = MediaWorkspacePhase.Verification, resolverMessage = message)
         }
     }
 
-    fun onResolved(media: ResolvedMedia) {
+    fun onResolved(media: ResolvedMedia, token: Long) {
+        if (!acceptsResolverCallback(token)) return
         val shouldAutoDownload = pendingAutoDownload
         pendingAutoDownload = false
         update {
@@ -216,7 +225,8 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
         if (shouldAutoDownload) startDownload()
     }
 
-    fun onResolveFailed(message: String) {
+    fun onResolveFailed(message: String, token: Long) {
+        if (!acceptsResolverCallback(token)) return
         pendingAutoDownload = false
         update {
             copy(
@@ -231,6 +241,7 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
     fun cancelResolve() {
         requestSequence += 1L
         resolveJob?.cancel(CancellationException("User cancelled media resolution"))
+        resolveJob = null
         pendingAutoDownload = false
         update {
             copy(
@@ -352,6 +363,8 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
         viewModelScope.launch {
             try {
                 writeRecord(record)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Exception) {
                 update { copy(notice = error.message ?: "无法更新媒体历史") }
             }
@@ -374,12 +387,18 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
 
     fun removeDownload(id: String, deleteFile: Boolean = true) {
         viewModelScope.launch {
-            historyMutationSequence++
-            historyWriteMutex.withLock {
-                withContext(Dispatchers.IO) { store.remove(id, deleteFile) }
-                    .also { next ->
-                        update { copy(downloads = next, notice = if (deleteFile) "文件已删除" else "记录已移除") }
-                    }
+            try {
+                historyMutationSequence++
+                historyWriteMutex.withLock {
+                    withContext(Dispatchers.IO) { store.remove(id, deleteFile) }
+                        .also { next ->
+                            update { copy(downloads = next, notice = if (deleteFile) "文件已删除" else "记录已移除") }
+                        }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                update { copy(notice = error.message ?: "无法删除媒体记录") }
             }
         }
     }

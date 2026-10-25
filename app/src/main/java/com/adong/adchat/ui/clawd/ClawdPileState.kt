@@ -2,7 +2,6 @@ package com.adong.adchat.ui.clawd
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
@@ -83,6 +82,10 @@ class ClawdPileState(
 
     var onChanged: (() -> Unit)? = null
 
+    private val activityGate = ClawdActivityGate()
+
+    fun setForeground(active: Boolean) = activityGate.setActive(active)
+
     private val px: Int get() = data.px
     private val bodyW: Int get() = data.bodyW
     private val liftH: Int get() = data.lift
@@ -98,7 +101,7 @@ class ClawdPileState(
     /** 原版 later/clear（78–79 行）：每只独立管理自己的定时器，动的时候一键清 */
     private fun later(k: Inner, ms: Long, block: () -> Unit): Job {
         val job = scope.launch {
-            delay(ms)
+            activityGate.delayWhileActive(ms)
             block()
         }
         k.jobs.add(job)
@@ -651,6 +654,7 @@ class ClawdPileState(
     private val flights = HashMap<String, Flight>()
     fun flightOf(name: String): Flight? = flights[name]
     fun isFlying(name: String): Boolean = flights.containsKey(name)
+    val hasFlights: Boolean get() = flights.isNotEmpty()
 
     /** 松手抛出。onLand(name, 落地x, 落到哪只身上或null——精确接触面，不再用临近猜测)。 */
     fun throwAt(
@@ -660,6 +664,7 @@ class ClawdPileState(
         actors.getValue(name)   // 校验存在
         flights[name] = Flight(x, y, vx, vy)
         flightCallbacks[name] = onLand
+        changed()
     }
 
     private val flightCallbacks = HashMap<String, (String, Int, String?) -> Unit>()
