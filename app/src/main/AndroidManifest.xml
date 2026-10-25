@@ -36,7 +36,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="link_island_overlay" />
+                android:value="User-triggered floating tools for text, webpage reading and media links" />
         </service>
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import com.adong.adchat.data.Conversation
+import com.adong.adchat.island.IslandService
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.components.UserNamePromptDialog
@@ -73,10 +74,12 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var pendingMediaShare by mutableStateOf<String?>(null)
+    private var pendingIslandSettings by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingMediaShare = extractSharedMediaText(intent)
+        pendingIslandSettings = intent?.action == IslandService.ACTION_OPEN_SETTINGS
         enableEdgeToEdge()
         if (com.adong.adchat.island.IslandPermissions.isEnabled(this) &&
             com.adong.adchat.island.IslandPermissions.isReady(this)
@@ -94,7 +97,12 @@ class MainActivity : ComponentActivity() {
                 AsterApp(
                     vm = viewModel,
                     incomingMediaText = pendingMediaShare,
-                    onMediaTextConsumed = { pendingMediaShare = null }
+                    onMediaTextConsumed = { pendingMediaShare = null },
+                    openIslandSettings = pendingIslandSettings,
+                    onIslandSettingsConsumed = {
+                        pendingIslandSettings = false
+                        if (intent?.action == IslandService.ACTION_OPEN_SETTINGS) intent.action = null
+                    }
                 )
             }
         }
@@ -104,6 +112,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingMediaShare = extractSharedMediaText(intent)
+        pendingIslandSettings = intent.action == IslandService.ACTION_OPEN_SETTINGS
     }
 
     private fun extractSharedMediaText(intent: Intent?): String? = when (intent?.action) {
@@ -122,7 +131,13 @@ internal enum class AppPage(val label: String, val icon: ImageVector) {
 }
 
 @Composable
-private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextConsumed: () -> Unit) {
+private fun AsterApp(
+    vm: MainViewModel,
+    incomingMediaText: String?,
+    onMediaTextConsumed: () -> Unit,
+    openIslandSettings: Boolean,
+    onIslandSettingsConsumed: () -> Unit,
+) {
     var page by rememberSaveable { mutableStateOf(AppPage.Chat) }
     if (!vm.appConfig.userNamePromptDone) {
         UserNamePromptDialog(
@@ -169,6 +184,13 @@ private fun AsterApp(vm: MainViewModel, incomingMediaText: String?, onMediaTextC
             mediaVm.acceptSharedText(sharedText)
             page = AppPage.Media
             onMediaTextConsumed()
+        }
+    }
+
+    LaunchedEffect(openIslandSettings) {
+        if (openIslandSettings) {
+            navigate(AppPage.Settings)
+            onIslandSettingsConsumed()
         }
     }
 

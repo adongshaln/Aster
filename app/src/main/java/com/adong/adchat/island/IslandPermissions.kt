@@ -9,7 +9,7 @@ import android.provider.Settings
 import androidx.core.content.ContextCompat
 
 /**
- * 灵动岛所需权限的一次性引导：悬浮窗（必要）+ 通知（Android 13+）。
+ * 星岛所需权限引导：悬浮窗（必要）+ 通知（Android 13+）。
  * 权限齐备前 IslandService 不会被唤起，避免无效启动。
  */
 object IslandPermissions {

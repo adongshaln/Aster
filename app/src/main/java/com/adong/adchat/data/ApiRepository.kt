@@ -95,6 +95,7 @@ class ApiRepository internal constructor(
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
         onReasoning: suspend (String) -> Unit = {},
         onAskUser: suspend (AskUserPrompt) -> String = { "" },
+        allowReasoningContinuation: Boolean = true,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult = withContext(Dispatchers.IO) {
         validateProfile(profile)
@@ -172,6 +173,7 @@ class ApiRepository internal constructor(
                     searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
+                    allowReasoningContinuation = allowReasoningContinuation,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
                     onAskUser = onAskUser,
@@ -198,6 +200,7 @@ class ApiRepository internal constructor(
                     searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
+                    allowReasoningContinuation = allowReasoningContinuation,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
                     onAskUser = onAskUser,
@@ -291,6 +294,7 @@ class ApiRepository internal constructor(
         searchBackend: SearchBackendConfig?,
         generationOptions: ChatGenerationOptions,
         askUserEnabled: Boolean,
+        allowReasoningContinuation: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
         onAskUser: suspend (AskUserPrompt) -> String,
@@ -491,6 +495,7 @@ class ApiRepository internal constructor(
         }
 
         var completedNormally = false
+        var stoppedAfterReasoning = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
         var delegatedSearchCalls = 0
@@ -509,6 +514,11 @@ class ApiRepository internal constructor(
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.reasoningOnly) {
+                if (!allowReasoningContinuation) {
+                    stoppedAfterReasoning = true
+                    outputComplete = false
+                    break
+                }
                 // Messages API 不回写伪装的助手思考轮；以用户提示让模型继续输出正文。
                 messages.put(JSONObject().put("role", "user").put("content", REASONING_CONTINUE_PROMPT))
                 continue
@@ -577,7 +587,7 @@ class ApiRepository internal constructor(
             messages.put(AnthropicMessages.toolResultMessage(results))
             forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
-        if (!completedNormally) {
+        if (!completedNormally && !stoppedAfterReasoning) {
             throw IllegalStateException("请求未在 ${MAX_TOOL_ROUNDS} 轮内完成。若模型连续多轮只输出思考没有正文，可能是输出预算（max_tokens）被思考耗尽，请提高输出上限或降低思考强度后重试。")
         }
         val duration = elapsedMs(started)
@@ -594,7 +604,7 @@ class ApiRepository internal constructor(
         )
         val resultText = full.toString().ifBlank {
             generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
-                ?: throw IllegalStateException("Streaming response contained no text")
+                ?: if (stoppedAfterReasoning) "" else throw IllegalStateException("Streaming response contained no text")
         }
         return ChatCompletionResult(
             text = resultText,
@@ -620,6 +630,7 @@ class ApiRepository internal constructor(
         searchBackend: SearchBackendConfig?,
         generationOptions: ChatGenerationOptions,
         askUserEnabled: Boolean,
+        allowReasoningContinuation: Boolean,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
         onAskUser: suspend (AskUserPrompt) -> String,
@@ -806,6 +817,7 @@ class ApiRepository internal constructor(
         }
 
         var completedNormally = false
+        var stoppedAfterReasoning = false
         var forceNoToolsNextRound = false
         var executedToolCalls = 0
         var delegatedSearchCalls = 0
@@ -824,6 +836,11 @@ class ApiRepository internal constructor(
             usage = usage + round.usage
             round.citations.forEach { citations[it.url] = it }
             if (round.reasoningOnly) {
+                if (!allowReasoningContinuation) {
+                    stoppedAfterReasoning = true
+                    outputComplete = false
+                    break
+                }
                 // 模型持续回传思考就持续续轮，不主动中断；
                 // 总轮数仍由 MAX_TOOL_ROUNDS 兜底，防止模型无限空转。
                 messages.put(JSONObject()
@@ -908,7 +925,7 @@ class ApiRepository internal constructor(
             }
             forceNoToolsNextRound = !usedDelegatedSearchThisRound && skillToolReuseGuard.shouldForceNoToolsNextRound()
         }
-        if (!completedNormally) {
+        if (!completedNormally && !stoppedAfterReasoning) {
             throw IllegalStateException("请求未在 ${MAX_TOOL_ROUNDS} 轮内完成。若模型连续多轮只输出思考没有正文，可能是输出预算（max_tokens）被思考耗尽，请提高输出上限或降低思考强度后重试。")
         }
         if (activities["web_search"]?.status == TOOL_STATUS_RUNNING) {
@@ -924,7 +941,7 @@ class ApiRepository internal constructor(
         )
         val resultText = full.toString().ifBlank {
             generatedFiles.takeIf { it.isNotEmpty() }?.joinToString("\n") { "已创建文件：${it.name}" }
-                ?: throw IllegalStateException("Streaming response contained no text")
+                ?: if (stoppedAfterReasoning) "" else throw IllegalStateException("Streaming response contained no text")
         }
         return ChatCompletionResult(
             text = resultText,

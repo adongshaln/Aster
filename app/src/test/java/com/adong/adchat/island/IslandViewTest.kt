@@ -207,7 +207,7 @@ class IslandViewTest {
         view.attach()
         layoutWindow()
         val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("note", "no link here"))
+        clipboard.setPrimaryClip(ClipData.newPlainText("empty", ""))
         val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
         root.callWindowFocusChanged(true)
         val size = ring.width
@@ -317,13 +317,13 @@ class IslandViewTest {
             "closing retracts the height first; before=$heightAtReversal now=${b.bottom - b.top}",
             b.bottom - b.top < heightAtReversal
         )
-        assertEquals("close must not finish before reversal", 0, events.dismissed)
+        assertEquals("dismiss must cancel the old task before the closing animation finishes", 1, events.dismissed)
         view.show(second)
         layoutWindow()
         advance(1_500)
         assertEquals(1f, view.expansionProgress, 0f)
         assertEquals(second, view.displayedLink)
-        assertEquals("a cancelled close must not shrink the window or report dismissal", 0, events.dismissed)
+        assertEquals("reopening must not dismiss the new task when the old close animation ends", 1, events.dismissed)
     }
 
     @Test fun collapseBeforeExpandedLayoutCancelsPendingOpen() {
