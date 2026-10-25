@@ -67,6 +67,17 @@ class SharedUiInteractionTest {
             root.findAccessibilityNodeInfosByText("Close app").firstOrNull()
                 ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
+        // MainActivity opens onboarding in a separate dialog on a fresh install.
+        // Complete that known prerequisite before waiting for the activity window:
+        // the activity cannot gain focus while its own onboarding dialog is open.
+        val onboardingPending = rule.runOnIdle {
+            !ViewModelProvider(rule.activity)[MainViewModel::class.java].appConfig.userNamePromptDone
+        }
+        if (onboardingPending) {
+            rule.onNodeWithText("该怎么称呼您？").assertIsDisplayed()
+            rule.onNodeWithText("稍后再说").performClick()
+            rule.onNodeWithText("该怎么称呼您？").assertDoesNotExist()
+        }
         rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
     }

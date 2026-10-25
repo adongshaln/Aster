@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -59,7 +60,7 @@ class OptimizedChatUiTest {
                 AsterTheme {
                     val density = LocalDensity.current.density
                     CompositionLocalProvider(LocalDensity provides Density(density, fontScale = 2f)) {
-                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
+                        Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(12.dp)) {
                             Column(Modifier.width(220.dp)) {
                                 ExpandableUserMessage(100L, text)
                             }
