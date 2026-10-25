@@ -135,7 +135,7 @@ class IslandViewTest {
         assertTrue(privateFlags.getInt(view.layoutParams as WindowManager.LayoutParams) and 0x00000040 != 0)
     }
 
-    @Test fun tagStretchesSidewaysThenDropsWithOneBounce() {
+    @Test fun tagTransfersInkToItsGrowingOutlineBeforeContentAppears() {
         view.attach()
         layoutWindow()
         view.show(first)
@@ -144,6 +144,8 @@ class IslandViewTest {
         val b = surface.body
         val anchorX = ring.left + ring.width / 2f
         val anchorY = ring.top + ring.height / 2f
+        val ringWidth = ring.width
+        val ringHeight = ring.height
         assertEquals(anchorX - card.left, card.pivotX, 0f)
         assertEquals(0f, card.pivotY, 0f)
         assertEquals(0f, card.alpha, 0f)
@@ -152,17 +154,23 @@ class IslandViewTest {
         assertEquals(anchorY - 13f, b.top, 0.01f)
         assertEquals(anchorY + 13f, b.bottom, 0.01f)
 
-        // The height waits 60ms: only the width has moved so far.
-        advance(48)
-        assertTrue("must already stretch sideways; width=${b.right - b.left}", b.right - b.left > 30f)
-        assertEquals(26f, b.bottom - b.top, 0.01f)
-        assertEquals(anchorX, (b.left + b.right) / 2f, 0.5f)
-
         var maxBottom = 0f
-        repeat(100) {
+        var widthAt90 = -1
+        var heightAt90 = -1
+        repeat(100) { frame ->
             advance(16)
             maxBottom = max(maxBottom, b.bottom)
+            if (widthAt90 < 0 && b.right - b.left >= 26f + 0.9f * (card.width - 26f)) widthAt90 = frame
+            if (heightAt90 < 0 && b.bottom - b.top >= 26f + 0.9f * (card.height - 26f)) heightAt90 = frame
+            if (b.heightProgress < 0.4f) assertEquals("content waits for the paper", 0f, card.alpha, 0f)
+            assertFalse("the surface owns the stroke while expanded", ring.inkVisible)
+            assertEquals("black lens backing stays opaque", 1f, ring.alpha, 0f)
+            assertEquals(ringWidth, ring.width)
+            assertEquals(ringHeight, ring.height)
+            assertEquals("the black core is never scaled with the ink", 1f, ring.scaleX, 0f)
+            assertEquals(1f, ring.scaleY, 0f)
         }
+        assertTrue("width leads height; width=$widthAt90 height=$heightAt90", widthAt90 in 0 until heightAt90)
         assertTrue("the drop must bounce past the card; max=$maxBottom card=${card.bottom}", maxBottom > card.bottom + 2f)
         assertEquals(1f, view.expansionProgress, 0f)
         assertEquals(card.left.toFloat(), b.left, 0.01f)
@@ -171,7 +179,8 @@ class IslandViewTest {
         assertEquals(card.bottom.toFloat(), b.bottom, 0.01f)
         assertEquals(1f, card.alpha, 0f)
         assertEquals(1f, card.scaleX, 0f)
-        // The ring stays in place as the tag's eyelet.
+        // Only the black lens backing remains in the resident View; the border owns its ink.
+        assertFalse(ring.inkVisible)
         assertEquals(1f, ring.alpha, 0f)
     }
 
@@ -240,11 +249,14 @@ class IslandViewTest {
             assertEquals(0, ring.top)
             assertEquals(view.width / 2f, ring.left + ring.width / 2f, 0.5f)
             assertEquals(1f, ring.bounce, 0f)
+            assertEquals(1f, ring.scaleX, 0f)
+            assertEquals(1f, ring.scaleY, 0f)
+            assertEquals("black camera backing must never fade", 1f, ring.alpha, 0f)
         }
         repeat(80) {
             advance(16)
             assertRingFixed()
-            assertEquals("the ring stays visible as the eyelet", 1f, ring.alpha, 0f)
+            assertFalse("the expanded surface owns the ink", ring.inkVisible)
         }
         view.collapse()
         repeat(80) {
@@ -253,6 +265,7 @@ class IslandViewTest {
         }
         layoutWindow()
         assertRingFixed()
+        assertTrue("the resident stroke returns after closing", ring.inkVisible)
         assertEquals(1, events.dismissed)
     }
 
@@ -352,8 +365,11 @@ class IslandViewTest {
     @Test fun repeatedShowDuringOvershootKeepsCurrentGeometryAndSettles() {
         view.show(first)
         layoutWindow()
-        // Width and height both overshoot around 350–450ms.
-        advance(400)
+        // Find an actual overshoot instead of coupling the regression to one spring timing.
+        for (frame in 0 until 100) {
+            advance(16)
+            if (view.expansionProgress > 1.01f) break
+        }
         val overshoot = view.expansionProgress
         assertTrue("must exercise the overshoot; progress=$overshoot", overshoot > 1f)
         view.show(second)

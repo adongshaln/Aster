@@ -49,10 +49,10 @@ import kotlin.math.roundToInt
 
 /**
  * One overlay, one anchored island. At rest a pen-drawn clay ring sits around the camera. A
- * recognised link pulls a paper tag out of that ring: jelly springs stretch it sideways, then drop
- * it with a bounce, and it closes back along the same path. The ring keeps its position and size
- * throughout, as the tag's eyelet. The window is resized only before opening and after the tag has
- * come to rest closed; one vsync clock samples every spring from absolute time.
+ * recognised selection unfolds that same ink stroke into the paper edge, then returns it along
+ * the same path. The camera backing keeps its position and size throughout. The window is resized
+ * only before opening and after the tag has come to rest closed; one vsync clock samples every
+ * spring from absolute time.
  */
 class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
     interface Callbacks {
@@ -132,6 +132,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var clock: TimeAnimator? = null
     private val hideRunnable: Runnable = Runnable { collapse() }
     private val releaseSpringRunnable = Runnable { pressRing(down = false) }
+    private val emptyFeedbackHaptic = Runnable {
+        if (state == State.Hidden && !expandedViewport) hapticBounceTick(first = false)
+    }
     private var clipboardReadPending = false
     private val readClipboardRunnable: Runnable = Runnable {
         if (clipboardReadPending && hasWindowFocus()) {
@@ -292,6 +295,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         mainHandler.removeCallbacksAndMessages(null)
         breathAnimator?.cancel()
         stopClock()
+        secondBounceAt = Double.NaN
+        bounceTicksAt.fill(Double.NaN)
+        surface.active = false
+        ringView.inkVisible = true
         actionButtons.forEach { (button, _) -> button.animate().cancel() }
         if (attached) {
             runCatching { windowManager.removeViewImmediate(this@IslandView) }
@@ -608,7 +615,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             gestureInOutput = outputScroll.visibility == VISIBLE &&
                 outputBounds.contains(event.rawX.roundToInt(), event.rawY.roundToInt())
             scheduleReadyTimeout()
-            if (state is State.Card && !surface.body.contains(event.x, event.y)) {
+            if (state is State.Card && !surface.containsPoint(event.x, event.y)) {
                 collapse()
                 return true
             }
@@ -716,10 +723,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         breathAnimator?.cancel()
         if (state != State.Hidden || expandedViewport || windowVisibility != VISIBLE) return
         if (!ValueAnimator.areAnimatorsEnabled()) {
-            ringView.alpha = 0.95f
+            ringView.inkAlpha = 1f
             return
         }
-        val startAlpha = ringView.alpha
+        val startAlpha = ringView.inkAlpha
         var entering = true
         breathAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = BREATH_PERIOD_MS
@@ -728,9 +735,9 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             interpolator = LinearInterpolator()
             addUpdateListener {
                 val p = it.animatedFraction
-                // Only this cached 64dp layer changes alpha: the idle ring costs no redraw.
+                // Only the ink fades. The black camera backing stays fully opaque and stationary.
                 val wave = 0.95f + 0.05f * cos(2.0 * Math.PI * p).toFloat()
-                ringView.alpha = if (entering && p < 0.15f) {
+                ringView.inkAlpha = if (entering && p < 0.15f) {
                     lerp(startAlpha, wave, IslandSpring.progress(p / 0.15f)).coerceIn(0f, 1f)
                 } else {
                     entering = false
@@ -743,6 +750,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun cancelIdleFeedback() {
         mainHandler.removeCallbacks(releaseSpringRunnable)
+        mainHandler.removeCallbacks(emptyFeedbackHaptic)
         breathAnimator?.cancel()
         idleFeedbackRunning = false
     }
@@ -754,7 +762,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (down) {
             cancelIdleFeedback()
             idleFeedbackRunning = true
-            ringView.alpha = 1f
+            ringView.inkAlpha = 1f
         }
         inkSpring.set(
             if (down) PRESS_INK else 1f, now, 0.0,
@@ -778,14 +786,14 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (state != State.Hidden || expandedViewport) return
         cancelIdleFeedback()
         idleFeedbackRunning = true
-        ringView.alpha = 1f
+        ringView.inkAlpha = 1f
         val now = now()
         inkSpring.set(1f, now, 0.0, 0.34f, 0.5f)
         if (!ValueAnimator.areAnimatorsEnabled()) {
             inkSpring.jump(1f, now)
             ringView.ink = 1f
             hapticBounceTick(first = true)
-            mainHandler.postDelayed({ hapticBounceTick(first = false) }, (BOUNCE_GAP_S * 1000).toLong())
+            mainHandler.postDelayed(emptyFeedbackHaptic, (BOUNCE_GAP_S * 1000).toLong())
             idleFeedbackRunning = false
             startBreathing()
             return
@@ -803,7 +811,6 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val now = now()
         secondBounceAt = Double.NaN
         bounceTicksAt.fill(Double.NaN)
-        ringView.alpha = 1f
         inkSpring.set(1f, now, 0.0, 0.34f, 0.42f)
         if (ValueAnimator.areAnimatorsEnabled()) {
             ensureClock()
@@ -838,7 +845,38 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         clock = null
     }
 
+    /** The surface and resident ring never draw the same stroke in the same frame. */
+    private fun syncInkOwnership() {
+        surface.setInkState(ringView.ink, ringView.bounce, ringView.inkAlpha)
+        ringView.inkVisible = !(expandedViewport && surface.active)
+    }
+
+    private fun finishMotionWithoutAnimation(now: Double, targetOpen: Boolean = surface.body.opened) {
+        secondBounceAt = Double.NaN
+        bounceTicksAt.fill(Double.NaN)
+        mainHandler.removeCallbacks(releaseSpringRunnable)
+        mainHandler.removeCallbacks(emptyFeedbackHaptic)
+        inkSpring.jump(1f, now)
+        bounceSpring.jump(1f, now)
+        ringView.ink = 1f
+        ringView.bounce = 1f
+        ringView.inkAlpha = 1f
+        idleFeedbackRunning = false
+        if (bodyMoving) {
+            surface.body.snap(targetOpen, now)
+            onBodyAtRest(now)
+        } else {
+            syncInkOwnership()
+        }
+        stopClock()
+    }
+
     private fun onFrame(now: Double) {
+        // Animator scale can change while an opening or closing spring is already running.
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            finishMotionWithoutAnimation(now)
+            return
+        }
         if (!secondBounceAt.isNaN() && now >= secondBounceAt) {
             bounceSpring.kick(BOUNCE_KICK, secondBounceAt)
             secondBounceAt = Double.NaN
@@ -851,6 +889,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
         ringView.ink = inkSpring.value(now)
         ringView.bounce = bounceSpring.value(now)
+        // The closing ink impulse may outlast the body's movement; keep it on the same outline.
+        syncInkOwnership()
         if (bodyMoving) {
             renderBody(now)
             val body = surface.body
@@ -865,6 +905,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (ringAtRest) {
             ringView.ink = inkSpring.target
             ringView.bounce = bounceSpring.target
+            syncInkOwnership()
             if (idleFeedbackRunning && inkSpring.target == 1f) {
                 idleFeedbackRunning = false
                 startBreathing()
@@ -880,8 +921,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val body = surface.body
         bodyMoving = true
         if (!ValueAnimator.areAnimatorsEnabled()) {
-            body.snap(open, now)
-            onBodyAtRest(now)
+            finishMotionWithoutAnimation(now, open)
             return
         }
         if (open) body.open(now) else body.close(now)
@@ -913,6 +953,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun renderBody(now: Double) {
         if (!surface.active) return
+        syncInkOwnership()
         surface.render(now)
         val body = surface.body
         // Content is laid out once at its final position; the growing paper reveals and clips it.
@@ -1053,13 +1094,17 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
                 cardLeft, cardTop, cardRight, cardBottom, dpF(ISLAND_RADIUS_DP)
             )
             surface.active = true
+            syncInkOwnership()
             val now = now()
             if (reshaped && body.opened) {
                 // A late font or text change resized the open card: retarget from the current motion.
                 startBody(open = true)
             }
             renderBody(now)
-        } else surface.active = false
+        } else {
+            surface.active = false
+            syncInkOwnership()
+        }
         val start = pendingMorph
         pendingMorph = null
         start?.invoke()
@@ -1071,6 +1116,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         expandedViewport = false
         // Remove the tag before shrinking the overlay so no last frame of paper covers the ring.
         surface.active = false
+        syncInkOwnership()
         cardHost.alpha = 0f
         actionButtons.forEach { (button, _) -> button.isEnabled = false }
         ringView.isClickable = true
