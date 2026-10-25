@@ -33,9 +33,11 @@
 - 完整 JVM / Robolectric / MockWebServer 单测：607 项通过，0 失败，0 跳过。欢迎语改版将旧的 12 项姓名/寒暄断言替换为 6 项轮换、边界与文案约束测试；请求、状态和动画回归测试保留。
 - 本地检查命令：`./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease assembleDebugAndroidTest` 全部成功；覆盖 Release 构建与 Android instrumentation 测试包编译。
 - 原生 UI 通过仓库 `Native UI preview` 工作流运行；手动触发可使用 `test_class` 选择测试，避免为不同修复硬编码更多分支。
-- 云端完整测试及签名 Release 构建已通过：[Android build](https://github.com/adongshaln/Aster/actions/runs/40157144795)。签名 APK 留在 Actions 制品，本地生成的 APK 已清理。
+- 最新产品提交 `1c7ff74` 的云端完整测试及签名 Release 构建已通过：[Android build](https://github.com/adongshaln/Aster/actions/runs/40160096120)。签名 APK 留在 `aster-release-signed` 制品，本地生成的 APK 已清理。
 - 原生验收范围为 `OptimizedChatUiTest` 和 `SharedUiInteractionTest` 全部 25 项；真实字体和两倍字号测试首轮通过。共享组件测试原先先启动整个首页，受首启弹窗和持续帧动画干扰，现使用仅 debug 构建存在的空 Activity，保留被测组件动画、键盘、窗口检查和全部业务断言；Release 不包含该宿主。
-- 最终原生验收结果、截图检查记录与对应运行链接统一记录在 [PR #8](https://github.com/adongshaln/Aster/pull/8)。
+- [原生验收结果](https://github.com/adongshaln/Aster/actions/runs/40160107422)：25 项中 17 项通过、8 项失败、0 跳过。通过项包括真实字体、两倍字号、欢迎语、HTML 内嵌/全屏与离线限制、模型选择、展开草稿、文件保存等。
+- 未通过项为两个键盘展开高度断言、三个故事思考区选择器、复制选择器、故事重新回答按钮可见性、技能面板重开。尚未完成产品行为与测试契约的逐项归因，不能将整套原生测试记为通过。
+- 按用户最新要求停止追加测试轮次，后续以实际安装体验反馈为准。现有报告保留于 `artifacts/optimization-validation/`（本地忽略目录），结果同步 [PR #8](https://github.com/adongshaln/Aster/pull/8)。
 
 ## 取舍与未覆盖范围
 
