@@ -1311,6 +1311,8 @@ private fun SettingsDisclosure(
 @Composable
 private fun StarIslandSettingsCard() {
     val context = LocalContext.current
+    val night = LocalThemeDark.current
+    val themeMode = LocalThemeMode.current
     // Re-read readiness whenever we come back from a permission settings page.
     var permissionTick by remember { mutableIntStateOf(0) }
     var enabled by remember(permissionTick) { mutableStateOf(IslandPermissions.isEnabled(context)) }
@@ -1360,8 +1362,10 @@ private fun StarIslandSettingsCard() {
             }
         )
         // Returning from the settings page with permissions now granted: start the service.
-        LaunchedEffect(enabled, ready, permissionTick) {
-            if (enabled && ready) IslandService.start(context) else IslandService.stop(context)
+        LaunchedEffect(enabled, ready, permissionTick, night, themeMode) {
+            if (enabled && ready) IslandService.start(
+                context, night, followSystem = themeMode == THEME_MODE_SYSTEM
+            ) else IslandService.stop(context)
         }
         if (enabled && !ready) {
             TextButton(onClick = ::requestMissingPermission) {

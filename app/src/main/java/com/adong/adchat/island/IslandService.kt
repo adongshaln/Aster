@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.IBinder
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.adong.adchat.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -31,18 +32,38 @@ class IslandService : Service(), IslandView.Callbacks {
         const val ACTION_START = "com.adong.adchat.island.START"
         const val ACTION_STOP = "com.adong.adchat.island.STOP"
         const val ACTION_OPEN_SETTINGS = "com.adong.adchat.island.OPEN_SETTINGS"
+        const val ACTION_THEME_CHANGED = "com.adong.adchat.island.THEME_CHANGED"
+        const val EXTRA_THEME_NIGHT = "com.adong.adchat.island.THEME_NIGHT"
+        const val EXTRA_THEME_FOLLOW_SYSTEM = "com.adong.adchat.island.THEME_FOLLOW_SYSTEM"
         // Keep the existing channel and preference IDs so upgrades retain the user's choices.
         private const val CHANNEL_ID = "link_island"
         private const val NOTIFICATION_ID = 9301
         private const val IDLE_TEXT = "点按墨线圈，处理文字或链接"
 
-        fun start(context: Context) {
+        fun start(context: Context, night: Boolean? = null, followSystem: Boolean = false) {
             if (!IslandPermissions.isEnabled(context) || !IslandPermissions.isReady(context)) return
-            context.startForegroundService(Intent(context, IslandService::class.java).setAction(ACTION_START))
+            val intent = Intent(context, IslandService::class.java).setAction(ACTION_START)
+            if (night != null) {
+                intent.putExtra(EXTRA_THEME_NIGHT, night)
+                    .putExtra(EXTRA_THEME_FOLLOW_SYSTEM, followSystem)
+            }
+            ContextCompat.startForegroundService(context, intent)
         }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, IslandService::class.java))
+        }
+
+        /** Synchronise Aster's in-app theme with the separately hosted overlay. */
+        fun syncTheme(context: Context, night: Boolean, followSystem: Boolean) {
+            if (!IslandPermissions.isEnabled(context) || !IslandPermissions.isReady(context)) return
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, IslandService::class.java)
+                    .setAction(ACTION_THEME_CHANGED)
+                    .putExtra(EXTRA_THEME_NIGHT, night)
+                    .putExtra(EXTRA_THEME_FOLLOW_SYSTEM, followSystem)
+            )
         }
     }
 
@@ -55,6 +76,7 @@ class IslandService : Service(), IslandView.Callbacks {
     private var taskGeneration = 0L
     private var stopRequestedGeneration: Long? = null
     private var currentTask: StarIslandTaskState? = null
+    private var themeNightOverride: Boolean? = null
     private var viewConfiguration: Configuration? = null
     private var restoringView = false
     private var shuttingDown = false
@@ -73,13 +95,21 @@ class IslandService : Service(), IslandView.Callbacks {
         }
         // A sticky restart restores only the entry point; it never repeats a model request.
         startAsForeground()
-        obtainView().attach()
+        val view = obtainView()
+        view.attach()
+        if (intent?.hasExtra(EXTRA_THEME_NIGHT) == true) {
+            val night = intent.getBooleanExtra(EXTRA_THEME_NIGHT, false)
+            val followSystem = intent.getBooleanExtra(EXTRA_THEME_FOLLOW_SYSTEM, false)
+            themeNightOverride = night.takeUnless { followSystem }
+            view.setNightMode(night, followSystem)
+        }
         return START_STICKY
     }
 
     private fun obtainView(): IslandView = islandView ?: IslandView(this, this).also {
         islandView = it
         viewConfiguration = Configuration(resources.configuration)
+        themeNightOverride?.let(it::setNightMode)
     }
 
     private fun expandShortLink(content: StarIslandContent) {

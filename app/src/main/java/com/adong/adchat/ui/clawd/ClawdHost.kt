@@ -3,7 +3,6 @@ package com.adong.adchat.ui.clawd
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -62,7 +61,7 @@ fun ClawdHost(
     }
     val data = bundle ?: run {
         // Keep the composer in place while the bundled sprites are parsed off the main thread.
-        Box(modifier.height(ClawdPileBandHeight).offset(y = 7.dp))
+        Box(modifier.height(ClawdPileBandHeight))
         return
     }
     val scope = rememberCoroutineScope()
@@ -149,11 +148,9 @@ fun ClawdHost(
         }
     }
 
-    // 小爪整体下移：原版 .clawd-pile{bottom:100%; margin-bottom:-1px}，WebView 时期校准到净 -5px；
-    // 本版要求再降 ~1mm（6dp），带从 1dp 提到 7dp——爪脚压进输入框上缘，视觉上「站在框上」。
     // Sprite physics use absolute screen x coordinates; do not mirror hit targets in RTL.
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
-        Box(modifier.height(ClawdPileBandHeight).offset(y = 7.dp)) {
+        Box(modifier.height(ClawdPileBandHeight)) {
             // 小爪带：底边 = 地面（正好压在输入框上沿，原版 .clawd-pile{bottom:100%}）
             ClawdPileOverlay(
                 pile = pile,

@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.LayoutDirection
 import kotlin.math.abs
 import com.adong.adchat.data.Conversation
+import com.adong.adchat.data.THEME_MODE_SYSTEM
 import com.adong.adchat.island.IslandService
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.components.*
@@ -92,10 +93,18 @@ class MainActivity : ComponentActivity() {
         setContent {
             val themeMode = viewModel.appConfig.themeMode
             val dark = com.adong.adchat.ui.theme.themeIsDark(themeMode)
-            LaunchedEffect(dark) {
+            // Re-sync when the mode changes even if its current effective colour stays the same
+            // (for example, fixed dark -> system while the device is already dark). The island
+            // keeps an explicit override, so it must receive the mode transition itself.
+            LaunchedEffect(dark, themeMode) {
                 enableEdgeToEdge(
                     statusBarStyle = if (dark) androidx.activity.SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
                                      else androidx.activity.SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+                )
+                IslandService.syncTheme(
+                    this@MainActivity,
+                    dark,
+                    followSystem = themeMode == THEME_MODE_SYSTEM
                 )
             }
             AsterTheme(themeMode = themeMode, fontWeight = viewModel.appConfig.fontWeight) {

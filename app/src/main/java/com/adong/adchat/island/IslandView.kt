@@ -102,7 +102,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealSize(it)
     }
-    private val palette = IslandPalette.forNightMode(IslandPalette.isNight(resources.configuration))
+    private var palette = IslandPalette.forNightMode(IslandPalette.isNight(resources.configuration))
+    private var nightOverride: Boolean? = null
     private fun dp(v: Int): Int = (v * density).roundToInt()
     private fun dpF(v: Float): Float = v * density
     private fun lerp(from: Float, to: Float, p: Float) = from + (to - from) * p
@@ -160,7 +161,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private val actionGrid: LinearLayout
     private val outputScroll: ScrollView
     private val outputText: TextView
-    private val actionButtons = mutableListOf<Pair<TextView, Boolean>>()
+    private data class ActionButtonRef(val view: TextView, val primary: Boolean, val enabled: Boolean)
+    private val actionButtons = mutableListOf<ActionButtonRef>()
     private var renderedActions: String? = null
     private var breathAnimator: ValueAnimator? = null
 
@@ -173,6 +175,16 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     internal val islandPalette: IslandPalette get() = palette
     internal val ringInk: Float get() = ringView.ink
     internal val ringBounce: Float get() = ringView.bounce
+    internal val cardTitleColor: Int get() = cardTitle.currentTextColor
+    internal val cardSummaryColor: Int get() = cardSummary.currentTextColor
+    internal val outputColor: Int get() = outputText.currentTextColor
+    internal val actionTextColors: List<Int> get() = actionButtons.map { it.view.currentTextColor }
+
+    /** Apply the app's custom theme without rebuilding the overlay or interrupting its motion. */
+    fun setNightMode(night: Boolean, followSystem: Boolean = false): Unit = onMain {
+        nightOverride = night.takeUnless { followSystem }
+        applyPalette(IslandPalette.forNightMode(night))
+    }
 
     init {
         clipChildren = false
@@ -299,7 +311,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         bounceTicksAt.fill(Double.NaN)
         surface.active = false
         ringView.inkVisible = true
-        actionButtons.forEach { (button, _) -> button.animate().cancel() }
+        actionButtons.forEach { it.view.animate().cancel() }
         if (attached) {
             runCatching { windowManager.removeViewImmediate(this@IslandView) }
             attached = false
@@ -395,6 +407,46 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         return CardParts(host, icon, title, summary, actions, scroll, output)
     }
 
+    private fun applyPalette(next: IslandPalette) {
+        if (palette == next) return
+        palette = next
+        surface.setPalette(next)
+        ringView.inkColor = next.clay
+        cardTitle.setTextColor(next.ink)
+        cardSummary.setTextColor(next.muted)
+        outputText.setTextColor(next.ink)
+        outputScroll.background = GradientDrawable().apply {
+            setColor(next.well)
+            cornerRadius = dpF(14f)
+        }
+        platformIcon.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(next.well)
+        }
+        platformIcon.imageTintList = ColorStateList.valueOf(next.glyph)
+        displayedContent?.let { content ->
+            platformIcon.contentDescription = IslandCardText.title(content)
+            if (content.kind == StarIslandKind.Media) {
+                platformIcon.setImageResource(when (checkNotNull(content.mediaLink).platform) {
+                    MediaPlatform.Douyin -> R.drawable.ic_island_douyin
+                    MediaPlatform.Bilibili -> R.drawable.ic_island_bilibili
+                    MediaPlatform.Twitter -> R.drawable.ic_island_x
+                    MediaPlatform.Direct -> R.drawable.ic_island_link
+                })
+            } else {
+                platformIcon.setImageDrawable(ContentGlyph(content.kind))
+            }
+        }
+        actionButtons.forEach { ref ->
+            ref.view.setTextColor(if (ref.primary) next.onClay else next.ink)
+            ref.view.background = GradientDrawable().apply {
+                setColor(if (ref.primary) next.clay else next.well)
+                cornerRadius = dpF(22f)
+            }
+        }
+        invalidate()
+    }
+
     private data class CardAction(
         val label: String,
         val primary: Boolean = false,
@@ -433,7 +485,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun renderActions(key: String, actions: List<CardAction>, reserveTwoRows: Boolean = false) {
         if (renderedActions == key) return
         renderedActions = key
-        actionButtons.forEach { (button, _) -> button.animate().cancel() }
+        actionButtons.forEach { it.view.animate().cancel() }
         actionButtons.clear()
         actionGrid.removeAllViews()
         val rows = actions.chunked(2)
@@ -443,7 +495,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             rows.getOrNull(index).orEmpty().forEachIndexed { column, action ->
                 val button = actionButton(action)
-                actionButtons += button to action.enabled
+                actionButtons += ActionButtonRef(button, action.primary, action.enabled)
                 row.addView(button, LinearLayout.LayoutParams(0, rowHeight, 1f).apply {
                     if (column > 0) marginStart = dp(8)
                 })
@@ -458,7 +510,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun updateActionEnabled() {
         val actionable = state is State.Card && surface.body.opened && surface.body.contentAlpha > 0.9f
-        actionButtons.forEach { (button, enabled) -> button.isEnabled = actionable && enabled }
+        actionButtons.forEach { ref -> ref.view.isEnabled = actionable && ref.enabled }
     }
 
     private fun animateButton(view: View, target: Float) {
@@ -1118,7 +1170,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         surface.active = false
         syncInkOwnership()
         cardHost.alpha = 0f
-        actionButtons.forEach { (button, _) -> button.isEnabled = false }
+        actionButtons.forEach { it.view.isEnabled = false }
         ringView.isClickable = true
         ringView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         params.width = size
@@ -1131,6 +1183,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         super.onConfigurationChanged(newConfig)
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealSize(screenSize)
+        if (nightOverride == null) applyPalette(IslandPalette.forNightMode(IslandPalette.isNight(newConfig)))
         if (!attached) return
         if (expandedViewport) prepareExpandedViewport() else applyIdleViewport()
     }

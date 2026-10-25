@@ -135,6 +135,34 @@ class IslandViewTest {
         assertTrue(privateFlags.getInt(view.layoutParams as WindowManager.LayoutParams) and 0x00000040 != 0)
     }
 
+    @Test fun appThemeUpdatesIslandPaletteAndAllVisibleCardColorsInBothDirections() {
+        view.attach()
+        layoutWindow()
+        view.show(first)
+
+        view.setNightMode(true)
+        assertEquals(IslandPalette.Dark, view.islandPalette)
+        assertEquals(IslandPalette.Dark, surface.currentPalette)
+        assertEquals(IslandPalette.Dark.clay, ring.inkColor)
+        assertEquals(IslandPalette.Dark.ink, view.cardTitleColor)
+        assertEquals(IslandPalette.Dark.muted, view.cardSummaryColor)
+        assertEquals(IslandPalette.Dark.ink, view.outputColor)
+        val darkActions = view.actionTextColors
+        assertEquals(4, darkActions.size)
+        assertEquals(IslandPalette.Dark.onClay, darkActions.first())
+        assertTrue(darkActions.drop(1).all { it == IslandPalette.Dark.ink })
+
+        view.setNightMode(false)
+        assertEquals(IslandPalette.Light, view.islandPalette)
+        assertEquals(IslandPalette.Light, surface.currentPalette)
+        assertEquals(IslandPalette.Light.clay, ring.inkColor)
+        assertEquals(IslandPalette.Light.ink, view.cardTitleColor)
+        assertEquals(IslandPalette.Light.muted, view.cardSummaryColor)
+        assertEquals(IslandPalette.Light.ink, view.outputColor)
+        assertEquals(IslandPalette.Light.onClay, view.actionTextColors.first())
+        assertTrue(view.actionTextColors.drop(1).all { it == IslandPalette.Light.ink })
+    }
+
     @Test fun tagTransfersInkToItsGrowingOutlineBeforeContentAppears() {
         view.attach()
         layoutWindow()
