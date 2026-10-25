@@ -34,7 +34,7 @@
 - 本地检查命令：`./gradlew --no-daemon testDebugUnitTest lintDebug assembleRelease assembleDebugAndroidTest` 全部成功；覆盖 Release 构建与 Android instrumentation 测试包编译。
 - 原生 UI 通过仓库 `Native UI preview` 工作流运行；手动触发可使用 `test_class` 选择测试，避免为不同修复硬编码更多分支。
 - 云端完整测试及签名 Release 构建已通过：[Android build](https://github.com/adongshaln/Aster/actions/runs/40157144795)。签名 APK 留在 Actions 制品，本地生成的 APK 已清理。
-- 原生验收范围为 `OptimizedChatUiTest` 和 `SharedUiInteractionTest` 全部 25 项；真实字体和两倍字号测试首轮通过。既有共享夹具会被昵称首启弹窗挡住焦点，已改为通过实际“稍后再说”按钮正常关闭引导，保留焦点检查和全部用例。
+- 原生验收范围为 `OptimizedChatUiTest` 和 `SharedUiInteractionTest` 全部 25 项；真实字体和两倍字号测试首轮通过。共享组件测试原先先启动整个首页，受首启弹窗和持续帧动画干扰，现使用仅 debug 构建存在的空 Activity，保留被测组件动画、键盘、窗口检查和全部业务断言；Release 不包含该宿主。
 - 最终原生验收结果、截图检查记录与对应运行链接统一记录在 [PR #8](https://github.com/adongshaln/Aster/pull/8)。
 
 ## 取舍与未覆盖范围

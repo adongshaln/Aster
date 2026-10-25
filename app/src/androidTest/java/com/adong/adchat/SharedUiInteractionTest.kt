@@ -59,7 +59,7 @@ import java.io.File
 /** Exercise the same controls used by both modes, without an API or story database fixture. */
 @RunWith(AndroidJUnit4::class)
 class SharedUiInteractionTest {
-    @get:Rule val rule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val rule = createAndroidComposeRule<SharedUiTestActivity>()
 
     private fun content(block: @Composable () -> Unit) {
         // Dismiss only the known cold-boot launcher ANR, never an Aster error dialog.
@@ -69,19 +69,16 @@ class SharedUiInteractionTest {
             root.findAccessibilityNodeInfosByText("Close app").firstOrNull()
                 ?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         }
-        // MainActivity opens onboarding in a separate dialog on a fresh install.
-        // Complete that known prerequisite before waiting for the activity window:
-        // the activity cannot gain focus while its own onboarding dialog is open.
-        val onboardingPending = rule.runOnIdle {
-            !ViewModelProvider(rule.activity)[MainViewModel::class.java].appConfig.userNamePromptDone
-        }
-        if (onboardingPending) {
-            rule.onNodeWithText("该怎么称呼您？").assertIsDisplayed()
-            rule.onNodeWithText("稍后再说").performClick()
-            rule.onNodeWithText("该怎么称呼您？").assertDoesNotExist()
-        }
-        rule.waitUntil(10_000) { rule.activity.hasWindowFocus() }
+        // Install only the component fixture. Starting the full app here introduces
+        // unrelated onboarding windows and Clawd animations into every idling check.
         rule.runOnUiThread { rule.activity.setContent { AsterTheme { block() } } }
+        // A fixture may open its own Dialog/ModalBottomSheet, which legitimately owns
+        // focus instead of the Activity. System dialogs and other apps still fail this check.
+        rule.waitUntil(10_000) {
+            rule.activity.hasWindowFocus() ||
+                InstrumentationRegistry.getInstrumentation().uiAutomation.rootInActiveWindow
+                    ?.packageName?.toString() == rule.activity.packageName
+        }
     }
 
     @Test fun completedStoryReplyKeepsRegenerateAction() {
@@ -314,8 +311,7 @@ class SharedUiInteractionTest {
             rule.onNodeWithTag(tag).assertIsOn()
             screenshot("skill-library-selection")
             assertTrue(runtime.selected("native-prose").isEmpty())
-            // Dismiss the modal first: it owns focus while open, so replacing Activity content
-            // through content() would wait forever for the underlying Activity to regain focus.
+            // Reopen through the same modal state, as a user would, to verify persisted selection.
             rule.onNodeWithContentDescription("关闭").performScrollTo().performClick()
             rule.onNodeWithTag(tag).assertDoesNotExist()
             rule.runOnIdle { open = true }

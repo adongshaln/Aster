@@ -160,8 +160,7 @@ fun ClawdBigOverlay(
 
     // 物理层：订阅 version（runtime.onChanged 驱动），拖拽/弹道逐帧重组
     val phys = remember(version) { runtime.visualAt(android.os.SystemClock.elapsedRealtime()) }
-    val f = frame
-    // ghost 活跃时逐帧重组（原版 Web Animations 自带时钟）
+    // ghost 活跃时使绘制失效；帧值只在 Canvas 内观察，不重组整个组件。
     var ghostTick by remember { mutableIntStateOf(0) }
     ForegroundEffect(ghosts.isNotEmpty()) {
         while (ghosts.isNotEmpty()) {
@@ -172,7 +171,6 @@ fun ClawdBigOverlay(
             }
         }
     }
-    val nowMsNow = remember(ghostTick, version, frame) { android.os.SystemClock.elapsedRealtime() }
 
     Box(modifier) {
         // ── 触摸层：与大爪同位置的 42×34 小盒（原版按钮命中区），空白处穿透 ──
@@ -210,6 +208,10 @@ fun ClawdBigOverlay(
                 .size(42.dp, 34.dp)
         ) {
             Canvas(Modifier.fillMaxSize()) {
+                // Sprite frames and ghost time affect pixels only. Reading them here confines
+                // their updates to drawing while physics still updates layout and hit targets.
+                val f = frame
+                val nowMsNow = ghostTick.let { android.os.SystemClock.elapsedRealtime() }
                 // A2 物理形变层：transform-origin 按钮中心底部（21, 34）
                 rotate(phys.rot.toFloat(), pivot = Offset(21f * d, 34f * d)) {
                     scale(phys.sqx.toFloat(), phys.sqy.toFloat(), pivot = Offset(21f * d, 34f * d)) {
