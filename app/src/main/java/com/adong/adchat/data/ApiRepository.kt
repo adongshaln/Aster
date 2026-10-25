@@ -1347,22 +1347,23 @@ class ApiRepository internal constructor(
         }
 
     /**
-     * 输入建议：小请求（60 tokens），思考强度取该模型家族支持的最低档。失败由调用方静默处理。
+     * 输入建议：短输出预算，思考强度取该模型家族支持的最低档。失败由调用方静默处理。
      * [model] 由设置指定（ApiProfile.suggestionModel）；为空白视为功能关闭，直接返回 null。
      * 与 completePlain 的差异：不走 applyReasoningPolicy（避免叠加 profile 的思考强度），
      * 而是显式写入 minimalEffort 档位。
      */
     suspend fun suggestNextMessage(profile: ApiProfile, model: String, history: List<ChatMessage>): String? {
-        if (model.isBlank()) return null
+        if (model.isBlank() || history.isEmpty()) return null
         return withContext(Dispatchers.IO) {
             validateProfile(profile)
+            val outputTokens = 128
             val responsesApi = profile.usesResponses(model)
             val anthropicApi = profile.usesAnthropicMessages(model)
             val body = if (anthropicApi) {
                 val messages = JSONArray()
                 history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
                 messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
-                JSONObject().put("model", model).put("max_tokens", 60)
+                JSONObject().put("model", model).put("max_tokens", outputTokens)
                     .put("system", InputSuggester.SUGGESTION_INSTRUCTION)
                     .put("messages", messages)
             } else if (responsesApi) {
@@ -1372,15 +1373,15 @@ class ApiRepository internal constructor(
                 }
                 input.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
                 JSONObject().put("model", model).put("instructions", InputSuggester.SUGGESTION_INSTRUCTION)
-                    .put("input", input).put("max_output_tokens", 60)
+                    .put("input", input).put("max_output_tokens", outputTokens)
             } else {
                 val messages = JSONArray()
                     .put(JSONObject().put("role", "system").put("content", InputSuggester.SUGGESTION_INSTRUCTION))
                 history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
                 messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
-                JSONObject().put("model", model).put("max_tokens", 60).put("messages", messages)
+                JSONObject().put("model", model).put("max_tokens", outputTokens).put("messages", messages)
             }
-            ReasoningPolicy.write(body, model, ReasoningPolicy.minimalEffort(model), responsesApi, outputTokenLimit = 60)
+            ReasoningPolicy.write(body, model, ReasoningPolicy.minimalEffort(model), responsesApi, outputTokenLimit = outputTokens)
             val path = when {
                 anthropicApi -> profile.messagesPath
                 responsesApi -> profile.responsesPath
@@ -1390,6 +1391,18 @@ class ApiRepository internal constructor(
                 .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("输入建议接口返回的不是有效 JSON") }
+            // Never offer a sentence that the provider explicitly stopped partway through.
+            val finish = when {
+                anthropicApi -> root.optString("stop_reason")
+                responsesApi -> root.optString("status")
+                else -> root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason").orEmpty()
+            }
+            val complete = when {
+                anthropicApi -> finish in setOf("", "end_turn", "stop_sequence")
+                responsesApi -> finish in setOf("", "completed") && root.optJSONObject("incomplete_details") == null
+                else -> finish in setOf("", "stop")
+            }
+            if (!complete) return@withContext null
             when {
                 anthropicApi -> AnthropicMessages.parseContent(root).first
                 responsesApi -> parseResponsesText(root)

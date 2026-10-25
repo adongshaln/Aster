@@ -40,8 +40,8 @@ fun ComposerContextRing(
 ) {
     val targetTint = when {
         !configured -> MutedInk
-        overflow -> Danger
-        percent >= 85 -> Accent
+        overflow -> OnDangerSoft
+        percent >= 85 -> OnAccentSoft
         else -> Sage
     }
     val tint by animateColorAsState(
@@ -98,7 +98,7 @@ fun ComposerReasoningButton(
         label = "ReasoningChipBg"
     )
     val tint by animateColorAsState(
-        targetValue = if (detailed) Accent else MutedInk,
+        targetValue = if (detailed) OnAccentSoft else MutedInk,
         animationSpec = AsterSpring.editorial(),
         label = "ReasoningChipTint"
     )
@@ -178,7 +178,7 @@ fun ComposerContextSheet(
                     )
                     Text(
                         if (budget > 0) "${(progress * 100).toInt()}%" else "--",
-                        color = if (overflow) Danger else Accent,
+                        color = if (overflow) OnDangerSoft else OnAccentSoft,
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -208,7 +208,7 @@ fun ComposerContextSheet(
             if (omittedTurns > 0) {
                 Text(
                     "已省略最早 $omittedTurns 轮",
-                    color = Danger,
+                    color = OnDangerSoft,
                     style = MaterialTheme.typography.labelMedium
                 )
             }
@@ -264,7 +264,7 @@ private fun ModelContextPresetsInline(limits: ModelContextLimits?, onSelect: (In
                     onSelect(window)
                 },
                 color = if (selected) AccentSoft else Surface,
-                contentColor = if (selected) Accent else Ink,
+                contentColor = if (selected) OnAccentSoft else Ink,
                 shape = RoundedCornerShape(16.dp),
                 border = BorderStroke(
                     1.dp,
@@ -283,7 +283,7 @@ private fun ModelContextPresetsInline(limits: ModelContextLimits?, onSelect: (In
                         Surface(color = Accent, shape = CircleShape) {
                             Text(
                                 "当前",
-                                color = androidx.compose.ui.graphics.Color.White,
+                                color = OnAccent,
                                 style = MaterialTheme.typography.labelSmall,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )

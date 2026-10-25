@@ -384,6 +384,36 @@ class SharedUiInteractionTest {
         screenshot("tavern-preset-configuration")
     }
 
+    @Test fun inlineSuggestionStaysOutOfDraftAndDoesNotMoveTheCapsule() {
+        var draft by mutableStateOf("")
+        var suggestion by mutableStateOf<String?>(null)
+        var sent = ""
+        content {
+            Box(Modifier.fillMaxSize()) {
+                ConversationComposer(draft, emptyList(), false, false,
+                    { draft = it; suggestion = null }, {}, {}, { sent = draft }, {}, {},
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    suggestion = suggestion,
+                    onSuggestionClick = { sent = suggestion.orEmpty(); suggestion = null })
+            }
+        }
+        val before = rule.onNodeWithTag("chat-composer").fetchSemanticsNode().boundsInRoot
+        rule.runOnIdle { suggestion = "请给一个带注释的缓存示例" }
+        rule.onNodeWithText("请给一个带注释的缓存示例", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(before, rule.onNodeWithTag("chat-composer").fetchSemanticsNode().boundsInRoot)
+        rule.onNodeWithTag("chat-input").assert(SemanticsMatcher.expectValue(
+            SemanticsProperties.EditableText, androidx.compose.ui.text.AnnotatedString("")))
+        rule.onNodeWithContentDescription("发送建议").performClick()
+        rule.runOnIdle {
+            assertEquals("请给一个带注释的缓存示例", sent)
+            assertEquals("", draft)
+            suggestion = "请说明离线修改如何合并"
+        }
+        rule.onNodeWithTag("chat-input").performTextInput("我来输入")
+        rule.onNodeWithText("请说明离线修改如何合并", useUnmergedTree = true).assertDoesNotExist()
+        rule.runOnIdle { assertEquals("我来输入", draft) }
+    }
+
     @OptIn(ExperimentalTestApi::class)
     @Test fun expandedDraftPreservesTextAndSelection() {
         var draft by mutableStateOf("第一行\n第二行")

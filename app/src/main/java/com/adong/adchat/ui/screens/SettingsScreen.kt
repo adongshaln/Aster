@@ -805,14 +805,14 @@ private fun InputSuggestionCard(
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text("输入建议", style = MaterialTheme.typography.titleSmall)
-                    Text("回复完成后预测你的下一句输入", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                    Text("有明确下一步时，在输入框内提供淡色建议", color = MutedInk, style = MaterialTheme.typography.bodySmall)
                 }
             }
             RouteValueButton("API", profile.name, Icons.Rounded.Dns, Accent) { showProfileSheet = true }
             RouteValueButton("建议模型", profile.suggestionModel.ifBlank { "已关闭" }, Icons.Rounded.AutoAwesome, Accent) { showModelSheet = true }
             Text(
                 if (profile.suggestionModel.isBlank()) {
-                    "选择一个响应快、成本低的模型，在回复结束后生成下一句输入建议。也可以保持关闭。"
+                    "选择一个响应快、成本低的模型。建议以淡色显示在空输入框中，点发送即可采纳，直接输入则忽略。也可以保持关闭。"
                 } else {
                     "已配置 ${profile.suggestionModel}。思考强度自动使用该模型支持的最低档位；每次预测只携带最近两轮对话。"
                 },

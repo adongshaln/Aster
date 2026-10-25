@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -16,6 +17,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -103,6 +106,9 @@ fun ClawdHost(
 
     // 锚矩形：Window 像素 → 转 dp → 写 runtime（同步 formRect/chatRect）
     LaunchedEffect(formAnchor, chatAnchor, density) {
+        // The activity band has the capsule's current width; update it on each geometry change
+        // instead of polling every 50 ms behind the shell's spring animation.
+        formAnchor?.let { runtime.bandLeftOffset = (it.width / density - 42f).toDouble() }
         runtime.formRect = formAnchor?.let {
             ClawdBigRuntime.RectF(it.left / density, it.top / density, it.right / density, it.bottom / density)
         }
@@ -126,17 +132,6 @@ fun ClawdHost(
         }
     }
 
-    // band 宽度（dp）：seat cx 用 pile 本地坐标系，runtime.x 用右侧偏移坐标系，桥接用
-    ForegroundEffect(pile, runtime) {
-        while (true) {
-            kotlinx.coroutines.delay(50)
-            if (pile.width > 0) {
-                // 大爪左边在 pile 坐标系 = bandW - RIG_W + x（x 是相对右缘的偏移）
-                runtime.bandLeftOffset = pile.width.toDouble() - 42.0
-            }
-        }
-    }
-
     // 输入联动
     LaunchedEffect(inputText) { runtime.onInputText(inputText) }
     LaunchedEffect(inputFocused) { runtime.onInputFocus(inputFocused) }
@@ -156,20 +151,23 @@ fun ClawdHost(
 
     // 小爪整体下移：原版 .clawd-pile{bottom:100%; margin-bottom:-1px}，WebView 时期校准到净 -5px；
     // 本版要求再降 ~1mm（6dp），带从 1dp 提到 7dp——爪脚压进输入框上缘，视觉上「站在框上」。
-    Box(modifier.height(ClawdPileBandHeight).offset(y = 7.dp)) {
-        // 小爪带：底边 = 地面（正好压在输入框上沿，原版 .clawd-pile{bottom:100%}）
-        ClawdPileOverlay(
-            pile = pile,
-            night = night,
-            modifier = Modifier.fillMaxSize(),
-        )
-        // 大爪：叠加在同画布，自身位置由 runtime.x/fy 驱动；默认钉在右侧内边
-        ClawdBigOverlay(
-            runtime = runtime,
-            rig = data.rig,
-            night = night,
-            modifier = Modifier.fillMaxSize(),
-        )
+    // Sprite physics use absolute screen x coordinates; do not mirror hit targets in RTL.
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Box(modifier.height(ClawdPileBandHeight).offset(y = 7.dp)) {
+            // 小爪带：底边 = 地面（正好压在输入框上沿，原版 .clawd-pile{bottom:100%}）
+            ClawdPileOverlay(
+                pile = pile,
+                night = night,
+                modifier = Modifier.fillMaxSize(),
+            )
+            // 大爪：叠加在同画布，自身位置由 runtime.x/fy 驱动；默认钉在右侧内边
+            ClawdBigOverlay(
+                runtime = runtime,
+                rig = data.rig,
+                night = night,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

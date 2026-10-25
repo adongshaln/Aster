@@ -44,6 +44,7 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
@@ -74,6 +75,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import com.adong.adchat.ui.markdown.linkAt
 import com.adong.adchat.ui.clawd.ClawdHost
+import com.adong.adchat.ui.clawd.ClawdPileBandHeight
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -148,6 +150,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.sin
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -358,7 +361,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 }
             }
         )
-        Box(Modifier.weight(1f).fillMaxWidth().imePadding()) {
+        Box(Modifier.weight(1f).fillMaxWidth().imePadding()
+            .onGloballyPositioned { chatAnchor = it.boundsInWindow() }) {
             Box(
                 Modifier.fillMaxSize()
             ) {
@@ -371,7 +375,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 } else {
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize().onGloballyPositioned { chatAnchor = it.boundsInWindow() },
+                        modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(
                             start = 22.dp,
                             end = 22.dp,
@@ -456,7 +460,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     focusRequester = composerFocusRequester,
                     value = vm.chatInput,
                     suggestion = vm.inputSuggestion,
-                    onSuggestionClick = { vm.acceptSuggestion() },
+                    onSuggestionClick = { autoFollow = true; vm.sendInputSuggestion() },
                     attachments = vm.chatAttachments,
                     profileName = vm.chatProfile.name,
                     model = vm.chatProfile.chatModel,
@@ -487,28 +491,39 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     onSend = { autoFollow = true; vm.sendMessage() },
                     onStop = vm::stopGeneration,
                     onFocusChange = { composerFocused = it },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .onGloballyPositioned { formAnchor = it.boundsInWindow() }
+                    onSurfaceBounds = { formAnchor = it },
+                    modifier = Modifier.fillMaxWidth()
                 )
                 }
             }
-            // 三只小 Clawd + 大 Clawd：原生 Compose（像素引擎 + Kotlin 状态机），
-            // 与原版行为逐段对照（tools/clawd/host-template.html 同源）。
-            // 爪带真实占位 56dp 钉在输入框上沿（底边 = 地面 = composer 顶边），
-            // 与原版 .clawd-pile{bottom:100%} 一致；空白处触摸穿透聊天页。
-            ClawdHost(
-                modifier = Modifier.align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(bottom = composerHeight),
-                inputText = vm.chatInput,
-                inputFocused = composerFocused,
-                generating = vm.isChatLoading,
-                lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
-                formAnchor = formAnchor,
-                chatAnchor = chatAnchor,
-                scrollTick = clawdScrollTick,
-            )
+            // Use the moving shell, not the surrounding toolbar/attachment envelope, as the
+            // ground. Ghost suggestions never change this geometry or enter Clawd's input state.
+            val surface = formAnchor
+            val viewport = chatAnchor
+            if (surface != null && viewport != null) {
+                val insetPx = with(density) { 22.dp.toPx() }.coerceAtMost(surface.width * .08f)
+                val ground = androidx.compose.ui.geometry.Rect(
+                    surface.left + insetPx, surface.top, surface.right - insetPx, surface.bottom
+                )
+                val bandHeightPx = with(density) { ClawdPileBandHeight.toPx() }
+                ClawdHost(
+                    modifier = Modifier.align(AbsoluteAlignment.TopLeft)
+                        .absoluteOffset {
+                            androidx.compose.ui.unit.IntOffset(
+                                (ground.left - viewport.left).roundToInt(),
+                                (ground.top - viewport.top - bandHeightPx).roundToInt()
+                            )
+                        }
+                        .width(with(density) { ground.width.toDp() }),
+                    inputText = vm.chatInput,
+                    inputFocused = composerFocused,
+                    generating = vm.isChatLoading,
+                    lastText = vm.messages.lastOrNull()?.takeIf { it.role == "assistant" }?.content ?: "",
+                    formAnchor = ground,
+                    chatAnchor = viewport,
+                    scrollTick = clawdScrollTick,
+                )
+            }
         }
     }
     pendingEditResend?.let { candidate ->
@@ -2183,6 +2198,7 @@ private fun ChatComposer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onFocusChange: (Boolean) -> Unit,
+    onSurfaceBounds: (androidx.compose.ui.geometry.Rect) -> Unit,
     contextUsage: ContextUsage,
     onSelectContextWindow: (Int) -> Unit,
     onCustomizeContext: () -> Unit,
@@ -2190,17 +2206,16 @@ private fun ChatComposer(
     modifier: Modifier = Modifier
 ) {
     val focus = LocalFocusManager.current
-    var showEffortSheet by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     var showToolsSheet by remember { mutableStateOf(false) }
     var showContextSheet by remember { mutableStateOf(false) }
     val effortChoices = remember(model) { ReasoningPolicy.choices(model) }
-    val currentEffort = remember(model, reasoningEffort) { ReasoningPolicy.choiceOf(model, reasoningEffort) }
     ConversationComposer(
         value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentLoading,
         onValueChange = onValueChange, onOptionsClick = { showToolsSheet = true }, onRemoveImage = onRemoveImage,
         onSend = onSend, onStop = onStop, onFocusChange = onFocusChange,
         suggestion = suggestion, onSuggestionClick = onSuggestionClick,
-        focusRequester = focusRequester, modifier = modifier,
+        focusRequester = focusRequester, modifier = modifier, onSurfaceBounds = onSurfaceBounds,
         contextAction = {
             ComposerContextRing(
                 percent = contextUsage.percent,
@@ -2214,13 +2229,11 @@ private fun ChatComposer(
         },
         reasoningAction = if (effortChoices.isEmpty()) null else {
             {
-                ComposerReasoningButton(
-                    label = compactEffortLabel(currentEffort?.label ?: "默认"),
-                    detailed = currentEffort?.id != ReasoningPolicy.DEFAULT,
-                    onClick = {
-                        focus.clearFocus()
-                        showEffortSheet = true
-                    }
+                ComposerReasoningSlider(
+                    model = model,
+                    effort = reasoningEffort,
+                    onEffortChange = onReasoningEffortChange,
+                    enabled = !loading,
                 )
             }
         },
@@ -2238,7 +2251,10 @@ private fun ChatComposer(
             onPickImages = { showToolsSheet = false; onPickImages() },
             onPickDocument = { showToolsSheet = false; onPickDocument() },
             onModelClick = { showToolsSheet = false; onModelClick() },
-            onReasoningClick = { showToolsSheet = false; showEffortSheet = true },
+            onReasoningClick = {
+                showToolsSheet = false
+                scope.launch { withFrameNanos { }; focusRequester.requestFocus() }
+            },
             onWebSearchToggle = onWebSearchToggle,
             onFileCreationToggle = onFileCreationToggle,
             reasoningSupported = effortChoices.isNotEmpty(),
@@ -2271,44 +2287,6 @@ private fun ChatComposer(
                 onResetContext()
             },
             onDismiss = { showContextSheet = false }
-        )
-    }
-    if (showEffortSheet) {
-        val responsesApi = apiMode == "responses"
-        val contract = ReasoningPolicy.contract(model, responsesApi)
-        AdSelectionSheet(
-            title = "思考强度",
-            subtitle = if (effortChoices.isEmpty()) "当前模型不支持调节思考强度" else "$model · ${contract.field}",
-            options = effortChoices.map { choice ->
-                AdChoiceOption(
-                    id = choice.id,
-                    title = choice.label,
-                    subtitle = choice.hint,
-                    icon = when (choice.id) {
-                        "off", "none" -> Icons.Rounded.Bolt
-                        "on" -> Icons.Rounded.Psychology
-                        "low" -> Icons.Rounded.Bolt
-                        "medium" -> Icons.Rounded.Balance
-                        "high" -> Icons.Rounded.Psychology
-                        "xhigh" -> Icons.Rounded.AccountTree
-                        "max" -> Icons.Rounded.AutoAwesome
-                        else -> Icons.Rounded.AutoAwesome
-                    },
-                    badge = when (choice.id) {
-                        "low" -> "更快"
-                        "medium" -> "推荐"
-                        "high" -> "复杂任务"
-                        "xhigh" -> "深度推理"
-                        "max" -> "最大预算"
-                        else -> null
-                    }
-                )
-            },
-            selectedId = currentEffort?.id,
-            onSelect = { onReasoningEffortChange(it.id); showEffortSheet = false },
-            onDismiss = { showEffortSheet = false },
-            searchEnabled = false,
-            headerIcon = Icons.Rounded.Psychology
         )
     }
 }
@@ -2388,18 +2366,3 @@ private fun ComposerToolToggle(
         }
     }
 }
-
-/** 输入框上的短标签，两个汉字放得下。 */
-private fun compactEffortLabel(label: String): String = when (label) {
-    "模型默认" -> "默认"
-    "极简" -> "极简"
-    "快速" -> "快速"
-    "均衡" -> "均衡"
-    "深入" -> "深入"
-    "深度" -> "深度"
-    "极致" -> "极致"
-    "关闭" -> "关闭"
-    "开启" -> "开启"
-    else -> label.take(2)
-}
-

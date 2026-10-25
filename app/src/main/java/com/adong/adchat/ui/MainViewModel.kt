@@ -33,6 +33,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -178,6 +179,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var questionAwaiting: CompletableDeferred<String>? = null
     private var chatJob: Job? = null
     private var suggestionJob: Job? = null
+    private data class InputSuggestionSource(val conversationKey: String, val messageId: Long, val profile: ApiProfile)
+    private var inputSuggestionSource: InputSuggestionSource? = null
     private val titleSummaryJobs = mutableMapOf<String, Job>()
     private var chatStopRequested = false
     private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
@@ -292,6 +295,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveProfile(profile: ApiProfile) {
         val cleaned = profile.normalized()
+        if (cleaned.id == suggestionProfile.id || cleaned.id == chatProfile.id) clearInputSuggestion()
         invalidateProfileTest(cleaned.id)
         val previous = appConfig.profiles.firstOrNull { it.id == cleaned.id }
         val exists = previous != null
@@ -323,6 +327,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             notice = "当前对话正在使用此 API，请等待生成完成后再删除"
             return
         }
+        if (profileId == suggestionProfile.id || profileId == chatProfile.id) clearInputSuggestion()
         invalidateProfileTest(profileId)
         val affectedConversationIds = conversations
             .filter { conversation ->
@@ -406,6 +411,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectSuggestionProfile(profileId: String) {
         val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        if (suggestionProfile.id != profileId) clearInputSuggestion()
         appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
         persist(); notice = "输入建议已切换到 ${profile.name}"
     }
@@ -413,6 +419,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun selectSuggestionModel(profileId: String, model: String) {
         if (profiles.none { it.id == profileId }) return
         val selected = model.trim()
+        if (suggestionProfile.id != profileId || suggestionProfile.suggestionModel != selected) clearInputSuggestion()
         updateProfile(profileId) { it.copy(suggestionModel = selected) }
         appConfig = appConfig.copy(activeSuggestionProfileId = profileId)
         persist(); notice = if (selected.isBlank()) "已关闭输入建议" else "输入建议模型已设置为 $selected"
@@ -1151,23 +1158,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun scheduleInputSuggestion() {
         clearInputSuggestion()
         val profile = suggestionProfile
-        if (chatInput.isNotBlank() || chatAttachments.isNotEmpty() || isChatAttachmentLoading || profile.suggestionModel.isBlank()) return
+        if (chatInput.isNotEmpty() || chatAttachments.isNotEmpty() || isChatAttachmentLoading || profile.suggestionModel.isBlank()) return
         val history = InputSuggester.buildSuggestHistory(messages.toList())
         if (history.isEmpty()) return
-        val conversationKey = currentChatKey()
-        val lastMessageId = messages.lastOrNull()?.id
+        val source = InputSuggestionSource(currentChatKey(), messages.last().id, profile)
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 val result = try {
-                    repository.suggestNextMessage(profile, profile.suggestionModel, history)
+                    withTimeoutOrNull(10_000) { repository.suggestNextMessage(profile, profile.suggestionModel, history) }
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
                     null
                 }
-                if (isActive && currentChatKey() == conversationKey && messages.lastOrNull()?.id == lastMessageId &&
-                    chatInput.isBlank() && chatAttachments.isEmpty() && !isChatLoading && !isChatAttachmentLoading) {
-                    inputSuggestion = InputSuggester.cleanSuggestion(result)
+                if (isActive && isCurrentSuggestionSource(source)) {
+                    val suggestion = InputSuggester.cleanSuggestion(result, history)
+                    inputSuggestionSource = source.takeIf { suggestion != null }
+                    inputSuggestion = suggestion
                 }
             } finally {
                 if (suggestionJob === coroutineContext[Job]) suggestionJob = null
@@ -1177,17 +1184,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         job.start()
     }
 
-    /** 点建议条：只在输入框为空时填入，填过即消失（建议预测的是空输入框场景）。 */
-    fun acceptSuggestion() {
-        val suggestion = inputSuggestion ?: return
-        if (!chatInput.isBlank()) return
+    /** 空输入框的预测文字由发送键提交，与普通用户输入走同一条发送路径。 */
+    fun sendInputSuggestion() {
+        val suggestion = validInputSuggestion() ?: return
         updateChatInput(suggestion)
-        inputSuggestion = null
+        sendMessage()
     }
+
+    fun acceptSuggestion() {
+        val suggestion = validInputSuggestion() ?: return
+        updateChatInput(suggestion)
+    }
+
+    private fun validInputSuggestion(): String? {
+        val source = inputSuggestionSource ?: return null
+        if (!isCurrentSuggestionSource(source)) {
+            clearInputSuggestion()
+            return null
+        }
+        return InputSuggester.cleanSuggestion(inputSuggestion, InputSuggester.buildSuggestHistory(messages.toList()))
+    }
+
+    private fun isCurrentSuggestionSource(source: InputSuggestionSource): Boolean =
+        currentChatKey() == source.conversationKey && messages.lastOrNull()?.id == source.messageId &&
+            suggestionProfile.matchesSuggestionRequest(source.profile) && source.profile.suggestionModel.isNotBlank() &&
+            chatInput.isEmpty() && chatAttachments.isEmpty() && !isChatLoading && !isChatAttachmentLoading
+
+    // Cache refreshes or the chat's effort slider do not change a completed suggestion request.
+    private fun ApiProfile.matchesSuggestionRequest(other: ApiProfile): Boolean =
+        id == other.id && baseUrl == other.baseUrl && apiKey == other.apiKey &&
+            extraHeaders == other.extraHeaders && apiFormat == other.apiFormat &&
+            chatPath == other.chatPath && responsesPath == other.responsesPath &&
+            messagesPath == other.messagesPath && suggestionModel == other.suggestionModel
 
     private fun clearInputSuggestion() {
         suggestionJob?.cancel()
         suggestionJob = null
+        inputSuggestionSource = null
         inputSuggestion = null
     }
 
@@ -2195,6 +2228,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun bindCurrentConversationRoute(profile: ApiProfile, model: String) {
+        clearInputSuggestion()
         val conversationId = activeConversationId
         if (conversationId == null) {
             updateProfile(profile.id) { it.copy(chatModel = model) }

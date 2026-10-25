@@ -13,6 +13,7 @@ import com.adong.adchat.data.ChatSessionStore
 import com.adong.adchat.data.ConfigStore
 import com.adong.adchat.data.Conversation
 import com.adong.adchat.data.ConversationStore
+import com.adong.adchat.data.InputSuggester
 import kotlinx.coroutines.Job
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -139,7 +140,7 @@ class MainViewModelStateTest {
     @Test fun typingThenClearingDraftInvalidatesAnInFlightSuggestion() {
         configure(suggestions = true)
         server.enqueue(completion("回答"))
-        server.enqueue(completion("旧预测").setBodyDelay(300, TimeUnit.MILLISECONDS))
+        server.enqueue(completion("请给一个带注释的缓存示例").setBodyDelay(300, TimeUnit.MILLISECONDS))
         val vm = createViewModel()
         vm.updateChatInput("问题")
         vm.sendMessage()
@@ -150,6 +151,50 @@ class MainViewModelStateTest {
         await { idle(vm) }
 
         assertNull(vm.inputSuggestion)
+    }
+
+    @Test fun sendsVisibleSuggestionOnceAsUserTextAndInvalidatesTheNextOneWhenItsModelChanges() {
+        configure(suggestions = true)
+        val suggestion = "请给一个带注释的缓存示例"
+        val suggestionRequests = AtomicInteger()
+        val releaseOldSuggestion = CountDownLatch(1)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                if (!request.body.readUtf8().contains(InputSuggester.SUGGESTION_PLACEHOLDER)) return completion("可以按层设计缓存。")
+                return if (suggestionRequests.incrementAndGet() == 1) completion(suggestion) else {
+                    releaseOldSuggestion.await(8, TimeUnit.SECONDS)
+                    completion("请说明缓存失效时如何回退")
+                }
+            }
+        }
+        val vm = createViewModel()
+        try {
+            vm.sendMessage("帮我设计一个缓存方案")
+            await { vm.inputSuggestion == suggestion }
+            assertEquals("", vm.chatInput)
+
+            vm.sendInputSuggestion()
+            vm.sendInputSuggestion()
+
+            assertNull(vm.inputSuggestion)
+            assertEquals("", vm.chatInput)
+            assertEquals(listOf("帮我设计一个缓存方案", suggestion), vm.messages.filter { it.role == "user" }.map { it.content })
+            assertFalse(vm.messages.last { it.role == "user" }.isContinuation)
+            await { suggestionRequests.get() == 2 }
+            vm.selectSuggestionModel("test", "replacement-model")
+            releaseOldSuggestion.countDown()
+            await { idle(vm) }
+            assertNull(vm.inputSuggestion)
+            assertEquals(4, server.requestCount)
+
+            vm.selectSuggestionModel("test", "")
+            vm.sendInputSuggestion()
+            assertEquals("", ConfigStore(application).load().suggestionProfile().suggestionModel)
+            assertEquals("已关闭输入建议", vm.notice)
+            assertEquals(4, server.requestCount)
+        } finally {
+            releaseOldSuggestion.countDown()
+        }
     }
 
     @Test fun anotherReplyDoesNotDuplicateAnInFlightTitleSummary() {

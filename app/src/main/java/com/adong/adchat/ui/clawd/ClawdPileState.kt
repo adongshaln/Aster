@@ -78,7 +78,7 @@ class ClawdPileState(
     val isLaid: Boolean get() = laid
     private var laid = false
     private var atHome = false
-    private var lastW = 0
+    private var resizeOffsets: Map<String, Int>? = null
 
     var onChanged: (() -> Unit)? = null
 
@@ -137,6 +137,7 @@ class ClawdPileState(
     }
 
     private fun save(keepHome: Boolean = false) {
+        resizeOffsets = null
         if (!keepHome) atHome = false
         if (width == 0) return
         store.save(actors.mapValues { (_, k) -> SavedPos(k.x - width / 2, k.on.toList()) })
@@ -230,7 +231,8 @@ class ClawdPileState(
         val layout = saved ?: homeLayout()
         for (n in data.names) {
             val k = actors.getValue(n)
-            k.x = clampX(centerX + (layout[n]?.dx ?: 0))
+            val position = layout[n]?.dx ?: 0
+            k.x = clampX(if (saved == null) position else centerX + position)
             k.on = layout[n]?.on
                 ?.filter { it != n && it in data.names }
                 ?.toMutableList()
@@ -238,14 +240,14 @@ class ClawdPileState(
         }
         stackX()
         laid = true
-        lastW = w
         for (n in data.names) sleep(actors.getValue(n), first = true)
         changed()
     }
 
     fun relayout(w: Int) {
         if (!laid || w <= 0 || w == width) return
-        val old = width
+        val offsets = resizeOffsets ?: actors.mapValues { (_, actor) -> posX(actor) - centerX }
+            .also { resizeOffsets = it }
         width = w
         centerX = w / 2
         if (atHome) {
@@ -259,18 +261,27 @@ class ClawdPileState(
             changed()
             return
         }
-        val d = Math.round((w - old).toDouble() / 2 / px).toInt() * px
         val moved = mutableListOf<Inner>()
         for (k in actors.values) {
             if (k.mode == Mode.HELD || k.on.isNotEmpty()) continue
-            endWalk(k)
-            val want = k.x + d
+            if (k.mode == Mode.WALK || k.walk != null) {
+                // Old step targets belong to the previous geometry. Stop once, retain the
+                // visual position captured above, and restart the normal rest/wake cycle.
+                endWalk(k)
+                clear(k)
+                k.mode = Mode.SIT
+                k.pose = PilePose.CROUCH
+                k.face = 0
+                later(k, 1200) { if (k.mode == Mode.SIT) doze(k) }
+            }
+            val want = centerX + (offsets[k.name] ?: 0)
             k.x = clampX(want)
             if (k.x != want) moved.add(k)
         }
         unstack(moved)
         stackX()
-        save(keepHome = true)
+        // Resizing is a visual transition, not a user placement. Keep the original offsets so
+        // repeated sub-pixel width steps cannot drift the pile or write preferences every frame.
         changed()
     }
 
@@ -394,6 +405,7 @@ class ClawdPileState(
     /* ===== 走路（原版 218–283 行） ===== */
 
     private fun walkTo(k: Inner, target: Int, done: () -> Unit) {
+        resizeOffsets = null
         endWalk(k)
         atHome = false
         k.mode = Mode.WALK
@@ -412,6 +424,7 @@ class ClawdPileState(
     }
 
     private fun steps(k: Inner, target: Int, done: () -> Unit) {
+        resizeOffsets = null
         val dir = (sign((target - k.x).toDouble()).toInt()).let { if (it == 0) 1 else it }
         k.walk = Walk(k.x, target, dir, done)
         k.pose = PilePose.RAISED
@@ -500,6 +513,7 @@ class ClawdPileState(
             done()
             return
         }
+        resizeOffsets = null
         k.x = t
         changed()
         done()
@@ -512,6 +526,8 @@ class ClawdPileState(
             doze(k)
             return
         }
+        resizeOffsets = null
+        atHome = false
         k.on = mutableListOf()
         k.x = t
         k.mode = Mode.WALK
@@ -574,7 +590,9 @@ class ClawdPileState(
 
     fun pickUp(name: String) {
         val k = actors.getValue(name)
+        resizeOffsets = null
         atHome = false
+        endWalk(k)
         clear(k)
         flights.remove(name)
         k.mode = Mode.HELD
@@ -590,6 +608,8 @@ class ClawdPileState(
 
     fun drop(name: String, cx: Int, onHead: String?) {
         val k = actors.getValue(name)
+        resizeOffsets = null
+        atHome = false
         k.squashAt = android.os.SystemClock.elapsedRealtime()
         if (onHead == "big") {
             // 放在大爪头上（原版 drop 的 onBigHead 分支）
@@ -919,6 +939,7 @@ class ClawdPileState(
 
     /** 大 Clawd 坐到某只头上（name）/ 落回地上（null）。 */
     fun bigSat(name: String?) {
+        resizeOffsets = null
         bigSatName = name?.takeIf { actors.containsKey(it) }
         if (bigSatName != null) atHome = false
         val k = bigSatName?.let { actors.getValue(it) }
@@ -972,6 +993,8 @@ class ClawdPileState(
     fun dropBigRiders() {
         val fell = actors.values.filter { it.on.contains("big") }.toList()
         if (fell.isEmpty()) return
+        resizeOffsets = null
+        atHome = false
         for (k in fell) {
             k.on = k.on.filter { it != "big" }.toMutableList()
         }
