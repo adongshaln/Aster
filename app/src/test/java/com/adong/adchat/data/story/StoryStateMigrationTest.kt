@@ -15,13 +15,14 @@ import org.robolectric.annotation.Config
 class StoryStateMigrationTest {
     @Test fun populatedOlderDatabasesUpgradeWithoutReclassifyingOldData() {
         val context: Context = RuntimeEnvironment.getApplication()
-        for (version in 1..12) {
+        for (version in 1..13) {
             context.deleteDatabase(StoryDatabase.DATABASE_NAME)
             val old = object : SQLiteOpenHelper(context, StoryDatabase.DATABASE_NAME, null, version) {
                 override fun onCreate(db: SQLiteDatabase) {
                     StorySchema.CREATE_STATEMENTS.filterNot {
                         (version == 1 && it.contains(StorySchema.MANUAL_MEMORY_CHANGES)) || (version < 4 && it.contains(StorySchema.CONFLICTS)) || (version < 5 && it.contains(StorySchema.SUMMARY_SOURCES)) || (version < 6 && it.contains(StorySchema.SUMMARY_INPUTS)) || (version < 7 && it.contains(StorySchema.USAGE)) || (version < 8 && it.contains(StorySchema.REWRITES)) || (version<9 && (it.contains("ADD COLUMN mode") || it.contains("ADD COLUMN replacement_input"))) || (version<10 && (it.contains(StorySchema.DISCUSSION_LINKS) || it.contains(StorySchema.MEMORY_DEPENDENCIES))) || (version<11 && it.contains("ADD COLUMN conflicts_with_")) || (version < 12 && it.contains("ADD COLUMN attachments_json")) || (version < 13 && (it.contains("ADD COLUMN setup_phase") || it.contains("ADD COLUMN char_card_json") || it.contains("ADD COLUMN user_persona")))
-                    }.forEach { db.execSQL(it.lineSequence().filterNot { line -> version < 3 && line.trim() == "state_key TEXT," }.joinToString("\n")) }
+                    }.filterNot { version < 14 && it.contains("ADD COLUMN cache_write_tokens") }
+                        .forEach { db.execSQL(it.lineSequence().filterNot { line -> version < 3 && line.trim() == "state_key TEXT," }.joinToString("\n")) }
                 }
                 override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = error("not used")
             }
@@ -39,7 +40,7 @@ class StoryStateMigrationTest {
             old.close()
             val upgraded = StoryDatabase(context)
             try {
-                assertEquals(13, upgraded.readableDatabase.version)
+                assertEquals(14, upgraded.readableDatabase.version)
                 upgraded.readableDatabase.rawQuery("SELECT setup_phase,char_card_json,user_persona FROM stories WHERE id='s'", null).use {
                     assertTrue(it.moveToFirst()); assertEquals("prose", it.getString(0)); assertEquals("", it.getString(1)); assertEquals("", it.getString(2))
                 }
@@ -51,6 +52,10 @@ class StoryStateMigrationTest {
                     else assertFalse(it.moveToFirst())
                 }
                 upgraded.readableDatabase.rawQuery("SELECT COUNT(*) FROM state_conflicts", null).use { assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0)) }
+                upgraded.readableDatabase.rawQuery("PRAGMA table_info(${StorySchema.USAGE})", null).use {
+                    val usageColumns = buildSet { while (it.moveToNext()) add(it.getString(1)) }
+                    assertTrue(usageColumns.contains("cache_write_tokens"))
+                }
                 upgraded.readableDatabase.rawQuery("PRAGMA foreign_key_check", null).use { assertFalse(it.moveToFirst()) }
             } finally { upgraded.close() }
             val archive = StoryArchiveStore(context)
