@@ -69,4 +69,18 @@ class StoryUsageStoreTest {
         val id=begin("discussion");usage.finish(id,"cancelled")
         assertEquals(0L,usage.totals(story.id).first { it.category=="discussion" }.reported)
     }
+
+    @Test fun appWideModelTotalsRetainCacheBreakdown() {
+        val id=usage.begin(story.id,story.currentTimelineId,"prose","p","Claude-opus-5.5",null)
+        val result=ChatCompletionResult("正文",TokenUsage(
+            inputTokens=15,cachedTokens=2,cacheWriteTokens=3,outputTokens=4,
+            totalTokens=19,providerUsageReported=true
+        ))
+        assertTrue(usage.finish(id,"completed",result))
+        val row=usage.totalsByModel().single()
+        assertEquals("Claude-opus-5.5",row.model)
+        assertEquals(1L,row.requests);assertEquals(1L,row.reportedRequests)
+        assertEquals(15L,row.inputTokens);assertEquals(2L,row.cachedTokens)
+        assertEquals(3L,row.cacheWriteTokens);assertEquals(4L,row.outputTokens)
+    }
 }

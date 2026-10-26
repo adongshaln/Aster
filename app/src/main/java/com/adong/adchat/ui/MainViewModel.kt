@@ -897,6 +897,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         clearInputSuggestion()
         val profile = chatProfile
         val model = profile.chatModel
+        val delegatedSearch = if (profile.webSearchEnabled) searchBackendConfig() else null
+        val requestProtocol = when {
+            profile.usesAnthropicMessages() -> "Anthropic Messages"
+            profile.usesResponses() -> "OpenAI Responses"
+            else -> "OpenAI-compatible Chat Completions"
+        }
         if (fromComposer) {
             clearCurrentDraft()
             chatAttachments.clear()
@@ -913,6 +919,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val streamingMessage = ChatMessage(
             id = assistantId, role = "assistant", content = "", isStreaming = true,
             profileName = profile.name, model = model,
+            requestProtocol = requestProtocol,
+            reasoningEffort = profile.reasoningEffort,
+            requestWebSearchEnabled = profile.webSearchEnabled,
+            requestFileCreationEnabled = profile.fileCreationEnabled,
+            delegatedSearchProfileName = delegatedSearch?.profile?.name.orEmpty(),
+            delegatedSearchModel = delegatedSearch?.model.orEmpty(),
+            xSearchEnabled = if (delegatedSearch != null) delegatedSearch.allowXSearch else null,
             previousContent = assistantSeed?.previousContent.orEmpty(),
             previousReasoning = assistantSeed?.previousReasoning.orEmpty()
         )
@@ -1460,6 +1473,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updatedAt = System.currentTimeMillis()
         )
         sortAndSaveConversations()
+    }
+
+    fun setConversationPinned(id: String, pinned: Boolean) = updateConversationOrganization(id) { it.copy(pinned = pinned) }
+
+    fun setConversationArchived(id: String, archived: Boolean) = updateConversationOrganization(id) { it.copy(archived = archived) }
+
+    fun setConversationFavorite(id: String, favorite: Boolean) = updateConversationOrganization(id) { it.copy(favorite = favorite) }
+
+    fun setConversationTags(id: String, tags: List<String>) = updateConversationOrganization(id) {
+        it.copy(tags = tags.asSequence().map(String::trim).filter(String::isNotBlank).distinct().take(8).toList())
+    }
+
+    /** Organization metadata is intentionally kept out of updatedAt, which represents activity. */
+    private fun updateConversationOrganization(id: String, update: (Conversation) -> Conversation) {
+        val index = conversations.indexOfFirst { it.id == id }
+        if (index < 0) return
+        val current = conversations[index]
+        val updated = update(current)
+        if (updated == current) return
+        conversations[index] = updated
+        scheduleConversationSave(conversations.toList())
     }
 
     fun generateImage() {

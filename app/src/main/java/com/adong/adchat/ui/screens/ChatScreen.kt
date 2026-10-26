@@ -800,9 +800,27 @@ private fun ChatMessageItem(
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                if (message.isStopped) "已停止生成，内容已保留" else "连接中断，已保留已生成内容",
+                                if (message.isStopped) "已停止生成，内容已保留" else "流中断，未确认完整结束；已保留已生成内容",
                                 color = MutedInk,
                                 style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+                if (message.isError) {
+                    Surface(
+                        color = DangerSoft,
+                        contentColor = Danger,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.padding(top = 8.dp)
+                    ) {
+                        Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(15.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "未收到有效回复；服务端处理与计费以供应商记录为准",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Medium
                             )
                         }
                     }
@@ -839,15 +857,7 @@ private fun ChatMessageItem(
                         }
                         if (showDetails) {
                             Column(Modifier.fillMaxWidth().padding(top = 5.dp)) {
-                                if (message.profileName.isNotBlank()) {
-                                    Text(
-                                        "${message.profileName} · ${message.model}",
-                                        color = MutedInk,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
+                                RequestTransparencyPanel(message)
                                 if (message.previousContent.isNotBlank()) {
                                     var showPrevious by remember(message.id) { mutableStateOf(false) }
                                     ConversationMessageAction(
@@ -1139,6 +1149,11 @@ private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
             }
             AnimatedVisibility(expanded) {
                 Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    UsageLine(
+                        "来源",
+                        if (usage.providerUsageReported) "服务端返回" else "未完整报告",
+                        if (usage.totalTokens > 0) "合计 ${formatTokens(usage.totalTokens)}" else null
+                    )
                     UsageLine("输入", formatTokens(usage.inputTokens), "未缓存 ${formatTokens(usage.uncachedInputTokens)}")
                     UsageLine("缓存", formatTokens(usage.cachedTokens), if (hitPercent > 0) "命中 $hitPercent%" else "尚未命中")
                     if (usage.cacheWriteTokens > 0) {
@@ -1157,6 +1172,89 @@ private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RequestTransparencyPanel(message: ChatMessage) {
+    val (icon, tint, status) = when {
+        message.isError -> Triple(Icons.Rounded.ErrorOutline, Danger, "请求未成功")
+        message.isStopped -> Triple(Icons.Rounded.StopCircle, MutedInk, "已停止 · 已保留已生成内容")
+        message.isInterrupted -> Triple(Icons.Rounded.CloudOff, Accent, "流中断 · 未确认完整结束")
+        message.isStreaming -> Triple(Icons.Rounded.AutoAwesome, Accent, "正在生成")
+        else -> Triple(Icons.Rounded.CheckCircle, Sage, "已完成")
+    }
+    Surface(
+        color = Color.Transparent,
+        contentColor = Ink,
+        shape = RoundedCornerShape(13.dp),
+        border = BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+    ) {
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(icon, null, Modifier.size(16.dp), tint = tint)
+                Spacer(Modifier.width(7.dp))
+                Text("本轮请求", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.width(8.dp))
+                Text(status, color = tint, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium)
+            }
+            if (message.profileName.isNotBlank()) {
+                RequestDetailLine("服务配置", message.profileName)
+            }
+            if (message.model.isNotBlank()) {
+                RequestDetailLine("模型", message.model)
+            }
+            if (message.requestProtocol.isNotBlank()) {
+                RequestDetailLine("协议", message.requestProtocol)
+            }
+            if (message.reasoningEffort.isNotBlank()) {
+                RequestDetailLine("思考强度", message.reasoningEffort)
+            }
+            val requestOptions = buildList {
+                if (message.requestWebSearchEnabled == true) add("联网搜索")
+                if (message.requestFileCreationEnabled == true) add("创建文件")
+                if (message.xSearchEnabled == true) add("X 搜索")
+            }
+            if (requestOptions.isNotEmpty()) {
+                RequestDetailLine("请求选项", requestOptions.joinToString(" · "))
+            }
+            if (message.delegatedSearchProfileName.isNotBlank() || message.delegatedSearchModel.isNotBlank()) {
+                RequestDetailLine(
+                    "搜索委托",
+                    listOf(message.delegatedSearchProfileName, message.delegatedSearchModel)
+                        .filter(String::isNotBlank).joinToString(" · ")
+                )
+            }
+            val usage = message.usage
+            if (usage == null) {
+                RequestDetailLine("Token 用量", if (message.isError || message.isInterrupted) "没有可用数据" else "服务端未返回")
+            } else {
+                val knownTotal = usage.totalTokens.takeIf { it > 0 }
+                    ?: (usage.inputTokens + usage.outputTokens).takeIf { it > 0 }
+                val usageSummary = buildString {
+                    if (usage.providerUsageReported) append("服务端计数 · ") else append("部分数据 · ")
+                    append("输入 ${formatTokens(usage.inputTokens)} · 输出 ${formatTokens(usage.outputTokens)}")
+                    knownTotal?.let { append(" · 合计 ${formatTokens(it)}") }
+                }
+                RequestDetailLine("Token 用量", usageSummary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RequestDetailLine(label: String, value: String) {
+    Row(verticalAlignment = Alignment.Top) {
+        Text(label, color = MutedInk, style = MaterialTheme.typography.labelSmall, modifier = Modifier.width(64.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            value,
+            color = Ink,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

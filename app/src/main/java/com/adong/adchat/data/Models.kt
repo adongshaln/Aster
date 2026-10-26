@@ -440,6 +440,13 @@ data class ChatMessage(
     val toolActivities: List<ChatToolActivity> = emptyList(),
     val previousContent: String = "",
     val previousReasoning: String = "",
+    val requestProtocol: String = "",
+    val reasoningEffort: String = "",
+    val requestWebSearchEnabled: Boolean? = null,
+    val requestFileCreationEnabled: Boolean? = null,
+    val delegatedSearchProfileName: String = "",
+    val delegatedSearchModel: String = "",
+    val xSearchEnabled: Boolean? = null,
     /** 「继续生成」这类由应用代发的指令：会进上下文，但不该显示成用户打过的话。 */
     val isContinuation: Boolean = false
 )
@@ -525,7 +532,11 @@ data class Conversation(
     val updatedAt: Long = System.currentTimeMillis(),
     val profileId: String = "",
     val model: String = "",
-    val titleSummarized: Boolean = false
+    val titleSummarized: Boolean = false,
+    val pinned: Boolean = false,
+    val archived: Boolean = false,
+    val favorite: Boolean = false,
+    val tags: List<String> = emptyList()
 )
 
 data class ReferenceImageInput(

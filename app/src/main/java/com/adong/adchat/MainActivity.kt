@@ -437,14 +437,28 @@ internal fun AppDrawer(
     var query by rememberSaveable { mutableStateOf("") }
     var deleteCandidate by remember { mutableStateOf<Conversation?>(null) }
     var renameCandidate by remember { mutableStateOf<Conversation?>(null) }
+    var tagsCandidate by remember { mutableStateOf<Conversation?>(null) }
     var renameText by remember { mutableStateOf("") }
     var showNewActions by remember { mutableStateOf(false) }
-    val visibleConversations = vm.conversations.filter { conversation ->
-        query.isBlank() || conversation.title.contains(query.trim(), ignoreCase = true) ||
-            conversation.messages.any { it.content.contains(query.trim(), ignoreCase = true) }
+    var conversationFilter by rememberSaveable { mutableStateOf("all") }
+    val normalizedQuery = query.trim()
+    val matchedConversations = vm.conversations.filter { conversation ->
+        normalizedQuery.isBlank() || conversation.title.contains(normalizedQuery, ignoreCase = true) ||
+            conversation.tags.any { it.contains(normalizedQuery, ignoreCase = true) } ||
+            conversation.messages.any { it.content.contains(normalizedQuery, ignoreCase = true) }
+    }
+    val visibleConversations = matchedConversations.filter { conversation ->
+        when (conversationFilter) {
+            "favorites" -> conversation.favorite && !conversation.archived
+            "archived" -> conversation.archived
+            else -> !conversation.archived
+        }
     }.sortedByDescending { it.updatedAt }
+    val pinnedConversations = visibleConversations.filter { it.pinned && conversationFilter != "archived" }
+    val unpinnedConversations = if (conversationFilter == "archived") visibleConversations
+        else visibleConversations.filterNot { it.pinned }
     val today = java.time.LocalDate.now()
-    val groupedConversations = visibleConversations.groupBy { conversation ->
+    val groupedConversations = unpinnedConversations.groupBy { conversation ->
         val day = java.time.Instant.ofEpochMilli(conversation.updatedAt).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
         when {
             day == today -> "今天"
@@ -479,7 +493,7 @@ internal fun AppDrawer(
                 textStyle = MaterialTheme.typography.bodyMedium,
                 leadingIcon = { Icon(Icons.Rounded.Search, null, Modifier.size(19.dp)) },
                 trailingIcon = { if (query.isNotEmpty()) AsterIconButton(Icons.Rounded.Close, "清空搜索", { query = "" }) },
-                placeholder = { Text("搜索对话", style = MaterialTheme.typography.bodyMedium) },
+                placeholder = { Text("搜索对话或标签", style = MaterialTheme.typography.bodyMedium) },
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = Surface,
@@ -488,6 +502,25 @@ internal fun AppDrawer(
                     unfocusedBorderColor = Color.Transparent
                 )
             )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf("all" to "全部", "favorites" to "收藏", "archived" to "归档").forEach { (filter, label) ->
+                    FilterChip(
+                        selected = conversationFilter == filter,
+                        onClick = { conversationFilter = filter },
+                        label = { Text(label) },
+                        leadingIcon = when (filter) {
+                            "favorites" -> ({ Icon(Icons.Rounded.Star, null, Modifier.size(16.dp)) })
+                            "archived" -> ({ Icon(Icons.Rounded.Archive, null, Modifier.size(16.dp)) })
+                            else -> null
+                        },
+                        modifier = Modifier.heightIn(min = 38.dp)
+                    )
+                }
+            }
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 AppPage.entries.filter { it != AppPage.Settings }.chunked(2).forEach { pair ->
@@ -523,7 +556,15 @@ internal fun AppDrawer(
             HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 12.dp), color = Hairline)
             Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(if (query.isBlank()) "对话记录" else "搜索结果", color = Ink, style = MaterialTheme.typography.labelLarge)
+                Text(
+                    when {
+                        conversationFilter == "archived" -> "已归档"
+                        conversationFilter == "favorites" -> "收藏的对话"
+                        normalizedQuery.isNotBlank() -> "搜索结果"
+                        else -> "对话记录"
+                    },
+                    color = Ink, style = MaterialTheme.typography.labelLarge
+                )
                 Text("${visibleConversations.size}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
             LazyColumn(
@@ -535,8 +576,38 @@ internal fun AppDrawer(
                     item {
                         AsterEmptyState(
                             Icons.Rounded.ChatBubbleOutline,
-                            if (query.isBlank()) "从一段对话开始" else "没有找到对话",
-                            if (query.isBlank()) "你的想法，会在这里留下记录" else "试试其他关键词"
+                            when {
+                                normalizedQuery.isNotBlank() -> "没有找到对话"
+                                conversationFilter == "favorites" -> "还没有收藏的对话"
+                                conversationFilter == "archived" -> "这里还没有归档内容"
+                                else -> "从一段对话开始"
+                            },
+                            when {
+                                normalizedQuery.isNotBlank() -> "试试其他关键词或标签"
+                                conversationFilter == "favorites" -> "在对话菜单中点按“收藏”"
+                                conversationFilter == "archived" -> "归档的对话会收纳在这里"
+                                else -> "你的想法，会在这里留下记录"
+                            }
+                        )
+                    }
+                }
+                if (pinnedConversations.isNotEmpty()) {
+                    item(key = "pinned-header") {
+                        Text("置顶", color = MutedInk, style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(start = 12.dp, top = 12.dp, bottom = 6.dp))
+                    }
+                    items(pinnedConversations, key = { it.id }) { conversation ->
+                        ConversationRow(
+                            conversation = conversation,
+                            selected = currentPage == AppPage.Chat && vm.activeConversationId == conversation.id,
+                            generating = vm.isChatLoading && vm.activeConversationId == conversation.id,
+                            onClick = { onConversation(conversation.id) },
+                            onRename = { renameCandidate = conversation; renameText = conversation.title },
+                            onDelete = { deleteCandidate = conversation },
+                            onTogglePin = { vm.setConversationPinned(conversation.id, !conversation.pinned) },
+                            onToggleFavorite = { vm.setConversationFavorite(conversation.id, !conversation.favorite) },
+                            onToggleArchive = { vm.setConversationArchived(conversation.id, !conversation.archived) },
+                            onEditTags = { tagsCandidate = conversation }
                         )
                     }
                 }
@@ -551,7 +622,11 @@ internal fun AppDrawer(
                             generating = vm.isChatLoading && vm.activeConversationId == conversation.id,
                             onClick = { onConversation(conversation.id) },
                             onRename = { renameCandidate = conversation; renameText = conversation.title },
-                            onDelete = { deleteCandidate = conversation }
+                            onDelete = { deleteCandidate = conversation },
+                            onTogglePin = { vm.setConversationPinned(conversation.id, !conversation.pinned) },
+                            onToggleFavorite = { vm.setConversationFavorite(conversation.id, !conversation.favorite) },
+                            onToggleArchive = { vm.setConversationArchived(conversation.id, !conversation.archived) },
+                            onEditTags = { tagsCandidate = conversation }
                         )
                     }
                 }
@@ -653,6 +728,54 @@ internal fun AppDrawer(
             }
         )
     }
+
+    tagsCandidate?.let { conversation ->
+        var tagsText by remember(conversation.id) { mutableStateOf(conversation.tags.joinToString("，")) }
+        AdModalDialog(
+            title = "管理标签",
+            subtitle = "用逗号分隔，最多保留 5 个标签",
+            icon = Icons.Rounded.Label,
+            onDismiss = { tagsCandidate = null },
+            content = {
+                OutlinedTextField(
+                    value = tagsText,
+                    onValueChange = { tagsText = it.take(160) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("例如：灵感，待办，项目") },
+                    shape = RoundedCornerShape(17.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Surface,
+                        unfocusedContainerColor = Surface,
+                        focusedBorderColor = Accent,
+                        unfocusedBorderColor = Color.Transparent
+                    )
+                )
+            },
+            actions = {
+                OutlinedButton(
+                    onClick = { tagsCandidate = null },
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
+                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
+                Button(
+                    onClick = {
+                        val tags = tagsText.split(Regex("[,，;；\\n]"))
+                            .map { it.trim().take(24) }
+                            .filter(String::isNotBlank)
+                            .distinctBy { it.lowercase() }
+                            .take(5)
+                        vm.setConversationTags(conversation.id, tags)
+                        tagsCandidate = null
+                    },
+                    modifier = Modifier.weight(1f).height(50.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent)
+                ) { Text("保存", fontWeight = FontWeight.Bold) }
+            }
+        )
+    }
 }
 
 @Composable
@@ -662,7 +785,11 @@ private fun ConversationRow(
     generating: Boolean,
     onClick: () -> Unit,
     onRename: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTogglePin: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onToggleArchive: () -> Unit,
+    onEditTags: () -> Unit
 ) {
     var showActions by remember { mutableStateOf(false) }
     val interactionSource = remember { MutableInteractionSource() }
@@ -685,12 +812,33 @@ private fun ConversationRow(
             Box(Modifier.width(3.dp).height(26.dp).clip(RoundedCornerShape(2.dp))
                 .background(if (selected) Accent else Color.Transparent))
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
-                Text(conversation.title.ifBlank { "未命名对话" }, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (conversation.pinned) Icon(Icons.Rounded.PushPin, "已置顶", Modifier.size(14.dp), tint = Accent)
+                    if (conversation.favorite) Icon(Icons.Rounded.Star, "已收藏", Modifier.size(14.dp), tint = Accent)
+                    Text(conversation.title.ifBlank { "未命名对话" },
+                        Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium)
+                }
                 Spacer(Modifier.height(4.dp))
                 Text(preview, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = if (generating) Accent else MutedInk, style = MaterialTheme.typography.labelMedium)
+                if (conversation.tags.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        conversation.tags.take(2).forEach { tag ->
+                            Text(
+                                tag,
+                                Modifier.clip(RoundedCornerShape(6.dp)).background(AccentSoft)
+                                    .widthIn(max = 70.dp).padding(horizontal = 6.dp, vertical = 2.dp),
+                                color = OnAccentSoft,
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
             }
             if (generating) AsterLoadingIndicator(Modifier.padding(horizontal = 4.dp), size = 12.dp)
             AsterIconButton(Icons.Rounded.MoreHoriz, "更多：${conversation.title}", { showActions = true })
@@ -701,6 +849,20 @@ private fun ConversationRow(
             title = conversation.title,
             subtitle = if (generating) "当前任务正在生成" else "管理这个历史任务",
             actions = listOf(
+                AdActionOption(
+                    "pin", if (conversation.pinned) "取消置顶" else "置顶",
+                    "将常用对话固定在列表顶部", Icons.Rounded.PushPin
+                ),
+                AdActionOption(
+                    "favorite", if (conversation.favorite) "取消收藏" else "收藏",
+                    "在收藏筛选中快速找到它", Icons.Rounded.Star
+                ),
+                AdActionOption("tags", "编辑标签", "标签可用于搜索", Icons.Rounded.Label),
+                AdActionOption(
+                    "archive", if (conversation.archived) "移出归档" else "归档",
+                    if (conversation.archived) "恢复到全部对话" else "从主列表收起，可在归档筛选中找回",
+                    Icons.Rounded.Archive
+                ),
                 AdActionOption("rename", "重命名", "修改任务在侧栏中的名称", Icons.Rounded.Edit),
                 AdActionOption(
                     "delete",
@@ -713,7 +875,14 @@ private fun ConversationRow(
             ),
             onAction = { action ->
                 showActions = false
-                if (action.id == "rename") onRename() else onDelete()
+                when (action.id) {
+                    "pin" -> onTogglePin()
+                    "favorite" -> onToggleFavorite()
+                    "tags" -> onEditTags()
+                    "archive" -> onToggleArchive()
+                    "rename" -> onRename()
+                    "delete" -> onDelete()
+                }
             },
             onDismiss = { showActions = false },
             headerIcon = Icons.Rounded.ChatBubbleOutline

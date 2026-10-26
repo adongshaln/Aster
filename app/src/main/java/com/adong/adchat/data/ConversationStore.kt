@@ -24,7 +24,11 @@ class ConversationStore(context: Context) {
             val existing = stored.getOrNull(index)
             val restored = recovery.copy(
                 title = existing?.title ?: recovery.title,
-                createdAt = existing?.createdAt ?: recovery.createdAt
+                createdAt = existing?.createdAt ?: recovery.createdAt,
+                pinned = existing?.pinned ?: recovery.pinned,
+                archived = existing?.archived ?: recovery.archived,
+                favorite = existing?.favorite ?: recovery.favorite,
+                tags = existing?.tags ?: recovery.tags
             )
             var recoveryMerged = false
             if (existing == null) {
@@ -99,6 +103,13 @@ class ConversationStore(context: Context) {
                     reasoning = message.optString("reasoning"),
                     previousContent = message.optString("previousContent"),
                     previousReasoning = message.optString("previousReasoning"),
+                    requestProtocol = message.optString("requestProtocol"),
+                    reasoningEffort = message.optString("reasoningEffort"),
+                    requestWebSearchEnabled = message.optBoolean("requestWebSearchEnabled").takeIf { message.has("requestWebSearchEnabled") && !message.isNull("requestWebSearchEnabled") },
+                    requestFileCreationEnabled = message.optBoolean("requestFileCreationEnabled").takeIf { message.has("requestFileCreationEnabled") && !message.isNull("requestFileCreationEnabled") },
+                    delegatedSearchProfileName = message.optString("delegatedSearchProfileName"),
+                    delegatedSearchModel = message.optString("delegatedSearchModel"),
+                    xSearchEnabled = message.optBoolean("xSearchEnabled").takeIf { message.has("xSearchEnabled") && !message.isNull("xSearchEnabled") },
                     isContinuation = message.optBoolean("isContinuation"),
                     attachments = decodeAttachments(message.optJSONArray("attachments")),
                     isError = message.optBoolean("isError"),
@@ -124,12 +135,26 @@ class ConversationStore(context: Context) {
             updatedAt = item.optLong("updatedAt", System.currentTimeMillis()),
             profileId = item.optString("profileId"),
             model = item.optString("model"),
-            titleSummarized = item.optBoolean("titleSummarized")
+            titleSummarized = item.optBoolean("titleSummarized"),
+            pinned = item.optBoolean("pinned"),
+            archived = item.optBoolean("archived"),
+            favorite = item.optBoolean("favorite"),
+            tags = item.optJSONArray("tags")?.let { tags ->
+                buildList {
+                    for (index in 0 until tags.length()) {
+                        tags.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
+                    }
+                }.map { it.take(MAX_TAG_LENGTH) }.distinct().take(MAX_TAGS)
+            }.orEmpty()
         )
     }
 
     private fun encodeConversations(conversations: List<Conversation>): JSONArray = JSONArray().apply {
-        conversations.sortedByDescending { it.updatedAt }.take(MAX_CONVERSATIONS).forEach { conversation ->
+        val protected = conversations.filter { it.pinned || it.archived || it.favorite }
+        val recent = conversations.filterNot { it.pinned || it.archived || it.favorite }
+            .sortedByDescending { it.updatedAt }
+            .take(MAX_CONVERSATIONS)
+        (protected + recent).forEach { conversation ->
             put(encodeConversation(conversation, includeStreaming = false))
         }
     }
@@ -142,6 +167,10 @@ class ConversationStore(context: Context) {
         .put("profileId", conversation.profileId)
         .put("model", conversation.model)
         .put("titleSummarized", conversation.titleSummarized)
+        .put("pinned", conversation.pinned)
+        .put("archived", conversation.archived)
+        .put("favorite", conversation.favorite)
+        .put("tags", JSONArray(conversation.tags.map { it.take(MAX_TAG_LENGTH) }.take(MAX_TAGS)))
         .put("messages", JSONArray().apply {
             conversation.messages.filter { includeStreaming || !it.isStreaming }.forEach { message ->
                 put(JSONObject()
@@ -151,6 +180,13 @@ class ConversationStore(context: Context) {
                     .put("reasoning", message.reasoning)
                     .put("previousContent", message.previousContent)
                     .put("previousReasoning", message.previousReasoning)
+                    .put("requestProtocol", message.requestProtocol)
+                    .put("reasoningEffort", message.reasoningEffort)
+                    .put("requestWebSearchEnabled", message.requestWebSearchEnabled)
+                    .put("requestFileCreationEnabled", message.requestFileCreationEnabled)
+                    .put("delegatedSearchProfileName", message.delegatedSearchProfileName)
+                    .put("delegatedSearchModel", message.delegatedSearchModel)
+                    .put("xSearchEnabled", message.xSearchEnabled)
                     .put("isContinuation", message.isContinuation)
                     .put("attachments", encodeAttachments(message.attachments))
                     .put("isError", message.isError)
@@ -282,6 +318,7 @@ class ConversationStore(context: Context) {
         .put("cacheMetricsReported", usage.cacheMetricsReported)
         .put("cacheStrategy", usage.cacheStrategy)
         .put("streamRecoveryCount", usage.streamRecoveryCount)
+        .put("providerUsageReported", usage.providerUsageReported)
 
     private fun decodeUsage(item: JSONObject): TokenUsage = TokenUsage(
         inputTokens = item.optInt("inputTokens"),
@@ -296,12 +333,15 @@ class ConversationStore(context: Context) {
         cacheKey = item.optString("cacheKey"),
         cacheMetricsReported = item.optBoolean("cacheMetricsReported"),
         cacheStrategy = item.optString("cacheStrategy").ifBlank { if (item.optBoolean("cacheRequested")) "automatic" else "off" },
-        streamRecoveryCount = item.optInt("streamRecoveryCount")
+        streamRecoveryCount = item.optInt("streamRecoveryCount"),
+        providerUsageReported = item.optBoolean("providerUsageReported")
     )
 
     private companion object {
         const val KEY = "conversations_v1"
         const val RECOVERY_KEY = "active_stream_v1"
         const val MAX_CONVERSATIONS = 100
+        const val MAX_TAGS = 5
+        const val MAX_TAG_LENGTH = 24
     }
 }
