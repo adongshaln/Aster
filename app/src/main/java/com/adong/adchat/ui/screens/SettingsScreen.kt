@@ -1505,7 +1505,7 @@ private fun StarIslandSettingsCard() {
         StarIslandUsageDemo()
         SettingSwitch(
             title = "启用星岛",
-            subtitle = "复制文字或链接后，点按摄像头旁的墨线圈；星岛只在点按时读取剪贴板。",
+            subtitle = "点按处理复制的文字或链接；长按框选屏幕，在星岛内快捷提问。",
             checked = enabled,
             onCheckedChange = { want ->
                 if (want) {
@@ -1531,8 +1531,8 @@ private fun StarIslandSettingsCard() {
             }
         }
         SettingSwitch(
-            title = "触摸兼容模式",
-            subtitle = "墨线圈只能点中下沿时启用。借助无障碍悬浮层保留摄像头旁的位置；不读取其他应用内容，也不执行自动点击。",
+            title = "触摸兼容与屏幕提问",
+            subtitle = "修复墨线圈点按，并支持长按截屏框选（Android 11 起）。只有发送时上传选区；不持续读取屏幕，不执行自动点击。",
             checked = touchCompatibilityEnabled,
             onCheckedChange = { want ->
                 if (!want && touchHost != null) {

@@ -33,9 +33,11 @@ class IslandViewTest {
     private class Events : IslandView.Callbacks {
         val shown = mutableListOf<IslandLink>()
         var dismissed = 0
+        var captures = 0
         override fun onLinkShown(link: IslandLink) { shown += link }
         override fun onDismissed() { dismissed++ }
         override fun onParseRequested(link: IslandLink) = Unit
+        override fun onScreenCaptureRequested() { captures++ }
     }
 
     private lateinit var events: Events
@@ -88,6 +90,68 @@ class IslandViewTest {
 
     private val ring get() = view.getChildAt(1) as IslandInkRingView
     private val surface get() = view.getChildAt(0) as IslandSurfaceView
+
+    @Test @Config(sdk = [35])
+    fun longPressCapturesOnceWithoutAlsoReadingClipboard() {
+        view.attach()
+        layoutWindow()
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("test", "https://v.douyin.com/one/"))
+        val start = SystemClock.uptimeMillis()
+        fun touch(action: Int) {
+            val event = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, ring.width / 2f, ring.height / 2f, 0)
+            ring.dispatchTouchEvent(event)
+            event.recycle()
+        }
+        touch(MotionEvent.ACTION_DOWN)
+        advance(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 32)
+        touch(MotionEvent.ACTION_UP)
+        advance(100)
+        assertEquals(1, events.captures)
+        assertNull(view.displayedContent)
+        assertTrue(events.shown.isEmpty())
+    }
+
+    @Test @Config(sdk = [35], qualifiers = "w393dp-h852dp-mdpi")
+    fun screenCardKeepsInkAnchorAndDraftAcrossKeyboardAndStreamingUpdates() {
+        view.destroy()
+        view = IslandView(RuntimeEnvironment.getApplication(), events, accessibilityOverlay = true)
+        view.attach()
+        layoutWindow()
+        val y = (view.layoutParams as WindowManager.LayoutParams).y
+        val size = ring.height
+        val preview = android.graphics.Bitmap.createBitmap(80, 80, android.graphics.Bitmap.Config.ARGB_8888)
+        val session = ScreenQuestionSession(preview,
+            com.adong.adchat.data.ChatImageAttachment(uri = "", name = "crop.jpg", bytes = byteArrayOf(1)), draft = "解释这里")
+        view.showScreenQuestion(session)
+        layoutWindow()
+        advance(1_200)
+        val originalHeight = surface.getChildAt(0).height
+        view.dispatchApplyWindowInsets(android.view.WindowInsets.Builder()
+            .setInsets(android.view.WindowInsets.Type.ime(), android.graphics.Insets.of(0, 0, 0, 200))
+            .setVisible(android.view.WindowInsets.Type.ime(), true).build())
+        layoutWindow()
+        assertTrue("keyboard should reduce card height: before=$originalHeight, after=${surface.getChildAt(0).height}",
+            surface.getChildAt(0).height < originalHeight)
+        assertEquals(y, (view.layoutParams as WindowManager.LayoutParams).y)
+        assertEquals(size, ring.height)
+        view.updateScreenQuestion(session.copy(task = StarIslandTaskState(StarIslandAction.AskScreen,
+            StarIslandPhase.Working, output = "这是答案")))
+        fun findInput(parent: ViewGroup): android.widget.EditText? {
+            for (i in 0 until parent.childCount) {
+                val child = parent.getChildAt(i)
+                if (child is android.widget.EditText) return child
+                if (child is ViewGroup) findInput(child)?.let { return it }
+            }
+            return null
+        }
+        assertEquals("解释这里", findInput(view)?.text.toString())
+        view.collapse()
+        advance(1_200)
+        assertEquals(y, (view.layoutParams as WindowManager.LayoutParams).y)
+        assertEquals(size, (view.layoutParams as WindowManager.LayoutParams).height)
+        assertEquals(0, (view.layoutParams as WindowManager.LayoutParams).flags and WindowManager.LayoutParams.FLAG_SECURE)
+    }
 
     @Test fun openingAndClosingKeepWindowOriginAndRingSize() {
         view.attach()
@@ -311,7 +375,7 @@ class IslandViewTest {
         layoutWindow()
         assertEquals("抖音视频", view.cardTitleText.toString())
         assertEquals("v.douyin.com/one", view.cardSummaryText.toString())
-        val card = surface.getChildAt(0) as ViewGroup
+        val card = (surface.getChildAt(0) as ViewGroup).getChildAt(0) as ViewGroup
         // Header + action row only: no grabber bar, no nested link capsule.
         assertEquals(2, card.childCount)
         advance(1_500)

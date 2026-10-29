@@ -30,9 +30,13 @@ import android.os.VibratorManager
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -69,6 +73,13 @@ class IslandView(
         fun onBackRequested() {}
         fun onCopyRequested() {}
         fun onConfigureRequested() {}
+        fun onRingTapped(): Boolean = false
+        fun onScreenCaptureRequested() {}
+        fun onScreenQuestionRequested(question: String) {}
+        fun onScreenDraftChanged(draft: String) {}
+        fun onScreenQuestionStopped() {}
+        fun onScreenQuestionClosed() {}
+        fun onScreenAnswerCopyRequested() {}
     }
 
     companion object {
@@ -96,6 +107,7 @@ class IslandView(
     sealed class State {
         data object Hidden : State()
         data class Card(val content: StarIslandContent, val task: StarIslandTaskState? = null) : State()
+        internal data class Screen(val session: ScreenQuestionSession) : State()
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -124,6 +136,13 @@ class IslandView(
     private var deferredCardRender = false
     private var renderedIconKey: String? = null
     private var lastPressDownUptimeMs = 0L
+    private var longPressFired = false
+    private var ringGestureCancelled = false
+    private var ringDownX = 0f
+    private var ringDownY = 0f
+    private val longPressRunnable = Runnable {
+        if (!ringGestureCancelled && state == State.Hidden && !expandedViewport) ringView.performLongClick()
+    }
     private var gestureDownX = 0f
     private var gestureDownY = 0f
     private var swipeDismissed = false
@@ -158,7 +177,10 @@ class IslandView(
 
     private val ringView: IslandInkRingView
     private val surface: IslandSurfaceView
-    private val cardHost: LinearLayout
+    private val cardHost: FrameLayout
+    private val clipboardCard: LinearLayout
+    private var screenPanel: ScreenQuestionPanel? = null
+    private var screenKeyboardInset = 0
     private val platformIcon: ImageView
     private val cardTitle: TextView
     private val cardSummary: TextView
@@ -173,6 +195,7 @@ class IslandView(
     internal val displayedContent: StarIslandContent? get() = (state as? State.Card)?.content
     internal val displayedTask: StarIslandTaskState? get() = (state as? State.Card)?.task
     internal val displayedLink: IslandLink? get() = displayedContent?.mediaLink
+    internal val screenQuestionVisible: Boolean get() = state is State.Screen
     internal val expansionProgress: Float get() = surface.body.progress
     internal val cardTitleText: CharSequence get() = cardTitle.text
     internal val cardSummaryText: CharSequence get() = cardSummary.text
@@ -195,7 +218,10 @@ class IslandView(
         clipToPadding = false
         surface = IslandSurfaceView(context).apply { setPalette(palette) }
         val card = buildCard()
-        cardHost = card.host
+        clipboardCard = card.host
+        cardHost = FrameLayout(context).apply {
+            addView(clipboardCard, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        }
         platformIcon = card.icon
         cardTitle = card.title
         cardSummary = card.summary
@@ -207,10 +233,19 @@ class IslandView(
         ringView = IslandInkRingView(context).apply {
             inkColor = palette.clay
             isHapticFeedbackEnabled = true
-            contentDescription = "星岛，点按读取剪贴板"
+            contentDescription = "星岛，点按处理内容，长按框选屏幕提问"
             isClickable = true
             setOnTouchListener { _, event -> handlePillTouch(event) }
-            setOnClickListener { requestClipboardRead() }
+            setOnClickListener { if (!callbacks.onRingTapped()) requestClipboardRead() }
+            setOnLongClickListener {
+                longPressFired = true
+                cancelClipboardRead()
+                setWindowFocusable(false)
+                pressRing(down = false)
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                callbacks.onScreenCaptureRequested()
+                true
+            }
         }
         // The ring is ALWAYS 64dp and centred, even when the window is wider: it never moves.
         addView(ringView, LayoutParams(dpF(WINDOW_SIZE_DP).roundToInt(), dpF(WINDOW_SIZE_DP).roundToInt()).apply {
@@ -221,6 +256,16 @@ class IslandView(
         cardHost.scaleY = IslandJellyBody.CONTENT_REST_SCALE
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         loadTitleTypeface()
+        setOnApplyWindowInsetsListener { _, insets ->
+            if (Build.VERSION.SDK_INT >= 30 && state is State.Screen) {
+                val bottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+                if (bottom != screenKeyboardInset) {
+                    screenKeyboardInset = bottom
+                    prepareExpandedViewport()
+                }
+            }
+            insets
+        }
     }
 
     fun attach(): Unit = onMain { ensureAttached() }
@@ -230,6 +275,8 @@ class IslandView(
     fun showContent(content: StarIslandContent): Unit = onMain {
         if (!ensureAttached()) return@onMain
         val previous = displayedContent
+        clipboardCard.visibility = VISIBLE
+        screenPanel?.visibility = GONE
         deferredCardRender = false
         state = State.Card(content)
         renderCard()
@@ -289,6 +336,7 @@ class IslandView(
     }
 
     fun collapse(): Unit = onMain {
+        hideKeyboard()
         setWindowFocusable(false)
         if (state == State.Hidden) return@onMain
         state = State.Hidden
@@ -302,6 +350,45 @@ class IslandView(
         callbacks.onDismissed()
         // Closed before the tag was ever laid out: nothing to animate back.
         if (surface.active) startBody(open = false) else finishClosed()
+    }
+
+    internal fun showScreenQuestion(session: ScreenQuestionSession): Unit = onMain {
+        if (!ensureAttached()) return@onMain
+        val alreadyOpen = state is State.Screen && surface.body.opened
+        state = State.Screen(session)
+        clipboardCard.visibility = GONE
+        val panel = screenPanel ?: ScreenQuestionPanel(context, callbacks, ::collapse) {
+            setWindowFocusable(true)
+        }.also {
+            screenPanel = it
+            cardHost.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        }
+        panel.visibility = VISIBLE
+        panel.applyPalette(palette)
+        panel.render(session)
+        mainHandler.removeCallbacks(hideRunnable)
+        cancelClipboardRead()
+        cancelIdleFeedback()
+        settleRing()
+        cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        setWindowFocusable(true)
+        prepareExpandedViewport()
+        if (!alreadyOpen) {
+            afterViewportLayout { startBody(open = true) }
+            hapticDoublePulse()
+        }
+    }
+
+    internal fun updateScreenQuestion(session: ScreenQuestionSession): Unit = onMain {
+        if (state !is State.Screen) return@onMain
+        state = State.Screen(session)
+        screenPanel?.render(session)
+    }
+
+    internal fun hideKeyboard() {
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(windowToken, 0)
+        clearFocus()
     }
 
     fun destroy(): Unit = onMain {
@@ -419,6 +506,7 @@ class IslandView(
         cardTitle.setTextColor(next.ink)
         cardSummary.setTextColor(next.muted)
         outputText.setTextColor(next.ink)
+        screenPanel?.applyPalette(next)
         outputScroll.background = GradientDrawable().apply {
             setColor(next.well)
             cornerRadius = dpF(14f)
@@ -656,6 +744,14 @@ class IslandView(
 
     // Swipe dismissal also works when the gesture begins on a child button or URL.
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (state is State.Screen) {
+            if (event.actionMasked == MotionEvent.ACTION_OUTSIDE ||
+                (event.actionMasked == MotionEvent.ACTION_DOWN && !surface.containsPoint(event.x, event.y))) {
+                collapse()
+                return true
+            }
+            return super.dispatchTouchEvent(event)
+        }
         if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && state is State.Card) {
             collapse()
             return true
@@ -694,27 +790,52 @@ class IslandView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean =
-        state is State.Card || super.onTouchEvent(event)
+        state != State.Hidden || super.onTouchEvent(event)
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (state is State.Screen && event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP) collapse()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun handlePillTouch(event: MotionEvent): Boolean {
-        if (state is State.Card || expandedViewport) return false
+        if (state != State.Hidden || expandedViewport) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 cancelClipboardRead()
                 mainHandler.removeCallbacks(releaseSpringRunnable)
                 lastPressDownUptimeMs = SystemClock.uptimeMillis()
+                longPressFired = false
+                ringGestureCancelled = false
+                ringDownX = event.x
+                ringDownY = event.y
+                mainHandler.postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
                 setWindowFocusable(true)
                 hapticClick()
                 pressRing(down = true)
             }
             MotionEvent.ACTION_UP -> {
+                mainHandler.removeCallbacks(longPressRunnable)
                 val elapsed = SystemClock.uptimeMillis() - lastPressDownUptimeMs
                 mainHandler.postDelayed(releaseSpringRunnable, max(0L, MIN_TAP_HOLD_MS - elapsed))
                 // performClick is also the accessibility entry point; wait until clipboard focus arrives.
-                ringView.performClick()
+                if (!longPressFired && !ringGestureCancelled) ringView.performClick()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val slop = ViewConfiguration.get(context).scaledTouchSlop
+                if (abs(event.x - ringDownX) > slop || abs(event.y - ringDownY) > slop) {
+                    ringGestureCancelled = true
+                    mainHandler.removeCallbacks(longPressRunnable)
+                    pressRing(down = false)
+                    setWindowFocusable(false)
+                }
             }
             MotionEvent.ACTION_CANCEL -> {
+                mainHandler.removeCallbacks(longPressRunnable)
+                ringGestureCancelled = true
                 cancelClipboardRead()
                 mainHandler.removeCallbacks(releaseSpringRunnable)
                 pressRing(down = false)
@@ -744,7 +865,7 @@ class IslandView(
     }
 
     private fun readClipboardAndHandle() {
-        if (!attached || state is State.Card) return
+        if (!attached || state != State.Hidden) return
         try {
             val content = currentClipText()?.let(StarIslandContentParser::parse)
             if (content == null) playEmptyFeedback() else showContent(content)
@@ -1092,13 +1213,19 @@ class IslandView(
 
     private fun prepareExpandedViewport() {
         val params = windowParams ?: return
-        val requestedWidth = minOf(screenSize.x, dp(440))
+        val screenQuestion = state is State.Screen
+        val requestedWidth = minOf(screenSize.x, dp(if (screenQuestion) 520 else 440))
         val ringWidth = dpF(WINDOW_SIZE_DP).roundToInt()
         // Equal parity keeps Gravity.CENTER's integer rounding from moving the ring half a pixel.
         val viewportWidth = requestedWidth - ((requestedWidth - ringWidth) and 1)
         val contentWidth = (viewportWidth - dp(28)).coerceAtLeast(1)
         val tagTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(TAG_TOP_INSET_DP)).roundToInt()
-        cardHost.layoutParams = LayoutParams(contentWidth, LayoutParams.WRAP_CONTENT).apply {
+        val cardHeight = if (screenQuestion) {
+            val available = screenSize.y - screenKeyboardInset - dp(24) - tagTop
+            minOf(dp(620), (available / (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()).coerceAtLeast(dp(180))
+        } else LayoutParams.WRAP_CONTENT
+        screenPanel?.setCompact(cardHeight in 1 until dp(370))
+        cardHost.layoutParams = LayoutParams(contentWidth, cardHeight).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = tagTop
         }
@@ -1118,7 +1245,8 @@ class IslandView(
         }
         cardHost.measure(
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            if (screenQuestion) MeasureSpec.makeMeasureSpec(cardHeight, MeasureSpec.EXACTLY)
+            else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
         // Geometry is configured in onLayout from ACTUAL bounds, atomically with the centred ring.
         // Reserve the drop's bounce plus the paper's shadow so neither ever clips.
@@ -1129,7 +1257,10 @@ class IslandView(
         ringView.isClickable = false
         ringView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         params.width = viewportWidth
-        params.height = viewportHeight
+        // A stable display-sized viewport gives IME insets a fixed reference while the card
+        // reshapes above the keyboard; the camera anchor never pans with the text field.
+        params.height = if (screenQuestion) screenSize.y - calcWindowY() else viewportHeight
+        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         params.y = calcWindowY() // EXACTLY the idle y: the ring must not move.
         runCatching { windowManager.updateViewLayout(this, params) }
     }
@@ -1188,11 +1319,14 @@ class IslandView(
         surface.active = false
         syncInkOwnership()
         cardHost.alpha = 0f
+        screenPanel?.let(cardHost::removeView)
+        screenPanel = null
         actionButtons.forEach { it.view.isEnabled = false }
         ringView.isClickable = true
         ringView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         params.width = size
         params.height = size
+        screenKeyboardInset = 0
         params.y = calcWindowY()
         runCatching { windowManager.updateViewLayout(this, params) }
     }
