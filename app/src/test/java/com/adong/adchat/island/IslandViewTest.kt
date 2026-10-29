@@ -457,6 +457,40 @@ class IslandViewTest {
         )
     }
 
+    @Test @Config(sdk = [35])
+    fun compatibilityHostKeepsCameraAnchorAcrossFocusAndViewportChanges() {
+        view.destroy()
+        view = IslandView(RuntimeEnvironment.getApplication(), events, accessibilityOverlay = true)
+        view.attach()
+        layoutWindow()
+        val params = view.layoutParams as WindowManager.LayoutParams
+        assertEquals(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, params.type)
+        assertEquals(0, params.fitInsetsTypes)
+        assertEquals(WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS, params.layoutInDisplayCutoutMode)
+        val density = view.resources.displayMetrics.density
+        val cameraCenter = params.y + ring.top + ring.height / 2f
+        assertEquals(25.5f * density, cameraCenter, 1f)
+
+        val clipboard = RuntimeEnvironment.getApplication().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("link", first.originalUrl))
+        val root = Shadow.extract<ShadowViewRootImpl>(view.parent)
+        root.callWindowFocusChanged(false)
+        ring.performClick()
+        root.callWindowFocusChanged(true)
+        advance(50)
+        layoutWindow()
+        assertEquals(first.originalUrl, view.displayedLink?.originalUrl)
+        assertEquals(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, params.type)
+        assertEquals(cameraCenter, params.y + ring.top + ring.height / 2f, 0f)
+        assertTrue(params.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE != 0)
+        advance(1_200)
+        view.collapse()
+        advance(1_200)
+        layoutWindow()
+        assertEquals(cameraCenter, params.y + ring.top + ring.height / 2f, 0f)
+        assertEquals(1, events.dismissed)
+    }
+
     @Test fun destroyingCancelsPendingLayoutAndAnimationCallbacks() {
         view.show(first)
         view.destroy() // Before the first expanded layout has happened.

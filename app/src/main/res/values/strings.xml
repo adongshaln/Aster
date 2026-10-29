@@ -1,3 +1,5 @@
 ﻿<resources>
     <string name="app_name">Aster</string>
+    <string name="island_touch_label">Aster · 星岛触摸兼容</string>
+    <string name="island_touch_description">让摄像头旁的星岛墨线圈在系统状态栏上方接收点按，修复部分系统升级后只能点中最下侧的问题。此服务仅承载星岛悬浮窗，不读取其他应用内容、不监听按键、不执行自动点击。剪贴板仍仅在你点按星岛时读取。</string>
 </resources>

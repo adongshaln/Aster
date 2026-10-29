@@ -2,6 +2,7 @@ package com.adong.adchat.island
 
 import android.Manifest
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -24,6 +25,15 @@ object IslandPermissions {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** Read the user's explicit system setting, not merely whether the service has bound yet. */
+    fun isTouchCompatibilityEnabled(context: Context): Boolean {
+        val component = ComponentName(context, IslandTouchService::class.java)
+        return Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            .orEmpty().split(':').any { ComponentName.unflattenFromString(it) == component }
+    }
+
+    fun touchCompatibilitySettingsIntent(): Intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
 
     // ---------- 设置开关 ----------
 

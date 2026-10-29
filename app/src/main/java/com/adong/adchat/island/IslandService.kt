@@ -5,15 +5,20 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
+import android.view.View
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -25,6 +30,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
 
 /** User-triggered clipboard tools, with requests isolated from ordinary conversations. */
 class IslandService : Service(), IslandView.Callbacks {
@@ -80,8 +86,27 @@ class IslandService : Service(), IslandView.Callbacks {
     private var viewConfiguration: Configuration? = null
     private var restoringView = false
     private var shuttingDown = false
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            updateOverlayVisibility()
+        }
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        ContextCompat.registerReceiver(this, screenReceiver, IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }, ContextCompat.RECEIVER_NOT_EXPORTED)
+        scope.launch {
+            IslandTouchService.connectedHost.collectLatest {
+                if (islandView != null) recreateView()
+            }
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -106,10 +131,23 @@ class IslandService : Service(), IslandView.Callbacks {
         return START_STICKY
     }
 
-    private fun obtainView(): IslandView = islandView ?: IslandView(this, this).also {
-        islandView = it
-        viewConfiguration = Configuration(resources.configuration)
-        themeNightOverride?.let(it::setNightMode)
+    private fun obtainView(): IslandView {
+        islandView?.let { return it }
+        val touchHost = IslandTouchService.connectedHost.value
+        return IslandView(touchHost ?: this, this, accessibilityOverlay = touchHost != null).also {
+            islandView = it
+            viewConfiguration = Configuration(resources.configuration)
+            themeNightOverride?.let(it::setNightMode)
+            updateOverlayVisibility()
+        }
+    }
+
+    private fun updateOverlayVisibility() {
+        val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
+        val interactive = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
+        // Accessibility overlays sit above the lock screen too. Keep clipboard/results private.
+        islandView?.visibility = if (IslandTouchService.connectedHost.value != null && (locked || !interactive))
+            View.GONE else View.VISIBLE
     }
 
     private fun expandShortLink(content: StarIslandContent) {
@@ -266,6 +304,12 @@ class IslandService : Service(), IslandView.Callbacks {
                 previous.fontScale == newConfig.fontScale && previous.locales == newConfig.locales &&
                 previous.orientation == newConfig.orientation &&
                 IslandPalette.isNight(previous) == IslandPalette.isNight(newConfig))) return
+        recreateView()
+    }
+
+    /** Swap window hosts without restarting a model task or dropping its visible output. */
+    private fun recreateView() {
+        if (shuttingDown) return
         val old = islandView ?: return
         val content = old.displayedContent
         val task = currentTask
@@ -287,6 +331,7 @@ class IslandService : Service(), IslandView.Callbacks {
 
     override fun onDestroy() {
         shuttingDown = true
+        unregisterReceiver(screenReceiver)
         invalidateTask()
         invalidateLinkResolution()
         islandView?.destroy()

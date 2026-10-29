@@ -54,7 +54,11 @@ import kotlin.math.roundToInt
  * only before opening and after the tag has come to rest closed; one vsync clock samples every
  * spring from absolute time.
  */
-class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
+class IslandView(
+    context: Context,
+    private val callbacks: Callbacks,
+    private val accessibilityOverlay: Boolean = false
+) : FrameLayout(context) {
     interface Callbacks {
         fun onParseRequested(link: IslandLink)
         fun onLinkShown(link: IslandLink)
@@ -1031,13 +1035,15 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     // ---------- Stable screen anchor / two window resizes, never a resize per frame ----------
 
     private fun calcWindowY(): Int =
-        (dpF(CUTOUT_CENTER_Y_DP) - dpF(WINDOW_SIZE_DP) / 2f).roundToInt() - statusBarHeight()
+        (dpF(CUTOUT_CENTER_Y_DP) - dpF(WINDOW_SIZE_DP) / 2f).roundToInt() -
+            if (accessibilityOverlay) 0 else statusBarHeight()
 
     private fun ensureAttached(): Boolean {
         if (attached) return true
         val size = dpF(WINDOW_SIZE_DP).roundToInt()
         val params = WindowManager.LayoutParams(
-            size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            size, size, if (accessibilityOverlay) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -1047,6 +1053,18 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = calcWindowY()
+            if (accessibilityOverlay) {
+                // This token belongs to the bound accessibility service. Its window lays out
+                // in screen coordinates; do not subtract the status-bar inset a second time.
+                flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    setFitInsetsTypes(0)
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                setTitle("Aster Star Island touch compatibility")
+            }
         }
         disableMoveAnimation(params)
         if (runCatching { windowManager.addView(this, params) }.isFailure) return false

@@ -3,6 +3,7 @@ package com.adong.adchat.ui.screens
 import com.adong.adchat.BuildConfig
 import com.adong.adchat.island.IslandPermissions
 import com.adong.adchat.island.IslandService
+import com.adong.adchat.island.IslandTouchService
 
 import android.Manifest
 import android.os.Build
@@ -1468,6 +1469,10 @@ private fun StarIslandSettingsCard() {
     // Re-read readiness whenever we come back from a permission settings page.
     var permissionTick by remember { mutableIntStateOf(0) }
     var enabled by remember(permissionTick) { mutableStateOf(IslandPermissions.isEnabled(context)) }
+    val touchHost by IslandTouchService.connectedHost.collectAsState()
+    val touchCompatibilityEnabled = remember(permissionTick, touchHost) {
+        IslandPermissions.isTouchCompatibilityEnabled(context)
+    }
     val overlayReady = remember(permissionTick) { Settings.canDrawOverlays(context) }
     val notificationsReady = remember(permissionTick) { IslandPermissions.hasNotifications(context) }
     val ready = overlayReady && notificationsReady
@@ -1524,6 +1529,26 @@ private fun StarIslandSettingsCard() {
             TextButton(onClick = ::requestMissingPermission) {
                 Text(if (!overlayReady) "授权悬浮窗" else "授权通知，完成开启")
             }
+        }
+        SettingSwitch(
+            title = "触摸兼容模式",
+            subtitle = "墨线圈只能点中下沿时启用。借助无障碍悬浮层保留摄像头旁的位置；不读取其他应用内容，也不执行自动点击。",
+            checked = touchCompatibilityEnabled,
+            onCheckedChange = { want ->
+                if (!want && touchHost != null) {
+                    touchHost?.disableSelf()
+                } else {
+                    context.startActivity(IslandPermissions.touchCompatibilitySettingsIntent())
+                }
+            }
+        )
+        if (touchCompatibilityEnabled && touchHost == null) {
+            TextButton(onClick = { context.startActivity(IslandPermissions.touchCompatibilitySettingsIntent()) }) {
+                Text("等待系统连接，检查无障碍服务")
+            }
+        } else if (!touchCompatibilityEnabled) {
+            Text("在系统无障碍设置中开启「Aster · 星岛触摸兼容」后生效。",
+                color = MutedInk, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
