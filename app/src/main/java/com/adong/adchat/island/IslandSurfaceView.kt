@@ -22,6 +22,7 @@ internal class IslandSurfaceView(context: Context) : FrameLayout(context) {
     private var inkWeight = 1f
     private var inkBounce = 1f
     private var inkAlpha = 1f
+    internal val currentPalette: IslandPalette get() = palette
     var active = false
         set(value) {
             field = value

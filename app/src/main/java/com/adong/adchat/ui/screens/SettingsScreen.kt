@@ -3,6 +3,7 @@ package com.adong.adchat.ui.screens
 import com.adong.adchat.BuildConfig
 import com.adong.adchat.island.IslandPermissions
 import com.adong.adchat.island.IslandService
+import com.adong.adchat.island.IslandTouchService
 
 import android.Manifest
 import android.os.Build
@@ -46,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -81,6 +83,14 @@ import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.resolveConversationRoute
 import com.adong.adchat.data.normalized
 import com.adong.adchat.data.isStepModel
+import com.adong.adchat.data.OfficialModelPrices
+import com.adong.adchat.data.ModelUsageTotal
+import com.adong.adchat.data.aggregateConversationUsage
+import com.adong.adchat.data.mergeUsageTotals
+import com.adong.adchat.data.story.StoryUsageModelTotal
+import com.adong.adchat.data.story.StoryUsageStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.ConnectionUiState
 import com.adong.adchat.ui.MainViewModel
@@ -159,14 +169,43 @@ private fun SettingsHome(
     var destination by rememberSaveable { mutableStateOf(SettingsDestination.Home) }
     var query by rememberSaveable { mutableStateOf("") }
     var showSkills by remember { mutableStateOf(false) }
+    var storyUsageRows by remember { mutableStateOf<List<StoryUsageModelTotal>>(emptyList()) }
+    var storyUsageLoaded by remember { mutableStateOf(false) }
+    var storyUsageError by remember { mutableStateOf(false) }
     val pageStates = rememberSaveableStateHolder()
     val keyboard = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
     LaunchedEffect(openIslandSettings, isActive) {
         if (openIslandSettings && isActive) {
             destination = SettingsDestination.Island
             onIslandSettingsConsumed()
         }
     }
+    LaunchedEffect(destination) {
+        if (destination == SettingsDestination.Usage) {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    StoryUsageStore(context.applicationContext).use { it.totalsByModel() }
+                }
+            }
+            storyUsageRows = result.getOrDefault(emptyList())
+            storyUsageError = result.isFailure
+            storyUsageLoaded = true
+        }
+    }
+    val usageRows = if (destination == SettingsDestination.Usage) {
+        mergeUsageTotals(
+            aggregateConversationUsage(vm.conversations),
+            storyUsageRows.map { row ->
+                ModelUsageTotal(
+                    model = row.model.ifBlank { "模型未记录" }, requests = row.requests,
+                    reportedRequests = row.reportedRequests, inputTokens = row.inputTokens,
+                    cachedTokens = row.cachedTokens, cacheWriteTokens = row.cacheWriteTokens,
+                    outputTokens = row.outputTokens
+                )
+            }
+        )
+    } else emptyList()
     fun navigate(target: SettingsDestination) {
         keyboard?.hide()
         if (target == SettingsDestination.Skills) showSkills = true else destination = target
@@ -223,6 +262,8 @@ private fun SettingsHome(
                                 item { SettingsNavigationRow(SettingsDestination.Assistant, "称呼、角色与回答风格") { navigate(SettingsDestination.Assistant) } }
                                 item { SettingsNavigationRow(SettingsDestination.Island, "文字处理、网页阅读与媒体下载") { navigate(SettingsDestination.Island) } }
                                 item { SettingsNavigationRow(SettingsDestination.Skills, "安装与管理助手技能") { navigate(SettingsDestination.Skills) } }
+                                item { SettingsGroupLabel("整理与用量") }
+                                item { SettingsNavigationRow(SettingsDestination.Usage, settingsSummary(SettingsDestination.Usage, vm)) { navigate(SettingsDestination.Usage) } }
                                 item { SettingsGroupLabel("应用管理") }
                                 item { SettingsNavigationRow(SettingsDestination.Transfer, "导入、导出服务配置") { navigate(SettingsDestination.Transfer) } }
                                 item { SettingsNavigationRow(SettingsDestination.Security, settingsSummary(SettingsDestination.Security, vm)) { navigate(SettingsDestination.Security) } }
@@ -271,6 +312,12 @@ private fun SettingsHome(
                         }
                         SettingsDestination.Island -> item {
                             SettingsContentCard { StarIslandSettingsCard() }
+                        }
+                        SettingsDestination.Usage -> {
+                            item { UsageOverview(usageRows, storyUsageLoaded, storyUsageError) }
+                            items(usageRows, key = { it.model }) { row ->
+                                UsageModelRow(row)
+                            }
                         }
                         SettingsDestination.Security -> item {
                             SettingsContentCard {
@@ -360,6 +407,7 @@ private enum class SettingsDestination(val title: String, val keywords: String =
     Assistant("助手偏好", "称呼 姓名 角色 提示词 system prompt 风格"),
     Island("星岛", "星岛 悬浮窗 通知 翻译 润色 解释 网页 下载"),
     Skills("技能", "技能 Skill 安装 ZIP"),
+    Usage("用量与成本", "用量 token 成本 价格 统计 模型 官方"),
     Transfer("备份与迁移", "导入 导出 备份 迁移 JSON"),
     Security("网络与安全", "安全 证书 SSL TLS 校验 自签名");
 
@@ -377,6 +425,7 @@ private fun settingsIcon(destination: SettingsDestination): ImageVector = when (
     SettingsDestination.Assistant -> Icons.Rounded.EditNote
     SettingsDestination.Island -> Icons.Rounded.WorkspacePremium
     SettingsDestination.Skills -> Icons.Rounded.Extension
+    SettingsDestination.Usage -> Icons.Rounded.DataUsage
     SettingsDestination.Transfer -> Icons.Rounded.ImportExport
     SettingsDestination.Security -> Icons.Rounded.Lock
     SettingsDestination.Home -> Icons.Rounded.Settings
@@ -392,8 +441,112 @@ private fun settingsSummary(destination: SettingsDestination, vm: MainViewModel)
     SettingsDestination.Assistant -> "称呼、角色与回答风格"
     SettingsDestination.Island -> "文字处理、网页阅读与媒体下载"
     SettingsDestination.Skills -> "安装与管理助手技能"
+    SettingsDestination.Usage -> {
+        "按模型查看 Token 用量与官方价格估算"
+    }
     SettingsDestination.Transfer -> "导入、导出服务配置"
     SettingsDestination.Home -> ""
+}
+
+@Composable
+private fun UsageOverview(rows: List<ModelUsageTotal>, storyUsageLoaded: Boolean, storyUsageError: Boolean) {
+    val estimates = rows.mapNotNull { OfficialModelPrices.estimate(it) }
+    val low = estimates.sumOf { it.lowUsd }
+    val high = estimates.sumOf { it.highUsd }
+    val knownRequests = rows.sumOf { it.reportedRequests }
+    val unknownRequests = rows.sumOf { it.unknownRequests }
+    Surface(
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, Hairline)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.DataUsage, null, tint = Accent, modifier = Modifier.size(20.dp))
+                Text("模型用量", Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleMedium)
+                Text("官方价格估算", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            }
+            Text(
+                if (estimates.isEmpty()) "暂无可计价用量" else formatUsageCost(low, high),
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = Accent
+            )
+            Text(
+                "已统计 $knownRequests 次服务端报告用量${if (unknownRequests > 0) " · $unknownRequests 次用量未返回或未知" else ""}",
+                color = MutedInk, style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "按模型当前官方标准价回算 USD；代理商账单、未知模型、长上下文、特殊档位和历史调价可能不同。价格数据核对于 ${OfficialModelPrices.CHECKED_ON}${if (storyUsageLoaded && !storyUsageError) "，包含故事调用" else ""}。",
+                color = MutedInk, style = MaterialTheme.typography.bodySmall
+            )
+            if (storyUsageError) Text("故事用量暂时未能读取；上方统计仅包含普通对话。", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@Composable
+private fun UsageModelRow(row: ModelUsageTotal) {
+    val estimate = OfficialModelPrices.estimate(row)
+    val price = estimate?.price
+    val uriHandler = LocalUriHandler.current
+    val usageSummary = buildString {
+        append("${row.requests} 条记录 · 输入 ${formatUsageTokens(row.inputTokens)}")
+        if (row.cachedTokens > 0 || row.cacheWriteTokens > 0) {
+            append("（缓存 ${formatUsageTokens(row.cachedTokens)} · 写入 ${formatUsageTokens(row.cacheWriteTokens)}）")
+        }
+        append(" · 输出 ${formatUsageTokens(row.outputTokens)} token")
+        if (row.unknownRequests > 0) append(" · ${row.unknownRequests} 次用量未知")
+    }
+    Surface(
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Hairline)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(price?.name ?: row.model, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    estimate?.let { formatUsageCost(it.lowUsd, it.highUsd) } ?: "暂无官方价格",
+                    color = if (estimate == null) MutedInk else Accent,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Text(usageSummary, color = MutedInk, style = MaterialTheme.typography.bodySmall)
+            if (price != null) {
+                Text(
+                    "官方标准价：输入 ${formatRate(price.input)} / 输出 ${formatRate(price.output)} USD / 1M token",
+                    color = MutedInk, style = MaterialTheme.typography.labelSmall
+                )
+                estimate?.notice?.let { Text(it, color = MutedInk, style = MaterialTheme.typography.labelSmall) }
+                TextButton(onClick = { runCatching { uriHandler.openUri(price.sourceUrl) } }, contentPadding = PaddingValues(0.dp)) {
+                    Text("查看官方价格来源", style = MaterialTheme.typography.labelSmall)
+                }
+            } else {
+                Text("已保留 Token 统计；此模型未匹配内置官方价格目录。", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+}
+
+private fun formatUsageTokens(tokens: Long): String = when {
+    tokens >= 1_000_000 -> "%.2fM".format(java.util.Locale.US, tokens / 1_000_000.0)
+    tokens >= 1_000 -> "%.1fK".format(java.util.Locale.US, tokens / 1_000.0)
+    else -> tokens.toString()
+}
+
+private fun formatUsageCost(low: Double, high: Double): String {
+    fun value(amount: Double): String = if (amount in 0.0..<0.000001) "< $0.000001" else "$%.6f".format(java.util.Locale.US, amount)
+    return if (kotlin.math.abs(high - low) < 0.0000005) value(low) else "${value(low)}–${value(high)}"
+}
+
+private fun formatRate(rate: com.adong.adchat.data.PriceRange): String {
+    fun value(amount: Double) = "$${java.math.BigDecimal.valueOf(amount).stripTrailingZeros().toPlainString()}"
+    return if (rate.high == rate.low) value(rate.low) else "${value(rate.low)}–${value(rate.high)}"
 }
 
 @Composable
@@ -1311,9 +1464,15 @@ private fun SettingsDisclosure(
 @Composable
 private fun StarIslandSettingsCard() {
     val context = LocalContext.current
+    val night = LocalThemeDark.current
+    val themeMode = LocalThemeMode.current
     // Re-read readiness whenever we come back from a permission settings page.
     var permissionTick by remember { mutableIntStateOf(0) }
     var enabled by remember(permissionTick) { mutableStateOf(IslandPermissions.isEnabled(context)) }
+    val touchHost by IslandTouchService.connectedHost.collectAsState()
+    val touchCompatibilityEnabled = remember(permissionTick, touchHost) {
+        IslandPermissions.isTouchCompatibilityEnabled(context)
+    }
     val overlayReady = remember(permissionTick) { Settings.canDrawOverlays(context) }
     val notificationsReady = remember(permissionTick) { IslandPermissions.hasNotifications(context) }
     val ready = overlayReady && notificationsReady
@@ -1342,10 +1501,11 @@ private fun StarIslandSettingsCard() {
             }
         }
     }
-    Column {
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        StarIslandUsageDemo()
         SettingSwitch(
             title = "启用星岛",
-            subtitle = "复制文字或链接后，点按摄像头旁的墨线圈。文字可翻译、润色、解释；网页可阅读；媒体可解析下载。仅在点按时读取剪贴板，文字与网页处理使用默认对话模型。",
+            subtitle = "点按处理复制的文字或链接；长按框选屏幕，在星岛内快捷提问。",
             checked = enabled,
             onCheckedChange = { want ->
                 if (want) {
@@ -1360,13 +1520,35 @@ private fun StarIslandSettingsCard() {
             }
         )
         // Returning from the settings page with permissions now granted: start the service.
-        LaunchedEffect(enabled, ready, permissionTick) {
-            if (enabled && ready) IslandService.start(context) else IslandService.stop(context)
+        LaunchedEffect(enabled, ready, permissionTick, night, themeMode) {
+            if (enabled && ready) IslandService.start(
+                context, night, followSystem = themeMode == THEME_MODE_SYSTEM
+            ) else IslandService.stop(context)
         }
         if (enabled && !ready) {
             TextButton(onClick = ::requestMissingPermission) {
                 Text(if (!overlayReady) "授权悬浮窗" else "授权通知，完成开启")
             }
+        }
+        SettingSwitch(
+            title = "触摸兼容与屏幕提问",
+            subtitle = "修复墨线圈点按，并支持长按截屏框选（Android 11 起）。只有发送时上传选区；不持续读取屏幕，不执行自动点击。",
+            checked = touchCompatibilityEnabled,
+            onCheckedChange = { want ->
+                if (!want && touchHost != null) {
+                    touchHost?.disableSelf()
+                } else {
+                    context.startActivity(IslandPermissions.touchCompatibilitySettingsIntent())
+                }
+            }
+        )
+        if (touchCompatibilityEnabled && touchHost == null) {
+            TextButton(onClick = { context.startActivity(IslandPermissions.touchCompatibilitySettingsIntent()) }) {
+                Text("等待系统连接，检查无障碍服务")
+            }
+        } else if (!touchCompatibilityEnabled) {
+            Text("在系统无障碍设置中开启「Aster · 星岛触摸兼容」后生效。",
+                color = MutedInk, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

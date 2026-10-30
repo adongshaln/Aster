@@ -1,6 +1,7 @@
 package com.adong.adchat.island
 
 import android.animation.TimeAnimator
+import android.animation.LayoutTransition
 import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.ClipboardManager
@@ -30,9 +31,13 @@ import android.os.VibratorManager
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
+import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.view.animation.LinearInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -46,6 +51,8 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 /**
  * One overlay, one anchored island. At rest a pen-drawn clay ring sits around the camera. A
@@ -54,7 +61,11 @@ import kotlin.math.roundToInt
  * only before opening and after the tag has come to rest closed; one vsync clock samples every
  * spring from absolute time.
  */
-class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayout(context) {
+class IslandView(
+    context: Context,
+    private val callbacks: Callbacks,
+    private val accessibilityOverlay: Boolean = false
+) : FrameLayout(context) {
     interface Callbacks {
         fun onParseRequested(link: IslandLink)
         fun onLinkShown(link: IslandLink)
@@ -65,6 +76,14 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         fun onBackRequested() {}
         fun onCopyRequested() {}
         fun onConfigureRequested() {}
+        fun onRingTapped(): Boolean = false
+        fun onScreenCaptureRequested() {}
+        fun onScreenQuestionRequested(question: String) {}
+        fun onScreenDraftChanged(draft: String) {}
+        fun onScreenQuestionStopped() {}
+        fun onScreenQuestionClosed() {}
+        fun onScreenAnswerCopyRequested() {}
+        fun onImmersiveModeChanged(hidden: Boolean) {}
     }
 
     companion object {
@@ -92,6 +111,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     sealed class State {
         data object Hidden : State()
         data class Card(val content: StarIslandContent, val task: StarIslandTaskState? = null) : State()
+        internal data class Screen(val session: ScreenQuestionSession) : State()
     }
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -102,7 +122,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealSize(it)
     }
-    private val palette = IslandPalette.forNightMode(IslandPalette.isNight(resources.configuration))
+    private var palette = IslandPalette.forNightMode(IslandPalette.isNight(resources.configuration))
+    private var nightOverride: Boolean? = null
     private fun dp(v: Int): Int = (v * density).roundToInt()
     private fun dpF(v: Float): Float = v * density
     private fun lerp(from: Float, to: Float, p: Float) = from + (to - from) * p
@@ -119,6 +140,13 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private var deferredCardRender = false
     private var renderedIconKey: String? = null
     private var lastPressDownUptimeMs = 0L
+    private var longPressFired = false
+    private var ringGestureCancelled = false
+    private var ringDownX = 0f
+    private var ringDownY = 0f
+    private val longPressRunnable = Runnable {
+        if (!ringGestureCancelled && state == State.Hidden && !expandedViewport) ringView.performLongClick()
+    }
     private var gestureDownX = 0f
     private var gestureDownY = 0f
     private var swipeDismissed = false
@@ -153,33 +181,55 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private val ringView: IslandInkRingView
     private val surface: IslandSurfaceView
-    private val cardHost: LinearLayout
+    private val cardHost: FrameLayout
+    private val clipboardCard: LinearLayout
+    private var screenPanel: ScreenQuestionPanel? = null
+    private var screenKeyboardInset = 0
     private val platformIcon: ImageView
     private val cardTitle: TextView
     private val cardSummary: TextView
     private val actionGrid: LinearLayout
     private val outputScroll: ScrollView
     private val outputText: TextView
-    private val actionButtons = mutableListOf<Pair<TextView, Boolean>>()
+    private data class ActionButtonRef(val view: TextView, val primary: Boolean, val enabled: Boolean)
+    private val actionButtons = mutableListOf<ActionButtonRef>()
     private var renderedActions: String? = null
     private var breathAnimator: ValueAnimator? = null
+    private var ringTransitionAnimator: ValueAnimator? = null
+    private var temporarilySuppressed = false
+    private var temporaryHideEnd: (() -> Unit)? = null
 
     internal val displayedContent: StarIslandContent? get() = (state as? State.Card)?.content
     internal val displayedTask: StarIslandTaskState? get() = (state as? State.Card)?.task
     internal val displayedLink: IslandLink? get() = displayedContent?.mediaLink
+    internal val screenQuestionVisible: Boolean get() = state is State.Screen
+    internal val isTemporarilySuppressed: Boolean get() = temporarilySuppressed
     internal val expansionProgress: Float get() = surface.body.progress
     internal val cardTitleText: CharSequence get() = cardTitle.text
     internal val cardSummaryText: CharSequence get() = cardSummary.text
     internal val islandPalette: IslandPalette get() = palette
     internal val ringInk: Float get() = ringView.ink
     internal val ringBounce: Float get() = ringView.bounce
+    internal val cardTitleColor: Int get() = cardTitle.currentTextColor
+    internal val cardSummaryColor: Int get() = cardSummary.currentTextColor
+    internal val outputColor: Int get() = outputText.currentTextColor
+    internal val actionTextColors: List<Int> get() = actionButtons.map { it.view.currentTextColor }
+
+    /** Apply the app's custom theme without rebuilding the overlay or interrupting its motion. */
+    fun setNightMode(night: Boolean, followSystem: Boolean = false): Unit = onMain {
+        nightOverride = night.takeUnless { followSystem }
+        applyPalette(IslandPalette.forNightMode(night))
+    }
 
     init {
         clipChildren = false
         clipToPadding = false
         surface = IslandSurfaceView(context).apply { setPalette(palette) }
         val card = buildCard()
-        cardHost = card.host
+        clipboardCard = card.host
+        cardHost = FrameLayout(context).apply {
+            addView(clipboardCard, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        }
         platformIcon = card.icon
         cardTitle = card.title
         cardSummary = card.summary
@@ -191,10 +241,19 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         ringView = IslandInkRingView(context).apply {
             inkColor = palette.clay
             isHapticFeedbackEnabled = true
-            contentDescription = "星岛，点按读取剪贴板"
+            contentDescription = "星岛，点按处理内容，长按框选屏幕提问"
             isClickable = true
             setOnTouchListener { _, event -> handlePillTouch(event) }
-            setOnClickListener { requestClipboardRead() }
+            setOnClickListener { if (!callbacks.onRingTapped()) requestClipboardRead() }
+            setOnLongClickListener {
+                longPressFired = true
+                cancelClipboardRead()
+                setWindowFocusable(false)
+                pressRing(down = false)
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                callbacks.onScreenCaptureRequested()
+                true
+            }
         }
         // The ring is ALWAYS 64dp and centred, even when the window is wider: it never moves.
         addView(ringView, LayoutParams(dpF(WINDOW_SIZE_DP).roundToInt(), dpF(WINDOW_SIZE_DP).roundToInt()).apply {
@@ -205,6 +264,16 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         cardHost.scaleY = IslandJellyBody.CONTENT_REST_SCALE
         cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         loadTitleTypeface()
+        setOnApplyWindowInsetsListener { _, insets ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && state is State.Screen) {
+                val bottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+                if (bottom != screenKeyboardInset) {
+                    screenKeyboardInset = bottom
+                    prepareExpandedViewport()
+                }
+            }
+            insets
+        }
     }
 
     fun attach(): Unit = onMain { ensureAttached() }
@@ -213,7 +282,12 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     fun showContent(content: StarIslandContent): Unit = onMain {
         if (!ensureAttached()) return@onMain
+        cancelTemporaryHide()
+        restoreRingVisuals()
+        alpha = 1f
         val previous = displayedContent
+        clipboardCard.visibility = VISIBLE
+        screenPanel?.visibility = GONE
         deferredCardRender = false
         state = State.Card(content)
         renderCard()
@@ -273,6 +347,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     fun collapse(): Unit = onMain {
+        cancelTemporaryHide()
+        hideKeyboard()
         setWindowFocusable(false)
         if (state == State.Hidden) return@onMain
         state = State.Hidden
@@ -288,18 +364,353 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         if (surface.active) startBody(open = false) else finishClosed()
     }
 
+    internal fun showScreenQuestion(session: ScreenQuestionSession): Unit = onMain {
+        if (!ensureAttached()) return@onMain
+        cancelTemporaryHide()
+        restoreRingVisuals()
+        alpha = 1f
+        val alreadyOpen = state is State.Screen && surface.body.opened
+        state = State.Screen(session)
+        clipboardCard.visibility = GONE
+        val panel = screenPanel ?: ScreenQuestionPanel(context, callbacks, ::collapse) {
+            setWindowFocusable(true)
+        }.also {
+            screenPanel = it
+            cardHost.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        }
+        panel.visibility = VISIBLE
+        panel.applyPalette(palette)
+        panel.render(session)
+        visibility = VISIBLE
+        ringView.alpha = 1f
+        ringView.scaleX = 1f
+        ringView.scaleY = 1f
+        ringView.inkAlpha = 1f
+        ringView.isClickable = false
+        mainHandler.removeCallbacks(hideRunnable)
+        cancelClipboardRead()
+        cancelIdleFeedback()
+        settleRing()
+        cardHost.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_AUTO
+        setWindowFocusable(true)
+        prepareExpandedViewport()
+        if (!alreadyOpen) {
+            afterViewportLayout { startBody(open = true) }
+            hapticDoublePulse()
+        }
+    }
+
+    internal fun updateScreenQuestion(session: ScreenQuestionSession): Unit = onMain {
+        if (state !is State.Screen) return@onMain
+        state = State.Screen(session)
+        screenPanel?.render(session)
+    }
+
+    internal fun hideKeyboard() {
+        (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(windowToken, 0)
+        clearFocus()
+    }
+
+    /** Retract to the lens, then let the resident ink sink before hiding for full-screen UI. */
+    internal fun retractForTemporaryHide(after: () -> Unit) = onMain {
+        if (destroyed) {
+            after()
+            return@onMain
+        }
+        temporarilySuppressed = true
+        cancelIdleFeedback()
+        hideKeyboard()
+        setWindowFocusable(false)
+        setWindowTouchable(false)
+        ringView.isClickable = false
+        temporaryHideEnd = after
+        if (surface.active && (surface.body.opened || bodyMoving)) {
+            pendingMorph = null
+            startBody(open = false)
+        } else {
+            beginTemporaryHideFade()
+        }
+    }
+
+    /** Lock-screen privacy takes effect immediately; the same content can spring back on unlock. */
+    internal fun suppressForSecureDisplay() = onMain {
+        if (destroyed) return@onMain
+        temporarilySuppressed = true
+        temporaryHideEnd = null
+        cancelIdleFeedback()
+        ringTransitionAnimator?.let { current ->
+            ringTransitionAnimator = null
+            current.cancel()
+        }
+        setWindowFocusable(false)
+        setWindowTouchable(false)
+        ringView.isClickable = false
+        if (surface.active) {
+            surface.body.snap(false, now())
+            bodyMoving = false
+            renderBody(now())
+            cardHost.setLayerType(View.LAYER_TYPE_NONE, null)
+        }
+        ringView.alpha = 0f
+        ringView.scaleX = 1f
+        ringView.scaleY = 1f
+        ringView.inkAlpha = 0f
+        surface.setInkState(ringView.ink, ringView.bounce, 0f)
+        stopClock()
+        visibility = GONE
+    }
+
+    /** Resume the same card after leaving a landscape or immersive display. */
+    internal fun restoreAfterTemporaryHide(after: () -> Unit = {}) = onMain {
+        if (destroyed || !temporarilySuppressed) {
+            after()
+            return@onMain
+        }
+        temporarilySuppressed = false
+        temporaryHideEnd = null
+        ringTransitionAnimator?.let { current ->
+            ringTransitionAnimator = null
+            current.cancel()
+        }
+        visibility = VISIBLE
+        alpha = 1f
+        setWindowTouchable(true)
+        if (expandedViewport && state != State.Hidden && surface.active) {
+            // The resident black lens stays fixed while the outline grows back around it.
+            restoreRingVisuals()
+            ringView.isClickable = false
+            surface.setInkState(ringView.ink, ringView.bounce, 1f)
+            if (!surface.body.opened) startBody(open = true)
+            else renderBody(now())
+            after()
+        } else {
+            ringView.isClickable = false
+            ringView.alpha = 0f
+            ringView.scaleX = 1f
+            ringView.scaleY = 1f
+            ringView.inkAlpha = 0f
+            animateRingReveal(after)
+        }
+    }
+
+    private fun animateRingReveal(after: () -> Unit = {}) {
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            restoreRingVisuals()
+            ringView.isClickable = true
+            if (state == State.Hidden) startBreathing()
+            after()
+            return
+        }
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 320L
+            addUpdateListener {
+                val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
+                ringView.alpha = p
+                ringView.scaleX = 1f
+                ringView.scaleY = 1f
+                ringView.inkAlpha = p
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (ringTransitionAnimator !== animation) return
+                    ringTransitionAnimator = null
+                    if (!destroyed && state == State.Hidden) {
+                        ringView.isClickable = true
+                        startBreathing()
+                    }
+                    after()
+                }
+            })
+        }
+        ringTransitionAnimator = animator
+        animator.start()
+    }
+
+    private fun beginTemporaryHideFade() {
+        val after = temporaryHideEnd ?: return
+        ringTransitionAnimator?.let { current ->
+            ringTransitionAnimator = null
+            current.cancel()
+        }
+        if (!ValueAnimator.areAnimatorsEnabled()) {
+            ringView.alpha = 0f
+            ringView.scaleX = 1f
+            ringView.scaleY = 1f
+            ringView.inkAlpha = 0f
+            surface.setInkState(ringView.ink, ringView.bounce, 0f)
+            temporaryHideEnd = null
+            after()
+            return
+        }
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 220L
+            addUpdateListener {
+                val p = IslandSpring.progress(it.animatedFraction)
+                val remain = (1f - p).coerceIn(0f, 1f)
+                ringView.alpha = remain
+                ringView.scaleX = 1f
+                ringView.scaleY = 1f
+                ringView.inkAlpha = remain
+                surface.setInkState(ringView.ink, ringView.bounce, remain)
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (ringTransitionAnimator !== animation) return
+                    ringTransitionAnimator = null
+                    ringView.alpha = 0f
+                    ringView.scaleX = 1f
+                    ringView.scaleY = 1f
+                    ringView.inkAlpha = 0f
+                    surface.setInkState(ringView.ink, ringView.bounce, 0f)
+                    temporaryHideEnd = null
+                    after()
+                }
+            })
+        }
+        ringTransitionAnimator = animator
+        animator.start()
+    }
+
+    private fun cancelTemporaryHide() {
+        temporarilySuppressed = false
+        temporaryHideEnd = null
+        setWindowTouchable(true)
+        ringTransitionAnimator?.let { current ->
+            ringTransitionAnimator = null
+            current.cancel()
+        }
+    }
+
+    private fun restoreRingVisuals() {
+        ringView.alpha = 1f
+        ringView.scaleX = 1f
+        ringView.scaleY = 1f
+        ringView.inkAlpha = 1f
+    }
+
+    /** Let the resident ink sink into the lens before freezing the underlying app frame. */
+    internal suspend fun prepareForScreenCapture(): Unit = suspendCancellableCoroutine { continuation ->
+        onMain {
+            if (!continuation.isActive || destroyed) return@onMain
+            cancelIdleFeedback()
+            cancelClipboardRead()
+            mainHandler.removeCallbacks(longPressRunnable)
+            setWindowFocusable(false)
+            setWindowTouchable(false)
+            ringView.isClickable = false
+            ringTransitionAnimator?.let { current ->
+                ringTransitionAnimator = null
+                current.cancel()
+            }
+            if (!ValueAnimator.areAnimatorsEnabled()) {
+                ringView.inkAlpha = 0f
+                visibility = INVISIBLE
+                if (continuation.isActive) continuation.resume(Unit)
+                return@onMain
+            }
+            val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 230L
+                addUpdateListener {
+                    val p = IslandSpring.progress(it.animatedFraction)
+                    ringView.inkAlpha = 1f - p
+                }
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        if (ringTransitionAnimator !== animation) return
+                        ringTransitionAnimator = null
+                        visibility = INVISIBLE
+                        if (continuation.isActive) continuation.resume(Unit)
+                    }
+                })
+            }
+            ringTransitionAnimator = animator
+            continuation.invokeOnCancellation {
+                mainHandler.post {
+                    if (ringTransitionAnimator === animator) {
+                        ringTransitionAnimator = null
+                        animator.cancel()
+                    }
+                }
+            }
+            animator.start()
+        }
+    }
+
+    internal fun restoreAfterScreenCapture(animate: Boolean = true, after: () -> Unit = {}) = onMain {
+        if (temporarilySuppressed) {
+            after()
+            return@onMain
+        }
+        ringTransitionAnimator?.let { current ->
+            ringTransitionAnimator = null
+            current.cancel()
+        }
+        if (destroyed) {
+            after()
+            return@onMain
+        }
+        if (state != State.Hidden) {
+            after()
+            return@onMain
+        }
+        visibility = VISIBLE
+        setWindowTouchable(true)
+        ringView.isClickable = false
+        ringView.alpha = 1f
+        ringView.scaleX = 1f
+        ringView.scaleY = 1f
+        ringView.inkAlpha = 0f
+        if (!animate || !ValueAnimator.areAnimatorsEnabled()) {
+            ringView.alpha = 1f
+            ringView.scaleX = 1f
+            ringView.scaleY = 1f
+            ringView.inkAlpha = 1f
+            ringView.isClickable = true
+            startBreathing()
+            after()
+            return@onMain
+        }
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 360L
+            addUpdateListener {
+                val p = IslandSpring.progress(it.animatedFraction)
+                ringView.alpha = p
+                ringView.inkAlpha = p
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (ringTransitionAnimator !== animation) return
+                    ringTransitionAnimator = null
+                    if (!destroyed && state == State.Hidden) {
+                        ringView.isClickable = true
+                        startBreathing()
+                    }
+                    after()
+                }
+            })
+        }
+        ringTransitionAnimator = animator
+        animator.start()
+    }
+
     fun destroy(): Unit = onMain {
         destroyed = true
         pendingMorph = null
         state = State.Hidden
         mainHandler.removeCallbacksAndMessages(null)
         breathAnimator?.cancel()
+        temporaryHideEnd = null
+        ringTransitionAnimator?.let { current ->
+            ringTransitionAnimator = null
+            current.cancel()
+        }
         stopClock()
         secondBounceAt = Double.NaN
         bounceTicksAt.fill(Double.NaN)
         surface.active = false
         ringView.inkVisible = true
-        actionButtons.forEach { (button, _) -> button.animate().cancel() }
+        actionButtons.forEach { it.view.animate().cancel() }
         if (attached) {
             runCatching { windowManager.removeViewImmediate(this@IslandView) }
             attached = false
@@ -325,6 +736,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(47), dp(18), dp(18))
+            layoutTransition = jellyLayoutTransition()
         }
         val headerRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -384,7 +796,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             }
             addView(output, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
-        val actions = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val actions = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutTransition = jellyLayoutTransition()
+        }
         val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         body.addView(scroll, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(180)).apply { topMargin = dp(12) })
         body.addView(actions, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
@@ -393,6 +808,55 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         host.addView(headerRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         host.addView(body, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         return CardParts(host, icon, title, summary, actions, scroll, output)
+    }
+
+    private fun jellyLayoutTransition() = LayoutTransition().apply {
+        setDuration(220L)
+        setInterpolator(LayoutTransition.APPEARING, SPRING_INTERPOLATOR)
+        setInterpolator(LayoutTransition.DISAPPEARING, SPRING_INTERPOLATOR)
+        setInterpolator(LayoutTransition.CHANGING, SPRING_INTERPOLATOR)
+        enableTransitionType(LayoutTransition.CHANGING)
+    }
+
+    private fun applyPalette(next: IslandPalette) {
+        if (palette == next) return
+        palette = next
+        surface.setPalette(next)
+        ringView.inkColor = next.clay
+        cardTitle.setTextColor(next.ink)
+        cardSummary.setTextColor(next.muted)
+        outputText.setTextColor(next.ink)
+        screenPanel?.applyPalette(next)
+        outputScroll.background = GradientDrawable().apply {
+            setColor(next.well)
+            cornerRadius = dpF(14f)
+        }
+        platformIcon.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(next.well)
+        }
+        platformIcon.imageTintList = ColorStateList.valueOf(next.glyph)
+        displayedContent?.let { content ->
+            platformIcon.contentDescription = IslandCardText.title(content)
+            if (content.kind == StarIslandKind.Media) {
+                platformIcon.setImageResource(when (checkNotNull(content.mediaLink).platform) {
+                    MediaPlatform.Douyin -> R.drawable.ic_island_douyin
+                    MediaPlatform.Bilibili -> R.drawable.ic_island_bilibili
+                    MediaPlatform.Twitter -> R.drawable.ic_island_x
+                    MediaPlatform.Direct -> R.drawable.ic_island_link
+                })
+            } else {
+                platformIcon.setImageDrawable(ContentGlyph(content.kind))
+            }
+        }
+        actionButtons.forEach { ref ->
+            ref.view.setTextColor(if (ref.primary) next.onClay else next.ink)
+            ref.view.background = GradientDrawable().apply {
+                setColor(if (ref.primary) next.clay else next.well)
+                cornerRadius = dpF(22f)
+            }
+        }
+        invalidate()
     }
 
     private data class CardAction(
@@ -433,7 +897,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     private fun renderActions(key: String, actions: List<CardAction>, reserveTwoRows: Boolean = false) {
         if (renderedActions == key) return
         renderedActions = key
-        actionButtons.forEach { (button, _) -> button.animate().cancel() }
+        actionButtons.forEach { it.view.animate().cancel() }
         actionButtons.clear()
         actionGrid.removeAllViews()
         val rows = actions.chunked(2)
@@ -443,7 +907,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
             val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
             rows.getOrNull(index).orEmpty().forEachIndexed { column, action ->
                 val button = actionButton(action)
-                actionButtons += button to action.enabled
+                actionButtons += ActionButtonRef(button, action.primary, action.enabled)
                 row.addView(button, LinearLayout.LayoutParams(0, rowHeight, 1f).apply {
                     if (column > 0) marginStart = dp(8)
                 })
@@ -458,7 +922,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun updateActionEnabled() {
         val actionable = state is State.Card && surface.body.opened && surface.body.contentAlpha > 0.9f
-        actionButtons.forEach { (button, enabled) -> button.isEnabled = actionable && enabled }
+        actionButtons.forEach { ref -> ref.view.isEnabled = actionable && ref.enabled }
     }
 
     private fun animateButton(view: View, target: Float) {
@@ -600,6 +1064,15 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     // Swipe dismissal also works when the gesture begins on a child button or URL.
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (temporarilySuppressed) return true
+        if (state is State.Screen) {
+            if (event.actionMasked == MotionEvent.ACTION_OUTSIDE ||
+                (event.actionMasked == MotionEvent.ACTION_DOWN && !surface.containsPoint(event.x, event.y))) {
+                collapse()
+                return true
+            }
+            return super.dispatchTouchEvent(event)
+        }
         if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && state is State.Card) {
             collapse()
             return true
@@ -638,27 +1111,52 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean =
-        state is State.Card || super.onTouchEvent(event)
+        state != State.Hidden || super.onTouchEvent(event)
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (state is State.Screen && event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP) collapse()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun handlePillTouch(event: MotionEvent): Boolean {
-        if (state is State.Card || expandedViewport) return false
+        if (state != State.Hidden || expandedViewport) return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 cancelClipboardRead()
                 mainHandler.removeCallbacks(releaseSpringRunnable)
                 lastPressDownUptimeMs = SystemClock.uptimeMillis()
+                longPressFired = false
+                ringGestureCancelled = false
+                ringDownX = event.x
+                ringDownY = event.y
+                mainHandler.postDelayed(longPressRunnable, ViewConfiguration.getLongPressTimeout().toLong())
                 setWindowFocusable(true)
                 hapticClick()
                 pressRing(down = true)
             }
             MotionEvent.ACTION_UP -> {
+                mainHandler.removeCallbacks(longPressRunnable)
                 val elapsed = SystemClock.uptimeMillis() - lastPressDownUptimeMs
                 mainHandler.postDelayed(releaseSpringRunnable, max(0L, MIN_TAP_HOLD_MS - elapsed))
                 // performClick is also the accessibility entry point; wait until clipboard focus arrives.
-                ringView.performClick()
+                if (!longPressFired && !ringGestureCancelled) ringView.performClick()
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val slop = ViewConfiguration.get(context).scaledTouchSlop
+                if (abs(event.x - ringDownX) > slop || abs(event.y - ringDownY) > slop) {
+                    ringGestureCancelled = true
+                    mainHandler.removeCallbacks(longPressRunnable)
+                    pressRing(down = false)
+                    setWindowFocusable(false)
+                }
             }
             MotionEvent.ACTION_CANCEL -> {
+                mainHandler.removeCallbacks(longPressRunnable)
+                ringGestureCancelled = true
                 cancelClipboardRead()
                 mainHandler.removeCallbacks(releaseSpringRunnable)
                 pressRing(down = false)
@@ -688,7 +1186,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     }
 
     private fun readClipboardAndHandle() {
-        if (!attached || state is State.Card) return
+        if (!attached || state != State.Hidden) return
         try {
             val content = currentClipText()?.let(StarIslandContentParser::parse)
             if (content == null) playEmptyFeedback() else showContent(content)
@@ -717,11 +1215,20 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         runCatching { windowManager.updateViewLayout(this, params) }
     }
 
+    private fun setWindowTouchable(touchable: Boolean) {
+        val params = windowParams ?: return
+        val flags = if (touchable) params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        else params.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        if (flags == params.flags || !attached) return
+        params.flags = flags
+        runCatching { windowManager.updateViewLayout(this, params) }
+    }
+
     // ---------- The ink ring ----------
 
     private fun startBreathing() {
         breathAnimator?.cancel()
-        if (state != State.Hidden || expandedViewport || windowVisibility != VISIBLE) return
+        if (temporarilySuppressed || state != State.Hidden || expandedViewport || windowVisibility != VISIBLE) return
         if (!ValueAnimator.areAnimatorsEnabled()) {
             ringView.inkAlpha = 1f
             return
@@ -937,6 +1444,12 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         body.snap(body.opened, now)
         renderBody(now)
         cardHost.setLayerType(View.LAYER_TYPE_NONE, null)
+        if (!body.opened && temporaryHideEnd != null) {
+            if (state == State.Hidden) finishClosed()
+            ringView.isClickable = false
+            beginTemporaryHideFade()
+            return
+        }
         if (body.opened && state is State.Card) {
             if (deferredCardRender) renderCard()
             deferredCardRender = false
@@ -979,13 +1492,15 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
     // ---------- Stable screen anchor / two window resizes, never a resize per frame ----------
 
     private fun calcWindowY(): Int =
-        (dpF(CUTOUT_CENTER_Y_DP) - dpF(WINDOW_SIZE_DP) / 2f).roundToInt() - statusBarHeight()
+        (dpF(CUTOUT_CENTER_Y_DP) - dpF(WINDOW_SIZE_DP) / 2f).roundToInt() -
+            if (accessibilityOverlay) 0 else statusBarHeight()
 
     private fun ensureAttached(): Boolean {
         if (attached) return true
         val size = dpF(WINDOW_SIZE_DP).roundToInt()
         val params = WindowManager.LayoutParams(
-            size, size, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            size, size, if (accessibilityOverlay) WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+                else WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
@@ -995,6 +1510,18 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             y = calcWindowY()
+            if (accessibilityOverlay) {
+                // This token belongs to the bound accessibility service. Its window lays out
+                // in screen coordinates; do not subtract the status-bar inset a second time.
+                flags = flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    setFitInsetsTypes(0)
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                }
+                setTitle("Aster Star Island touch compatibility")
+            }
         }
         disableMoveAnimation(params)
         if (runCatching { windowManager.addView(this, params) }.isFailure) return false
@@ -1022,13 +1549,19 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
 
     private fun prepareExpandedViewport() {
         val params = windowParams ?: return
-        val requestedWidth = minOf(screenSize.x, dp(440))
+        val screenQuestion = state is State.Screen
+        val requestedWidth = minOf(screenSize.x, dp(if (screenQuestion) 520 else 440))
         val ringWidth = dpF(WINDOW_SIZE_DP).roundToInt()
         // Equal parity keeps Gravity.CENTER's integer rounding from moving the ring half a pixel.
         val viewportWidth = requestedWidth - ((requestedWidth - ringWidth) and 1)
         val contentWidth = (viewportWidth - dp(28)).coerceAtLeast(1)
         val tagTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(TAG_TOP_INSET_DP)).roundToInt()
-        cardHost.layoutParams = LayoutParams(contentWidth, LayoutParams.WRAP_CONTENT).apply {
+        val cardHeight = if (screenQuestion) {
+            val available = screenSize.y - screenKeyboardInset - dp(24) - tagTop
+            minOf(dp(620), (available / (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()).coerceAtLeast(dp(180))
+        } else LayoutParams.WRAP_CONTENT
+        screenPanel?.setCompact(cardHeight in 1 until dp(370))
+        cardHost.layoutParams = LayoutParams(contentWidth, cardHeight).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = tagTop
         }
@@ -1048,7 +1581,8 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         }
         cardHost.measure(
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
+            if (screenQuestion) MeasureSpec.makeMeasureSpec(cardHeight, MeasureSpec.EXACTLY)
+            else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
         // Geometry is configured in onLayout from ACTUAL bounds, atomically with the centred ring.
         // Reserve the drop's bounce plus the paper's shadow so neither ever clips.
@@ -1059,7 +1593,10 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         ringView.isClickable = false
         ringView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         params.width = viewportWidth
-        params.height = viewportHeight
+        // A stable display-sized viewport gives IME insets a fixed reference while the card
+        // reshapes above the keyboard; the camera anchor never pans with the text field.
+        params.height = if (screenQuestion) screenSize.y - calcWindowY() else viewportHeight
+        params.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         params.y = calcWindowY() // EXACTLY the idle y: the ring must not move.
         runCatching { windowManager.updateViewLayout(this, params) }
     }
@@ -1118,20 +1655,28 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         surface.active = false
         syncInkOwnership()
         cardHost.alpha = 0f
-        actionButtons.forEach { (button, _) -> button.isEnabled = false }
+        screenPanel?.let(cardHost::removeView)
+        screenPanel = null
+        actionButtons.forEach { it.view.isEnabled = false }
         ringView.isClickable = true
         ringView.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         params.width = size
         params.height = size
+        screenKeyboardInset = 0
         params.y = calcWindowY()
         runCatching { windowManager.updateViewLayout(this, params) }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        refreshDisplayConfiguration(newConfig)
+    }
+
+    internal fun refreshDisplayConfiguration(newConfig: Configuration) = onMain {
         @Suppress("DEPRECATION")
         windowManager.defaultDisplay.getRealSize(screenSize)
-        if (!attached) return
+        if (nightOverride == null) applyPalette(IslandPalette.forNightMode(IslandPalette.isNight(newConfig)))
+        if (!attached) return@onMain
         if (expandedViewport) prepareExpandedViewport() else applyIdleViewport()
     }
 
@@ -1139,7 +1684,7 @@ class IslandView(context: Context, private val callbacks: Callbacks) : FrameLayo
         super.onWindowVisibilityChanged(visibility)
         // This callback may arrive from addView; all child fields are already initialised then.
         if (visibility != VISIBLE) breathAnimator?.cancel()
-        else if (attached && !idleFeedbackRunning && !expandedViewport) startBreathing()
+        else if (attached && !temporarilySuppressed && !idleFeedbackRunning && !expandedViewport) startBreathing()
     }
 
     private fun statusBarHeight(): Int {

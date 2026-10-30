@@ -16,6 +16,16 @@ data class StoryUsageTotal(
     val recoveries: Long
 )
 
+data class StoryUsageModelTotal(
+    val model: String,
+    val requests: Long,
+    val reportedRequests: Long,
+    val inputTokens: Long,
+    val cachedTokens: Long,
+    val cacheWriteTokens: Long,
+    val outputTokens: Long
+)
+
 /** Operational usage survives memory undo and route forks; it is never copied into story snapshots. */
 class StoryUsageStore(context: Context) : AutoCloseable {
     private val helper = StoryDatabase(context)
@@ -39,6 +49,7 @@ class StoryUsageStore(context: Context) : AutoCloseable {
                 if(usage.providerUsageReported) {
                     put("input_tokens",usage.inputTokens.coerceAtLeast(0));put("output_tokens",usage.outputTokens.coerceAtLeast(0))
                     put("cached_tokens",usage.cachedTokens.coerceAtLeast(0));put("reasoning_tokens",usage.reasoningTokens.coerceAtLeast(0))
+                    put("cache_write_tokens",usage.cacheWriteTokens.coerceAtLeast(0))
                 }
             }
         },"id=? AND state='running'",arrayOf(id)) == 1
@@ -54,6 +65,17 @@ class StoryUsageStore(context: Context) : AutoCloseable {
         SUM(CASE WHEN state IN ('incomplete','failed','cancelled','interrupted') THEN 1 ELSE 0 END),
         SUM(recovery_count) FROM ${StorySchema.USAGE} WHERE story_id=? GROUP BY category""",arrayOf(story)).use { c ->
         buildList { while(c.moveToNext()) add(StoryUsageTotal(c.getString(0),c.getLong(1),c.getLong(2),c.getLong(3),c.getLong(4),c.getLong(5),c.getLong(6),c.getLong(7))) }
+    }
+
+    fun totalsByModel(): List<StoryUsageModelTotal> = helper.readableDatabase.rawQuery("""SELECT model,COUNT(*),
+        COUNT(input_tokens),COALESCE(SUM(input_tokens),0),COALESCE(SUM(cached_tokens),0),
+        COALESCE(SUM(cache_write_tokens),0),COALESCE(SUM(output_tokens),0)
+        FROM ${StorySchema.USAGE} GROUP BY model""",null).use { c ->
+        buildList {
+            while(c.moveToNext()) add(StoryUsageModelTotal(
+                c.getString(0).orEmpty(),c.getLong(1),c.getLong(2),c.getLong(3),c.getLong(4),c.getLong(5),c.getLong(6)
+            ))
+        }
     }
 
     override fun close() = helper.close()

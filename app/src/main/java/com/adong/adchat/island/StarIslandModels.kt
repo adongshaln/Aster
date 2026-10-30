@@ -19,6 +19,7 @@ enum class StarIslandKind { Text, Web, Media }
 enum class StarIslandAction(val label: String) {
     Translate("翻译"), Polish("润色"), Explain("解释"),
     ReadWeb("阅读网页"), Download("解析下载"), OpenLink("打开原页"), CopyLink("复制链接"),
+    AskScreen("屏幕问答"),
 }
 
 enum class StarIslandPhase { Working, Complete, Stopped, Error }

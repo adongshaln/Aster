@@ -121,6 +121,7 @@ fun ConversationComposer(
     val density = LocalDensity.current
     val ime = WindowInsets.ime
     val imeTarget = WindowInsets.imeAnimationTarget
+    val toolbarLiftPx = with(density) { 6.dp.toPx() }
     LaunchedEffect(isFocused) {
         if (!isFocused) return@LaunchedEffect
         var previousBottom = ime.getBottom(density)
@@ -148,6 +149,32 @@ fun ConversationComposer(
     val progress = if (motionEnabled) opening.coerceIn(0f, 1f) else if (expanded) 1f else 0f
     val shellProgress = if (motionEnabled) opening.coerceIn(-0.035f, 1.06f) else progress
     val keepTools = expanded || progress > 0.001f
+    // Let the expanded toolbar arrive as a small wave instead of one flat opacity jump.
+    // Exit stays quick so controls never linger after the capsule is closed.
+    val contextRevealSpec = if (!motionEnabled) snap<Float>() else if (expanded) {
+        tween(durationMillis = 190, delayMillis = 18, easing = FastOutSlowInEasing)
+    } else tween(100, easing = FastOutLinearInEasing)
+    val expandRevealSpec = if (!motionEnabled) snap<Float>() else if (expanded) {
+        tween(durationMillis = 190, delayMillis = 42, easing = FastOutSlowInEasing)
+    } else tween(100, easing = FastOutLinearInEasing)
+    val reasoningRevealSpec = if (!motionEnabled) snap<Float>() else if (expanded) {
+        tween(durationMillis = 190, delayMillis = 66, easing = FastOutSlowInEasing)
+    } else tween(100, easing = FastOutLinearInEasing)
+    val contextReveal by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = contextRevealSpec,
+        label = "composer-context-reveal"
+    )
+    val expandReveal by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = expandRevealSpec,
+        label = "composer-expand-reveal"
+    )
+    val reasoningReveal by animateFloatAsState(
+        targetValue = if (expanded) 1f else 0f,
+        animationSpec = reasoningRevealSpec,
+        label = "composer-reasoning-reveal"
+    )
     val sendSuggestion = suggestion?.takeIf {
         it.isNotBlank() && fieldValue.text.isEmpty() && value.isEmpty() &&
             attachments.isEmpty() && !loading && !attachmentLoading && !configureRequired
@@ -299,32 +326,58 @@ fun ConversationComposer(
                                     .clip(CircleShape).background(sendContainer),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    imageVector = when {
-                                        loading -> Icons.Rounded.Stop
-                                        configureRequired -> Icons.Rounded.Settings
+                                val sendMode = when {
+                                    loading -> "stop"
+                                    configureRequired -> "settings"
+                                    else -> "send"
+                                }
+                                AnimatedContent(
+                                    targetState = sendMode,
+                                    transitionSpec = {
+                                        if (!motionEnabled) {
+                                            fadeIn(snap()) togetherWith fadeOut(snap())
+                                        } else {
+                                            (fadeIn(AsterSpring.editorial()) +
+                                                scaleIn(AsterSpring.jelly(), initialScale = 0.72f)) togetherWith
+                                                (fadeOut(AsterSpring.snappy()) +
+                                                    scaleOut(AsterSpring.snappy(), targetScale = 0.72f))
+                                        }
+                                    },
+                                    label = "composer-send-icon"
+                                ) { mode ->
+                                    val icon = when (mode) {
+                                        "stop" -> Icons.Rounded.Stop
+                                        "settings" -> Icons.Rounded.Settings
                                         else -> Icons.Rounded.ArrowUpward
-                                    },
-                                    contentDescription = when {
-                                        loading -> "停止生成"
-                                        configureRequired -> "选择模型"
-                                        sendSuggestion != null -> "发送建议"
-                                        else -> "发送"
-                                    },
-                                    modifier = Modifier.size(if (loading) 18.dp else 20.dp),
-                                    tint = sendInk
-                                )
+                                    }
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = when (mode) {
+                                            "stop" -> "停止生成"
+                                            "settings" -> "选择模型"
+                                            else -> if (sendSuggestion != null) "发送建议" else "发送"
+                                        },
+                                        modifier = Modifier.size(if (mode == "stop") 18.dp else 20.dp),
+                                        tint = sendInk
+                                    )
+                                }
                             }
                         }
                         Box(
                             Modifier.layoutId("context")
-                                .graphicsLayer { alpha = progress }
+                                .graphicsLayer {
+                                    alpha = progress * contextReveal
+                                    translationY = toolbarLiftPx * (1f - contextReveal)
+                                }
                                 .then(if (expanded) Modifier else Modifier.clearAndSetSemantics {}),
                             contentAlignment = Alignment.CenterStart
                         ) { if (keepTools) contextAction?.invoke() }
                         Box(
                             Modifier.layoutId("expand").size(48.dp)
-                                .graphicsLayer { alpha = progress }
+                                .graphicsLayer {
+                                    alpha = progress * expandReveal
+                                    translationY = toolbarLiftPx * (1f - expandReveal)
+                                }
                                 .then(if (expanded) Modifier else Modifier.clearAndSetSemantics {})
                         ) {
                             if (keepTools) {
@@ -351,7 +404,10 @@ fun ConversationComposer(
                         }
                         Box(
                             Modifier.layoutId("reasoning")
-                                .graphicsLayer { alpha = progress }
+                                .graphicsLayer {
+                                    alpha = progress * reasoningReveal
+                                    translationY = toolbarLiftPx * (1f - reasoningReveal)
+                                }
                                 .then(if (expanded) Modifier else Modifier.clearAndSetSemantics {})
                         ) { if (keepTools) reasoningAction?.invoke() }
                     }
