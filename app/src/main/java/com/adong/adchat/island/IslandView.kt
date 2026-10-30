@@ -376,7 +376,7 @@ class IslandView(
             setWindowFocusable(true)
         }.also {
             screenPanel = it
-            cardHost.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            cardHost.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
         panel.visibility = VISIBLE
         panel.applyPalette(palette)
@@ -401,9 +401,12 @@ class IslandView(
     }
 
     internal fun updateScreenQuestion(session: ScreenQuestionSession): Unit = onMain {
-        if (state !is State.Screen) return@onMain
+        val previous = (state as? State.Screen)?.session ?: return@onMain
+        val enteringConversation = (previous.history.isEmpty() && previous.question.isBlank() && previous.task == null) &&
+            (session.history.isNotEmpty() || session.question.isNotBlank() || session.task != null)
         state = State.Screen(session)
         screenPanel?.render(session)
+        if (enteringConversation) prepareExpandedViewport()
     }
 
     internal fun hideKeyboard() {
@@ -475,18 +478,24 @@ class IslandView(
         }
         visibility = VISIBLE
         alpha = 1f
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealSize(screenSize)
         setWindowTouchable(true)
-        if (expandedViewport && state != State.Hidden && surface.active) {
-            // The resident black lens stays fixed while the outline grows back around it.
+        if (state != State.Hidden) {
             restoreRingVisuals()
             ringView.isClickable = false
-            surface.setInkState(ringView.ink, ringView.bounce, 1f)
-            if (!surface.body.opened) startBody(open = true)
-            else renderBody(now())
-            after()
+            if (state is State.Screen) setWindowFocusable(true)
+            prepareExpandedViewport()
+            afterViewportLayout {
+                surface.setInkState(ringView.ink, ringView.bounce, 1f)
+                if (!surface.body.opened) startBody(open = true)
+                else renderBody(now())
+                after()
+            }
         } else {
+            applyIdleViewport()
             ringView.isClickable = false
-            ringView.alpha = 0f
+            ringView.alpha = 1f
             ringView.scaleX = 1f
             ringView.scaleY = 1f
             ringView.inkAlpha = 0f
@@ -506,7 +515,7 @@ class IslandView(
             duration = 320L
             addUpdateListener {
                 val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
-                ringView.alpha = p
+                ringView.alpha = 1f
                 ringView.scaleX = 1f
                 ringView.scaleY = 1f
                 ringView.inkAlpha = p
@@ -609,18 +618,25 @@ class IslandView(
                 if (continuation.isActive) continuation.resume(Unit)
                 return@onMain
             }
+            val startInk = ringView.ink
             val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 230L
+                duration = 170L
                 addUpdateListener {
-                    val p = IslandSpring.progress(it.animatedFraction)
+                    val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
+                    ringView.ink = lerp(startInk, 0.85f, p)
                     ringView.inkAlpha = 1f - p
                 }
                 addListener(object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: android.animation.Animator) {
                         if (ringTransitionAnimator !== animation) return
                         ringTransitionAnimator = null
+                        ringView.ink = 1f
                         visibility = INVISIBLE
-                        if (continuation.isActive) continuation.resume(Unit)
+                        // Wait one choreographer frame so SurfaceFlinger composites the clean
+                        // underlying app frame without the island window before takeScreenshot().
+                        postOnAnimation {
+                            if (continuation.isActive) continuation.resume(Unit)
+                        }
                     }
                 })
             }
@@ -637,7 +653,15 @@ class IslandView(
         }
     }
 
-    internal fun restoreAfterScreenCapture(animate: Boolean = true, after: () -> Unit = {}) = onMain {
+    /**
+     * Hand ownership directly back from a closed full-screen selection contour that has already
+     * converged onto the camera ring, or fade in smoothly if the capture failed before any contour.
+     */
+    internal fun restoreAfterScreenCapture(
+        animate: Boolean = true,
+        seamlessFromContour: Boolean = false,
+        after: () -> Unit = {}
+    ) = onMain {
         if (temporarilySuppressed) {
             after()
             return@onMain
@@ -656,26 +680,27 @@ class IslandView(
         }
         visibility = VISIBLE
         setWindowTouchable(true)
-        ringView.isClickable = false
-        ringView.alpha = 1f
-        ringView.scaleX = 1f
-        ringView.scaleY = 1f
-        ringView.inkAlpha = 0f
-        if (!animate || !ValueAnimator.areAnimatorsEnabled()) {
+        if (seamlessFromContour || !animate || !ValueAnimator.areAnimatorsEnabled()) {
             ringView.alpha = 1f
             ringView.scaleX = 1f
             ringView.scaleY = 1f
+            ringView.ink = 1f
+            ringView.bounce = 1f
             ringView.inkAlpha = 1f
             ringView.isClickable = true
             startBreathing()
             after()
             return@onMain
         }
+        ringView.isClickable = false
+        ringView.alpha = 1f
+        ringView.scaleX = 1f
+        ringView.scaleY = 1f
+        ringView.inkAlpha = 0f
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 360L
+            duration = 320L
             addUpdateListener {
-                val p = IslandSpring.progress(it.animatedFraction)
-                ringView.alpha = p
+                val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
                 ringView.inkAlpha = p
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
@@ -683,6 +708,7 @@ class IslandView(
                     if (ringTransitionAnimator !== animation) return
                     ringTransitionAnimator = null
                     if (!destroyed && state == State.Hidden) {
+                        ringView.inkAlpha = 1f
                         ringView.isClickable = true
                         startBreathing()
                     }
@@ -1556,11 +1582,19 @@ class IslandView(
         val viewportWidth = requestedWidth - ((requestedWidth - ringWidth) and 1)
         val contentWidth = (viewportWidth - dp(28)).coerceAtLeast(1)
         val tagTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(TAG_TOP_INSET_DP)).roundToInt()
-        val cardHeight = if (screenQuestion) {
+        val hasScreenConversation = screenPanel?.hasConversationContent == true
+        val maxScreenCardHeight = if (screenQuestion) {
             val available = screenSize.y - screenKeyboardInset - dp(24) - tagTop
-            minOf(dp(620), (available / (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()).coerceAtLeast(dp(180))
-        } else LayoutParams.WRAP_CONTENT
-        screenPanel?.setCompact(cardHeight in 1 until dp(370))
+            minOf(dp(560), (available / (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()).coerceAtLeast(dp(180))
+        } else 0
+        screenPanel?.let { panel ->
+            panel.setCompact(maxScreenCardHeight in 1 until dp(350))
+            panel.layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                if (hasScreenConversation) LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT
+            )
+        }
+        val cardHeight = if (screenQuestion && hasScreenConversation) maxScreenCardHeight else LayoutParams.WRAP_CONTENT
         cardHost.layoutParams = LayoutParams(contentWidth, cardHeight).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = tagTop
@@ -1581,7 +1615,8 @@ class IslandView(
         }
         cardHost.measure(
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
-            if (screenQuestion) MeasureSpec.makeMeasureSpec(cardHeight, MeasureSpec.EXACTLY)
+            if (screenQuestion && hasScreenConversation) MeasureSpec.makeMeasureSpec(maxScreenCardHeight, MeasureSpec.EXACTLY)
+            else if (screenQuestion) MeasureSpec.makeMeasureSpec(maxScreenCardHeight, MeasureSpec.AT_MOST)
             else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
         // Geometry is configured in onLayout from ACTUAL bounds, atomically with the centred ring.

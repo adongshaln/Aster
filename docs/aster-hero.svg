@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 340" width="1120" height="340" role="img" aria-label="Aster — Tactile AI Workspace for Android">
+  <defs>
+    <style>
+      .paper { fill: #FAF9F5; stroke: #E3E0D6; stroke-width: 1.5; }
+      .well { fill: #F2EFE7; stroke: #E5E1D6; stroke-width: 1; }
+      .ink { fill: #141413; }
+      .muted { fill: #6B6860; }
+      .clay-fill { fill: #D97757; }
+      .clay-stroke { fill: none; stroke: #D97757; }
+      .rule { stroke: #E6E3D9; stroke-width: 1; }
+      .grid-dot { fill: #DDD9CE; }
+      .serif-hero { font-family: "Georgia", "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif; }
+      .sans-ui { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "MiSans", "PingFang SC", "Segoe UI", sans-serif; }
+      .mono-ui { font-family: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, monospace; }
+
+      @media (prefers-color-scheme: dark) {
+        .paper { fill: #1D1D1B; stroke: #343330; }
+        .well { fill: #272724; stroke: #3A3935; }
+        .ink { fill: #F5F4EE; }
+        .muted { fill: #A6A39A; }
+        .clay-fill { fill: #E28769; }
+        .clay-stroke { stroke: #E28769; }
+        .rule { stroke: #31302D; }
+        .grid-dot { fill: #353430; }
+      }
+    </style>
+
+    <radialGradient id="clayGlow" cx="76%" cy="46%" r="42%">
+      <stop offset="0%" stop-color="#D97757" stop-opacity="0.16"/>
+      <stop offset="55%" stop-color="#D97757" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="#D97757" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="starGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F29A52"/>
+      <stop offset="52%" stop-color="#D97757"/>
+      <stop offset="100%" stop-color="#C35E3E"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Paper Sheet -->
+  <rect x="4" y="4" width="1112" height="332" rx="32" class="paper"/>
+  <rect x="4" y="4" width="1112" height="332" rx="32" fill="url(#clayGlow)"/>
+
+  <!-- Editorial Fine Margin Lines -->
+  <line x1="60" y1="74" x2="640" y2="74" class="rule"/>
+  <line x1="60" y1="264" x2="640" y2="264" class="rule"/>
+
+  <!-- Top Kicker Metadata -->
+  <circle cx="67" cy="50" r="4.5" class="clay-fill"/>
+  <text x="82" y="54" class="mono-ui muted" font-size="12" letter-spacing="1.8">NATIVE ANDROID · KOTLIN &amp; JETPACK COMPOSE · SDK 36</text>
+
+  <!-- Brand Mark + Wordmark -->
+  <g transform="translate(60, 102)">
+    <!-- Hand-crafted 8-Point Aster Star -->
+    <g transform="translate(36, 36)">
+      <path d="M 0,-36 C 3.5,-11 6,-8.5 23,-23 C 8.5,-6 11,-3.5 36,0 C 11,3.5 8.5,6 23,23 C 6,8.5 3.5,11 0,36 C -3.5,11 -6,8.5 -23,23 C -8.5,6 -11,3.5 -36,0 C -11,-3.5 -8.5,-6 -23,-23 C -6,-8.5 -3.5,-11 0,-36 Z" fill="url(#starGrad)"/>
+    </g>
+    <text x="92" y="53" class="serif-hero ink" font-size="58" font-weight="600" letter-spacing="-1.2">Aster</text>
+    <rect x="252" y="22" width="76" height="26" rx="13" class="well"/>
+    <text x="290" y="39" text-anchor="middle" class="mono-ui clay-fill" font-size="12" font-weight="600">v4.2.0</text>
+  </g>
+
+  <!-- Editorial Subtitle -->
+  <text x="60" y="212" class="serif-hero ink" font-size="21" letter-spacing="0.3">纸墨质感与解析弹簧驱动的原生 Android 多模型工作台</text>
+  <text x="60" y="241" class="sans-ui muted" font-size="14" letter-spacing="0.2">双协议深度思考对话 · 星岛屏幕框选快问 · 长篇故事记忆库 · 多路绘图与媒体工坊</text>
+
+  <!-- Bottom Pill Tags -->
+  <g transform="translate(60, 282)" class="sans-ui" font-size="12.5" font-weight="500">
+    <rect x="0" y="0" width="96" height="28" rx="14" class="well"/>
+    <text x="48" y="18.5" text-anchor="middle" class="ink">Star Island</text>
+
+    <rect x="106" y="0" width="114" height="28" rx="14" class="well"/>
+    <text x="163" y="18.5" text-anchor="middle" class="ink">Story Memory</text>
+
+    <rect x="230" y="0" width="112" height="28" rx="14" class="well"/>
+    <text x="286" y="18.5" text-anchor="middle" class="ink">Jelly Physics</text>
+
+    <rect x="352" y="0" width="128" height="28" rx="14" class="well"/>
+    <text x="416" y="18.5" text-anchor="middle" class="ink">Multi-API Studio</text>
+  </g>
+
+  <!-- Right Architectural Illustration: Star Island Bezel & Eyelets Diagram -->
+  <g transform="translate(716, 36)">
+    <!-- Subtle Coordinate Dot Grid -->
+    <g>
+      <circle cx="16" cy="24" r="1.3" class="grid-dot"/><circle cx="48" cy="24" r="1.3" class="grid-dot"/><circle cx="80" cy="24" r="1.3" class="grid-dot"/><circle cx="264" cy="24" r="1.3" class="grid-dot"/><circle cx="296" cy="24" r="1.3" class="grid-dot"/><circle cx="328" cy="24" r="1.3" class="grid-dot"/>
+      <circle cx="16" cy="244" r="1.3" class="grid-dot"/><circle cx="48" cy="244" r="1.3" class="grid-dot"/><circle cx="80" cy="244" r="1.3" class="grid-dot"/><circle cx="264" cy="244" r="1.3" class="grid-dot"/><circle cx="296" cy="244" r="1.3" class="grid-dot"/><circle cx="328" cy="244" r="1.3" class="grid-dot"/>
+    </g>
+
+    <!-- Phone Bezel Silhouette -->
+    <rect x="52" y="10" width="240" height="248" rx="38" class="well"/>
+
+    <!-- Unfolded Star Island Paper Tag from the Camera Lens -->
+    <rect x="66" y="22" width="212" height="178" rx="28" class="paper"/>
+    <rect x="66" y="22" width="212" height="178" rx="28" class="clay-stroke" stroke-width="1.6"/>
+
+    <!-- Tapered Resident Ring & Fixed Black Camera Core -->
+    <circle cx="172" cy="40" r="15.5" class="clay-stroke" stroke-width="2.1" stroke-dasharray="92 8" stroke-linecap="round"/>
+    <circle cx="172" cy="40" r="11" fill="#0A0A0A"/>
+
+    <!-- Mini Card Header & Pill Buttons inside Diagram -->
+    <text x="84" y="76" class="serif-hero ink" font-size="13.5" font-weight="600">问问这里</text>
+    <rect x="192" y="63" width="34" height="18" rx="9" class="well"/>
+    <text x="209" y="75" text-anchor="middle" class="sans-ui ink" font-size="9">收起</text>
+    <rect x="230" y="63" width="34" height="18" rx="9" class="well"/>
+    <text x="247" y="75" text-anchor="middle" class="sans-ui ink" font-size="9">结束</text>
+
+    <!-- Crop Selection Preview Box with 4 Clay Eyelets -->
+    <rect x="84" y="90" width="176" height="58" rx="12" class="well"/>
+    <rect x="96" y="99" width="66" height="40" rx="7" class="clay-stroke" stroke-width="1.5"/>
+    <!-- 4 Paper-Core Clay Eyelets -->
+    <circle cx="96" cy="99" r="3.6" class="clay-fill"/><circle cx="96" cy="99" r="1.7" class="paper"/>
+    <circle cx="162" cy="99" r="3.6" class="clay-fill"/><circle cx="162" cy="99" r="1.7" class="paper"/>
+    <circle cx="96" cy="139" r="3.6" class="clay-fill"/><circle cx="96" cy="139" r="1.7" class="paper"/>
+    <circle cx="162" cy="139" r="3.6" class="clay-fill"/><circle cx="162" cy="139" r="1.7" class="paper"/>
+
+    <line x1="174" y1="111" x2="244" y2="111" class="rule" stroke-width="2"/>
+    <line x1="174" y1="126" x2="226" y2="126" class="rule" stroke-width="2"/>
+
+    <!-- Mini Input Capsule + Clay Send Pill -->
+    <rect x="84" y="160" width="134" height="26" rx="13" class="well"/>
+    <text x="96" y="176.5" class="sans-ui muted" font-size="9.5">解释、翻译或直接提问…</text>
+    <rect x="224" y="160" width="36" height="26" rx="13" class="clay-fill"/>
+    <text x="242" y="176.5" text-anchor="middle" class="sans-ui" fill="#141413" font-size="9.5" font-weight="600">发送</text>
+
+    <!-- Native Clawd Pixel Silhouette Standing on Bottom Capsule -->
+    <rect x="88" y="220" width="168" height="24" rx="12" class="paper"/>
+    <g transform="translate(198, 206)" class="clay-fill">
+      <rect x="2" y="0" width="16" height="10" rx="2"/>
+      <rect x="0" y="4" width="20" height="6" rx="1.5"/>
+      <rect x="3" y="10" width="3" height="4"/>
+      <rect x="8.5" y="10" width="3" height="4"/>
+      <rect x="14" y="10" width="3" height="4"/>
+      <rect x="6" y="3" width="2" height="2.5" fill="#141413"/>
+      <rect x="12" y="3" width="2" height="2.5" fill="#141413"/>
+    </g>
+  </g>
+</svg>

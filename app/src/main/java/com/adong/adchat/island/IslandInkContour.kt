@@ -71,7 +71,8 @@ internal class IslandInkContour {
             val ny = sines[i] * seedMix - dx / length * transfer
             val penWidth = weight[i] * max(0f, ink) * circleScale
             // Retain a hint of pen pressure at rest without thinning the card's border to zero.
-            val borderWidth = density * (0.9f + 0.22f * weight[i] / IslandInkRing.WEIGHT_DP)
+            val borderWidth = density * body.expandedBorderScale *
+                (0.9f + 0.22f * weight[i] / IslandInkRing.WEIGHT_DP)
             val stroke = penWidth * seedMix + borderWidth * transfer
             val inset = stroke * transfer
             innerX[index] = x[i] - nx * inset

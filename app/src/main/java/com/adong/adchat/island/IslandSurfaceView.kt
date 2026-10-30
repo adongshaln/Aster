@@ -28,6 +28,24 @@ internal class IslandSurfaceView(context: Context) : FrameLayout(context) {
             field = value
             invalidate()
         }
+    var borderClayMix = 0.28f
+        set(value) {
+            val bounded = value.coerceIn(0f, 1f)
+            if (field != bounded) {
+                field = bounded
+                shapeDirty = true
+                invalidate()
+            }
+        }
+    var borderAlphaDrop = 0.12f
+        set(value) {
+            val bounded = value.coerceIn(0f, 1f)
+            if (field != bounded) {
+                field = bounded
+                shapeDirty = true
+                invalidate()
+            }
+        }
 
     init {
         setWillNotDraw(false)
@@ -82,8 +100,8 @@ internal class IslandSurfaceView(context: Context) : FrameLayout(context) {
         for (i in IslandInkRing.SAMPLES downTo 0) inkPath.lineTo(contour.innerX[i], contour.innerY[i])
         inkPath.close()
         paperPaint.alpha = (body.paperAlpha * 255f).toInt().coerceIn(0, 255)
-        inkPaint.color = mixColor(palette.clay, palette.edge, body.inkTransfer * 0.28f)
-        inkPaint.alpha = (inkAlpha * (1f - body.inkTransfer * 0.12f) * 255f).toInt().coerceIn(0, 255)
+        inkPaint.color = mixColor(palette.clay, palette.edge, body.inkTransfer * borderClayMix)
+        inkPaint.alpha = (inkAlpha * (1f - body.inkTransfer * borderAlphaDrop) * 255f).toInt().coerceIn(0, 255)
         applyShadow()
     }
 
