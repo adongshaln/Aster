@@ -120,7 +120,6 @@ internal class IslandJellyBody {
         height.jump(if (open) expandedBottom - expandedTop else seed, now)
         content.jump(if (open) 1f else CONTENT_REST_SCALE, now)
     }
-
     fun isAtRest(now: Double): Boolean =
         width.isSettled(now) && height.isSettled(now) && content.isSettled(now, 0.002f)
 

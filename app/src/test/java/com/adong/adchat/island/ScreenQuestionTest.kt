@@ -17,6 +17,34 @@ import org.robolectric.annotation.GraphicsMode
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ScreenQuestionTest {
+    @Test fun screenSelectionInkMorphStartsAtAndReturnsToTheCameraRing() {
+        val body = IslandJellyBody()
+        val contour = IslandInkContour()
+        body.configure(180f, 25.5f, IslandInkRing.CORE_RADIUS_DP, 0f, 0f, 360f, 800f, 40f)
+        body.snap(false, 1.0)
+        body.update(1.0)
+        contour.update(body, 1f, 1f, 1f)
+        listOf(0, IslandInkRing.SAMPLES / 3, IslandInkRing.SAMPLES).forEach { index ->
+            val angle = IslandInkRing.angle(index.toFloat() / IslandInkRing.SAMPLES)
+            val expected = IslandInkRing.outerRadius(index.toFloat() / IslandInkRing.SAMPLES, 1f)
+            assertEquals(180f + kotlin.math.cos(angle) * expected, contour.outerX[index], 0.001f)
+            assertEquals(25.5f + kotlin.math.sin(angle) * expected, contour.outerY[index], 0.001f)
+        }
+
+        body.open(1.0)
+        body.update(1.12)
+        assertTrue("the full-screen selection grows from the ring", body.progress > 0f)
+        assertTrue(body.progress < 1f)
+        body.close(1.12)
+        body.update(1.28)
+        assertTrue("cancel or confirmation retracts the same spring", body.progress > 0f)
+        assertTrue(body.progress < 1f)
+        body.update(4.0)
+        assertEquals(0f, body.progress, 0.001f)
+        assertEquals(IslandInkRing.CORE_RADIUS_DP * 2f, body.right - body.left, 0.001f)
+        assertEquals(IslandInkRing.CORE_RADIUS_DP * 2f, body.bottom - body.top, 0.001f)
+    }
+
     @Test fun cropMappingUsesImageBoundsRatherThanWindowBounds() {
         val fittedImage = RectF(40f, 100f, 440f, 900f)
         assertEquals(Rect(100, 200, 500, 600),

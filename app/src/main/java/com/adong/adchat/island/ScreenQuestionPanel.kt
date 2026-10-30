@@ -1,5 +1,6 @@
 package com.adong.adchat.island
 
+import android.animation.LayoutTransition
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -7,7 +8,10 @@ import android.text.Editable
 import android.text.InputFilter
 import android.text.InputType
 import android.text.TextWatcher
+import android.transition.AutoTransition
+import android.transition.TransitionManager
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageView
@@ -79,8 +83,7 @@ internal class ScreenQuestionPanel(
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                send.isEnabled = !working && !s.isNullOrBlank()
-                send.alpha = if (send.isEnabled) 1f else 0.45f
+                setSendEnabled(!working && !s.isNullOrBlank())
                 if (!rendering) callbacks.onScreenDraftChanged(s?.toString().orEmpty())
             }
             override fun afterTextChanged(s: Editable?) = Unit
@@ -89,6 +92,7 @@ internal class ScreenQuestionPanel(
 
     init {
         orientation = VERTICAL
+        layoutTransition = smoothLayoutTransition()
         setPadding(dp(18), dp(47), dp(18), dp(16))
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         title.typeface = Typeface.create("serif", Typeface.BOLD)
@@ -100,7 +104,10 @@ internal class ScreenQuestionPanel(
         previewRow.addView(description, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
         addView(previewRow, LayoutParams(LayoutParams.MATCH_PARENT, dp(64)).apply { bottomMargin = dp(10) })
         addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
-        val tools = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
+        val tools = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            layoutTransition = smoothLayoutTransition()
+        }
         tools.addView(status, LayoutParams(0, dp(40), 1f))
         tools.addView(configure, LayoutParams(dp(48), dp(40)))
         tools.addView(copy, LayoutParams(dp(72), dp(40)))
@@ -125,7 +132,38 @@ internal class ScreenQuestionPanel(
         gravity = Gravity.CENTER
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         contentDescription = value
+        setOnTouchListener { view, event ->
+            val target = when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> 0.95f
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> 1f
+                else -> return@setOnTouchListener false
+            }
+            view.animate().cancel()
+            view.animate().scaleX(target).scaleY(target)
+                .setDuration(if (target < 1f) 100L else 220L)
+                .setInterpolator(android.view.animation.PathInterpolator(0.2f, 0.9f, 0.25f, 1f))
+                .start()
+            false
+        }
         setOnClickListener { action() }
+    }
+
+    private fun smoothLayoutTransition() = LayoutTransition().apply {
+        setDuration(220L)
+        setInterpolator(LayoutTransition.APPEARING, android.view.animation.PathInterpolator(0.2f, 0.9f, 0.25f, 1f))
+        setInterpolator(LayoutTransition.DISAPPEARING, android.view.animation.PathInterpolator(0.2f, 0.9f, 0.25f, 1f))
+        setInterpolator(LayoutTransition.CHANGING, android.view.animation.PathInterpolator(0.2f, 0.9f, 0.25f, 1f))
+        enableTransitionType(LayoutTransition.CHANGING)
+    }
+
+    private fun setSendEnabled(enabled: Boolean) {
+        if (send.isEnabled == enabled) return
+        send.isEnabled = enabled
+        send.animate().cancel()
+        send.animate().alpha(if (enabled) 1f else 0.45f)
+            .setDuration(180L)
+            .setInterpolator(android.view.animation.PathInterpolator(0.2f, 0.9f, 0.25f, 1f))
+            .start()
     }
 
     private fun submit() {
@@ -173,7 +211,14 @@ internal class ScreenQuestionPanel(
                 historyText.text = session.history.joinToString("\n\n") { message ->
                     (if (message.role == "user") "你：" else "星岛：") + message.content
                 }
-                historyText.visibility = if (session.history.isEmpty()) GONE else VISIBLE
+                val visibility = if (session.history.isEmpty()) GONE else VISIBLE
+                if (historyText.visibility != visibility) {
+                    TransitionManager.beginDelayedTransition(conversation, AutoTransition().apply {
+                        duration = 220L
+                        interpolator = android.view.animation.PathInterpolator(0.2f, 0.9f, 0.25f, 1f)
+                    })
+                    historyText.visibility = visibility
+                }
             }
             val transcript = buildString {
                 if (session.question.isNotEmpty()) {
@@ -202,8 +247,7 @@ internal class ScreenQuestionPanel(
             stop.visibility = if (working) VISIBLE else GONE
             configure.visibility = if (task?.needsConfiguration == true) VISIBLE else GONE
             copy.visibility = if (!task?.output.isNullOrBlank()) VISIBLE else GONE
-            send.isEnabled = !working && input.text.isNotBlank()
-            send.alpha = if (send.isEnabled) 1f else 0.45f
+            setSendEnabled(!working && input.text.isNotBlank())
         } finally { rendering = false }
     }
 }

@@ -187,6 +187,30 @@ class IslandViewTest {
         assertEquals(1, events.dismissed)
     }
 
+    @Test fun temporaryLandscapeHideRetractsAndRestoresTheSameCard() {
+        view.attach()
+        layoutWindow()
+        view.show(first)
+        layoutWindow()
+        advance(1_200)
+        assertEquals(1f, view.expansionProgress, 0f)
+
+        view.retractForTemporaryHide { view.visibility = View.GONE }
+        advance(1_200)
+        assertTrue(view.isTemporarilySuppressed)
+        assertEquals(View.GONE, view.visibility)
+        assertEquals(first.originalUrl, view.displayedContent?.key)
+        assertEquals(0f, view.expansionProgress, 1e-4f)
+
+        view.restoreAfterTemporaryHide()
+        layoutWindow()
+        advance(1_200)
+        assertFalse(view.isTemporarilySuppressed)
+        assertEquals(View.VISIBLE, view.visibility)
+        assertEquals(first.originalUrl, view.displayedContent?.key)
+        assertEquals(1f, view.expansionProgress, 0f)
+    }
+
     @Test fun overlayResizeNeverPlaysTheWindowMoveAnimation() {
         view.attach()
         layoutWindow()

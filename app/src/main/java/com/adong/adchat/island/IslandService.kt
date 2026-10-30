@@ -31,7 +31,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.collectLatest
@@ -88,9 +87,12 @@ class IslandService : Service(), IslandView.Callbacks {
     private var currentTask: StarIslandTaskState? = null
     private var themeNightOverride: Boolean? = null
     private var viewConfiguration: Configuration? = null
+    private var landscapeMode = false
+    private var fullScreenWindow = false
     private var restoringView = false
     private var shuttingDown = false
     private var screenSession: ScreenQuestionSession? = null
+    private var pendingScreenPresentation = false
     private var screenTaskJob: Job? = null
     private var screenTaskGeneration = 0L
     private var screenStopGeneration: Long? = null
@@ -98,6 +100,7 @@ class IslandService : Service(), IslandView.Callbacks {
     private var captureGeneration = 0L
     private var capturing = false
     private var screenSelection: ScreenSelectionView? = null
+    private var selectionScreenshot: android.graphics.Bitmap? = null
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             updateOverlayVisibility()
@@ -108,6 +111,7 @@ class IslandService : Service(), IslandView.Callbacks {
 
     override fun onCreate() {
         super.onCreate()
+        landscapeMode = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         ContextCompat.registerReceiver(this, screenReceiver, IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
@@ -117,6 +121,13 @@ class IslandService : Service(), IslandView.Callbacks {
             IslandTouchService.connectedHost.collectLatest {
                 cancelScreenSelection()
                 if (islandView != null) recreateView()
+                updateOverlayVisibility()
+            }
+        }
+        scope.launch {
+            IslandTouchService.windowFullScreen.collectLatest { fullScreen ->
+                fullScreenWindow = fullScreen
+                updateOverlayVisibility()
             }
         }
     }
@@ -141,6 +152,7 @@ class IslandService : Service(), IslandView.Callbacks {
             themeNightOverride = night.takeUnless { followSystem }
             view.setNightMode(night, followSystem)
         }
+        updateOverlayVisibility()
         return START_STICKY
     }
 
@@ -151,17 +163,45 @@ class IslandService : Service(), IslandView.Callbacks {
             islandView = it
             viewConfiguration = Configuration(resources.configuration)
             themeNightOverride?.let(it::setNightMode)
-            updateOverlayVisibility()
         }
     }
 
     private fun updateOverlayVisibility() {
         val locked = (getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked
         val interactive = (getSystemService(POWER_SERVICE) as PowerManager).isInteractive
+        val view = islandView
         if ((locked || !interactive) && capturing) cancelScreenSelection(restore = false)
         // Accessibility overlays sit above the lock screen too. Keep clipboard/results private.
-        islandView?.visibility = if (capturing || (IslandTouchService.connectedHost.value != null && (locked || !interactive)))
-            View.GONE else View.VISIBLE
+        if (locked || !interactive) {
+            view?.suppressForSecureDisplay()
+            return
+        }
+        if (landscapeMode || fullScreenWindow) {
+            view?.let { current ->
+                if (!current.isTemporarilySuppressed) {
+                    current.retractForTemporaryHide {
+                        if (landscapeMode || fullScreenWindow) current.visibility = View.GONE
+                        else current.restoreAfterTemporaryHide()
+                    }
+                }
+            }
+            if (capturing) cancelScreenSelection(restore = true)
+            return
+        }
+        if (!capturing) {
+            val pending = screenSession?.takeIf { pendingScreenPresentation && view?.isTemporarilySuppressed == true }
+            if (pending != null && view != null) {
+                view.restoreAfterTemporaryHide {
+                    if (pendingScreenPresentation && screenSession === pending) {
+                        pendingScreenPresentation = false
+                        view.showScreenQuestion(pending)
+                    }
+                }
+            } else {
+                view?.restoreAfterTemporaryHide()
+            }
+            if (view?.isTemporarilySuppressed != true) view?.visibility = View.VISIBLE
+        }
     }
 
     private fun expandShortLink(content: StarIslandContent) {
@@ -335,12 +375,12 @@ class IslandService : Service(), IslandView.Callbacks {
         val generation = ++captureGeneration
         capturing = true
         islandView?.hideKeyboard()
-        islandView?.visibility = View.INVISIBLE
         captureJob = scope.launch {
+            var unownedScreenshot: android.graphics.Bitmap? = null
             try {
-                // Let the window compositor remove our ring/card before taking the one-shot image.
-                delay(180)
+                islandView?.prepareForScreenCapture()
                 val screenshot = withTimeout(5_000) { host.captureScreen() }
+                unownedScreenshot = screenshot
                 if (generation != captureGeneration || shuttingDown) return@launch
                 val selector = ScreenSelectionView(host, screenshot,
                     islandView?.islandPalette ?: IslandPalette.forNightMode(IslandPalette.isNight(resources.configuration)),
@@ -348,17 +388,24 @@ class IslandService : Service(), IslandView.Callbacks {
                         captureJob = scope.launch {
                             try {
                                 val session = withContext(Dispatchers.Default) { prepareScreenQuestion(screenshot, crop) }
-                                if (generation != captureGeneration || shuttingDown) return@launch
-                                screenSelection?.destroy()
-                                screenSelection = null
-                                captureJob = null
-                                capturing = false
-                                clearScreenQuestion()
-                                invalidateTask()
-                                invalidateLinkResolution()
-                                screenSession = session
-                                updateOverlayVisibility()
-                                obtainView().showScreenQuestion(session)
+                                if (generation != captureGeneration || shuttingDown) {
+                                    if (!session.preview.isRecycled) session.preview.recycle()
+                                    return@launch
+                                }
+                                val selection = screenSelection
+                                selection?.dismiss {
+                                    if (generation != captureGeneration || shuttingDown) {
+                                        releaseSelectionScreenshot()
+                                        return@dismiss
+                                    }
+                                    releaseSelectionScreenshot()
+                                    showPreparedScreenQuestion(session)
+                } ?: run {
+                    if (generation == captureGeneration && !shuttingDown) {
+                        releaseSelectionScreenshot()
+                        showPreparedScreenQuestion(session)
+                    }
+                }
                             } catch (cancelled: CancellationException) {
                                 throw cancelled
                             } catch (_: Exception) {
@@ -367,33 +414,90 @@ class IslandService : Service(), IslandView.Callbacks {
                             }
                         }
                     },
-                    onCancel = { cancelScreenSelection() },
+                    onCancel = {
+                        cancelScreenSelection()
+                    },
                 )
                 screenSelection = selector
+                selectionScreenshot = screenshot
+                unownedScreenshot = null
                 check(selector.attach()) { "无法显示选区，请检查星岛无障碍服务" }
                 captureJob = null
             } catch (cancelled: kotlinx.coroutines.TimeoutCancellationException) {
+                releaseSelectionScreenshot()
                 cancelScreenSelection()
                 Toast.makeText(this@IslandService, "截屏超时，请重新长按星岛", Toast.LENGTH_LONG).show()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                releaseSelectionScreenshot()
                 cancelScreenSelection()
                 val message = if (error is SecurityException) "请在系统设置中重新开启星岛无障碍服务，允许主动截屏"
                     else error.message ?: "暂时无法截取屏幕"
                 Toast.makeText(this@IslandService, message, Toast.LENGTH_LONG).show()
+            } finally {
+                unownedScreenshot?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
             }
         }
     }
 
     private fun cancelScreenSelection(restore: Boolean = true) {
-        captureGeneration++
+        val generation = ++captureGeneration
         captureJob?.cancel()
         captureJob = null
-        screenSelection?.destroy()
-        screenSelection = null
+        val selection = screenSelection
+        if (selection != null && !restore) {
+            selection.disposeImmediately()
+            screenSelection = null
+            releaseSelectionScreenshot()
+            capturing = false
+            islandView?.restoreAfterScreenCapture(animate = false)
+            return
+        }
+        if (selection != null) {
+            selection.dismiss {
+                if (generation != captureGeneration) return@dismiss
+                if (screenSelection === selection) screenSelection = null
+                releaseSelectionScreenshot()
+                capturing = false
+                islandView?.restoreAfterScreenCapture()
+                updateOverlayVisibility()
+            }
+            return
+        }
         capturing = false
-        if (restore) updateOverlayVisibility()
+        releaseSelectionScreenshot()
+        if (restore) {
+            islandView?.restoreAfterScreenCapture()
+            updateOverlayVisibility()
+        }
+    }
+
+    private fun releaseSelectionScreenshot() {
+        selectionScreenshot?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+        selectionScreenshot = null
+    }
+
+    private fun showPreparedScreenQuestion(session: ScreenQuestionSession) {
+        screenSelection = null
+        captureJob = null
+        capturing = false
+        clearScreenQuestion()
+        invalidateTask()
+        invalidateLinkResolution()
+        screenSession = session
+        pendingScreenPresentation = landscapeMode || fullScreenWindow
+        updateOverlayVisibility()
+        if (landscapeMode || fullScreenWindow) return
+        pendingScreenPresentation = true
+        obtainView().restoreAfterScreenCapture {
+            // The camera ink is visible again before the next surface takes ownership of it.
+            // This keeps the selection-to-question transition as one continuous stroke.
+            if (pendingScreenPresentation && screenSession === session && !landscapeMode && !fullScreenWindow) {
+                pendingScreenPresentation = false
+                obtainView().showScreenQuestion(session)
+            }
+        }
     }
 
     override fun onScreenDraftChanged(draft: String) {
@@ -455,6 +559,7 @@ class IslandService : Service(), IslandView.Callbacks {
     }
 
     private fun clearScreenQuestion() {
+        pendingScreenPresentation = false
         screenTaskGeneration++
         screenTaskJob?.cancel()
         screenTaskJob = null
@@ -464,14 +569,23 @@ class IslandService : Service(), IslandView.Callbacks {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (capturing) cancelScreenSelection()
         val previous = viewConfiguration
         viewConfiguration = Configuration(newConfig)
+        landscapeMode = newConfig.orientation == Configuration.ORIENTATION_LANDSCAPE
+        if (capturing && !landscapeMode && !fullScreenWindow) cancelScreenSelection(restore = true)
+        if (landscapeMode) {
+            updateOverlayVisibility()
+            return
+        }
+        islandView?.refreshDisplayConfiguration(newConfig)
+        updateOverlayVisibility()
+        if (previous != null && previous.orientation != newConfig.orientation) return
         if (previous == null || (previous.densityDpi == newConfig.densityDpi &&
                 previous.fontScale == newConfig.fontScale && previous.locales == newConfig.locales &&
                 previous.orientation == newConfig.orientation &&
                 IslandPalette.isNight(previous) == IslandPalette.isNight(newConfig))) return
         recreateView()
+        updateOverlayVisibility()
     }
 
     /** Swap window hosts without restarting a model task or dropping its visible output. */
@@ -493,6 +607,7 @@ class IslandService : Service(), IslandView.Callbacks {
                 }
                 if (showingScreen) screenSession?.let(replacement::showScreenQuestion)
             }
+            updateOverlayVisibility()
         } finally {
             restoringView = false
         }

@@ -18,17 +18,54 @@ class IslandTouchService : AccessibilityService() {
     companion object {
         private val activeHost = MutableStateFlow<IslandTouchService?>(null)
         internal val connectedHost = activeHost.asStateFlow()
+        private val activeWindowFullScreen = MutableStateFlow(false)
+        internal val windowFullScreen = activeWindowFullScreen.asStateFlow()
     }
+
+    private var fullScreenPackage: String? = null
+    private var fullScreenWindowId: Int? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        fullScreenPackage = null
+        fullScreenWindowId = null
+        activeWindowFullScreen.value = false
         activeHost.value = this
         // The user may have enabled compatibility while the ordinary island service was stopped.
         // Starting it still respects the island's master switch and notification permission.
         IslandService.start(this)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
+        // The accessibility overlay itself is full-screen by geometry; only follow other apps'
+        // window metadata. No node tree, text, or other app content is retrieved.
+        val eventPackage = event.packageName?.toString() ?: return
+        if (eventPackage == packageName || eventPackage == "com.android.systemui") return
+        val inputMethodPackage = android.provider.Settings.Secure.getString(
+            contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD
+        )?.substringBefore('/')
+        if (eventPackage == inputMethodPackage) return
+        if (event.isFullScreen) {
+            fullScreenPackage = eventPackage
+            fullScreenWindowId = event.windowId
+            activeWindowFullScreen.value = true
+            return
+        }
+        val previousPackage = fullScreenPackage ?: run {
+            activeWindowFullScreen.value = false
+            return
+        }
+        // Ignore transient non-fullscreen child windows, IME and system chrome; exit only when
+        // the same app/window leaves fullscreen or a different foreground app takes over.
+        if (eventPackage != previousPackage || event.windowId == fullScreenWindowId) {
+            fullScreenPackage = null
+            fullScreenWindowId = null
+            activeWindowFullScreen.value = false
+        }
+    }
 
     override fun onInterrupt() = Unit
 
@@ -80,6 +117,11 @@ class IslandTouchService : AccessibilityService() {
     }
 
     private fun detachHost() {
-        if (activeHost.value === this) activeHost.value = null
+        if (activeHost.value === this) {
+            fullScreenPackage = null
+            fullScreenWindowId = null
+            activeWindowFullScreen.value = false
+            activeHost.value = null
+        }
     }
 }
