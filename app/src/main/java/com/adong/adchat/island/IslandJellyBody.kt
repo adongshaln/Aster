@@ -44,6 +44,7 @@ internal class IslandJellyBody {
     private var closeWidthDamping = min(0.95f, WIDTH_DAMPING + 0.06f)
     private var closeHeightDamping = min(0.95f, HEIGHT_DAMPING + 0.12f)
     private var borderWeightScale = 1f
+    private var fullScreenMode = false
 
     var opened = false
         private set
@@ -101,14 +102,17 @@ internal class IslandJellyBody {
         this.expandedRight = expandedRight
         this.expandedBottom = expandedBottom
         this.cornerRadius = cornerRadius
+        this.fullScreenMode = fullScreenSheet
         if (fullScreenSheet) {
-            openWidthResponse = 0.56f
-            openWidthDamping = 0.88f
-            openHeightResponse = 0.64f
-            openHeightDamping = 0.87f
+            // Near-critically damped cushion: expands fluidly right onto the physical display bezel
+            // (0, 0, W, H) with zero off-screen clipping while drawing an inward terracotta border.
+            openWidthResponse = 0.46f
+            openWidthDamping = 0.99f
+            openHeightResponse = 0.54f
+            openHeightDamping = 0.99f
             closeWidthDamping = 0.94f
             closeHeightDamping = 0.94f
-            borderWeightScale = 1.65f
+            borderWeightScale = 2.35f
         } else {
             openWidthResponse = WIDTH_RESPONSE
             openWidthDamping = WIDTH_DAMPING
@@ -171,11 +175,22 @@ internal class IslandJellyBody {
         heightProgress = ((h - seed) / travelH).coerceIn(0f, 1f)
         progress = ((w - seed) / travelW + (h - seed) / travelH) / 2f
         val seedTop = centerY - coreRadius
-        top = seedTop + (expandedTop - seedTop) * heightProgress
-        bottom = top + renderedHeight
+        val rawTop = seedTop + (expandedTop - seedTop) * heightProgress
+        val rawBottom = rawTop + renderedHeight
         val cx = centerX + ((expandedLeft + expandedRight) / 2f - centerX) * widthFraction
-        left = cx - renderedWidth / 2f
-        right = cx + renderedWidth / 2f
+        val rawLeft = cx - renderedWidth / 2f
+        val rawRight = cx + renderedWidth / 2f
+        if (fullScreenMode) {
+            left = rawLeft.coerceAtLeast(expandedLeft)
+            top = rawTop.coerceAtLeast(expandedTop)
+            right = rawRight.coerceAtMost(expandedRight)
+            bottom = rawBottom.coerceAtMost(expandedBottom)
+        } else {
+            left = rawLeft
+            top = rawTop
+            right = rawRight
+            bottom = rawBottom
+        }
         radius = minOf(cornerRadius, (bottom - top) / 2f, (right - left) / 2f)
         // Scale pen-to-border transfer by physical distance from the seed as well as card progress,
         // so tall full-screen sheets thin smoothly instead of holding a heavy 2.1dp stroke at 120dp.
@@ -183,7 +198,8 @@ internal class IslandJellyBody {
         val physicalProgress = max(renderedWidth - seed, renderedHeight - seed) / physicalSpan
         inkTransfer = smooth(0f, 0.64f, max(progress, physicalProgress))
         paperAlpha = smooth(0.03f, 0.55f, heightProgress)
-        val formation = smooth(0f, 0.28f, progress)
+        val bezelSeat = if (fullScreenMode) 1f - smooth(0.70f, 0.98f, max(widthFraction, heightProgress)) else 1f
+        val formation = smooth(0f, 0.28f, progress) * bezelSeat
         contourLean = coreRadius * 0.42f * (0.7f * vw - 0.3f * vh) * formation
         contourWave = coreRadius * 0.42f * (0.8f * vh + 0.2f * vw) * formation
         val fade = ((heightProgress - CONTENT_FADE_START) / (CONTENT_FADE_END - CONTENT_FADE_START)).coerceIn(0f, 1f)

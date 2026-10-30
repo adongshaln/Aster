@@ -92,44 +92,50 @@ class ScreenQuestionTest {
         }
     }
 
-    @Test fun redmiTurbo5MaxFullScreenSheetStaysInsideBezelAndThinsSmoothlyOnRetract() {
+    @Test fun redmiTurbo5MaxFullScreenSheetHugsExactBezelAndThinsSmoothlyOnRetract() {
         val density = 3.25f
         val width = 1280f
         val height = 2772f
         val bezelRadius = 156f // 48dp * 3.25
-        val inset = 6.5f * density
         val body = IslandJellyBody()
         val contour = IslandInkContour()
         body.configure(
             centerX = width / 2f,
             centerY = 25.5f * density,
             coreRadius = IslandInkRing.CORE_RADIUS_DP * density,
-            expandedLeft = inset,
-            expandedTop = inset,
-            expandedRight = width - inset,
-            expandedBottom = height - inset,
-            cornerRadius = bezelRadius - inset,
+            expandedLeft = 0f,
+            expandedTop = 0f,
+            expandedRight = width,
+            expandedBottom = height,
+            cornerRadius = bezelRadius,
             fullScreenSheet = true,
         )
         body.open(0.0)
         for (ms in 0..1600 step 16) {
             body.update(ms / 1000.0)
             contour.update(body, density, 1f, 1f)
-            // Even at peak spring overshoot, the border must stay strictly inside the display bounds.
+            // The outer edge cushions flush onto 0..width / 0..height without clipping outside the bezel.
             for (i in 0..IslandInkRing.SAMPLES) {
-                assertTrue("outerX[$i]=${contour.outerX[i]} at ${ms}ms", contour.outerX[i] in 0f..width)
-                assertTrue("outerY[$i]=${contour.outerY[i]} at ${ms}ms", contour.outerY[i] in 0f..height)
+                assertTrue("outerX[$i]=${contour.outerX[i]} at ${ms}ms", contour.outerX[i] in -0.5f..(width + 0.5f))
+                assertTrue("outerY[$i]=${contour.outerY[i]} at ${ms}ms", contour.outerY[i] in -0.5f..(height + 0.5f))
             }
         }
         body.snap(true, 2.0)
         body.update(2.0)
         contour.update(body, density, 1f, 1f)
-        // Verify smooth corner sampling across all four bezel corners on 1280x2772.
+        // Settled body hugs 100% of the screen (0, 0, 1280, 2772) with inward-stroked ink border.
+        assertEquals(0f, body.left, 0.01f)
+        assertEquals(0f, body.top, 0.01f)
+        assertEquals(width, body.right, 0.01f)
+        assertEquals(height, body.bottom, 0.01f)
+        assertEquals(bezelRadius, body.radius, 0.01f)
         var topLeftArcPoints = 0
         var bottomRightArcPoints = 0
         for (i in 0..IslandInkRing.SAMPLES) {
             if (contour.outerX[i] < bezelRadius && contour.outerY[i] < bezelRadius) topLeftArcPoints++
             if (contour.outerX[i] > width - bezelRadius && contour.outerY[i] > height - bezelRadius) bottomRightArcPoints++
+            val strokePx = kotlin.math.hypot(contour.outerX[i] - contour.innerX[i], contour.outerY[i] - contour.innerY[i])
+            assertTrue("inward bezel stroke[$i]=$strokePx", strokePx >= 2f * density)
         }
         assertTrue("topLeftArcPoints=$topLeftArcPoints", topLeftArcPoints >= 5)
         assertTrue("bottomRightArcPoints=$bottomRightArcPoints", bottomRightArcPoints >= 5)
@@ -149,7 +155,8 @@ class ScreenQuestionTest {
         assertTrue(checkedMidRetract)
     }
 
-    @Test @org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
+    @Test @Config(sdk = [35], qualifiers = "w400dp-h800dp-mdpi")
+    @org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
     fun liveDragUpdatesVisualSelectionImmediatelyDuringMoveEvents() {
         org.robolectric.shadows.ShadowChoreographer.setPaused(true)
         org.robolectric.shadows.ShadowChoreographer.setFrameDelay(java.time.Duration.ofMillis(16))
@@ -157,12 +164,12 @@ class ScreenQuestionTest {
         val bitmap = Bitmap.createBitmap(400, 800, Bitmap.Config.ARGB_8888)
         val view = ScreenSelectionView(context, bitmap, IslandPalette.Light, onConfirm = {}, onCancel = {})
         try {
+            assertTrue(view.attach())
             view.measure(
                 View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
             )
             view.layout(0, 0, 400, 800)
-            assertTrue(view.attach())
             repeat(80) {
                 org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
                     .idleFor(java.time.Duration.ofMillis(16))
@@ -183,6 +190,17 @@ class ScreenQuestionTest {
             send(MotionEvent.ACTION_UP, 240f, 360f)
             assertFalse(view.hasLiveDragFeedback)
             assertEquals(RectF(60f, 120f, 240f, 360f), view.visualSelectionBounds)
+
+            // Edge-to-edge drag starting at the outermost pixel (0, 0) to (400, 800) must also succeed!
+            send(MotionEvent.ACTION_DOWN, 0f, 0f)
+            send(MotionEvent.ACTION_MOVE, 400f, 800f)
+            assertEquals(RectF(0f, 0f, 400f, 800f), view.visualSelectionBounds)
+            send(MotionEvent.ACTION_UP, 400f, 800f)
+            repeat(20) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+                    .idleFor(java.time.Duration.ofMillis(16))
+            }
+            assertEquals(RectF(0f, 0f, 400f, 800f), view.visualSelectionBounds)
         } finally {
             view.destroy()
             org.robolectric.shadows.ShadowChoreographer.setFrameDelay(java.time.Duration.ofMillis(1))

@@ -49,7 +49,6 @@ internal class ScreenSelectionView(
 ) : FrameLayout(context) {
     companion object {
         private const val CUTOUT_CENTER_Y_DP = 25.5f
-        private const val SHEET_INSET_DP = 6.5f
         /** Redmi Turbo 5 Max default hardware corner radius (156px at 3.25x = 48dp). */
         private const val DEFAULT_BEZEL_RADIUS_DP = 48f
         private const val MIN_SELECTION_DP = 16f
@@ -385,18 +384,18 @@ internal class ScreenSelectionView(
     }
 
     private fun configureSheetGeometry(w: Int, h: Int) {
-        val inset = dpF(SHEET_INSET_DP)
+        // Hug the exact physical display boundary (0, 0, w, h) and hardware rounded-corner radius
+        // so 100% of the screen can be selected while the inward-stroked ink border frames the bezel.
         val bezelRadius = if (detectedBezelRadiusPx > 0f) detectedBezelRadiusPx else dpF(DEFAULT_BEZEL_RADIUS_DP)
-        val sheetCornerRadius = max(dpF(28f), bezelRadius - inset)
         morph.body.configure(
             centerX = w / 2f,
             centerY = dpF(CUTOUT_CENTER_Y_DP),
             coreRadius = dpF(IslandInkRing.CORE_RADIUS_DP),
-            expandedLeft = inset,
-            expandedTop = inset,
-            expandedRight = (w - inset).coerceAtLeast(inset + 1f),
-            expandedBottom = (h - inset).coerceAtLeast(inset + 1f),
-            cornerRadius = sheetCornerRadius,
+            expandedLeft = 0f,
+            expandedTop = 0f,
+            expandedRight = w.toFloat().coerceAtLeast(1f),
+            expandedBottom = h.toFloat().coerceAtLeast(1f),
+            cornerRadius = bezelRadius,
             fullScreenSheet = true,
         )
     }
@@ -426,7 +425,8 @@ internal class ScreenSelectionView(
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (!interactive || dismissing) return true
-        if (event.actionMasked == MotionEvent.ACTION_DOWN && !morph.containsPoint(event.x, event.y)) return true
+        // Every pixel of the frozen screen is selectable once open, including the outermost edges
+        // and rounded corners; never drop edge drags via polygon hit-testing.
         return super.dispatchTouchEvent(event)
     }
 
