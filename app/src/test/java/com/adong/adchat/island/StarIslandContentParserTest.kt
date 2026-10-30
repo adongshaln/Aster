@@ -43,4 +43,17 @@ class StarIslandContentParserTest {
         assertTrue(error is IllegalArgumentException)
         assertTrue(error?.message.orEmpty().contains("内容过长"))
     }
+
+    @Test fun douyinExpandedShortLinkPreservesOriginalUrlForWatermarkFreeResolution() {
+        val original = IslandLinkParser.parse("2.34 abc https://v.douyin.com/lpYsAUlL3OU/ 复制此链接")!!
+        val expanded = IslandLinkParser.resolveExpanded(
+            original,
+            "https://www.iesdouyin.com/share/video/6961737553342991651/?region=CN&mid=123&tt_from=copy"
+        )!!
+        assertEquals("https://v.douyin.com/lpYsAUlL3OU/", expanded.originalUrl)
+        assertEquals(
+            "https://www.iesdouyin.com/share/video/6961737553342991651/?region=CN&mid=123",
+            expanded.cleanedUrl
+        )
+    }
 }

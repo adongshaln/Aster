@@ -302,14 +302,17 @@ class IslandService : Service(), IslandView.Callbacks {
         if (islandView?.displayedContent?.key != content.key) return
         when (action) {
             StarIslandAction.Download -> content.mediaLink?.let(::onParseRequested)
-            StarIslandAction.OpenLink -> content.url?.let { url ->
+            StarIslandAction.OpenLink -> (content.mediaLink?.let { it.cleanedUrl.ifBlank { it.originalUrl } }
+                ?: content.url)?.let { url ->
                 val uri = Uri.parse(url)
                 if (uri.scheme?.lowercase() in setOf("http", "https") && !uri.host.isNullOrBlank()) {
                     openActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
                 }
             }
-            StarIslandAction.CopyLink -> (content.mediaLink?.let { it.cleanedUrl.ifBlank { it.originalUrl } }
-                ?: content.url)?.let { copyText(it, "链接已复制") }
+            StarIslandAction.CopyLink -> (content.mediaLink?.let {
+                if (it.platform == com.adong.adchat.media.MediaPlatform.Douyin) it.originalUrl
+                else it.cleanedUrl.ifBlank { it.originalUrl }
+            } ?: content.url)?.let { copyText(it, "链接已复制") }
             StarIslandAction.Translate, StarIslandAction.Polish, StarIslandAction.Explain ->
                 if (content.kind == StarIslandKind.Text) startTask(content, action)
             StarIslandAction.ReadWeb -> if (content.kind == StarIslandKind.Web) startTask(content, action)
@@ -385,10 +388,15 @@ class IslandService : Service(), IslandView.Callbacks {
     }
 
     override fun onParseRequested(link: IslandLink) {
+        val parseUrl = if (link.platform == com.adong.adchat.media.MediaPlatform.Douyin) {
+            link.originalUrl.ifBlank { link.cleanedUrl }
+        } else {
+            link.cleanedUrl.ifBlank { link.originalUrl }
+        }
         openActivity(Intent(this, MainActivity::class.java).apply {
             action = Intent.ACTION_SEND
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, link.cleanedUrl.ifBlank { link.originalUrl })
+            putExtra(Intent.EXTRA_TEXT, parseUrl)
         })
     }
 

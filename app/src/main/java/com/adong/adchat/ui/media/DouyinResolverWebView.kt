@@ -82,7 +82,6 @@ private class DouyinResolverSession(
     private var pollScheduled = false
     private var pollInFlight = false
     private var verificationRaised = false
-    private var canonicalized = request.link.videoId != null
     private var lastPageUrl = request.link.resolverUrl
     private var pollCount = 0
     private var detailFetchInjected = false
@@ -131,14 +130,6 @@ private class DouyinResolverSession(
                     if (finished) return
                     lastPageUrl = url.orEmpty().ifBlank { view.url.orEmpty() }.ifBlank { lastPageUrl }
                     CookieManager.getInstance().flush()
-
-                    val discoveredId = DouyinUrlParser.extractVideoId(lastPageUrl)
-                    if (!canonicalized && discoveredId != null) {
-                        canonicalized = true
-                        onProgress("已识别视频，正在读取页面媒体")
-                        view.loadUrl("https://www.douyin.com/jingxuan?modal_id=$discoveredId")
-                        return
-                    }
                     injectDetailFetch(view)
                     schedulePoll(220L)
                 }
@@ -199,7 +190,8 @@ private class DouyinResolverSession(
             ?: DouyinUrlParser.extractVideoId(view.url.orEmpty())
             ?: request.link.videoId
             ?: return
-        if (!view.url.orEmpty().contains("douyin.com")) return
+        val currentHost = runCatching { Uri.parse(view.url.orEmpty()).host?.lowercase().orEmpty() }.getOrDefault("")
+        if (currentHost != "douyin.com" && !currentHost.endsWith(".douyin.com")) return
         detailFetchInjected = true
         Log.d("AsterMedia", "inject detail fetch: videoId=$videoId page=${view.url.orEmpty().take(100)}")
         view.evaluateJavascript(DOUYIN_DETAIL_FETCH.replace("__VIDEO_ID__", videoId), null)
@@ -519,9 +511,13 @@ private class DouyinResolverSession(
                 var url = normalize(value);
                 if (!/^https?:\/\//i.test(url) || isImage(url) || /\.m3u8(?:\?|$)/i.test(url)) return 0;
                 var fromMediaElement = (originScore || 0) >= 1000;
-                var strongMarker = /douyinvod|\/video\/tos\/|\/video\/play|\.mp4(?:\?|$)|video_id=|mime_type=video/i.test(url);
+                var strongMarker = /douyinvod|\/video\/tos\/|\/video\/play|\/aweme\/v1\/play|\.mp4(?:\?|$)|video_id=|mime_type=video/i.test(url);
                 if (!fromMediaElement && !strongMarker) return 0;
                 var score = originScore || 0;
+                // /aweme/v1/play(wm) carries the canonical video_id that DouyinMediaSourceSelector
+                // rewrites to the watermark-free /aweme/v1/play/ endpoint. A <video> tag's currentSrc
+                // after redirect is often a watermarked douyinvod CDN URL, so prefer play/playwm!
+                if (/\/aweme\/v1\/play(?:wm)?\//i.test(url) && /video_id=/i.test(url)) score += 900;
                 if (/douyinvod/i.test(url)) score += 480;
                 if (/\/video\/tos\//i.test(url)) score += 420;
                 if (/\.mp4(?:\?|$)/i.test(url)) score += 360;
@@ -605,6 +601,12 @@ private class DouyinResolverSession(
                     addThumbnail(value.video.cover, 0);
                     addThumbnail(value.video.dynamic_cover, 0);
                     addThumbnail(value.video.animated_cover, 0);
+                    var playAddr = value.video.play_addr;
+                    var vid = (playAddr && typeof playAddr.uri === 'string' && playAddr.uri) ||
+                      (typeof value.video.vid === 'string' && value.video.vid) || '';
+                    if (vid && /^[a-z0-9_]{10,}$/i.test(vid)) {
+                      add('https://aweme.snssdk.com/aweme/v1/playwm/?video_id=' + vid + '&ratio=1080p&line=0', 950);
+                    }
                   }
                   var keys = Object.keys(value);
                   for (var j = 0; j < keys.length && j < 120; j++) {

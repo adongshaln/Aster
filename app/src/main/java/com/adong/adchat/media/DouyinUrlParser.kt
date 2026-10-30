@@ -6,8 +6,14 @@ data class DouyinLink(
     val sourceUrl: String,
     val videoId: String? = null
 ) {
+    /**
+     * 移动端分享页（iesdouyin.com / m.douyin.com / /share/video/）内嵌 _ROUTER_DATA，
+     * 含 video_id 及 /aweme/v1/playwm/ 地址，经 DouyinMediaSourceSelector 改写为
+     * /aweme/v1/play/ 即可拿到真无水印源。若强行改写为 PC 端 www.douyin.com/jingxuan，
+     * 在 Android WebView 的移动端 UA 下 detail API 会失败且页面播放器只会吐出带水印 CDN 直链。
+     */
     val resolverUrl: String
-        get() = videoId?.let { "https://www.douyin.com/jingxuan?modal_id=$it" } ?: sourceUrl
+        get() = videoId?.let { "https://www.iesdouyin.com/share/video/$it/" } ?: sourceUrl
 }
 
 object DouyinUrlParser {
@@ -34,7 +40,7 @@ object DouyinUrlParser {
     }
 
     fun canonicalResolverUrl(url: String): String {
-        return extractVideoId(url)?.let { "https://www.douyin.com/jingxuan?modal_id=$it" } ?: url
+        return extractVideoId(url)?.let { "https://www.iesdouyin.com/share/video/$it/" } ?: url
     }
 
     private fun isDouyinHost(host: String): Boolean {

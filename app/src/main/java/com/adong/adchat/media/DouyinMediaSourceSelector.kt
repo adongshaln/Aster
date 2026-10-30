@@ -16,11 +16,12 @@ internal object DouyinMediaSourceSelector {
     fun preferWatermarkFree(url: String): DouyinPreferredMediaSource {
         val normalized = url.trim()
         val isPlaywm = normalized.contains("/aweme/v1/playwm/", ignoreCase = true)
+        val isPlay = normalized.contains("/aweme/v1/play/", ignoreCase = true)
         val watermarkFree = if (isPlaywm) normalized.replace("/aweme/v1/playwm/", "/aweme/v1/play/", ignoreCase = true) else normalized
         return DouyinPreferredMediaSource(
             primaryUrl = watermarkFree,
             compatibilityUrl = if (isPlaywm) normalized else "",
-            watermarkFreePreferred = isPlaywm
+            watermarkFreePreferred = isPlaywm || isPlay
         )
     }
 }

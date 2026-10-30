@@ -1,4 +1,4 @@
-﻿package com.adong.adchat.media
+package com.adong.adchat.media
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -13,7 +13,7 @@ class DouyinUrlParserTest {
         requireNotNull(parsed)
         assertEquals("6961737553342991651", parsed.videoId)
         assertEquals(
-            "https://www.douyin.com/jingxuan?modal_id=6961737553342991651",
+            "https://www.iesdouyin.com/share/video/6961737553342991651/",
             parsed.resolverUrl
         )
     }

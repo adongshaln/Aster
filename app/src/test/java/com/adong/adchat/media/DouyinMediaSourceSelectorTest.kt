@@ -42,7 +42,7 @@ class DouyinMediaSourceSelectorTest {
         val source = DouyinMediaSourceSelector.preferWatermarkFree(play)
 
         assertEquals(play, source.primaryUrl)
-        assertFalse(source.watermarkFreePreferred)
+        assertTrue(source.watermarkFreePreferred)
         assertEquals("", source.compatibilityUrl)
     }
 }
