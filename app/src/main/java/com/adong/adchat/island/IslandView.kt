@@ -376,7 +376,7 @@ class IslandView(
             setWindowFocusable(true)
         }.also {
             screenPanel = it
-            cardHost.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+            cardHost.addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
         panel.visibility = VISIBLE
         panel.applyPalette(palette)
@@ -401,9 +401,12 @@ class IslandView(
     }
 
     internal fun updateScreenQuestion(session: ScreenQuestionSession): Unit = onMain {
-        if (state !is State.Screen) return@onMain
+        val previous = (state as? State.Screen)?.session ?: return@onMain
+        val enteringConversation = (previous.history.isEmpty() && previous.question.isBlank() && previous.task == null) &&
+            (session.history.isNotEmpty() || session.question.isNotBlank() || session.task != null)
         state = State.Screen(session)
         screenPanel?.render(session)
+        if (enteringConversation) prepareExpandedViewport()
     }
 
     internal fun hideKeyboard() {
@@ -1579,11 +1582,19 @@ class IslandView(
         val viewportWidth = requestedWidth - ((requestedWidth - ringWidth) and 1)
         val contentWidth = (viewportWidth - dp(28)).coerceAtLeast(1)
         val tagTop = (dpF(WINDOW_SIZE_DP) / 2f - dpF(TAG_TOP_INSET_DP)).roundToInt()
-        val cardHeight = if (screenQuestion) {
+        val hasScreenConversation = screenPanel?.hasConversationContent == true
+        val maxScreenCardHeight = if (screenQuestion) {
             val available = screenSize.y - screenKeyboardInset - dp(24) - tagTop
-            minOf(dp(620), (available / (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()).coerceAtLeast(dp(180))
-        } else LayoutParams.WRAP_CONTENT
-        screenPanel?.setCompact(cardHeight in 1 until dp(370))
+            minOf(dp(560), (available / (1f + IslandJellyBody.MAX_HEIGHT_EXCESS)).roundToInt()).coerceAtLeast(dp(180))
+        } else 0
+        screenPanel?.let { panel ->
+            panel.setCompact(maxScreenCardHeight in 1 until dp(350))
+            panel.layoutParams = LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                if (hasScreenConversation) LayoutParams.MATCH_PARENT else LayoutParams.WRAP_CONTENT
+            )
+        }
+        val cardHeight = if (screenQuestion && hasScreenConversation) maxScreenCardHeight else LayoutParams.WRAP_CONTENT
         cardHost.layoutParams = LayoutParams(contentWidth, cardHeight).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             topMargin = tagTop
@@ -1604,7 +1615,8 @@ class IslandView(
         }
         cardHost.measure(
             MeasureSpec.makeMeasureSpec(contentWidth, MeasureSpec.EXACTLY),
-            if (screenQuestion) MeasureSpec.makeMeasureSpec(cardHeight, MeasureSpec.EXACTLY)
+            if (screenQuestion && hasScreenConversation) MeasureSpec.makeMeasureSpec(maxScreenCardHeight, MeasureSpec.EXACTLY)
+            else if (screenQuestion) MeasureSpec.makeMeasureSpec(maxScreenCardHeight, MeasureSpec.AT_MOST)
             else MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
         )
         // Geometry is configured in onLayout from ACTUAL bounds, atomically with the centred ring.

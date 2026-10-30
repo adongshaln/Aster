@@ -126,17 +126,39 @@ class IslandViewTest {
         view.showScreenQuestion(session)
         layoutWindow()
         advance(1_200)
-        val originalHeight = surface.getChildAt(0).height
+        val compactPromptHeight = surface.getChildAt(0).height
+        assertTrue(
+            "initial prompt card should stay compact before any answer exists: height=$compactPromptHeight",
+            compactPromptHeight < 320
+        )
+        fun findTextButton(parent: ViewGroup, label: String): android.widget.TextView? {
+            for (i in 0 until parent.childCount) {
+                val child = parent.getChildAt(i)
+                if (child is android.widget.TextView && child.text?.toString() == label) return child
+                if (child is ViewGroup) findTextButton(child, label)?.let { return it }
+            }
+            return null
+        }
+        assertNotNull("收起 must wear a visible pill background", findTextButton(view, "收起")?.background)
+        assertNotNull("结束 must wear a visible pill background", findTextButton(view, "结束")?.background)
+
+        view.updateScreenQuestion(session.copy(question = "解释这里", task = StarIslandTaskState(StarIslandAction.AskScreen,
+            StarIslandPhase.Working, output = "这是答案")))
+        layoutWindow()
+        advance(1_200)
+        val expandedConversationHeight = surface.getChildAt(0).height
+        assertTrue(
+            "conversation panel expands smoothly once a question is asked: compact=$compactPromptHeight expanded=$expandedConversationHeight",
+            expandedConversationHeight > compactPromptHeight + 80
+        )
         view.dispatchApplyWindowInsets(android.view.WindowInsets.Builder()
-            .setInsets(android.view.WindowInsets.Type.ime(), android.graphics.Insets.of(0, 0, 0, 200))
+            .setInsets(android.view.WindowInsets.Type.ime(), android.graphics.Insets.of(0, 0, 0, 360))
             .setVisible(android.view.WindowInsets.Type.ime(), true).build())
         layoutWindow()
-        assertTrue("keyboard should reduce card height: before=$originalHeight, after=${surface.getChildAt(0).height}",
-            surface.getChildAt(0).height < originalHeight)
+        assertTrue("keyboard should reduce active conversation card height: before=$expandedConversationHeight, after=${surface.getChildAt(0).height}",
+            surface.getChildAt(0).height < expandedConversationHeight)
         assertEquals(y, (view.layoutParams as WindowManager.LayoutParams).y)
         assertEquals(size, ring.height)
-        view.updateScreenQuestion(session.copy(task = StarIslandTaskState(StarIslandAction.AskScreen,
-            StarIslandPhase.Working, output = "这是答案")))
         fun findInput(parent: ViewGroup): android.widget.EditText? {
             for (i in 0 until parent.childCount) {
                 val child = parent.getChildAt(i)

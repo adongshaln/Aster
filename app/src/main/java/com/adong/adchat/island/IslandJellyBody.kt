@@ -45,6 +45,7 @@ internal class IslandJellyBody {
     private var closeHeightDamping = min(0.95f, HEIGHT_DAMPING + 0.12f)
     private var borderWeightScale = 1f
     private var fullScreenMode = false
+    private var contentFloor = 0f
 
     var opened = false
         private set
@@ -130,15 +131,17 @@ internal class IslandJellyBody {
     }
 
     fun open(now: Double) {
+        if (opened && contentAlpha >= 0.95f) contentFloor = 1f
         opened = true
         width.set(expandedRight - expandedLeft, now, 0.0, openWidthResponse, openWidthDamping)
         height.set(expandedBottom - expandedTop, now, HEIGHT_DELAY, openHeightResponse, openHeightDamping)
-        content.set(1f, now, CONTENT_DELAY, 0.40f, 0.82f)
+        content.set(1f, now, if (contentFloor > 0f) 0.0 else CONTENT_DELAY, 0.40f, 0.82f)
     }
 
     /** Height retracts first, width follows: the tag slips back into the core along its own path. */
     fun close(now: Double) {
         opened = false
+        contentFloor = 0f
         height.set(seed, now, 0.0, openHeightResponse * 0.78f, closeHeightDamping)
         width.set(seed, now, HEIGHT_DELAY * 0.8, openWidthResponse * 0.9f, closeWidthDamping)
         content.set(CONTENT_REST_SCALE, now, 0.0, 0.3f, 0.9f)
@@ -147,6 +150,7 @@ internal class IslandJellyBody {
     /** Jump straight to the open or closed rest state (animations disabled, or once settled). */
     fun snap(open: Boolean, now: Double) {
         opened = open
+        contentFloor = if (open) 1f else 0f
         width.jump(if (open) expandedRight - expandedLeft else seed, now)
         height.jump(if (open) expandedBottom - expandedTop else seed, now)
         content.jump(if (open) 1f else CONTENT_REST_SCALE, now)
@@ -175,7 +179,11 @@ internal class IslandJellyBody {
         heightProgress = ((h - seed) / travelH).coerceIn(0f, 1f)
         progress = ((w - seed) / travelW + (h - seed) / travelH) / 2f
         val seedTop = centerY - coreRadius
-        val rawTop = seedTop + (expandedTop - seedTop) * heightProgress
+        // Clear the camera ring within the first ~8 core radii of vertical drop so later card-height
+        // expansions (e.g. compact prompt -> answer stream) keep the top edge anchored without jumping.
+        val topSpan = min(travelH, max(1f, coreRadius * 8f))
+        val topProgress = if (fullScreenMode) heightProgress else ((h - seed) / topSpan).coerceIn(0f, 1f)
+        val rawTop = seedTop + (expandedTop - seedTop) * topProgress
         val rawBottom = rawTop + renderedHeight
         val cx = centerX + ((expandedLeft + expandedRight) / 2f - centerX) * widthFraction
         val rawLeft = cx - renderedWidth / 2f
@@ -197,7 +205,7 @@ internal class IslandJellyBody {
         val physicalSpan = max(1f, coreRadius * TRANSFER_SPAN_CORE_MULTIPLES)
         val physicalProgress = max(renderedWidth - seed, renderedHeight - seed) / physicalSpan
         inkTransfer = smooth(0f, 0.64f, max(progress, physicalProgress))
-        paperAlpha = smooth(0.03f, 0.55f, heightProgress)
+        paperAlpha = max(smooth(0.03f, 0.55f, heightProgress), contentFloor)
         val bezelSeat = if (fullScreenMode) 1f - smooth(0.70f, 0.98f, max(widthFraction, heightProgress)) else 1f
         val formation = smooth(0f, 0.28f, progress) * bezelSeat
         contourLean = coreRadius * 0.42f * (0.7f * vw - 0.3f * vh) * formation
@@ -205,7 +213,8 @@ internal class IslandJellyBody {
         val fade = ((heightProgress - CONTENT_FADE_START) / (CONTENT_FADE_END - CONTENT_FADE_START)).coerceIn(0f, 1f)
         // The text waits for both shoulders and the lower edge. Otherwise a partially exposed
         // button becomes a coloured wedge while the pen is still describing the silhouette.
-        contentAlpha = fade * fade * (3f - 2f * fade) * smooth(0.88f, 0.99f, widthFraction)
+        val computedContentAlpha = fade * fade * (3f - 2f * fade) * smooth(0.88f, 0.99f, widthFraction)
+        contentAlpha = max(computedContentAlpha, contentFloor)
         contentScale = content.value(now)
     }
 
