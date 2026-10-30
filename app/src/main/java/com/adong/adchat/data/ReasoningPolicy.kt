@@ -212,7 +212,11 @@ internal object ReasoningPolicy {
             ReasoningFamily.DeepSeek -> {
                 if (value == DEFAULT) return
                 body.put("thinking", JSONObject().put("type", if (value == "none") "disabled" else "enabled"))
-                if (value != "none") body.put("reasoning_effort", value)
+                if (responsesApi) {
+                    body.put("reasoning", JSONObject().put("effort", value))
+                } else if (value != "none") {
+                    body.put("reasoning_effort", value)
+                }
             }
 
             ReasoningFamily.Unsupported -> Unit

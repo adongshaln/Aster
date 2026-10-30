@@ -141,11 +141,13 @@ class IslandViewTest {
         }
         assertNotNull("收起 must wear a visible pill background", findTextButton(view, "收起")?.background)
         assertNotNull("结束 must wear a visible pill background", findTextButton(view, "结束")?.background)
+        assertNotNull("quick prompt chip 提取文字 should be shown on initial prompt card", findTextButton(view, "提取文字"))
 
         view.updateScreenQuestion(session.copy(question = "解释这里", task = StarIslandTaskState(StarIslandAction.AskScreen,
-            StarIslandPhase.Working, output = "这是答案")))
+            StarIslandPhase.Working, output = "## 核心要点\n- **第一项**：这是答案")))
         layoutWindow()
         advance(1_200)
+        assertNotNull("Markdown heading should be rendered inside screen conversation", findTextButton(view, "核心要点"))
         val expandedConversationHeight = surface.getChildAt(0).height
         assertTrue(
             "conversation panel expands smoothly once a question is asked: compact=$compactPromptHeight expanded=$expandedConversationHeight",

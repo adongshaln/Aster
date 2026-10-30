@@ -187,10 +187,11 @@ class IslandView(
     private var screenKeyboardInset = 0
     private val platformIcon: ImageView
     private val cardTitle: TextView
+    private val cardBadge: TextView
     private val cardSummary: TextView
     private val actionGrid: LinearLayout
     private val outputScroll: ScrollView
-    private val outputText: TextView
+    private val outputMarkdown: IslandMarkdownView
     private data class ActionButtonRef(val view: TextView, val primary: Boolean, val enabled: Boolean)
     private val actionButtons = mutableListOf<ActionButtonRef>()
     private var renderedActions: String? = null
@@ -212,7 +213,8 @@ class IslandView(
     internal val ringBounce: Float get() = ringView.bounce
     internal val cardTitleColor: Int get() = cardTitle.currentTextColor
     internal val cardSummaryColor: Int get() = cardSummary.currentTextColor
-    internal val outputColor: Int get() = outputText.currentTextColor
+    internal val outputColor: Int get() = outputMarkdown.currentTextColor
+    internal val outputMarkdownText: String get() = outputMarkdown.rawMarkdown
     internal val actionTextColors: List<Int> get() = actionButtons.map { it.view.currentTextColor }
 
     /** Apply the app's custom theme without rebuilding the overlay or interrupting its motion. */
@@ -232,10 +234,11 @@ class IslandView(
         }
         platformIcon = card.icon
         cardTitle = card.title
+        cardBadge = card.badge
         cardSummary = card.summary
         actionGrid = card.actions
         outputScroll = card.outputScroll
-        outputText = card.outputText
+        outputMarkdown = card.outputMarkdown
         surface.addView(cardHost)
         addView(surface, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         ringView = IslandInkRingView(context).apply {
@@ -329,7 +332,7 @@ class IslandView(
         state = card.copy(task = task)
         mainHandler.removeCallbacks(hideRunnable)
         if (enteringTask) {
-            outputText.text = ""
+            outputMarkdown.setMarkdown("")
             outputScroll.scrollTo(0, 0)
         }
         renderCard()
@@ -753,15 +756,15 @@ class IslandView(
     // ---------- The paper tag ----------
 
     private data class CardParts(
-        val host: LinearLayout, val icon: ImageView, val title: TextView,
+        val host: LinearLayout, val icon: ImageView, val title: TextView, val badge: TextView,
         val summary: TextView, val actions: LinearLayout, val outputScroll: ScrollView,
-        val outputText: TextView,
+        val outputMarkdown: IslandMarkdownView,
     )
 
     private fun buildCard(): CardParts {
         val host = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(47), dp(18), dp(18))
+            setPadding(dp(18), dp(46), dp(18), dp(16))
             layoutTransition = jellyLayoutTransition()
         }
         val headerRow = LinearLayout(context).apply {
@@ -774,11 +777,16 @@ class IslandView(
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(palette.well)
+                setStroke(max(1, dp(1)), palette.edge)
             }
             imageTintList = ColorStateList.valueOf(palette.glyph)
         }
-        headerRow.addView(icon, LinearLayout.LayoutParams(dp(38), dp(38)))
+        headerRow.addView(icon, LinearLayout.LayoutParams(dp(40), dp(40)))
         val texts = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val titleRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
         val title = TextView(context).apply {
             textSize = 16f
             typeface = Typeface.SERIF
@@ -788,28 +796,47 @@ class IslandView(
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
         }
+        val badge = TextView(context).apply {
+            textSize = 11f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            setTextColor(palette.clay)
+            includeFontPadding = false
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(3), dp(8), dp(3))
+            background = GradientDrawable().apply {
+                setColor(IslandMarkdown.blendColor(palette.well, palette.clay, 0.14f))
+                setStroke(max(1, dp(1)), IslandMarkdown.blendColor(palette.edge, palette.clay, 0.35f))
+                cornerRadius = dpF(11f)
+            }
+        }
+        titleRow.addView(title, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+        titleRow.addView(badge, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            marginStart = dp(8)
+        })
         val summary = TextView(context).apply {
             textSize = 13f
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setTextColor(palette.muted)
             includeFontPadding = false
-            setLines(3)
+            maxLines = 2
+            setLineSpacing(dpF(2.5f), 1f)
             ellipsize = TextUtils.TruncateAt.END
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            background = GradientDrawable().apply {
+                setColor(palette.well)
+                setStroke(max(1, dp(1)), palette.edge)
+                cornerRadius = dpF(12f)
+            }
         }
-        texts.addView(title, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+        texts.addView(titleRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         texts.addView(summary, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(5)
+            topMargin = dp(7)
         })
         headerRow.addView(texts, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
             marginStart = dp(12)
         })
-        val output = TextView(context).apply {
-            textSize = 14f
-            setTextColor(palette.ink)
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            setLineSpacing(dpF(3f), 1f)
-            // Copying is explicit; streaming does not repeatedly move a text selection.
+        val output = IslandMarkdownView(context, palette).apply {
+            setPadding(dp(14), dp(12), dp(14), dp(12))
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         }
         val scroll = ScrollView(context).apply {
@@ -818,7 +845,8 @@ class IslandView(
             isVerticalScrollBarEnabled = true
             background = GradientDrawable().apply {
                 setColor(palette.well)
-                cornerRadius = dpF(14f)
+                setStroke(max(1, dp(1)), palette.edge)
+                cornerRadius = dpF(16f)
             }
             addView(output, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         }
@@ -829,11 +857,11 @@ class IslandView(
         val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         body.addView(scroll, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(180)).apply { topMargin = dp(12) })
         body.addView(actions, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(14)
+            topMargin = dp(12)
         })
         host.addView(headerRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         host.addView(body, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        return CardParts(host, icon, title, summary, actions, scroll, output)
+        return CardParts(host, icon, title, badge, summary, actions, scroll, output)
     }
 
     private fun jellyLayoutTransition() = LayoutTransition().apply {
@@ -850,16 +878,29 @@ class IslandView(
         surface.setPalette(next)
         ringView.inkColor = next.clay
         cardTitle.setTextColor(next.ink)
+        cardBadge.setTextColor(next.clay)
+        cardBadge.background = GradientDrawable().apply {
+            setColor(IslandMarkdown.blendColor(next.well, next.clay, 0.14f))
+            setStroke(max(1, dp(1)), IslandMarkdown.blendColor(next.edge, next.clay, 0.35f))
+            cornerRadius = dpF(11f)
+        }
         cardSummary.setTextColor(next.muted)
-        outputText.setTextColor(next.ink)
+        cardSummary.background = GradientDrawable().apply {
+            setColor(next.well)
+            setStroke(max(1, dp(1)), next.edge)
+            cornerRadius = dpF(12f)
+        }
+        outputMarkdown.applyPalette(next)
         screenPanel?.applyPalette(next)
         outputScroll.background = GradientDrawable().apply {
             setColor(next.well)
-            cornerRadius = dpF(14f)
+            setStroke(max(1, dp(1)), next.edge)
+            cornerRadius = dpF(16f)
         }
         platformIcon.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(next.well)
+            setStroke(max(1, dp(1)), next.edge)
         }
         platformIcon.imageTintList = ColorStateList.valueOf(next.glyph)
         displayedContent?.let { content ->
@@ -879,6 +920,7 @@ class IslandView(
             ref.view.setTextColor(if (ref.primary) next.onClay else next.ink)
             ref.view.background = GradientDrawable().apply {
                 setColor(if (ref.primary) next.clay else next.well)
+                if (!ref.primary) setStroke(max(1, dp(1)), next.edge)
                 cornerRadius = dpF(22f)
             }
         }
@@ -908,6 +950,7 @@ class IslandView(
         alpha = if (action.enabled) 1f else 0.45f
         background = GradientDrawable().apply {
             setColor(if (action.primary) palette.clay else palette.well)
+            if (!action.primary) setStroke(max(1, dp(1)), palette.edge)
             cornerRadius = dpF(22f)
         }
         setOnTouchListener { v, event ->
@@ -980,8 +1023,20 @@ class IslandView(
             StarIslandPhase.Error -> "${task.action.label}未完成"
         }
         if (cardTitle.text.toString() != title) cardTitle.text = title
+        val badgeLabel = if (task == null) when (content.kind) {
+            StarIslandKind.Text -> "${content.text.length} 字 · 极速"
+            StarIslandKind.Web -> "网页 · 极速"
+            StarIslandKind.Media -> "媒体直链"
+        } else when (task.phase) {
+            StarIslandPhase.Working -> "极速响应中"
+            StarIslandPhase.Complete -> "已完成"
+            StarIslandPhase.Stopped -> "已中止"
+            StarIslandPhase.Error -> "需关注"
+        }
+        if (cardBadge.text.toString() != badgeLabel) cardBadge.text = badgeLabel
         val summary = IslandCardText.summary(content)
         if (cardSummary.text.toString() != summary) cardSummary.text = summary
+        cardSummary.maxLines = if (task == null) 2 else 1
         val iconKey = "${content.kind}:${content.mediaLink?.platform}"
         if (renderedIconKey != iconKey) {
             renderedIconKey = iconKey
@@ -999,7 +1054,8 @@ class IslandView(
         outputScroll.visibility = if (task == null) GONE else VISIBLE
         if (task != null) {
             val nearEnd = !outputScroll.canScrollVertically(1) ||
-                outputText.height - outputScroll.height - outputScroll.scrollY < dp(28)
+                outputMarkdown.height - outputScroll.height - outputScroll.scrollY < dp(28)
+            val isPlaceholder = task.output.isBlank()
             val body = task.output.ifBlank {
                 task.detail.ifBlank {
                     when (task.phase) {
@@ -1011,10 +1067,10 @@ class IslandView(
                 }
             }.let { output ->
                 if (task.output.isNotBlank() && task.detail.isNotBlank() && task.phase != StarIslandPhase.Working)
-                    "$output\n\n${task.detail}" else output
+                    "$output\n\n> ${task.detail}" else output
             }
-            if (outputText.text.toString() != body) {
-                outputText.text = body
+            if (outputMarkdown.rawMarkdown != body) {
+                outputMarkdown.setMarkdown(body, placeholder = isPlaceholder)
                 if (nearEnd && task.phase == StarIslandPhase.Working) outputScroll.post { outputScroll.fullScroll(FOCUS_DOWN) }
             }
         }

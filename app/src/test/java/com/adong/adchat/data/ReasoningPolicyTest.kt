@@ -103,7 +103,18 @@ class ReasoningPolicyTest {
         val deepseek = JSONObject()
         ReasoningPolicy.write(deepseek, "deepseek-chat", "max", responsesApi = true, outputTokenLimit = 8192)
         assertEquals("enabled", deepseek.getJSONObject("thinking").getString("type"))
-        assertEquals("max", deepseek.getString("reasoning_effort"))
+        assertEquals("max", deepseek.getJSONObject("reasoning").getString("effort"))
+        assertFalse(deepseek.has("reasoning_effort"))
+
+        val deepseekChat = JSONObject()
+        ReasoningPolicy.write(deepseekChat, "deepseek-chat", "low", responsesApi = false, outputTokenLimit = 8192)
+        assertEquals("enabled", deepseekChat.getJSONObject("thinking").getString("type"))
+        assertEquals("low", deepseekChat.getString("reasoning_effort"))
+
+        val deepseekNoneResponses = JSONObject()
+        ReasoningPolicy.write(deepseekNoneResponses, "deepseek-reasoner", "none", responsesApi = true, outputTokenLimit = 8192)
+        assertEquals("disabled", deepseekNoneResponses.getJSONObject("thinking").getString("type"))
+        assertEquals("none", deepseekNoneResponses.getJSONObject("reasoning").getString("effort"))
     }
 
     @Test fun defaultAndUnsupportedModelsAddNothing() {
