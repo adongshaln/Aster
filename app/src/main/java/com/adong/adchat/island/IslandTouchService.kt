@@ -2,35 +2,43 @@ package com.adong.adchat.island
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.Build
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
 import androidx.annotation.RequiresApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 /** Hosts the island and captures one frame only after the user requests screen selection. */
 class IslandTouchService : AccessibilityService() {
     companion object {
         private val activeHost = MutableStateFlow<IslandTouchService?>(null)
         internal val connectedHost = activeHost.asStateFlow()
-        private val activeWindowFullScreen = MutableStateFlow(false)
-        internal val windowFullScreen = activeWindowFullScreen.asStateFlow()
-    }
+        private val activeWindowImmersive = MutableStateFlow(false)
+        /**
+         * True only when the status bar around the camera cutout is genuinely hidden by an
+         * immersive full-screen app (status-bar window absent from the top edge). Never relies on
+         * `AccessibilityEvent.isFullScreen`, which edge-to-edge portrait apps and launchers also set.
+         */
+        internal val windowFullScreen = activeWindowImmersive.asStateFlow()
 
-    private var fullScreenPackage: String? = null
-    private var fullScreenWindowId: Int? = null
+        internal fun computeImmersiveStatusBarHidden(
+            hasVisibleTopStatusBar: Boolean,
+            hasFocusedApplicationWindow: Boolean,
+        ): Boolean = hasFocusedApplicationWindow && !hasVisibleTopStatusBar
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        fullScreenPackage = null
-        fullScreenWindowId = null
-        activeWindowFullScreen.value = false
         activeHost.value = this
+        refreshImmersiveState()
         // The user may have enabled compatibility while the ordinary island service was stopped.
         // Starting it still respects the island's master switch and notification permission.
         IslandService.start(this)
@@ -38,33 +46,64 @@ class IslandTouchService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_WINDOWS_CHANGED) return
-        // The accessibility overlay itself is full-screen by geometry; only follow other apps'
-        // window metadata. No node tree, text, or other app content is retrieved.
-        val eventPackage = event.packageName?.toString() ?: return
-        if (eventPackage == packageName || eventPackage == "com.android.systemui") return
-        val inputMethodPackage = android.provider.Settings.Secure.getString(
-            contentResolver, android.provider.Settings.Secure.DEFAULT_INPUT_METHOD
-        )?.substringBefore('/')
-        if (eventPackage == inputMethodPackage) return
-        if (event.isFullScreen) {
-            fullScreenPackage = eventPackage
-            fullScreenWindowId = event.windowId
-            activeWindowFullScreen.value = true
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        ) {
+            refreshImmersiveState()
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        refreshImmersiveState()
+    }
+
+    /**
+     * Inspect window geometry metadata only (`canRetrieveWindowContent=false` remains enforced).
+     * When the system status bar is visible along the top edge, normal edge-to-edge apps and the
+     * launcher are NOT immersive and must never hide the island ring.
+     */
+    internal fun refreshImmersiveState() {
+        val windowList = runCatching { windows }.getOrNull()
+        if (windowList.isNullOrEmpty()) {
+            activeWindowImmersive.value = false
             return
         }
-        val previousPackage = fullScreenPackage ?: run {
-            activeWindowFullScreen.value = false
-            return
+        val statusBarMaxHeightPx = (96f * resources.displayMetrics.density).toInt().coerceAtLeast(1)
+        val screenWidthPx = resources.displayMetrics.widthPixels
+        var hasTopStatusBar = false
+        var hasApplicationWindow = false
+        val bounds = Rect()
+        try {
+            for (window in windowList) {
+                window.getBoundsInScreen(bounds)
+                if (bounds.isEmpty) continue
+                when (window.type) {
+                    AccessibilityWindowInfo.TYPE_SYSTEM -> {
+                        // StatusBar spans the top of the screen with a compact bar height; full-screen
+                        // notification shade / lock-screen system windows are much taller.
+                        val spansWidth = screenWidthPx <= 0 || bounds.width() >= screenWidthPx / 2
+                        if (bounds.top <= 2 && bounds.height() in 1..statusBarMaxHeightPx && spansWidth) {
+                            hasTopStatusBar = true
+                        }
+                    }
+                    AccessibilityWindowInfo.TYPE_APPLICATION -> {
+                        if (window.isActive || window.isFocused || bounds.top <= 2) {
+                            hasApplicationWindow = true
+                        }
+                    }
+                }
+            }
+        } finally {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                @Suppress("DEPRECATION")
+                windowList.forEach { runCatching { it.recycle() } }
+            }
         }
-        // Ignore transient non-fullscreen child windows, IME and system chrome; exit only when
-        // the same app/window leaves fullscreen or a different foreground app takes over.
-        if (eventPackage != previousPackage || event.windowId == fullScreenWindowId) {
-            fullScreenPackage = null
-            fullScreenWindowId = null
-            activeWindowFullScreen.value = false
-        }
+        activeWindowImmersive.value = computeImmersiveStatusBarHidden(
+            hasVisibleTopStatusBar = hasTopStatusBar,
+            hasFocusedApplicationWindow = hasApplicationWindow,
+        )
     }
 
     override fun onInterrupt() = Unit
@@ -118,9 +157,7 @@ class IslandTouchService : AccessibilityService() {
 
     private fun detachHost() {
         if (activeHost.value === this) {
-            fullScreenPackage = null
-            fullScreenWindowId = null
-            activeWindowFullScreen.value = false
+            activeWindowImmersive.value = false
             activeHost.value = null
         }
     }

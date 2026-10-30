@@ -5,12 +5,16 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.SystemClock
+import android.view.MotionEvent
+import android.view.View
 import com.adong.adchat.data.ChatImageAttachment
 import com.adong.adchat.data.ChatMessage
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 
@@ -86,5 +90,126 @@ class ScreenQuestionTest {
         assertThrows(IllegalArgumentException::class.java) {
             screenQuestionHistory("x".repeat(2001), ScreenQuestionRequest(crop, emptyList()))
         }
+    }
+
+    @Test fun redmiTurbo5MaxFullScreenSheetStaysInsideBezelAndThinsSmoothlyOnRetract() {
+        val density = 3.25f
+        val width = 1280f
+        val height = 2772f
+        val bezelRadius = 156f // 48dp * 3.25
+        val inset = 6.5f * density
+        val body = IslandJellyBody()
+        val contour = IslandInkContour()
+        body.configure(
+            centerX = width / 2f,
+            centerY = 25.5f * density,
+            coreRadius = IslandInkRing.CORE_RADIUS_DP * density,
+            expandedLeft = inset,
+            expandedTop = inset,
+            expandedRight = width - inset,
+            expandedBottom = height - inset,
+            cornerRadius = bezelRadius - inset,
+            fullScreenSheet = true,
+        )
+        body.open(0.0)
+        for (ms in 0..1600 step 16) {
+            body.update(ms / 1000.0)
+            contour.update(body, density, 1f, 1f)
+            // Even at peak spring overshoot, the border must stay strictly inside the display bounds.
+            for (i in 0..IslandInkRing.SAMPLES) {
+                assertTrue("outerX[$i]=${contour.outerX[i]} at ${ms}ms", contour.outerX[i] in 0f..width)
+                assertTrue("outerY[$i]=${contour.outerY[i]} at ${ms}ms", contour.outerY[i] in 0f..height)
+            }
+        }
+        body.snap(true, 2.0)
+        body.update(2.0)
+        contour.update(body, density, 1f, 1f)
+        // Verify smooth corner sampling across all four bezel corners on 1280x2772.
+        var topLeftArcPoints = 0
+        var bottomRightArcPoints = 0
+        for (i in 0..IslandInkRing.SAMPLES) {
+            if (contour.outerX[i] < bezelRadius && contour.outerY[i] < bezelRadius) topLeftArcPoints++
+            if (contour.outerX[i] > width - bezelRadius && contour.outerY[i] > height - bezelRadius) bottomRightArcPoints++
+        }
+        assertTrue("topLeftArcPoints=$topLeftArcPoints", topLeftArcPoints >= 5)
+        assertTrue("bottomRightArcPoints=$bottomRightArcPoints", bottomRightArcPoints >= 5)
+
+        // During close, when the sheet is still ~100dp tall, inkTransfer must already remain high
+        // so it never renders a thick 2.1dp ring stroke on a medium-sized rectangle.
+        body.close(2.0)
+        var checkedMidRetract = false
+        for (ms in 2000..2600 step 10) {
+            body.update(ms / 1000.0)
+            val spanDp = (body.bottom - body.top) / density
+            if (spanDp in 95f..125f) {
+                checkedMidRetract = true
+                assertTrue("inkTransfer=${body.inkTransfer} at span=${spanDp}dp", body.inkTransfer > 0.65f)
+            }
+        }
+        assertTrue(checkedMidRetract)
+    }
+
+    @Test @org.robolectric.annotation.LooperMode(org.robolectric.annotation.LooperMode.Mode.PAUSED)
+    fun liveDragUpdatesVisualSelectionImmediatelyDuringMoveEvents() {
+        org.robolectric.shadows.ShadowChoreographer.setPaused(true)
+        org.robolectric.shadows.ShadowChoreographer.setFrameDelay(java.time.Duration.ofMillis(16))
+        val context = RuntimeEnvironment.getApplication()
+        val bitmap = Bitmap.createBitmap(400, 800, Bitmap.Config.ARGB_8888)
+        val view = ScreenSelectionView(context, bitmap, IslandPalette.Light, onConfirm = {}, onCancel = {})
+        try {
+            view.measure(
+                View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
+            )
+            view.layout(0, 0, 400, 800)
+            assertTrue(view.attach())
+            repeat(80) {
+                org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper())
+                    .idleFor(java.time.Duration.ofMillis(16))
+            }
+            val downTime = SystemClock.uptimeMillis()
+            fun send(action: Int, x: Float, y: Float) {
+                val ev = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), action, x, y, 0)
+                view.dispatchTouchEvent(ev)
+                ev.recycle()
+            }
+            send(MotionEvent.ACTION_DOWN, 60f, 120f)
+            assertTrue(view.hasLiveDragFeedback)
+            send(MotionEvent.ACTION_MOVE, 140f, 220f)
+            // Intermediate MOVE must immediately expose the live selection rectangle before ACTION_UP.
+            assertEquals(RectF(60f, 120f, 140f, 220f), view.visualSelectionBounds)
+            send(MotionEvent.ACTION_MOVE, 240f, 360f)
+            assertEquals(RectF(60f, 120f, 240f, 360f), view.visualSelectionBounds)
+            send(MotionEvent.ACTION_UP, 240f, 360f)
+            assertFalse(view.hasLiveDragFeedback)
+            assertEquals(RectF(60f, 120f, 240f, 360f), view.visualSelectionBounds)
+        } finally {
+            view.destroy()
+            org.robolectric.shadows.ShadowChoreographer.setFrameDelay(java.time.Duration.ofMillis(1))
+            org.robolectric.shadows.ShadowChoreographer.setPaused(false)
+        }
+    }
+
+    @Test fun immersiveDetectionIgnoresEdgeToEdgeAppsWhenTopStatusBarRemainsVisible() {
+        assertFalse(
+            "portrait edge-to-edge app or launcher with visible StatusBar must never hide the island",
+            IslandTouchService.computeImmersiveStatusBarHidden(
+                hasVisibleTopStatusBar = true,
+                hasFocusedApplicationWindow = true,
+            )
+        )
+        assertTrue(
+            "genuine immersive app with hidden StatusBar hides the island",
+            IslandTouchService.computeImmersiveStatusBarHidden(
+                hasVisibleTopStatusBar = false,
+                hasFocusedApplicationWindow = true,
+            )
+        )
+        assertFalse(
+            IslandTouchService.computeImmersiveStatusBarHidden(
+                hasVisibleTopStatusBar = false,
+                hasFocusedApplicationWindow = false,
+            )
+        )
     }
 }

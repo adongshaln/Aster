@@ -211,6 +211,31 @@ class IslandViewTest {
         assertEquals(1f, view.expansionProgress, 0f)
     }
 
+    @Test fun lockScreenSuppressionAndSeamlessScreenCaptureRestoreKeepRingInteractiveAndOpaque() {
+        view.attach()
+        layoutWindow()
+        view.suppressForSecureDisplay()
+        assertTrue(view.isTemporarilySuppressed)
+        assertEquals(View.GONE, view.visibility)
+
+        view.restoreAfterTemporaryHide()
+        layoutWindow()
+        // Black camera core must remain opaque immediately on reveal; only the ink stroke blooms in.
+        assertEquals(1f, ring.alpha, 0f)
+        advance(500)
+        assertFalse(view.isTemporarilySuppressed)
+        assertEquals(View.VISIBLE, view.visibility)
+        assertTrue(ring.isClickable)
+        assertEquals(1f, ring.inkAlpha, 0.06f)
+
+        // Seamless handoff after ScreenSelectionView's contour has already converged onto the ring:
+        // must NOT drop inkAlpha back to 0 or create a double-fade flicker.
+        view.restoreAfterScreenCapture(seamlessFromContour = true)
+        assertEquals(1f, ring.alpha, 0f)
+        assertEquals(1f, ring.inkAlpha, 0.06f)
+        assertTrue(ring.isClickable)
+    }
+
     @Test fun overlayResizeNeverPlaysTheWindowMoveAnimation() {
         view.attach()
         layoutWindow()

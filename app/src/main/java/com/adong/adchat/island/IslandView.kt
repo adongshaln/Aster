@@ -475,18 +475,24 @@ class IslandView(
         }
         visibility = VISIBLE
         alpha = 1f
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealSize(screenSize)
         setWindowTouchable(true)
-        if (expandedViewport && state != State.Hidden && surface.active) {
-            // The resident black lens stays fixed while the outline grows back around it.
+        if (state != State.Hidden) {
             restoreRingVisuals()
             ringView.isClickable = false
-            surface.setInkState(ringView.ink, ringView.bounce, 1f)
-            if (!surface.body.opened) startBody(open = true)
-            else renderBody(now())
-            after()
+            if (state is State.Screen) setWindowFocusable(true)
+            prepareExpandedViewport()
+            afterViewportLayout {
+                surface.setInkState(ringView.ink, ringView.bounce, 1f)
+                if (!surface.body.opened) startBody(open = true)
+                else renderBody(now())
+                after()
+            }
         } else {
+            applyIdleViewport()
             ringView.isClickable = false
-            ringView.alpha = 0f
+            ringView.alpha = 1f
             ringView.scaleX = 1f
             ringView.scaleY = 1f
             ringView.inkAlpha = 0f
@@ -506,7 +512,7 @@ class IslandView(
             duration = 320L
             addUpdateListener {
                 val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
-                ringView.alpha = p
+                ringView.alpha = 1f
                 ringView.scaleX = 1f
                 ringView.scaleY = 1f
                 ringView.inkAlpha = p
@@ -609,18 +615,25 @@ class IslandView(
                 if (continuation.isActive) continuation.resume(Unit)
                 return@onMain
             }
+            val startInk = ringView.ink
             val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 230L
+                duration = 170L
                 addUpdateListener {
-                    val p = IslandSpring.progress(it.animatedFraction)
+                    val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
+                    ringView.ink = lerp(startInk, 0.85f, p)
                     ringView.inkAlpha = 1f - p
                 }
                 addListener(object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: android.animation.Animator) {
                         if (ringTransitionAnimator !== animation) return
                         ringTransitionAnimator = null
+                        ringView.ink = 1f
                         visibility = INVISIBLE
-                        if (continuation.isActive) continuation.resume(Unit)
+                        // Wait one choreographer frame so SurfaceFlinger composites the clean
+                        // underlying app frame without the island window before takeScreenshot().
+                        postOnAnimation {
+                            if (continuation.isActive) continuation.resume(Unit)
+                        }
                     }
                 })
             }
@@ -637,7 +650,15 @@ class IslandView(
         }
     }
 
-    internal fun restoreAfterScreenCapture(animate: Boolean = true, after: () -> Unit = {}) = onMain {
+    /**
+     * Hand ownership directly back from a closed full-screen selection contour that has already
+     * converged onto the camera ring, or fade in smoothly if the capture failed before any contour.
+     */
+    internal fun restoreAfterScreenCapture(
+        animate: Boolean = true,
+        seamlessFromContour: Boolean = false,
+        after: () -> Unit = {}
+    ) = onMain {
         if (temporarilySuppressed) {
             after()
             return@onMain
@@ -656,26 +677,27 @@ class IslandView(
         }
         visibility = VISIBLE
         setWindowTouchable(true)
-        ringView.isClickable = false
-        ringView.alpha = 1f
-        ringView.scaleX = 1f
-        ringView.scaleY = 1f
-        ringView.inkAlpha = 0f
-        if (!animate || !ValueAnimator.areAnimatorsEnabled()) {
+        if (seamlessFromContour || !animate || !ValueAnimator.areAnimatorsEnabled()) {
             ringView.alpha = 1f
             ringView.scaleX = 1f
             ringView.scaleY = 1f
+            ringView.ink = 1f
+            ringView.bounce = 1f
             ringView.inkAlpha = 1f
             ringView.isClickable = true
             startBreathing()
             after()
             return@onMain
         }
+        ringView.isClickable = false
+        ringView.alpha = 1f
+        ringView.scaleX = 1f
+        ringView.scaleY = 1f
+        ringView.inkAlpha = 0f
         val animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 360L
+            duration = 320L
             addUpdateListener {
-                val p = IslandSpring.progress(it.animatedFraction)
-                ringView.alpha = p
+                val p = IslandSpring.progress(it.animatedFraction).coerceIn(0f, 1f)
                 ringView.inkAlpha = p
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
@@ -683,6 +705,7 @@ class IslandView(
                     if (ringTransitionAnimator !== animation) return
                     ringTransitionAnimator = null
                     if (!destroyed && state == State.Hidden) {
+                        ringView.inkAlpha = 1f
                         ringView.isClickable = true
                         startBreathing()
                     }

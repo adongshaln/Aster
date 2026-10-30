@@ -22,6 +22,7 @@ internal class IslandJellyBody {
         const val MAX_HEIGHT_EXCESS = 0.12f
         private const val CONTENT_FADE_START = 0.72f
         private const val CONTENT_FADE_END = 0.98f
+        private const val TRANSFER_SPAN_CORE_MULTIPLES = 10f
     }
 
     private val width = IslandJellySpring(0f, WIDTH_RESPONSE, WIDTH_DAMPING)
@@ -36,6 +37,13 @@ internal class IslandJellyBody {
     private var expandedRight = 0f
     private var expandedBottom = 0f
     private var cornerRadius = 0f
+    private var openWidthResponse = WIDTH_RESPONSE
+    private var openWidthDamping = WIDTH_DAMPING
+    private var openHeightResponse = HEIGHT_RESPONSE
+    private var openHeightDamping = HEIGHT_DAMPING
+    private var closeWidthDamping = min(0.95f, WIDTH_DAMPING + 0.06f)
+    private var closeHeightDamping = min(0.95f, HEIGHT_DAMPING + 0.12f)
+    private var borderWeightScale = 1f
 
     var opened = false
         private set
@@ -69,6 +77,7 @@ internal class IslandJellyBody {
         private set
     var contourWave = 0f
         private set
+    val expandedBorderScale: Float get() = borderWeightScale
     val seedRadius: Float get() = coreRadius
 
     private val seed: Float get() = coreRadius * 2f
@@ -81,7 +90,8 @@ internal class IslandJellyBody {
         expandedTop: Float,
         expandedRight: Float,
         expandedBottom: Float,
-        cornerRadius: Float
+        cornerRadius: Float,
+        fullScreenSheet: Boolean = false
     ) {
         this.centerX = centerX
         this.centerY = centerY
@@ -91,6 +101,23 @@ internal class IslandJellyBody {
         this.expandedRight = expandedRight
         this.expandedBottom = expandedBottom
         this.cornerRadius = cornerRadius
+        if (fullScreenSheet) {
+            openWidthResponse = 0.56f
+            openWidthDamping = 0.88f
+            openHeightResponse = 0.64f
+            openHeightDamping = 0.87f
+            closeWidthDamping = 0.94f
+            closeHeightDamping = 0.94f
+            borderWeightScale = 1.65f
+        } else {
+            openWidthResponse = WIDTH_RESPONSE
+            openWidthDamping = WIDTH_DAMPING
+            openHeightResponse = HEIGHT_RESPONSE
+            openHeightDamping = HEIGHT_DAMPING
+            closeWidthDamping = min(0.95f, WIDTH_DAMPING + 0.06f)
+            closeHeightDamping = min(0.95f, HEIGHT_DAMPING + 0.12f)
+            borderWeightScale = 1f
+        }
         if (!configured) {
             configured = true
             width.jump(seed, 0.0)
@@ -100,16 +127,16 @@ internal class IslandJellyBody {
 
     fun open(now: Double) {
         opened = true
-        width.set(expandedRight - expandedLeft, now, 0.0, WIDTH_RESPONSE, WIDTH_DAMPING)
-        height.set(expandedBottom - expandedTop, now, HEIGHT_DELAY, HEIGHT_RESPONSE, HEIGHT_DAMPING)
+        width.set(expandedRight - expandedLeft, now, 0.0, openWidthResponse, openWidthDamping)
+        height.set(expandedBottom - expandedTop, now, HEIGHT_DELAY, openHeightResponse, openHeightDamping)
         content.set(1f, now, CONTENT_DELAY, 0.40f, 0.82f)
     }
 
     /** Height retracts first, width follows: the tag slips back into the core along its own path. */
     fun close(now: Double) {
         opened = false
-        height.set(seed, now, 0.0, HEIGHT_RESPONSE * 0.78f, min(0.95f, HEIGHT_DAMPING + 0.12f))
-        width.set(seed, now, HEIGHT_DELAY * 0.8, WIDTH_RESPONSE * 0.9f, min(0.95f, WIDTH_DAMPING + 0.06f))
+        height.set(seed, now, 0.0, openHeightResponse * 0.78f, closeHeightDamping)
+        width.set(seed, now, HEIGHT_DELAY * 0.8, openWidthResponse * 0.9f, closeWidthDamping)
         content.set(CONTENT_REST_SCALE, now, 0.0, 0.3f, 0.9f)
     }
 
@@ -123,13 +150,20 @@ internal class IslandJellyBody {
     fun isAtRest(now: Double): Boolean =
         width.isSettled(now) && height.isSettled(now) && content.isSettled(now, 0.002f)
 
+    /** True once a closing body's rendered geometry has shrunk onto the camera core. */
+    fun hasCollapsedToSeed(now: Double, epsilon: Float = 0.75f): Boolean {
+        if (opened || width.hasPending || height.hasPending) return false
+        update(now)
+        return right - left <= seed + epsilon && bottom - top <= seed + epsilon
+    }
+
     fun update(now: Double) {
         val w = width.value(now)
         val h = height.value(now)
         val travelW = max(1f, expandedRight - expandedLeft - seed)
         val travelH = max(1f, expandedBottom - expandedTop - seed)
-        val vw = (width.velocity(now) * WIDTH_RESPONSE / travelW).coerceIn(-1f, 1f)
-        val vh = (height.velocity(now) * HEIGHT_RESPONSE / travelH).coerceIn(-1f, 1f)
+        val vw = (width.velocity(now) * openWidthResponse / travelW).coerceIn(-1f, 1f)
+        val vh = (height.velocity(now) * openHeightResponse / travelH).coerceIn(-1f, 1f)
         // Surging sideways thins the tag; dropping narrows it. Never smaller than the core.
         val renderedHeight = max(seed, h - SQUASH * vw * 0.12f * max(0f, h - seed * 0.6f))
         val renderedWidth = max(seed, w - SQUASH * vh * 0.05f * max(0f, w - seed))
@@ -143,7 +177,11 @@ internal class IslandJellyBody {
         left = cx - renderedWidth / 2f
         right = cx + renderedWidth / 2f
         radius = minOf(cornerRadius, (bottom - top) / 2f, (right - left) / 2f)
-        inkTransfer = smooth(0f, 0.64f, progress)
+        // Scale pen-to-border transfer by physical distance from the seed as well as card progress,
+        // so tall full-screen sheets thin smoothly instead of holding a heavy 2.1dp stroke at 120dp.
+        val physicalSpan = max(1f, coreRadius * TRANSFER_SPAN_CORE_MULTIPLES)
+        val physicalProgress = max(renderedWidth - seed, renderedHeight - seed) / physicalSpan
+        inkTransfer = smooth(0f, 0.64f, max(progress, physicalProgress))
         paperAlpha = smooth(0.03f, 0.55f, heightProgress)
         val formation = smooth(0f, 0.28f, progress)
         contourLean = coreRadius * 0.42f * (0.7f * vw - 0.3f * vh) * formation

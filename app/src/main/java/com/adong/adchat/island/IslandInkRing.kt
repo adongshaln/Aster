@@ -12,7 +12,7 @@ internal object IslandInkRing {
     const val CORE_RADIUS_DP = 13f
     const val RADIUS_DP = 16.8f
     const val WEIGHT_DP = 2.1f
-    const val SAMPLES = 120
+    const val SAMPLES = 288
     const val START_DEG = -58f
     const val SWEEP_DEG = 372f
 
