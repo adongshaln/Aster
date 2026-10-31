@@ -90,6 +90,11 @@ const val THEME_MODE_ASTER = "aster"
 const val THEME_MODE_DARK = "dark"
 const val THEME_MODE_SYSTEM = "system"
 
+const val BILLING_CURRENCY_CNY = "CNY"
+const val BILLING_CURRENCY_USD = "USD"
+const val BILLING_CURRENCY_OFF = "OFF"
+const val CUSTOM_BILLING_ROWS_MAX = 24
+
 data class AppConfig(
     val profiles: List<ApiProfile>,
     val activeChatProfileId: String,
@@ -104,7 +109,11 @@ data class AppConfig(
     /** 用户希望被怎样称呼；空串表示尚未设置（首启弹窗会询问）。 */
     val userName: String = "",
     /** 询问称呼的首启弹窗是否已完成（跳过或填写都算完成）。 */
-    val userNamePromptDone: Boolean = false
+    val userNamePromptDone: Boolean = false,
+    /** 计费币种：CNY（人民币 ¥）、USD（美元 $）或 OFF（关闭费用估算）。 */
+    val billingCurrency: String = BILLING_CURRENCY_CNY,
+    /** 自定义计费表条目：`model|input|cacheRead|output`（每百万 token 单价）。 */
+    val customBillingRows: List<String> = emptyList()
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
@@ -205,6 +214,8 @@ class ConfigStore(context: Context) {
         .put("allowInsecureCertificates", config.allowInsecureCertificates)
         .put("userName", config.userName)
         .put("userNamePromptDone", config.userNamePromptDone)
+        .put("billingCurrency", config.billingCurrency)
+        .put("customBillingRows", JSONArray().apply { config.customBillingRows.take(CUSTOM_BILLING_ROWS_MAX).forEach(::put) })
         .put("profiles", JSONArray().apply {
             config.profiles.forEach { profile ->
                 put(JSONObject()
@@ -301,7 +312,19 @@ class ConfigStore(context: Context) {
             themeMode = root.optString("themeMode").takeIf { it in setOf(THEME_MODE_DARK, THEME_MODE_SYSTEM) } ?: THEME_MODE_ASTER,
             allowInsecureCertificates = root.optBoolean("allowInsecureCertificates", false),
             userName = root.optString("userName").trim().take(24),
-            userNamePromptDone = root.optBoolean("userNamePromptDone", false)
+            userNamePromptDone = root.optBoolean("userNamePromptDone", false),
+            billingCurrency = root.optString("billingCurrency").takeIf {
+                it in setOf(BILLING_CURRENCY_CNY, BILLING_CURRENCY_USD, BILLING_CURRENCY_OFF)
+            } ?: BILLING_CURRENCY_CNY,
+            customBillingRows = buildList {
+                val arr = root.optJSONArray("customBillingRows")
+                if (arr != null) {
+                    for (i in 0 until minOf(arr.length(), CUSTOM_BILLING_ROWS_MAX)) {
+                        val row = arr.optString(i).trim()
+                        if (row.isNotBlank()) add(row)
+                    }
+                }
+            }
         )
     }
 

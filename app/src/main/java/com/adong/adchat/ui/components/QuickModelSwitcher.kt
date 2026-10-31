@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.adong.adchat.data.ApiModel
+import com.adong.adchat.data.ModelCatalogCopy
 import com.adong.adchat.ui.ConnectionPhase
 import com.adong.adchat.ui.MainViewModel
 import com.adong.adchat.ui.theme.*
@@ -201,48 +202,102 @@ fun QuickModelSwitcher(
                     }
                 }
             } else {
-                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 330.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val nowMs = remember { System.currentTimeMillis() }
+                LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 360.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(models, key = { it.id }) { model ->
                         val selected = selectedProfile.id == activeProfileId && model.id == activeModel
+                        val description = remember(model.id, selectedProfile.name) {
+                            ModelCatalogCopy.descriptionFor(model.id, model.ownedBy, selectedProfile.name)
+                        }
+                        val peakRate = remember(model.id, nowMs / 60_000L) {
+                            ModelCatalogCopy.peakRateBadgeFor(model.id, nowMs)
+                        }
                         Column {
-                        Surface(
-                            enabled = modelSelectionEnabled,
-                            onClick = {
-                                when (kind) {
-                                    RouteKind.Chat -> (onSelectChatModel ?: vm::selectChatModel)(selectedProfile.id, model.id)
-                                    RouteKind.Image -> vm.selectImageModel(selectedProfile.id, model.id)
-                                    RouteKind.Analysis -> vm.selectMangaAnalysisModel(selectedProfile.id, model.id)
-                                }
-                                onDismiss()
-                            },
-                            color = if (selected) AccentSoft else Surface,
-                            contentColor = Ink,
-                            border = if (selected) BorderStroke(1.dp, Accent.copy(alpha = .5f)) else null,
-                            shape = RoundedCornerShape(18.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp).alpha(if (modelSelectionEnabled) 1f else .38f), verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(if (selected) Surface else Canvas), contentAlignment = Alignment.Center) {
-                                    Icon(if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining, null, Modifier.size(20.dp), tint = if (selected) OnAccentSoft else MutedInk)
-                                }
-                                Spacer(Modifier.width(12.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(model.id, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(model.ownedBy.ifBlank { selectedProfile.name }, color = MutedInk, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-                                }
-                                if (selected) {
-                                    Surface(color = Accent, contentColor = OnAccent, shape = CircleShape) {
-                                        Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(Icons.Rounded.Check, null, Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)); Text("当前", style = MaterialTheme.typography.labelSmall)
+                            Surface(
+                                enabled = modelSelectionEnabled,
+                                onClick = {
+                                    when (kind) {
+                                        RouteKind.Chat -> (onSelectChatModel ?: vm::selectChatModel)(selectedProfile.id, model.id)
+                                        RouteKind.Image -> vm.selectImageModel(selectedProfile.id, model.id)
+                                        RouteKind.Analysis -> vm.selectMangaAnalysisModel(selectedProfile.id, model.id)
+                                    }
+                                    onDismiss()
+                                },
+                                color = if (selected) AccentSoft else Surface,
+                                contentColor = Ink,
+                                border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .5f) else Hairline.copy(alpha = 0.65f)),
+                                shape = RoundedCornerShape(18.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    Modifier
+                                        .padding(horizontal = 13.dp, vertical = 12.dp)
+                                        .alpha(if (modelSelectionEnabled) 1f else .38f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AsterModelBrandIcon(
+                                        modelId = model.id,
+                                        modelName = model.ownedBy,
+                                        fallbackIcon = if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining,
+                                        containerSize = 40.dp,
+                                        iconSize = 20.dp,
+                                        selected = selected
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                model.id,
+                                                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            if (peakRate != null) {
+                                                Spacer(Modifier.width(6.dp))
+                                                AsterPeakRateBadge(state = peakRate)
+                                            }
+                                        }
+                                        if (!description.isNullOrBlank()) {
+                                            Spacer(Modifier.height(2.dp))
+                                            Text(
+                                                description,
+                                                color = MutedInk,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        } else {
+                                            Text(
+                                                model.ownedBy.ifBlank { selectedProfile.name },
+                                                color = MutedInk,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                maxLines = 1
+                                            )
                                         }
                                     }
-                                } else {
-                                    Icon(Icons.Rounded.ChevronRight, null, tint = MutedInk)
+                                    Spacer(Modifier.width(8.dp))
+                                    if (selected) {
+                                        Surface(color = Accent, contentColor = OnAccent, shape = CircleShape) {
+                                            Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(Icons.Rounded.Check, null, Modifier.size(14.dp))
+                                                Spacer(Modifier.width(3.dp))
+                                                Text("当前", style = MaterialTheme.typography.labelSmall)
+                                            }
+                                        }
+                                    } else {
+                                        Icon(Icons.Rounded.ChevronRight, null, tint = MutedInk)
+                                    }
                                 }
                             }
-                        }
-                        if (kind == RouteKind.Chat && selected) ModelContextPresets(selectedProfile.id, model.id,
-                            selectedProfile.modelContexts[model.id], { vm.setModelContextWindow(selectedProfile.id, model.id, it) })
+                            if (kind == RouteKind.Chat && selected) {
+                                ModelContextPresets(
+                                    selectedProfile.id,
+                                    model.id,
+                                    selectedProfile.modelContexts[model.id],
+                                    { vm.setModelContextWindow(selectedProfile.id, model.id, it) }
+                                )
+                            }
                         }
                     }
                 }

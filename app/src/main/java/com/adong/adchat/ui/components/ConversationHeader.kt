@@ -67,6 +67,13 @@ fun ConversationHeader(
                         .padding(end = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (!modelUnavailable && model.isNotBlank()) {
+                        AsterInlineBrandGlyph(
+                            modelId = model,
+                            size = 13.5.dp,
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                    }
                     Text(
                         text = model.ifBlank { "选择模型" },
                         modifier = Modifier.weight(1f, fill = false),

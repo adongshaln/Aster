@@ -578,6 +578,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persist()
     }
 
+    fun setBillingCurrency(currency: String) {
+        val normalized = currency.takeIf {
+            it in setOf(BILLING_CURRENCY_CNY, BILLING_CURRENCY_USD, BILLING_CURRENCY_OFF)
+        } ?: BILLING_CURRENCY_CNY
+        if (appConfig.billingCurrency == normalized) return
+        appConfig = appConfig.copy(billingCurrency = normalized)
+        persist()
+    }
+
+    fun setCustomBillingRows(rows: List<String>) {
+        val cleaned = rows.map(String::trim).filter(String::isNotBlank).take(CUSTOM_BILLING_ROWS_MAX)
+        if (appConfig.customBillingRows == cleaned) return
+        appConfig = appConfig.copy(customBillingRows = cleaned)
+        persist()
+    }
+
     fun testProfile(profile: ApiProfile, onUpdatedDraft: ((ApiProfile) -> Unit)? = null) {
         val tested = profile.normalized()
         val epoch = invalidateProfileTest(tested.id)

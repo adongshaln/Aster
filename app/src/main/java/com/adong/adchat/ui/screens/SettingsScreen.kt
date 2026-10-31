@@ -28,8 +28,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.List
@@ -67,6 +69,13 @@ import com.adong.adchat.data.API_FORMAT_ANTHROPIC
 import com.adong.adchat.data.API_FORMAT_OPENAI
 import com.adong.adchat.data.ApiModel
 import com.adong.adchat.data.ApiProfile
+import com.adong.adchat.data.BILLING_CURRENCY_CNY
+import com.adong.adchat.data.BILLING_CURRENCY_OFF
+import com.adong.adchat.data.BILLING_CURRENCY_USD
+import com.adong.adchat.data.CUSTOM_BILLING_ROWS_MAX
+import com.adong.adchat.data.CustomBillingRow
+import com.adong.adchat.data.CustomBillingTable
+import com.adong.adchat.data.ModelCatalogCopy
 import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
 import com.adong.adchat.data.THEME_MODE_SYSTEM
@@ -316,9 +325,34 @@ private fun SettingsHome(
                             SettingsContentCard { StarIslandSettingsCard() }
                         }
                         SettingsDestination.Usage -> {
-                            item { UsageOverview(usageRows, storyUsageLoaded, storyUsageError) }
+                            val customRows = CustomBillingTable.parseTable(vm.appConfig.customBillingRows)
+                            val unpricedModels = usageRows.map { it.model }
+                                .filter { model ->
+                                    OfficialModelPrices.estimate(
+                                        ModelUsageTotal(model = model, inputTokens = 1000, outputTokens = 1000),
+                                        customRows = customRows,
+                                        customCurrency = vm.appConfig.billingCurrency
+                                    ) == null
+                                }
+                            item {
+                                UsageOverview(
+                                    rows = usageRows,
+                                    storyUsageLoaded = storyUsageLoaded,
+                                    storyUsageError = storyUsageError,
+                                    billingCurrency = vm.appConfig.billingCurrency,
+                                    customRows = customRows,
+                                    unpricedModels = unpricedModels,
+                                    rawCustomEntries = vm.appConfig.customBillingRows,
+                                    onBillingCurrencyChange = vm::setBillingCurrency,
+                                    onSaveCustomBillingRows = vm::setCustomBillingRows
+                                )
+                            }
                             items(usageRows, key = { it.model }) { row ->
-                                UsageModelRow(row)
+                                UsageModelRow(
+                                    row = row,
+                                    billingCurrency = vm.appConfig.billingCurrency,
+                                    customRows = customRows
+                                )
                             }
                         }
                         SettingsDestination.Security -> item {
@@ -451,47 +485,155 @@ private fun settingsSummary(destination: SettingsDestination, vm: MainViewModel)
 }
 
 @Composable
-private fun UsageOverview(rows: List<ModelUsageTotal>, storyUsageLoaded: Boolean, storyUsageError: Boolean) {
-    val estimates = rows.mapNotNull { OfficialModelPrices.estimate(it) }
-    val low = estimates.sumOf { it.lowUsd }
-    val high = estimates.sumOf { it.highUsd }
+private fun UsageOverview(
+    rows: List<ModelUsageTotal>,
+    storyUsageLoaded: Boolean,
+    storyUsageError: Boolean,
+    billingCurrency: String,
+    customRows: List<CustomBillingRow>,
+    unpricedModels: List<String>,
+    rawCustomEntries: List<String>,
+    onBillingCurrencyChange: (String) -> Unit,
+    onSaveCustomBillingRows: (List<String>) -> Unit
+) {
+    var showBillingEditor by remember { mutableStateOf(false) }
+    val activeCurrency = if (billingCurrency == BILLING_CURRENCY_USD) BILLING_CURRENCY_USD else BILLING_CURRENCY_CNY
+    val billingOff = billingCurrency == BILLING_CURRENCY_OFF
+    val estimates = rows.mapNotNull {
+        OfficialModelPrices.estimate(it, customRows = customRows, customCurrency = activeCurrency)
+    }
+    val low = estimates.sumOf { it.lowIn(activeCurrency) }
+    val high = estimates.sumOf { it.highIn(activeCurrency) }
     val knownRequests = rows.sumOf { it.reportedRequests }
     val unknownRequests = rows.sumOf { it.unknownRequests }
-    Surface(
-        color = Surface,
-        contentColor = Ink,
-        shape = RoundedCornerShape(22.dp),
-        border = BorderStroke(1.dp, Hairline)
-    ) {
-        Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.DataUsage, null, tint = Accent, modifier = Modifier.size(20.dp))
-                Text("模型用量", Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleMedium)
-                Text("官方价格估算", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+    val peakState = remember { ModelCatalogCopy.peakRateBadgeFor("deepseek-flash") }
+
+    if (showBillingEditor) {
+        CustomBillingEditorDialog(
+            entries = rawCustomEntries,
+            unpricedModels = unpricedModels,
+            currency = activeCurrency,
+            onSave = {
+                onSaveCustomBillingRows(it)
+                showBillingEditor = false
+            },
+            onDismiss = { showBillingEditor = false }
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            color = Surface,
+            contentColor = Ink,
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
+        ) {
+            Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.DataUsage, null, tint = Accent, modifier = Modifier.size(20.dp))
+                    Text("模型用量与成本", Modifier.weight(1f).padding(start = 8.dp), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when {
+                            billingOff -> "费用已关闭"
+                            activeCurrency == BILLING_CURRENCY_CNY -> "人民币 · ¥"
+                            else -> "美元 · $"
+                        },
+                        color = MutedInk,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+                if (!billingOff) {
+                    Text(
+                        if (estimates.isEmpty()) "暂无可计价用量" else OfficialModelPrices.formatCost(low, high, activeCurrency),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Accent
+                    )
+                }
+                Text(
+                    "已统计 $knownRequests 次服务端报告用量${if (unknownRequests > 0) " · $unknownRequests 次用量未返回或未知" else ""}",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(2.dp))
+                Text("计费币种", style = MaterialTheme.typography.labelLarge, color = Ink)
+                val currencyOptions = listOf(
+                    BILLING_CURRENCY_CNY to "人民币 ¥",
+                    BILLING_CURRENCY_USD to "美元 $",
+                    BILLING_CURRENCY_OFF to "关闭"
+                )
+                AsterSegmentedControl(
+                    labels = currencyOptions.map { it.second },
+                    selectedIndex = currencyOptions.indexOfFirst { it.first == billingCurrency }.coerceAtLeast(0),
+                    onSelect = { index -> onBillingCurrencyChange(currencyOptions[index].first) }
+                )
+                HorizontalDivider(color = Hairline.copy(alpha = 0.7f), modifier = Modifier.padding(vertical = 4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("自定义计费表", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (unpricedModels.isNotEmpty()) {
+                                "${customRows.size} 条 · ${unpricedModels.size} 个模型尚未计价"
+                            } else {
+                                "已配置 ${customRows.size} 条 · 单位：每百万 token"
+                            },
+                            color = MutedInk,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    AsterPillButton(
+                        text = "编辑",
+                        compact = true,
+                        onClick = { showBillingEditor = true }
+                    )
+                }
+                if (peakState != null) {
+                    Surface(
+                        color = Canvas,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AsterModelBrandIcon(
+                                modelId = "deepseek-flash",
+                                containerSize = 30.dp,
+                                iconSize = 16.dp
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("DeepSeek 峰谷电表", style = MaterialTheme.typography.labelLarge, color = Ink)
+                                Text(peakState.fullSummary, style = MaterialTheme.typography.labelSmall, color = MutedInk)
+                            }
+                            AsterPeakRateBadge(state = peakState, showCountdown = false)
+                        }
+                    }
+                }
+                Text(
+                    "按模型官方标准价与自定义计费表回算；代理商账单、长上下文、特殊档位和历史调价可能不同。价格数据核对于 ${OfficialModelPrices.CHECKED_ON}${if (storyUsageLoaded && !storyUsageError) "，包含故事调用" else ""}。",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (storyUsageError) Text("故事用量暂时未能读取；上方统计仅包含普通对话。", color = MutedInk, style = MaterialTheme.typography.bodySmall)
             }
-            Text(
-                if (estimates.isEmpty()) "暂无可计价用量" else formatUsageCost(low, high),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-                color = Accent
-            )
-            Text(
-                "已统计 $knownRequests 次服务端报告用量${if (unknownRequests > 0) " · $unknownRequests 次用量未返回或未知" else ""}",
-                color = MutedInk, style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "按模型当前官方标准价回算 USD；代理商账单、未知模型、长上下文、特殊档位和历史调价可能不同。价格数据核对于 ${OfficialModelPrices.CHECKED_ON}${if (storyUsageLoaded && !storyUsageError) "，包含故事调用" else ""}。",
-                color = MutedInk, style = MaterialTheme.typography.bodySmall
-            )
-            if (storyUsageError) Text("故事用量暂时未能读取；上方统计仅包含普通对话。", color = MutedInk, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
 @Composable
-private fun UsageModelRow(row: ModelUsageTotal) {
-    val estimate = OfficialModelPrices.estimate(row)
+private fun UsageModelRow(
+    row: ModelUsageTotal,
+    billingCurrency: String,
+    customRows: List<CustomBillingRow>
+) {
+    val activeCurrency = if (billingCurrency == BILLING_CURRENCY_USD) BILLING_CURRENCY_USD else BILLING_CURRENCY_CNY
+    val billingOff = billingCurrency == BILLING_CURRENCY_OFF
+    val estimate = OfficialModelPrices.estimate(row, customRows = customRows, customCurrency = activeCurrency)
     val price = estimate?.price
+    val description = remember(row.model) { ModelCatalogCopy.descriptionFor(row.model) }
+    val peakState = remember(row.model) { ModelCatalogCopy.peakRateBadgeFor(row.model) }
     val uriHandler = LocalUriHandler.current
     val usageSummary = buildString {
         append("${row.requests} 条记录 · 输入 ${formatUsageTokens(row.inputTokens)}")
@@ -505,34 +647,245 @@ private fun UsageModelRow(row: ModelUsageTotal) {
         color = Surface,
         contentColor = Ink,
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(1.dp, Hairline)
+        border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
     ) {
         Column(Modifier.fillMaxWidth().padding(15.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(price?.name ?: row.model, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    estimate?.let { formatUsageCost(it.lowUsd, it.highUsd) } ?: "暂无官方价格",
-                    color = if (estimate == null) MutedInk else Accent,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
+                AsterModelBrandIcon(
+                    modelId = row.model,
+                    modelName = price?.name.orEmpty(),
+                    containerSize = 36.dp,
+                    iconSize = 18.dp
                 )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            price?.name ?: row.model,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (peakState != null) {
+                            Spacer(Modifier.width(6.dp))
+                            AsterPeakRateBadge(state = peakState, showCountdown = false)
+                        }
+                    }
+                    if (!description.isNullOrBlank()) {
+                        Text(
+                            description,
+                            color = MutedInk,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                if (!billingOff) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        estimate?.let {
+                            OfficialModelPrices.formatCost(
+                                it.lowIn(activeCurrency),
+                                it.highIn(activeCurrency),
+                                activeCurrency
+                            )
+                        } ?: "未计价",
+                        color = if (estimate == null) MutedInk else Accent,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
             Text(usageSummary, color = MutedInk, style = MaterialTheme.typography.bodySmall)
-            if (price != null) {
+            if (price != null && !billingOff) {
+                val inputRate = price.inputFor(activeCurrency)
+                val cacheRate = price.cachedInputFor(activeCurrency)
+                val outputRate = price.outputFor(activeCurrency)
+                val unitSymbol = if (activeCurrency == BILLING_CURRENCY_CNY) "¥" else "$"
                 Text(
-                    "官方标准价：输入 ${formatRate(price.input)} / 输出 ${formatRate(price.output)} USD / 1M token",
-                    color = MutedInk, style = MaterialTheme.typography.labelSmall
+                    "${if (estimate.customOverride) "自定义单价" else "官方标准价"}：缓存读 ${formatRate(cacheRate, unitSymbol)} · 输入 ${formatRate(inputRate, unitSymbol)} · 输出 ${formatRate(outputRate, unitSymbol)} $activeCurrency / 1M token",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.labelSmall
                 )
-                estimate?.notice?.let { Text(it, color = MutedInk, style = MaterialTheme.typography.labelSmall) }
-                TextButton(onClick = { runCatching { uriHandler.openUri(price.sourceUrl) } }, contentPadding = PaddingValues(0.dp)) {
-                    Text("查看官方价格来源", style = MaterialTheme.typography.labelSmall)
+                estimate.notice?.let { Text(it, color = MutedInk, style = MaterialTheme.typography.labelSmall) }
+                if (price.sourceUrl.isNotBlank()) {
+                    TextButton(onClick = { runCatching { uriHandler.openUri(price.sourceUrl) } }, contentPadding = PaddingValues(0.dp)) {
+                        Text("查看官方价格来源", style = MaterialTheme.typography.labelSmall)
+                    }
                 }
-            } else {
-                Text("已保留 Token 统计；此模型未匹配内置官方价格目录。", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            } else if (price == null && !billingOff) {
+                Text("已保留 Token 统计；可在上方「自定义计费表」中为此模型填写单价。", color = MutedInk, style = MaterialTheme.typography.labelSmall)
             }
         }
     }
+}
+
+private data class EditableBillingRow(
+    val model: String = "",
+    val cacheRead: String = "",
+    val input: String = "",
+    val output: String = ""
+)
+
+/**
+ * Custom price table editor ported from `dsh-claude-style` (`features/context-stats/billing-editor.ts`):
+ * pre-populates unpriced models seen in usage history, edits `model | cacheRead | input | output` per 1M tokens.
+ */
+@Composable
+private fun CustomBillingEditorDialog(
+    entries: List<String>,
+    unpricedModels: List<String>,
+    currency: String,
+    onSave: (List<String>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val initialRows = remember(entries, unpricedModels) {
+        val parsed = CustomBillingTable.parseTable(entries).map { row ->
+            EditableBillingRow(
+                model = row.model,
+                cacheRead = row.cacheRead?.let { java.math.BigDecimal.valueOf(it).stripTrailingZeros().toPlainString() }.orEmpty(),
+                input = row.input?.let { java.math.BigDecimal.valueOf(it).stripTrailingZeros().toPlainString() }.orEmpty(),
+                output = row.output?.let { java.math.BigDecimal.valueOf(it).stripTrailingZeros().toPlainString() }.orEmpty()
+            )
+        }.toMutableList()
+        val knownKeys = parsed.mapNotNull { CustomBillingTable.modelKey(it.model) }.toSet()
+        unpricedModels.forEach { model ->
+            val key = CustomBillingTable.modelKey(model)
+            if (key != null && key !in knownKeys && parsed.size < CUSTOM_BILLING_ROWS_MAX) {
+                parsed.add(EditableBillingRow(model = model))
+            }
+        }
+        if (parsed.isEmpty()) parsed.add(EditableBillingRow())
+        parsed
+    }
+    var rows by remember { mutableStateOf(initialRows.toList()) }
+
+    AdModalDialog(
+        title = "自定义计费表",
+        subtitle = "为价格表里没有的模型填单价，或覆盖基础价格；单位：$currency / 百万 token",
+        icon = Icons.Rounded.DataUsage,
+        onDismiss = onDismiss,
+        content = {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                rows.forEachIndexed { index, row ->
+                    Surface(
+                        color = Surface,
+                        shape = RoundedCornerShape(16.dp),
+                        border = BorderStroke(1.dp, Hairline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = row.model,
+                                    onValueChange = { next ->
+                                        rows = rows.toMutableList().also { it[index] = row.copy(model = next) }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    label = { Text("模型 ID") },
+                                    placeholder = { Text("例如：deepseek-v4-flash") },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = editorFieldColors()
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                IconButton(
+                                    onClick = {
+                                        rows = rows.toMutableList().also {
+                                            it.removeAt(index)
+                                            if (it.isEmpty()) it.add(EditableBillingRow())
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Rounded.Close, "移除这一行", tint = MutedInk)
+                                }
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedTextField(
+                                    value = row.cacheRead,
+                                    onValueChange = { next ->
+                                        rows = rows.toMutableList().also { it[index] = row.copy(cacheRead = next) }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    label = { Text("缓存读") },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = editorFieldColors()
+                                )
+                                OutlinedTextField(
+                                    value = row.input,
+                                    onValueChange = { next ->
+                                        rows = rows.toMutableList().also { it[index] = row.copy(input = next) }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    label = { Text("输入") },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = editorFieldColors()
+                                )
+                                OutlinedTextField(
+                                    value = row.output,
+                                    onValueChange = { next ->
+                                        rows = rows.toMutableList().also { it[index] = row.copy(output = next) }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    singleLine = true,
+                                    label = { Text("输出") },
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = editorFieldColors()
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsterPillButton(
+                        text = "＋ 添加一行",
+                        compact = true,
+                        enabled = rows.size < CUSTOM_BILLING_ROWS_MAX,
+                        onClick = { rows = rows + EditableBillingRow() }
+                    )
+                    Text("最多 $CUSTOM_BILLING_ROWS_MAX 条", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(
+                    "模型名大小写与 provider/ 前缀都不影响匹配；留空的项沿用官方表，同名以这里的为准。",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        },
+        actions = {
+            AsterPillButton(
+                text = "取消",
+                onClick = onDismiss,
+                modifier = Modifier.weight(1f).height(48.dp)
+            )
+            AsterPillButton(
+                text = "保存",
+                primary = true,
+                onClick = {
+                    val saved = rows
+                        .filter { it.model.isNotBlank() }
+                        .map { CustomBillingTable.formatEntry(it.model, it.input, it.cacheRead, it.output) }
+                    onSave(saved)
+                },
+                modifier = Modifier.weight(1f).height(48.dp)
+            )
+        }
+    )
 }
 
 private fun formatUsageTokens(tokens: Long): String = when {
@@ -541,14 +894,9 @@ private fun formatUsageTokens(tokens: Long): String = when {
     else -> tokens.toString()
 }
 
-private fun formatUsageCost(low: Double, high: Double): String {
-    fun value(amount: Double): String = if (amount in 0.0..<0.000001) "< $0.000001" else "$%.6f".format(java.util.Locale.US, amount)
-    return if (kotlin.math.abs(high - low) < 0.0000005) value(low) else "${value(low)}–${value(high)}"
-}
-
-private fun formatRate(rate: com.adong.adchat.data.PriceRange): String {
-    fun value(amount: Double) = "$${java.math.BigDecimal.valueOf(amount).stripTrailingZeros().toPlainString()}"
-    return if (rate.high == rate.low) value(rate.low) else "${value(rate.low)}–${value(rate.high)}"
+private fun formatRate(rate: com.adong.adchat.data.PriceRange, symbol: String = "$"): String {
+    fun value(amount: Double) = "$symbol${java.math.BigDecimal.valueOf(amount).setScale(4, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()}"
+    return if (kotlin.math.abs(rate.high - rate.low) < 0.00001) value(rate.low) else "${value(rate.low)}–${value(rate.high)}"
 }
 
 @Composable
@@ -992,16 +1340,51 @@ private fun InputSuggestionCard(
 
 @Composable
 private fun RouteValueButton(label: String, value: String, icon: ImageVector, accent: Color, onClick: () -> Unit) {
+    val brand = remember(value) { ModelCatalogCopy.brandFor(value) }
+    val desc = remember(value) { ModelCatalogCopy.descriptionFor(value) }
+    val peakRate = remember(value) { ModelCatalogCopy.peakRateBadgeFor(value) }
     Surface(onClick = onClick, color = Canvas, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.98f)) {
         Row(Modifier.padding(horizontal = 12.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Surface), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(18.dp), tint = accent)
+            if (brand != null) {
+                AsterModelBrandIcon(
+                    modelId = value,
+                    fallbackIcon = icon,
+                    containerSize = 36.dp,
+                    iconSize = 18.dp
+                )
+            } else {
+                Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(Surface), contentAlignment = Alignment.Center) {
+                    Icon(icon, null, Modifier.size(18.dp), tint = accent)
+                }
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(label, color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                Text(value, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        value,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (peakRate != null) {
+                        Spacer(Modifier.width(6.dp))
+                        AsterPeakRateBadge(state = peakRate, showCountdown = false)
+                    }
+                }
+                if (!desc.isNullOrBlank()) {
+                    Text(
+                        desc,
+                        color = MutedInk,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
+            Spacer(Modifier.width(6.dp))
             Surface(color = Surface, shape = CircleShape) {
                 Icon(Icons.Rounded.ChevronRight, null, Modifier.padding(6.dp).size(16.dp), tint = MutedInk)
             }

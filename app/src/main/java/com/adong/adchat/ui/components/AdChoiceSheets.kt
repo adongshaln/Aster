@@ -217,6 +217,9 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
     val iconContainer by animateColorAsState(if (selected) Surface else Canvas, AsterSpring.editorial(), label = "choiceIconContainer")
     val iconTint by animateColorAsState(if (selected) OnAccentSoft else MutedInk, AsterSpring.editorial(), label = "choiceIconTint")
     val indicator by animateColorAsState(if (selected) Accent else Hairline, AsterSpring.editorial(), label = "choiceIndicator")
+    val brand = remember(option.id, option.title) { com.adong.adchat.data.ModelCatalogCopy.brandFor(option.id, option.title) }
+    val modelDesc = remember(option.id, option.title) { com.adong.adchat.data.ModelCatalogCopy.descriptionFor(option.id, option.title) }
+    val peakRate = remember(option.id) { com.adong.adchat.data.ModelCatalogCopy.peakRateBadgeFor(option.id) }
     Surface(
         selected = selected,
         onClick = onClick,
@@ -227,7 +230,16 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (option.icon != null) {
+            if (brand != null) {
+                AsterModelBrandIcon(
+                    modelId = option.id,
+                    modelName = option.title,
+                    containerSize = 40.dp,
+                    iconSize = 20.dp,
+                    selected = selected
+                )
+                Spacer(Modifier.width(12.dp))
+            } else if (option.icon != null) {
                 Box(
                     Modifier.size(40.dp).clip(RoundedCornerShape(13.dp)).background(iconContainer),
                     contentAlignment = Alignment.Center
@@ -240,16 +252,21 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(option.title, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (peakRate != null) {
+                        Spacer(Modifier.width(6.dp))
+                        AsterPeakRateBadge(state = peakRate)
+                    }
                     option.badge?.let {
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                         Surface(color = if (selected) Surface else Canvas, shape = CircleShape) {
                             Text(it, Modifier.padding(horizontal = 8.dp, vertical = 3.dp), color = if (selected) OnAccentSoft else MutedInk, style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
-                option.subtitle?.takeIf { it.isNotBlank() }?.let {
+                val displaySub = modelDesc ?: option.subtitle
+                displaySub?.takeIf { it.isNotBlank() }?.let {
                     Spacer(Modifier.height(2.dp))
-                    Text(it, color = MutedInk, style = MaterialTheme.typography.labelMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(it, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
             Spacer(Modifier.width(10.dp))

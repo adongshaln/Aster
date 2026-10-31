@@ -373,6 +373,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                         modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
                     )
                 } else {
+                    val customBillingRows = remember(vm.appConfig.customBillingRows) {
+                        com.adong.adchat.data.CustomBillingTable.parseTable(vm.appConfig.customBillingRows)
+                    }
+                    val billingCurrency = vm.appConfig.billingCurrency
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize(),
@@ -394,6 +398,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             message = message,
                             canRegenerate = message.id == regeneratableMessageId,
                             canRetry = message.id == retryableMessageId,
+                            billingCurrency = billingCurrency,
+                            customBillingRows = customBillingRows,
                             onRetry = { vm.retryMessage(message.id) },
                             onRegenerate = { vm.regenerateMessage(message.id) },
                             onEditResend = {
@@ -683,6 +689,8 @@ private fun ChatMessageItem(
     message: ChatMessage,
     canRegenerate: Boolean,
     canRetry: Boolean,
+    billingCurrency: String = com.adong.adchat.data.BILLING_CURRENCY_CNY,
+    customBillingRows: List<com.adong.adchat.data.CustomBillingRow> = emptyList(),
     onRetry: () -> Unit,
     onRegenerate: () -> Unit,
     onSaveFile: (ChatFileAttachment) -> Unit,
@@ -894,7 +902,12 @@ private fun ChatMessageItem(
                                     }
                                 }
                                 message.usage?.takeIf { it.inputTokens > 0 || it.outputTokens > 0 || it.cachedTokens > 0 }?.let { usage ->
-                                    TokenUsagePanel(usage = usage)
+                                    TokenUsagePanel(
+                                        usage = usage,
+                                        model = message.model,
+                                        billingCurrency = billingCurrency,
+                                        customBillingRows = customBillingRows
+                                    )
                                 }
                             }
                         }
@@ -1159,12 +1172,30 @@ private fun formatFileSize(bytes: Int): String = when {
 }
 
 @Composable
-private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
+private fun TokenUsagePanel(
+    usage: com.adong.adchat.data.TokenUsage,
+    model: String = "",
+    billingCurrency: String = com.adong.adchat.data.BILLING_CURRENCY_CNY,
+    customBillingRows: List<com.adong.adchat.data.CustomBillingRow> = emptyList()
+) {
     var expanded by remember { mutableStateOf(false) }
     val hitPercent = (usage.cacheHitRate * 100).toInt().coerceIn(0, 100)
     val hasCache = usage.cachedTokens > 0
     val hasCacheWrite = usage.cacheWriteTokens > 0
     val waitingForReuse = usage.cacheRequested && !hasCache && !hasCacheWrite
+    val costEstimate = remember(model, usage, billingCurrency, customBillingRows) {
+        if (model.isBlank()) null
+        else com.adong.adchat.data.OfficialModelPrices.estimateSingleMessage(model, usage, billingCurrency, customBillingRows)
+    }
+    val costLabel = remember(costEstimate, billingCurrency) {
+        costEstimate?.let {
+            com.adong.adchat.data.OfficialModelPrices.formatCost(
+                it.lowIn(billingCurrency),
+                it.highIn(billingCurrency),
+                billingCurrency
+            )
+        }
+    }
     val accentColor = when {
         hasCache -> Sage
         hasCacheWrite || (waitingForReuse && usage.cacheEligible) -> Accent
@@ -1177,10 +1208,16 @@ private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
         waitingForReuse -> "已提交，下次请求可复用"
         else -> "本次未启用缓存"
     }
-    val summary = if (hasCache) {
-        "${formatTokens(usage.cachedTokens)} / ${formatTokens(usage.inputTokens)}"
-    } else {
-        "输入 ${formatTokens(usage.inputTokens)}"
+    val summary = buildString {
+        if (hasCache) {
+            append("${formatTokens(usage.cachedTokens)} / ${formatTokens(usage.inputTokens)}")
+        } else {
+            append("输入 ${formatTokens(usage.inputTokens)}")
+        }
+        if (costLabel != null) {
+            append(" · ")
+            append(costLabel)
+        }
     }
     // 结果态退到描边线：命中与否靠图标和文字的颜色区分，不再发一整块色块
     // 和过程态、异常态争视觉权重。
@@ -1238,6 +1275,13 @@ private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
                         UsageLine("状态", if (usage.cacheEligible) "等待复用" else "暂不使用缓存", null)
                     }
                     UsageLine("输出", formatTokens(usage.outputTokens), usage.reasoningTokens.takeIf { it > 0 }?.let { "推理 ${formatTokens(it)}" })
+                    if (costLabel != null) {
+                        UsageLine(
+                            "本轮费用",
+                            costLabel,
+                            if (costEstimate?.customOverride == true) "自定义计费表" else "官方标准价估算"
+                        )
+                    }
                     if (usage.timeToFirstTokenMs != null || usage.durationMs != null) {
                         UsageLine(
                             "速度",

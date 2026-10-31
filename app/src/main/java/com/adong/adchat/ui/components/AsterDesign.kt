@@ -54,6 +54,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.adong.adchat.R
+import com.adong.adchat.data.ModelBrand
+import com.adong.adchat.data.ModelCatalogCopy
+import com.adong.adchat.data.PeakRateBadgeState
 import com.adong.adchat.ui.theme.*
 
 @Composable
@@ -356,13 +359,15 @@ fun AsterModelRow(
     icon: ImageVector = Icons.Rounded.Tune
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val brand = remember(model) { ModelCatalogCopy.brandFor(model) }
+    val description = remember(model) { ModelCatalogCopy.descriptionFor(model) }
+    val peakRate = remember(model) { ModelCatalogCopy.peakRateBadgeFor(model) }
     Surface(
         onClick = onClick,
         interactionSource = interactionSource,
         color = Surface,
         shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, Hairline.copy(alpha = 0.9f)),
-        shadowElevation = 1.dp,
         modifier = modifier.fillMaxWidth()
     ) {
         Row(
@@ -371,26 +376,45 @@ fun AsterModelRow(
                 .padding(horizontal = 14.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(AccentSoft),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(icon, null, Modifier.size(19.dp), tint = OnAccentSoft)
-            }
+            AsterModelBrandIcon(
+                modelId = model,
+                fallbackIcon = icon,
+                containerSize = 38.dp,
+                iconSize = 19.dp
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(label, color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(label, color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                    if (brand != null) {
+                        Text(" · ${brand.displayName}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
                 Spacer(Modifier.height(2.dp))
-                Text(
-                    text = model.ifBlank { "选择模型" },
-                    style = MaterialTheme.typography.titleSmall,
-                    color = Ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = model.ifBlank { "选择模型" },
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Ink,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (peakRate != null) {
+                        Spacer(Modifier.width(6.dp))
+                        AsterPeakRateBadge(state = peakRate)
+                    }
+                }
+                if (!description.isNullOrBlank()) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = description,
+                        color = MutedInk,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
             Spacer(Modifier.width(8.dp))
             Box(
@@ -402,6 +426,141 @@ fun AsterModelRow(
             ) {
                 Icon(Icons.Rounded.UnfoldMore, null, Modifier.size(16.dp), tint = MutedInk)
             }
+        }
+    }
+}
+
+/**
+ * Vendor brand mark from `dsh-claude-style` (`packages/assets/src/icons/combine/`),
+ * falling back to [fallbackIcon] when the model ID does not match a known vendor rule.
+ */
+@Composable
+fun AsterModelBrandIcon(
+    modelId: String,
+    modifier: Modifier = Modifier,
+    modelName: String = "",
+    fallbackIcon: ImageVector = Icons.Rounded.Tune,
+    containerSize: Dp = 40.dp,
+    iconSize: Dp = 20.dp,
+    selected: Boolean = false
+) {
+    val dark = LocalThemeDark.current
+    val brand = remember(modelId, modelName) { ModelCatalogCopy.brandFor(modelId, modelName) }
+    val brandTint = brand?.tint(dark) ?: if (selected) OnAccentSoft else MutedInk
+    val containerBg = when {
+        brand != null -> brandTint.copy(alpha = if (dark) 0.16f else 0.11f)
+        selected -> Surface
+        else -> Canvas
+    }
+    Box(
+        modifier = modifier
+            .size(containerSize)
+            .clip(RoundedCornerShape(containerSize * 0.32f))
+            .background(containerBg),
+        contentAlignment = Alignment.Center
+    ) {
+        if (brand != null) {
+            Icon(
+                painter = painterResource(brand.iconRes),
+                contentDescription = brand.displayName,
+                modifier = Modifier.size(iconSize),
+                tint = brandTint
+            )
+        } else {
+            Icon(
+                imageVector = fallbackIcon,
+                contentDescription = null,
+                modifier = Modifier.size(iconSize),
+                tint = brandTint
+            )
+        }
+    }
+}
+
+/**
+ * Small inline vendor glyph without a container box (used in ConversationHeader).
+ */
+@Composable
+fun AsterInlineBrandGlyph(
+    modelId: String,
+    modifier: Modifier = Modifier,
+    size: Dp = 14.dp
+) {
+    val dark = LocalThemeDark.current
+    val brand = remember(modelId) { ModelCatalogCopy.brandFor(modelId) } ?: return
+    Icon(
+        painter = painterResource(brand.iconRes),
+        contentDescription = brand.displayName,
+        modifier = modifier.size(size),
+        tint = brand.tint(dark)
+    )
+}
+
+/**
+ * Live Peak / Off-Peak rate badge ported from `dsh-claude-style` (`features/peakrate/badge.ts`):
+ * draws twin peaks for Peak (`2×`) or twin valleys for Off-Peak (`1×`) plus countdown to switch.
+ */
+@Composable
+fun AsterPeakRateBadge(
+    state: PeakRateBadgeState,
+    modifier: Modifier = Modifier,
+    showCountdown: Boolean = true
+) {
+    val fg = if (state.isPeak) Accent else Sage
+    val bg = if (state.isPeak) AccentSoft.copy(alpha = 0.78f) else SageSoft.copy(alpha = 0.78f)
+    Surface(
+        color = bg,
+        contentColor = fg,
+        shape = CircleShape,
+        border = BorderStroke(0.8.dp, fg.copy(alpha = 0.28f)),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.5.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            androidx.compose.foundation.Canvas(Modifier.size(11.dp)) {
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    if (state.isPeak) {
+                        // Twin peaks: M1.6 12.4 L5.4 6.2 L8.5 10.3 L10.9 7.0 L14.4 12.4
+                        moveTo(size.width * 0.10f, size.height * 0.78f)
+                        lineTo(size.width * 0.34f, size.height * 0.39f)
+                        lineTo(size.width * 0.53f, size.height * 0.64f)
+                        lineTo(size.width * 0.68f, size.height * 0.44f)
+                        lineTo(size.width * 0.90f, size.height * 0.78f)
+                    } else {
+                        // Twin valleys: M1.6 3.6 L5.4 9.8 L8.5 5.7 L10.9 9.0 L14.4 3.6
+                        moveTo(size.width * 0.10f, size.height * 0.22f)
+                        lineTo(size.width * 0.34f, size.height * 0.61f)
+                        lineTo(size.width * 0.53f, size.height * 0.36f)
+                        lineTo(size.width * 0.68f, size.height * 0.56f)
+                        lineTo(size.width * 0.90f, size.height * 0.22f)
+                    }
+                }
+                drawPath(
+                    path = path,
+                    color = fg,
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = 1.35.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                        join = androidx.compose.ui.graphics.StrokeJoin.Round
+                    )
+                )
+            }
+            Spacer(Modifier.width(3.5.dp))
+            Text(
+                text = buildString {
+                    append(state.badge)
+                    if (showCountdown && state.countdownLabel.isNotBlank()) {
+                        append(" · ")
+                        append(state.countdownLabel)
+                    }
+                },
+                color = fg,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
+            )
         }
     }
 }
