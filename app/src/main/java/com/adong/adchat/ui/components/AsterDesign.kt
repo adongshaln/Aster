@@ -220,7 +220,7 @@ fun AsterPrimaryButton(
             contentColor = OnAccent,
             shape = RoundedCornerShape(20.dp),
             border = BorderStroke(0.5.dp, OnAccent.copy(alpha = if (enabled) 0.16f else 0f)),
-            shadowElevation = elevation,
+            shadowElevation = elevation.coerceAtLeast(0.dp),
             modifier = Modifier.appleSpringPressable(
                 pressedScale = 0.96f, enabled = enabled, interactionSource = interactionSource
             )

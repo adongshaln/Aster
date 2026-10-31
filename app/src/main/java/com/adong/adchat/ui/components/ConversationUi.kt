@@ -239,9 +239,9 @@ fun ConversationComposer(
         )
         Surface(
             color = Surface,
-            shape = RoundedCornerShape(corner),
+            shape = RoundedCornerShape(corner.coerceAtLeast(0.dp)),
             border = BorderStroke(0.8.dp, outline),
-            shadowElevation = elevation,
+            shadowElevation = elevation.coerceAtLeast(0.dp),
             modifier = Modifier
                 .width(shellWidth.coerceIn(0.dp, maxWidth))
                 .testTag("${testTag}-composer")

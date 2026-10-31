@@ -152,8 +152,8 @@ fun StarIslandUsageDemo(modifier: Modifier = Modifier) {
                         modifier = Modifier
                             .align(Alignment.TopCenter)
                             .padding(top = 4.dp)
-                            .size(cardWidth, cardHeight)
-                            .graphicsLayer { alpha = cardAlpha }
+                            .size(cardWidth.coerceAtLeast(0.dp), cardHeight.coerceAtLeast(0.dp))
+                            .graphicsLayer { alpha = cardAlpha.coerceIn(0f, 1f) }
                     ) {
                         Box(Modifier.fillMaxSize().padding(top = 28.dp, start = 12.dp, end = 12.dp, bottom = 10.dp)) {
                             if (step == 1) {
@@ -353,7 +353,7 @@ fun StarIslandUsageDemo(modifier: Modifier = Modifier) {
                     )
                     Box(
                         Modifier
-                            .size(width, 6.dp)
+                            .size(width.coerceAtLeast(0.dp), 6.dp)
                             .clip(CircleShape)
                             .background(if (index == step) Accent else Hairline)
                     )

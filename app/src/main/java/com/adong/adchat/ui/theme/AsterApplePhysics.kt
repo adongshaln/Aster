@@ -236,12 +236,13 @@ fun AsterStageDepthContainer(
         targetValue = targetCorner,
         animationSpec = AsterSpring.spatial(), label = "stage-corner"
     )
+    val clampedCorner = if (motionEnabled) corner.coerceAtLeast(0.dp) else 0.dp
     Box(
         modifier = modifier.fillMaxSize().graphicsLayer {
             scaleX = if (motionEnabled) scale else 1f
             scaleY = if (motionEnabled) scale else 1f
-            shape = RoundedCornerShape(if (motionEnabled) corner else 0.dp)
-            clip = motionEnabled && corner > 0.dp
+            shape = RoundedCornerShape(clampedCorner)
+            clip = motionEnabled && clampedCorner > 0.dp
         }
     ) { content() }
 }
