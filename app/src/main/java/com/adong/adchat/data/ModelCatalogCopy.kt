@@ -23,39 +23,191 @@ import java.util.Locale
 enum class ModelBrand(
     val id: String,
     val displayName: String,
-    @DrawableRes val iconRes: Int,
+    /** The word inside a model name that the vendor's combine lockup stands in for (`data-combine-word` in dsh-claude-style). */
+    val combineWord: String,
+    @DrawableRes val markLightRes: Int,
+    @DrawableRes val markDarkRes: Int,
+    @DrawableRes val combineLightRes: Int,
+    @DrawableRes val combineDarkRes: Int,
+    val combineAspectRatio: Float,
     val lightTint: Color,
     val darkTint: Color
 ) {
-    DeepSeek("deepseek", "DeepSeek", R.drawable.ic_brand_deepseek, Color(0xFF4D6BFE), Color(0xFF6B85FF)),
-    Claude("claude", "Claude", R.drawable.ic_brand_claude, Color(0xFFD97757), Color(0xFFE28769)),
-    OpenAI("openai", "OpenAI", R.drawable.ic_brand_openai, Color(0xFF10A37F), Color(0xFF2CC29D)),
-    NanoBanana("nanobanana", "Nano Banana", R.drawable.ic_brand_nanobanana, Color(0xFFD99B00), Color(0xFFFABC12)),
-    Gemma("gemma", "Gemma", R.drawable.ic_brand_gemma, Color(0xFF446EFF), Color(0xFF6B8DFF)),
-    Gemini("gemini", "Gemini", R.drawable.ic_brand_gemini, Color(0xFF3186FF), Color(0xFF589DFF)),
-    Zai("zai", "GLM", R.drawable.ic_brand_zai, Color(0xFF3B66FF), Color(0xFF6688FF)),
-    Kimi("kimi", "Kimi", R.drawable.ic_brand_kimi, Color(0xFF1783FF), Color(0xFF459BFF)),
-    Qwen("qwen", "Qwen", R.drawable.ic_brand_qwen, Color(0xFF6336E7), Color(0xFF8B66F5)),
-    StepFun("stepfun", "StepFun", R.drawable.ic_brand_stepfun, Color(0xFF01A9FF), Color(0xFF3DBEFF)),
-    MiniMax("minimax", "MiniMax", R.drawable.ic_brand_minimax, Color(0xFFE2167E), Color(0xFFF04E9E)),
-    Meta("meta", "Meta", R.drawable.ic_brand_meta, Color(0xFF0867DF), Color(0xFF388BFF)),
-    CelestoAi("celestoai", "Celesto", R.drawable.ic_brand_celestoai, Color(0xFF141413), Color(0xFFF0EFEA)),
-    Inception("inception", "Inception", R.drawable.ic_brand_inception, Color(0xFF141413), Color(0xFFF0EFEA)),
-    Grok("grok", "Grok", R.drawable.ic_brand_grok, Color(0xFF141413), Color(0xFFF0EFEA)),
-    ByteDance("bytedance", "Doubao", R.drawable.ic_brand_bytedance, Color(0xFF0084FF), Color(0xFF3C9CFF)),
-    Baidu("baidu", "ERNIE", R.drawable.ic_brand_baidu, Color(0xFF2932E1), Color(0xFF5C65FF)),
-    Tencent("tencent", "Hunyuan", R.drawable.ic_brand_tencent, Color(0xFF0055E9), Color(0xFF3D82FF)),
-    Mistral("mistral", "Mistral", R.drawable.ic_brand_mistral, Color(0xFFFA500F), Color(0xFFFF733D)),
-    Cohere("cohere", "Cohere", R.drawable.ic_brand_cohere, Color(0xFF39594D), Color(0xFFD18EE2)),
-    Microsoft("microsoft", "Phi", R.drawable.ic_brand_microsoft, Color(0xFF00A4EF), Color(0xFF38B8F5)),
-    Nova("nova", "Amazon Nova", R.drawable.ic_brand_nova, Color(0xFFFF6200), Color(0xFFFF8533)),
-    XiaomiMiMo("xiaomimimo", "MiMo", R.drawable.ic_brand_xiaomimimo, Color(0xFFFF6900), Color(0xFFFF8533)),
-    LongCat("longcat", "LongCat", R.drawable.ic_brand_longcat, Color(0xFF141413), Color(0xFFF0EFEA)),
-    Perplexity("perplexity", "Perplexity", R.drawable.ic_brand_perplexity, Color(0xFF22B8CD), Color(0xFF45CEE0)),
-    Reflection("reflection", "Reflection", R.drawable.ic_brand_reflection, Color(0xFF2E5410), Color(0xFF7BA644));
+    DeepSeek(
+        "deepseek", "DeepSeek", "DeepSeek",
+        R.drawable.brand_mark_deepseek_light, R.drawable.brand_mark_deepseek_dark,
+        R.drawable.brand_combine_deepseek_light, R.drawable.brand_combine_deepseek_dark,
+        6.428f, Color(0xFF4D6BFE), Color(0xFF6B85FF)
+    ),
+    Claude(
+        "claude", "Claude", "Claude",
+        R.drawable.brand_mark_claude_light, R.drawable.brand_mark_claude_dark,
+        R.drawable.brand_combine_claude_light, R.drawable.brand_combine_claude_dark,
+        4.012f, Color(0xFFD97757), Color(0xFFE28769)
+    ),
+    OpenAI(
+        "openai", "OpenAI", "GPT",
+        R.drawable.brand_mark_openai_light, R.drawable.brand_mark_openai_dark,
+        R.drawable.brand_combine_openai_light, R.drawable.brand_combine_openai_dark,
+        3.071f, Color(0xFF10A37F), Color(0xFF2CC29D)
+    ),
+    NanoBanana(
+        "nanobanana", "Nano Banana", "Nano Banana",
+        R.drawable.brand_mark_nanobanana_light, R.drawable.brand_mark_nanobanana_dark,
+        R.drawable.brand_combine_nanobanana_light, R.drawable.brand_combine_nanobanana_dark,
+        7.568f, Color(0xFFD99B00), Color(0xFFFABC12)
+    ),
+    Gemma(
+        "gemma", "Gemma", "Gemma",
+        R.drawable.brand_mark_gemma_light, R.drawable.brand_mark_gemma_dark,
+        R.drawable.brand_combine_gemma_light, R.drawable.brand_combine_gemma_dark,
+        4.196f, Color(0xFF446EFF), Color(0xFF6B8DFF)
+    ),
+    Gemini(
+        "gemini", "Gemini", "Gemini",
+        R.drawable.brand_mark_gemini_light, R.drawable.brand_mark_gemini_dark,
+        R.drawable.brand_combine_gemini_light, R.drawable.brand_combine_gemini_dark,
+        4.123f, Color(0xFF3186FF), Color(0xFF589DFF)
+    ),
+    Zai(
+        "zai", "GLM", "GLM",
+        R.drawable.brand_mark_zai_light, R.drawable.brand_mark_zai_dark,
+        R.drawable.brand_combine_zai_light, R.drawable.brand_combine_zai_dark,
+        3.329f, Color(0xFF3B66FF), Color(0xFF6688FF)
+    ),
+    Kimi(
+        "kimi", "Kimi", "Kimi",
+        R.drawable.brand_mark_kimi_light, R.drawable.brand_mark_kimi_dark,
+        R.drawable.brand_combine_kimi_light, R.drawable.brand_combine_kimi_dark,
+        3.627f, Color(0xFF1783FF), Color(0xFF459BFF)
+    ),
+    Qwen(
+        "qwen", "Qwen", "Qwen",
+        R.drawable.brand_mark_qwen_light, R.drawable.brand_mark_qwen_dark,
+        R.drawable.brand_combine_qwen_light, R.drawable.brand_combine_qwen_dark,
+        3.552f, Color(0xFF6336E7), Color(0xFF8B66F5)
+    ),
+    StepFun(
+        "stepfun", "StepFun", "Step",
+        R.drawable.brand_mark_stepfun_light, R.drawable.brand_mark_stepfun_dark,
+        R.drawable.brand_combine_stepfun_light, R.drawable.brand_combine_stepfun_dark,
+        4.329f, Color(0xFF01A9FF), Color(0xFF3DBEFF)
+    ),
+    MiniMax(
+        "minimax", "MiniMax", "Minimax",
+        R.drawable.brand_mark_minimax_light, R.drawable.brand_mark_minimax_dark,
+        R.drawable.brand_combine_minimax_light, R.drawable.brand_combine_minimax_dark,
+        5.829f, Color(0xFFE2167E), Color(0xFFF04E9E)
+    ),
+    Meta(
+        "meta", "Meta", "Meta",
+        R.drawable.brand_mark_meta_light, R.drawable.brand_mark_meta_dark,
+        R.drawable.brand_combine_meta_light, R.drawable.brand_combine_meta_dark,
+        4.808f, Color(0xFF0867DF), Color(0xFF388BFF)
+    ),
+    CelestoAi(
+        "celestoai", "CelestoAI", "celestoai",
+        R.drawable.brand_mark_celestoai_light, R.drawable.brand_mark_celestoai_dark,
+        R.drawable.brand_combine_celestoai_light, R.drawable.brand_combine_celestoai_dark,
+        5.226f, Color(0xFF141413), Color(0xFFF0EFEA)
+    ),
+    Inception(
+        "inception", "Inception", "inception",
+        R.drawable.brand_mark_inception_light, R.drawable.brand_mark_inception_dark,
+        R.drawable.brand_combine_inception_light, R.drawable.brand_combine_inception_dark,
+        5.105f, Color(0xFF141413), Color(0xFFF0EFEA)
+    ),
+    Grok(
+        "grok", "Grok", "Grok",
+        R.drawable.brand_mark_grok_light, R.drawable.brand_mark_grok_dark,
+        R.drawable.brand_combine_grok_light, R.drawable.brand_combine_grok_dark,
+        3.306f, Color(0xFF141413), Color(0xFFF0EFEA)
+    ),
+    ByteDance(
+        "bytedance", "ByteDance", "ByteDance",
+        R.drawable.brand_mark_bytedance_light, R.drawable.brand_mark_bytedance_dark,
+        R.drawable.brand_combine_bytedance_light, R.drawable.brand_combine_bytedance_dark,
+        5.993f, Color(0xFF0084FF), Color(0xFF3C9CFF)
+    ),
+    Baidu(
+        "baidu", "Baidu", "Baidu",
+        R.drawable.brand_mark_baidu_light, R.drawable.brand_mark_baidu_dark,
+        R.drawable.brand_combine_baidu_light, R.drawable.brand_combine_baidu_dark,
+        3.669f, Color(0xFF2932E1), Color(0xFF5C65FF)
+    ),
+    Tencent(
+        "tencent", "Tencent", "Hunyuan",
+        R.drawable.brand_mark_tencent_light, R.drawable.brand_mark_tencent_dark,
+        R.drawable.brand_combine_tencent_light, R.drawable.brand_combine_tencent_dark,
+        4.756f, Color(0xFF0055E9), Color(0xFF3D82FF)
+    ),
+    Mistral(
+        "mistral", "Mistral", "Mistral",
+        R.drawable.brand_mark_mistral_light, R.drawable.brand_mark_mistral_dark,
+        R.drawable.brand_combine_mistral_light, R.drawable.brand_combine_mistral_dark,
+        7.231f, Color(0xFFFA500F), Color(0xFFFF733D)
+    ),
+    Cohere(
+        "cohere", "Cohere", "Cohere",
+        R.drawable.brand_mark_cohere_light, R.drawable.brand_mark_cohere_dark,
+        R.drawable.brand_combine_cohere_light, R.drawable.brand_combine_cohere_dark,
+        4.610f, Color(0xFF39594D), Color(0xFFD18EE2)
+    ),
+    Microsoft(
+        "microsoft", "Microsoft", "Azure",
+        R.drawable.brand_mark_microsoft_light, R.drawable.brand_mark_microsoft_dark,
+        R.drawable.brand_combine_microsoft_light, R.drawable.brand_combine_microsoft_dark,
+        5.393f, Color(0xFF00A4EF), Color(0xFF38B8F5)
+    ),
+    Nova(
+        "nova", "Amazon Nova", "Nova",
+        R.drawable.brand_mark_nova_light, R.drawable.brand_mark_nova_dark,
+        R.drawable.brand_combine_nova_light, R.drawable.brand_combine_nova_dark,
+        7.440f, Color(0xFFFF6200), Color(0xFFFF8533)
+    ),
+    XiaomiMiMo(
+        "xiaomimimo", "Xiaomi MiMo", "MiMo",
+        R.drawable.brand_mark_xiaomimimo_light, R.drawable.brand_mark_xiaomimimo_dark,
+        R.drawable.brand_combine_xiaomimimo_light, R.drawable.brand_combine_xiaomimimo_dark,
+        9.593f, Color(0xFFFF6900), Color(0xFFFF8533)
+    ),
+    LongCat(
+        "longcat", "LongCat", "longcat",
+        R.drawable.brand_mark_longcat_light, R.drawable.brand_mark_longcat_dark,
+        R.drawable.brand_combine_longcat_light, R.drawable.brand_combine_longcat_dark,
+        5.750f, Color(0xFF141413), Color(0xFFF0EFEA)
+    ),
+    Perplexity(
+        "perplexity", "Perplexity", "Perplexity",
+        R.drawable.brand_mark_perplexity_light, R.drawable.brand_mark_perplexity_dark,
+        R.drawable.brand_combine_perplexity_light, R.drawable.brand_combine_perplexity_dark,
+        4.919f, Color(0xFF22B8CD), Color(0xFF45CEE0)
+    ),
+    Reflection(
+        "reflection", "Reflection", "Reflection",
+        R.drawable.brand_mark_reflection_light, R.drawable.brand_mark_reflection_dark,
+        R.drawable.brand_combine_reflection_light, R.drawable.brand_combine_reflection_dark,
+        7.629f, Color(0xFF2E5410), Color(0xFF7BA644)
+    );
+
+    @DrawableRes
+    fun markRes(dark: Boolean): Int = if (dark) markDarkRes else markLightRes
+
+    @DrawableRes
+    fun combineRes(dark: Boolean): Int = if (dark) combineDarkRes else combineLightRes
 
     fun tint(dark: Boolean): Color = if (dark) darkTint else lightTint
 }
+
+/**
+ * Split a model label into `[head, combineLockup(brand), tail]` the exact way
+ * `packages/client/src/features/model/brand.ts::buildModelLabel` does in `dsh-claude-style`.
+ */
+data class ModelCombineLabelParts(
+    val brand: ModelBrand,
+    val head: String,
+    val tail: String
+)
 
 data class PeakRateBadgeState(
     val isPeak: Boolean,
@@ -209,6 +361,40 @@ object ModelCatalogCopy {
             }
         }
         return null
+    }
+
+    /**
+     * Split a model's display name or ID into `[head, combineLockup, tail]`
+     * following `dsh-claude-style`'s `buildModelLabel` (`packages/client/src/features/model/brand.ts`):
+     * - When the model name contains `brand.combineWord` (case-insensitive, or hyphenated like `nano-banana`),
+     *   the vendor lockup replaces that word in-place and strips any immediately following `-` / `_` / space separator;
+     * - When the model name does not spell the word (e.g., `o3-mini` for `GPT`, `k3.1-pro` for `Kimi`, `ernie-5` for `Baidu`),
+     *   the vendor lockup leads the label and `tail` carries the model name.
+     */
+    fun combineLabelParts(modelId: String, displayText: String = modelId): ModelCombineLabelParts? {
+        val brand = brandFor(modelId, displayText) ?: return null
+        val text = displayText.ifBlank { modelId }
+        val word = brand.combineWord
+        // Match either exact word or hyphen/underscore-separated form (e.g. "nano-banana" for "Nano Banana")
+        val pattern = Regex(Regex.escape(word).replace("\\ ", "[\\s\\-_]+"), RegexOption.IGNORE_CASE)
+        val match = pattern.find(text)
+        return if (match != null) {
+            val head = text.substring(0, match.range.first)
+            val rawTail = text.substring(match.range.last + 1).replaceFirst(Regex("^[\\s\\-–—_:/]+"), "")
+            // Prettify hyphenated model version tails (e.g. "sonnet-4-5" -> "sonnet-4-5" or keep as-is with a leading space)
+            val cleanedHead = if (head.endsWith("/") || head.endsWith(":")) head else head
+            ModelCombineLabelParts(
+                brand = brand,
+                head = cleanedHead,
+                tail = if (rawTail.isNotEmpty()) " $rawTail" else ""
+            )
+        } else {
+            ModelCombineLabelParts(
+                brand = brand,
+                head = "",
+                tail = if (text.isNotEmpty()) " $text" else ""
+            )
+        }
     }
 
     /** Resolve the one-line editorial description for a model (D5: family rules -> tier rules -> null). */

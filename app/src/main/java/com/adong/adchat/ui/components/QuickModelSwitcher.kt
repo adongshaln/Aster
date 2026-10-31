@@ -240,17 +240,17 @@ fun QuickModelSwitcher(
                                         modelName = model.ownedBy,
                                         fallbackIcon = if (kind == RouteKind.Image) Icons.Rounded.Image else Icons.Rounded.ModelTraining,
                                         containerSize = 40.dp,
-                                        iconSize = 20.dp,
+                                        iconSize = 22.dp,
                                         selected = selected
                                     )
                                     Spacer(Modifier.width(12.dp))
                                     Column(Modifier.weight(1f)) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                model.id,
+                                            AsterModelCombineLabel(
+                                                modelId = model.id,
+                                                displayText = model.id,
                                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
+                                                lockupHeight = 16.5.dp,
                                                 modifier = Modifier.weight(1f, fill = false)
                                             )
                                             if (peakRate != null) {
@@ -259,7 +259,7 @@ fun QuickModelSwitcher(
                                             }
                                         }
                                         if (!description.isNullOrBlank()) {
-                                            Spacer(Modifier.height(2.dp))
+                                            Spacer(Modifier.height(3.dp))
                                             Text(
                                                 description,
                                                 color = MutedInk,

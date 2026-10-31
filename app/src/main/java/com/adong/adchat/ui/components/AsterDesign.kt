@@ -380,7 +380,7 @@ fun AsterModelRow(
                 modelId = model,
                 fallbackIcon = icon,
                 containerSize = 38.dp,
-                iconSize = 19.dp
+                iconSize = 20.dp
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -390,16 +390,18 @@ fun AsterModelRow(
                         Text(" · ${brand.displayName}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     }
                 }
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(3.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = model.ifBlank { "选择模型" },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = Ink,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                    if (model.isBlank()) {
+                        Text("选择模型", style = MaterialTheme.typography.titleSmall, color = Ink)
+                    } else {
+                        AsterModelCombineLabel(
+                            modelId = model,
+                            displayText = model,
+                            lockupHeight = 16.dp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                     if (peakRate != null) {
                         Spacer(Modifier.width(6.dp))
                         AsterPeakRateBadge(state = peakRate)
@@ -431,8 +433,8 @@ fun AsterModelRow(
 }
 
 /**
- * Vendor brand mark from `dsh-claude-style` (`packages/assets/src/icons/combine/`),
- * falling back to [fallbackIcon] when the model ID does not match a known vendor rule.
+ * Full-color / multi-stop gradient vendor mark rendered directly from `dsh-claude-style`
+ * (`packages/assets/src/icons/combine/`), with zero monochrome tint distortion.
  */
 @Composable
 fun AsterModelBrandIcon(
@@ -441,17 +443,12 @@ fun AsterModelBrandIcon(
     modelName: String = "",
     fallbackIcon: ImageVector = Icons.Rounded.Tune,
     containerSize: Dp = 40.dp,
-    iconSize: Dp = 20.dp,
+    iconSize: Dp = 22.dp,
     selected: Boolean = false
 ) {
     val dark = LocalThemeDark.current
     val brand = remember(modelId, modelName) { ModelCatalogCopy.brandFor(modelId, modelName) }
-    val brandTint = brand?.tint(dark) ?: if (selected) OnAccentSoft else MutedInk
-    val containerBg = when {
-        brand != null -> brandTint.copy(alpha = if (dark) 0.16f else 0.11f)
-        selected -> Surface
-        else -> Canvas
-    }
+    val containerBg = if (selected) Surface else Canvas
     Box(
         modifier = modifier
             .size(containerSize)
@@ -460,40 +457,103 @@ fun AsterModelBrandIcon(
         contentAlignment = Alignment.Center
     ) {
         if (brand != null) {
-            Icon(
-                painter = painterResource(brand.iconRes),
+            Image(
+                painter = painterResource(brand.markRes(dark)),
                 contentDescription = brand.displayName,
-                modifier = Modifier.size(iconSize),
-                tint = brandTint
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(iconSize)
             )
         } else {
             Icon(
                 imageVector = fallbackIcon,
                 contentDescription = null,
-                modifier = Modifier.size(iconSize),
-                tint = brandTint
+                modifier = Modifier.size(iconSize * 0.9f),
+                tint = if (selected) OnAccentSoft else MutedInk
             )
         }
     }
 }
 
 /**
- * Small inline vendor glyph without a container box (used in ConversationHeader).
+ * Small inline full-color vendor mark without a container box (used in ConversationHeader).
  */
 @Composable
 fun AsterInlineBrandGlyph(
     modelId: String,
     modifier: Modifier = Modifier,
-    size: Dp = 14.dp
+    size: Dp = 15.dp
 ) {
     val dark = LocalThemeDark.current
     val brand = remember(modelId) { ModelCatalogCopy.brandFor(modelId) } ?: return
-    Icon(
-        painter = painterResource(brand.iconRes),
+    Image(
+        painter = painterResource(brand.markRes(dark)),
         contentDescription = brand.displayName,
-        modifier = modifier.size(size),
-        tint = brand.tint(dark)
+        contentScale = ContentScale.Fit,
+        modifier = modifier.size(size)
     )
+}
+
+/**
+ * Authentic `dsh-claude-style` vendor combine lockup label (`packages/client/src/features/model/brand.ts`):
+ * replaces the vendor word inside the model name with the official [Mark + Custom Wordmark] lockup artwork,
+ * keeping the model's version/tier suffix beside it on the same line.
+ */
+@Composable
+fun AsterModelCombineLabel(
+    modelId: String,
+    modifier: Modifier = Modifier,
+    displayText: String = modelId,
+    textColor: Color = Ink,
+    fontWeight: FontWeight = FontWeight.Medium,
+    lockupHeight: Dp = 16.dp
+) {
+    val dark = LocalThemeDark.current
+    val parts = remember(modelId, displayText) { ModelCatalogCopy.combineLabelParts(modelId, displayText) }
+    if (parts == null) {
+        Text(
+            text = displayText.ifBlank { modelId },
+            color = textColor,
+            fontWeight = fontWeight,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = modifier
+        )
+        return
+    }
+    val brand = parts.brand
+    val lockupWidth = lockupHeight * brand.combineAspectRatio
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (parts.head.isNotEmpty()) {
+            Text(
+                text = parts.head,
+                color = textColor,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = fontWeight,
+                maxLines = 1
+            )
+        }
+        Image(
+            painter = painterResource(brand.combineRes(dark)),
+            contentDescription = brand.displayName,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .width(lockupWidth)
+                .height(lockupHeight)
+        )
+        if (parts.tail.isNotEmpty()) {
+            Text(
+                text = parts.tail,
+                color = textColor,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = fontWeight,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }
 
 /**

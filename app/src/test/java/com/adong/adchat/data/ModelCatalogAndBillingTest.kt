@@ -31,6 +31,26 @@ class ModelCatalogAndBillingTest {
     }
 
     @Test
+    fun combineLabelPartsReplacesVendorWordOrLeadsWhenAbsent() {
+        val claudeParts = ModelCatalogCopy.combineLabelParts("claude-sonnet-4-6")
+        assertNotNull(claudeParts)
+        assertEquals(ModelBrand.Claude, claudeParts!!.brand)
+        assertEquals("", claudeParts.head)
+        assertEquals(" sonnet-4-6", claudeParts.tail)
+
+        val prefixedParts = ModelCatalogCopy.combineLabelParts("anthropic/claude-opus-4.5")
+        assertNotNull(prefixedParts)
+        assertEquals("anthropic/", prefixedParts!!.head)
+        assertEquals(" opus-4.5", prefixedParts.tail)
+
+        val kimiK3Parts = ModelCatalogCopy.combineLabelParts("k3.1-pro")
+        assertNotNull(kimiK3Parts)
+        assertEquals(ModelBrand.Kimi, kimiK3Parts!!.brand)
+        assertEquals("", kimiK3Parts.head)
+        assertEquals(" k3.1-pro", kimiK3Parts.tail)
+    }
+
+    @Test
     fun familyAndTierCopyRulesMatchDshClaudeStyleCatalog() {
         assertEquals(
             "非对称模型结构，小成本大智能。",

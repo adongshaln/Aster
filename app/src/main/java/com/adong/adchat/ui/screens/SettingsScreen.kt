@@ -655,17 +655,16 @@ private fun UsageModelRow(
                     modelId = row.model,
                     modelName = price?.name.orEmpty(),
                     containerSize = 36.dp,
-                    iconSize = 18.dp
+                    iconSize = 20.dp
                 )
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            price?.name ?: row.model,
-                            style = MaterialTheme.typography.titleSmall,
+                        AsterModelCombineLabel(
+                            modelId = row.model,
+                            displayText = price?.name ?: row.model,
                             fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            lockupHeight = 16.dp,
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         if (peakState != null) {
@@ -1361,14 +1360,24 @@ private fun RouteValueButton(label: String, value: String, icon: ImageVector, ac
             Column(Modifier.weight(1f)) {
                 Text(label, color = MutedInk, style = MaterialTheme.typography.labelSmall)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        value,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
+                    if (brand != null) {
+                        AsterModelCombineLabel(
+                            modelId = value,
+                            displayText = value,
+                            fontWeight = FontWeight.SemiBold,
+                            lockupHeight = 15.5.dp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    } else {
+                        Text(
+                            value,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                     if (peakRate != null) {
                         Spacer(Modifier.width(6.dp))
                         AsterPeakRateBadge(state = peakRate, showCountdown = false)

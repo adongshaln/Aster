@@ -235,7 +235,7 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
                     modelId = option.id,
                     modelName = option.title,
                     containerSize = 40.dp,
-                    iconSize = 20.dp,
+                    iconSize = 22.dp,
                     selected = selected
                 )
                 Spacer(Modifier.width(12.dp))
@@ -251,7 +251,23 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
             }
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(option.title, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (brand != null) {
+                        AsterModelCombineLabel(
+                            modelId = option.id,
+                            displayText = option.title,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            lockupHeight = 16.5.dp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    } else {
+                        Text(
+                            option.title,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    }
                     if (peakRate != null) {
                         Spacer(Modifier.width(6.dp))
                         AsterPeakRateBadge(state = peakRate)
