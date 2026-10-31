@@ -2,6 +2,12 @@ package com.adong.adchat.ui.components
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,11 +23,16 @@ import androidx.compose.ui.unit.dp
 import com.adong.adchat.data.ASK_USER_SOURCE
 import com.adong.adchat.data.LoadedSkill
 import com.adong.adchat.data.SkillRuntime
+import com.adong.adchat.ui.theme.Accent
+import com.adong.adchat.ui.theme.AsterSpring
+import com.adong.adchat.ui.theme.Canvas
 import com.adong.adchat.ui.theme.Danger
 import com.adong.adchat.ui.theme.DangerSoft
+import com.adong.adchat.ui.theme.Hairline
 import com.adong.adchat.ui.theme.Ink
 import com.adong.adchat.ui.theme.MutedInk
 import com.adong.adchat.ui.theme.SageSoft
+import com.adong.adchat.ui.theme.Surface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,45 +99,80 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
     }
     AsterOptionsSheet("技能", if (conversationScope == null) "管理你的写作方法、参考资料与工作流程" else
         "最多选 4 个，模型按需读取；选择自动保存", onDismiss, Icons.Rounded.AutoAwesome) {
-        OutlinedTextField(source, { source = it }, Modifier.fillMaxWidth(), enabled = !busy,
-            label = { Text("GitHub 技能链接") }, placeholder = { Text("粘贴包含 SKILL.md 的目录链接") },
-            shape = RoundedCornerShape(16.dp), maxLines = 3)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(enabled = !busy && source.isNotBlank(), onClick = {
-                val url = source.trim()
-                // 首次安装和更新说的是两件事，别用同一句「版本已更新」带过。
-                val alreadyInstalled = skills.any { it.sourceUrl == url }
-                action(if (alreadyInstalled) "技能已更新" else "技能已安装；可在输入选项中选择使用") { runtime.install(url) }
-            }) { Text("安装 / 更新") }
-            OutlinedButton(enabled = !busy, onClick = { zipPicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }) { Text("导入 ZIP") }
+        OutlinedTextField(
+            value = source,
+            onValueChange = { source = it },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !busy,
+            label = { Text("GitHub 技能链接") },
+            placeholder = { Text("粘贴包含 SKILL.md 的目录链接") },
+            shape = RoundedCornerShape(16.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = Ink,
+                unfocusedBorderColor = Hairline,
+                focusedContainerColor = Surface,
+                unfocusedContainerColor = Surface,
+                cursorColor = Accent
+            ),
+            maxLines = 3
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+            AsterPillButton(
+                text = "安装 / 更新",
+                primary = true,
+                enabled = !busy && source.isNotBlank(),
+                onClick = {
+                    val url = source.trim()
+                    // 首次安装和更新说的是两件事，别用同一句「版本已更新」带过。
+                    val alreadyInstalled = skills.any { it.sourceUrl == url }
+                    action(if (alreadyInstalled) "技能已更新" else "技能已安装；可在输入选项中选择使用") { runtime.install(url) }
+                },
+                modifier = Modifier.weight(1f)
+            )
+            AsterPillButton(
+                text = "导入 ZIP",
+                enabled = !busy,
+                onClick = { zipPicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
+                modifier = Modifier.weight(1f)
+            )
         }
-        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if (busy) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
         // 成功与失败必须能分开：加载失败/URL 非法和「已安装」长得一样就没法判断结果。
         notice?.let {
             Surface(
                 color = if (noticeIsError) DangerSoft else SageSoft,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, if (noticeIsError) Danger.copy(alpha = 0.3f) else Hairline),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(it, color = if (noticeIsError) Danger else Ink, style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 9.dp))
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp))
             }
         }
         if (skills.isEmpty() && !busy) Text("还没有技能。安装后，可在普通聊天、故事讨论和正文中分别选择。", color = MutedInk)
         skills.forEach { skill ->
-            Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Surface,
+                border = BorderStroke(1.dp, Hairline),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(skill.name, style = MaterialTheme.typography.titleMedium, color = Ink)
                             Text(skill.description.ifBlank { "此技能未提供简介" }, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall, color = MutedInk)
                         }
-                        if (conversationScope != null) Checkbox(skill.sourceUrl in selected, modifier = Modifier.testTag("skill-select-${skill.sourceUrl}"), enabled = !busy && skill.enabled,
+                        if (conversationScope != null) Checkbox(
+                            checked = skill.sourceUrl in selected,
+                            modifier = Modifier.testTag("skill-select-${skill.sourceUrl}"),
+                            enabled = !busy && skill.enabled,
                             onCheckedChange = { checked ->
                                 val next = if (checked) selected + skill.sourceUrl else selected - skill.sourceUrl
                                 action("此对话的技能选择已保存") { runtime.select(conversationScope, next) }
-                            })
+                            }
+                        )
                     }
                     val selectedHere = conversationScope != null && skill.sourceUrl in selected
                     Text(when {
@@ -134,25 +180,62 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
                         skill.containsScripts -> "含脚本，仅读取说明与资料"
                         else -> "仅读取说明与资料"
                     }, style = MaterialTheme.typography.labelSmall, color = MutedInk)
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { detail = if (detail == skill.sourceUrl) null else skill.sourceUrl }) { Text(if (detail == skill.sourceUrl) "收起" else "详情") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        val detailOpen = detail == skill.sourceUrl
+                        AsterPillButton(
+                            text = if (detailOpen) "收起" else "详情",
+                            compact = true,
+                            selected = detailOpen,
+                            onClick = { detail = if (detailOpen) null else skill.sourceUrl }
+                        )
                         // 停用一个已勾选的技能时，把勾选一起取消：否则勾着却不会生效，本身自相矛盾。
-                        TextButton(enabled = !busy, onClick = {
-                            action(if (skill.enabled) "技能已停用" else "技能已启用") {
-                                if (skill.enabled && conversationScope != null && skill.sourceUrl in selected) {
-                                    runtime.select(conversationScope, selected - skill.sourceUrl)
+                        AsterPillButton(
+                            text = if (skill.enabled) "停用" else "启用",
+                            compact = true,
+                            enabled = !busy,
+                            onClick = {
+                                action(if (skill.enabled) "技能已停用" else "技能已启用") {
+                                    if (skill.enabled && conversationScope != null && skill.sourceUrl in selected) {
+                                        runtime.select(conversationScope, selected - skill.sourceUrl)
+                                    }
+                                    runtime.enable(skill.sourceUrl, !skill.enabled)
                                 }
-                                runtime.enable(skill.sourceUrl, !skill.enabled)
                             }
-                        }) { Text(if (skill.enabled) "停用" else "启用") }
-                        if (skill.sourceUrl.startsWith("https://")) TextButton(enabled = !busy, onClick = { action("技能已更新") { runtime.install(skill.sourceUrl) } }) { Text("更新") }
-                        TextButton(enabled = !busy, onClick = { deleting = skill }) { Text("删除") }
+                        )
+                        if (skill.sourceUrl.startsWith("https://")) {
+                            AsterPillButton(
+                                text = "更新",
+                                compact = true,
+                                enabled = !busy,
+                                onClick = { action("技能已更新") { runtime.install(skill.sourceUrl) } }
+                            )
+                        }
+                        AsterPillButton(
+                            text = "删除",
+                            compact = true,
+                            destructive = true,
+                            enabled = !busy,
+                            onClick = { deleting = skill }
+                        )
                     }
-                    if (detail == skill.sourceUrl) {
-                        Text("来源：${skill.sourceUrl}\n版本：${skill.sha256.take(12)}\n文件：${skill.files.size.takeIf { it > 0 } ?: 1}",
-                            style = MaterialTheme.typography.bodySmall, color = MutedInk)
-                        Text(skill.files.keys.sorted().joinToString("\n"), style = MaterialTheme.typography.bodySmall)
-                        Text(skill.content, style = MaterialTheme.typography.bodySmall, color = Ink)
+                    AnimatedVisibility(
+                        visible = detail == skill.sourceUrl,
+                        enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                        exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+                    ) {
+                        Surface(
+                            color = Canvas,
+                            shape = RoundedCornerShape(14.dp),
+                            border = BorderStroke(1.dp, Hairline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("来源：${skill.sourceUrl}\n版本：${skill.sha256.take(12)}\n文件：${skill.files.size.takeIf { it > 0 } ?: 1}",
+                                    style = MaterialTheme.typography.bodySmall, color = MutedInk)
+                                Text(skill.files.keys.sorted().joinToString("\n"), style = MaterialTheme.typography.bodySmall)
+                                Text(skill.content, style = MaterialTheme.typography.bodySmall, color = Ink)
+                            }
+                        }
                     }
                 }
             }
@@ -161,9 +244,15 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
             style = MaterialTheme.typography.bodySmall, color = MutedInk)
     }
     deleting?.let { skill ->
-        AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除 ${skill.name}？") },
-            text = { Text("删除本机安装的技能包，已有聊天内容会保留。") },
-            confirmButton = { TextButton(onClick = { deleting = null; action("技能已删除") { runtime.remove(skill.sourceUrl) } }) { Text("删除") } },
-            dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } })
+        AdConfirmDialog(
+            title = "删除 ${skill.name}？",
+            message = "删除本机安装的技能包，已有聊天内容会保留。",
+            confirmLabel = "删除",
+            dismissLabel = "取消",
+            icon = Icons.Rounded.DeleteOutline,
+            destructive = true,
+            onConfirm = { deleting = null; action("技能已删除") { runtime.remove(skill.sourceUrl) } },
+            onDismiss = { deleting = null }
+        )
     }
 }

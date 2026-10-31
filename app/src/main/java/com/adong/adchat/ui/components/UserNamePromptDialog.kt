@@ -82,18 +82,18 @@ fun UserNamePromptDialog(
             )
         },
         actions = {
-            OutlinedButton(
+            AsterPillButton(
+                text = skipLabel,
                 onClick = onSkip,
-                modifier = Modifier.weight(1f).height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
-            ) { Text(skipLabel) }
-            Button(
-                onClick = confirm,
+                modifier = Modifier.weight(1f).height(48.dp)
+            )
+            AsterPillButton(
+                text = confirmLabel,
+                primary = true,
                 enabled = confirmEnabled,
-                modifier = Modifier.weight(1f).height(50.dp),
-                shape = RoundedCornerShape(16.dp)
-            ) { Text(confirmLabel, fontWeight = FontWeight.SemiBold) }
+                onClick = confirm,
+                modifier = Modifier.weight(1f).height(48.dp)
+            )
         }
     )
 }

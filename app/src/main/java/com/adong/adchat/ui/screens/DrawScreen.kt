@@ -301,19 +301,21 @@ private fun DrawGenerateBar(vm: MainViewModel, onGenerate: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     Surface(color = Canvas) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp)) {
-            Button(onClick = { haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove); onGenerate() },
-                enabled = ready, modifier = Modifier.fillMaxWidth().height(54.dp),
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Night, contentColor = WarmWhite)) {
-                Icon(if (manga) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome, null, Modifier.size(20.dp))
-                Spacer(Modifier.width(9.dp))
-                Text(when {
+            AsterPrimaryButton(
+                text = when {
                     !vm.canStartImageTask -> "并发任务已满"
                     vm.activeImageTaskCount > 0 -> "提交下一批 · ${vm.activeImageCount}/${vm.maxConcurrentImageCount} 张"
                     manga -> "开始翻译漫画"
                     else -> "开始生成"
-                }, fontWeight = FontWeight.SemiBold)
-            }
+                },
+                icon = if (manga) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome,
+                enabled = ready,
+                onClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onGenerate()
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
@@ -1139,11 +1141,27 @@ private fun ImageLightbox(
             )
         }
     }
+    val motionEnabled = LocalAsterMotionEnabled.current
+    var entered by remember { mutableStateOf(!motionEnabled) }
+    LaunchedEffect(Unit) { entered = true }
+    val entryScale by animateFloatAsState(
+        targetValue = if (entered) 1f else 0.92f,
+        animationSpec = if (motionEnabled) AsterSpring.jelly() else androidx.compose.animation.core.snap(),
+        label = "lightbox-entry-scale"
+    )
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
     ) {
-        Box(Modifier.fillMaxSize().background(Night)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Night)
+                .graphicsLayer {
+                    scaleX = if (motionEnabled) entryScale else 1f
+                    scaleY = if (motionEnabled) entryScale else 1f
+                }
+        ) {
             AsyncImage(
                 model = imageModel(source),
                 contentDescription = title,
@@ -1191,8 +1209,8 @@ private fun ImageLightbox(
             }
             AnimatedVisibility(
                 visible = controlsVisible,
-                enter = fadeIn(tween(160)),
-                exit = fadeOut(tween(120)),
+                enter = fadeIn(AsterSpring.editorial()),
+                exit = fadeOut(AsterSpring.snappy()),
                 modifier = Modifier.align(Alignment.TopCenter)
             ) {
                 Row(
@@ -1217,14 +1235,14 @@ private fun ImageLightbox(
             }
             AnimatedVisibility(
                 visible = controlsVisible,
-                enter = fadeIn(tween(180)) + scaleIn(tween(220), initialScale = 0.97f),
-                exit = fadeOut(tween(120)) + scaleOut(tween(140), targetScale = 0.98f),
+                enter = fadeIn(AsterSpring.editorial()) + scaleIn(AsterSpring.spatial(), initialScale = 0.96f),
+                exit = fadeOut(AsterSpring.snappy()) + scaleOut(AsterSpring.snappy(), targetScale = 0.97f),
                 modifier = Modifier.align(Alignment.BottomCenter)
             ) {
                 Surface(
                     color = Color.Black.copy(alpha = 0.72f),
                     contentColor = Color.White,
-                    shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp),
+                    shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(Modifier.navigationBarsPadding().padding(horizontal = 18.dp, vertical = 16.dp)) {
@@ -1237,29 +1255,21 @@ private fun ImageLightbox(
                             Spacer(Modifier.height(14.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 if (onReuse != null) {
-                                    OutlinedButton(
+                                    AsterPillButton(
+                                        text = "复用参数",
+                                        icon = Icons.Rounded.Refresh,
                                         onClick = onReuse,
-                                        modifier = Modifier.weight(1f).height(48.dp),
-                                        shape = RoundedCornerShape(16.dp),
-                                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.28f)),
-                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
-                                    ) {
-                                        Icon(Icons.Rounded.Refresh, null, Modifier.size(17.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("复用参数")
-                                    }
+                                        modifier = Modifier.weight(1f).height(48.dp)
+                                    )
                                 }
                                 if (onSave != null) {
-                                    Button(
+                                    AsterPillButton(
+                                        text = "保存到相册",
+                                        icon = Icons.Rounded.Download,
+                                        primary = true,
                                         onClick = onSave,
-                                        modifier = Modifier.weight(1f).height(48.dp),
-                                        shape = RoundedCornerShape(16.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Accent)
-                                    ) {
-                                        Icon(Icons.Rounded.Download, null, Modifier.size(17.dp))
-                                        Spacer(Modifier.width(6.dp))
-                                        Text("保存到相册")
-                                    }
+                                        modifier = Modifier.weight(1f).height(48.dp)
+                                    )
                                 }
                             }
                         }

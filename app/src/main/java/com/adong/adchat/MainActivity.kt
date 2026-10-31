@@ -252,83 +252,78 @@ private fun AsterApp(
             val pageBottomPadding = if (edgeToEdgePage) 0.dp else padding.calculateBottomPadding()
             val drawerScope = scope
             val drawerOpen: () -> Unit = { drawerScope.launch { drawerState.open() } }
-            Box(
-                Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
-                    .consumeWindowInsets(PaddingValues(bottom = pageBottomPadding))
-                    .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas)))
-                    .drawerEdgeSwipe(drawerOpen),
-                contentAlignment = Alignment.TopCenter
+            val stageOverlayOpen = drawerState.targetValue == DrawerValue.Open || drawerState.isOpen || showStoryCreator
+            AsterStageDepthContainer(
+                isOverlayOpen = stageOverlayOpen,
+                modifier = Modifier.fillMaxSize()
             ) {
-                val motionEnabled = LocalAsterMotionEnabled.current
-                val pageTravelPx = with(LocalDensity.current) { 28.dp.roundToPx() }
-                AnimatedContent(
-                    targetState = page,
-                    modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
-                    transitionSpec = {
-                        val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
-                        val enter = if (motionEnabled) {
-                            fadeIn(tween(180, easing = AsterEase)) +
-                                slideInHorizontally(AsterSpring.spatial()) { width ->
-                                    minOf(width / 14, pageTravelPx) * direction
-                                } +
-                                scaleIn(
-                                    AsterSpring.settle(), initialScale = 0.986f,
-                                    transformOrigin = TransformOrigin(0.5f, 0.35f)
+                Box(
+                    Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
+                        .consumeWindowInsets(PaddingValues(bottom = pageBottomPadding))
+                        .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas)))
+                        .drawerEdgeSwipe(drawerOpen),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    val motionEnabled = LocalAsterMotionEnabled.current
+                    val pageTravelPx = with(LocalDensity.current) { 28.dp.roundToPx() }
+                    AnimatedContent(
+                        targetState = page,
+                        modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
+                        transitionSpec = {
+                            val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                            val enter = if (motionEnabled) {
+                                fadeIn(tween(180, easing = AsterEase)) +
+                                    slideInHorizontally(AsterSpring.spatial()) { width ->
+                                        minOf(width / 14, pageTravelPx) * direction
+                                    } +
+                                    scaleIn(
+                                        AsterSpring.settle(), initialScale = 0.986f,
+                                        transformOrigin = TransformOrigin(0.5f, 0.35f)
+                                    )
+                            } else EnterTransition.None
+                            val exit = if (motionEnabled) {
+                                fadeOut(tween(120, easing = AsterEase)) +
+                                    slideOutHorizontally(tween(180, easing = AsterEase)) { width ->
+                                        -minOf(width / 32, pageTravelPx / 2) * direction
+                                    }
+                            } else ExitTransition.None
+                            // Only navigation changes this transition; streaming text never resizes it.
+                            (enter togetherWith exit).using(null)
+                        },
+                        label = "page-transition"
+                    ) { target ->
+                        pageStates.SaveableStateProvider(target.name) {
+                            when (target) {
+                                AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                                AppPage.Story -> StoryScreen(
+                                    mainVm = vm,
+                                    storyVm = storyVm,
+                                    onOpenDrawer = openDrawer,
+                                    onCreateStory = ::requestStoryCreation,
+                                    onOpenSettings = { navigate(AppPage.Settings) }
                                 )
-                        } else EnterTransition.None
-                        val exit = if (motionEnabled) {
-                            fadeOut(tween(120, easing = AsterEase)) +
-                                slideOutHorizontally(tween(180, easing = AsterEase)) { width ->
-                                    -minOf(width / 32, pageTravelPx / 2) * direction
-                                }
-                        } else ExitTransition.None
-                        // Only navigation changes this transition; streaming text never resizes it.
-                        (enter togetherWith exit).using(null)
-                    },
-                    label = "page-transition"
-                ) { target ->
-                    pageStates.SaveableStateProvider(target.name) {
-                        when (target) {
-                            AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
-                            AppPage.Story -> StoryScreen(
-                                mainVm = vm,
-                                storyVm = storyVm,
-                                onOpenDrawer = openDrawer,
-                                onCreateStory = ::requestStoryCreation,
-                                onOpenSettings = { navigate(AppPage.Settings) }
-                            )
-                            AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
-                            AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
-                            AppPage.Settings -> SettingsScreen(
-                                vm,
-                                onOpenDrawer = openDrawer,
-                                openIslandSettings = openIslandSettings,
-                                onIslandSettingsConsumed = onIslandSettingsConsumed
-                            )
+                                AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                                AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
+                                AppPage.Settings -> SettingsScreen(
+                                    vm,
+                                    onOpenDrawer = openDrawer,
+                                    openIslandSettings = openIslandSettings,
+                                    onIslandSettingsConsumed = onIslandSettingsConsumed
+                                )
+                            }
                         }
                     }
-                }
-                SnackbarHost(
-                    hostState = snackbarHostState,
-                    modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
-                        .padding(top = 82.dp, start = 16.dp, end = 16.dp).widthIn(max = 640.dp)
-                ) { data ->
-                    Snackbar(
-                        containerColor = MaterialTheme.colorScheme.inverseSurface,
-                        contentColor = MaterialTheme.colorScheme.inverseOnSurface,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().clickable { data.dismiss() }
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(data.visuals.message, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                            data.visuals.actionLabel?.let { action ->
-                                TextButton(onClick = { data.performAction() }) {
-                                    Text(action, color = MaterialTheme.colorScheme.inversePrimary, fontWeight = FontWeight.Bold)
-                                }
-                            }
-                            Spacer(Modifier.width(if (data.visuals.actionLabel != null) 2.dp else 12.dp))
-                            Icon(Icons.Rounded.Close, "关闭提示", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.inverseOnSurface)
-                        }
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                            .padding(top = 64.dp, start = 16.dp, end = 16.dp).widthIn(max = 520.dp)
+                    ) { data ->
+                        AsterPaperSnackbar(
+                            message = data.visuals.message,
+                            actionLabel = data.visuals.actionLabel,
+                            onAction = { data.performAction() },
+                            onDismiss = { data.dismiss() }
+                        )
                     }
                 }
             }
@@ -358,33 +353,34 @@ private fun AsterApp(
                     } else {
                         Text("使用 ${vm.chatProfile.name} · ${vm.chatProfile.chatModel}", color = MutedInk, style = MaterialTheme.typography.bodySmall)
                     }
-                    OutlinedButton(
+                    AsterPillButton(
+                        text = "导入角色卡",
+                        icon = Icons.Rounded.FileUpload,
+                        enabled = vm.chatProfile.chatModel.isNotBlank(),
                         onClick = {
                             cardPicker.launch(arrayOf("image/png", "application/json", "application/zip", "text/plain", "application/octet-stream"))
                         },
-                        enabled = vm.chatProfile.chatModel.isNotBlank(),
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        shape = RoundedCornerShape(16.dp)
-                    ) { Text("导入角色卡") }
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    )
                     Text("导入后不进入讨论。开场白会去掉网页和样式，只留下正文。", color = MutedInk, style = MaterialTheme.typography.bodySmall)
                 }
             },
             actions = {
-                OutlinedButton(
+                AsterPillButton(
+                    text = "取消",
                     onClick = { showStoryCreator = false },
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(16.dp)
-                ) { Text("取消") }
-                Button(
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
+                AsterPillButton(
+                    text = "创建",
+                    primary = true,
+                    enabled = storyTitle.isNotBlank() && vm.chatProfile.chatModel.isNotBlank(),
                     onClick = {
                         storyVm.createStory(storyTitle, vm.chatProfile) { page = AppPage.Story }
                         showStoryCreator = false
                     },
-                    enabled = storyTitle.isNotBlank() && vm.chatProfile.chatModel.isNotBlank(),
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent)
-                ) { Text("创建", fontWeight = FontWeight.Bold) }
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
             }
         )
     }
@@ -503,21 +499,22 @@ internal fun AppDrawer(
                 )
             )
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 2.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                listOf("all" to "全部", "favorites" to "收藏", "archived" to "归档").forEach { (filter, label) ->
-                    FilterChip(
+                listOf(
+                    Triple("all", "全部", null),
+                    Triple("favorites", "收藏", Icons.Rounded.Star),
+                    Triple("archived", "归档", Icons.Rounded.Archive)
+                ).forEach { (filter, label, icon) ->
+                    AsterPillButton(
+                        text = label,
+                        icon = icon,
                         selected = conversationFilter == filter,
+                        compact = true,
                         onClick = { conversationFilter = filter },
-                        label = { Text(label) },
-                        leadingIcon = when (filter) {
-                            "favorites" -> ({ Icon(Icons.Rounded.Star, null, Modifier.size(16.dp)) })
-                            "archived" -> ({ Icon(Icons.Rounded.Archive, null, Modifier.size(16.dp)) })
-                            else -> null
-                        },
-                        modifier = Modifier.heightIn(min = 38.dp)
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
@@ -712,19 +709,18 @@ internal fun AppDrawer(
                 )
             },
             actions = {
-                OutlinedButton(
+                AsterPillButton(
+                    text = "取消",
                     onClick = { renameCandidate = null },
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
-                Button(
-                    onClick = { vm.renameConversation(conversation.id, renameText); renameCandidate = null },
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
+                AsterPillButton(
+                    text = "保存",
+                    primary = true,
                     enabled = renameText.isNotBlank(),
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent)
-                ) { Text("保存", fontWeight = FontWeight.Bold) }
+                    onClick = { vm.renameConversation(conversation.id, renameText); renameCandidate = null },
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
             }
         )
     }
@@ -753,13 +749,14 @@ internal fun AppDrawer(
                 )
             },
             actions = {
-                OutlinedButton(
+                AsterPillButton(
+                    text = "取消",
                     onClick = { tagsCandidate = null },
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
-                ) { Text("取消", fontWeight = FontWeight.SemiBold) }
-                Button(
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
+                AsterPillButton(
+                    text = "保存",
+                    primary = true,
                     onClick = {
                         val tags = tagsText.split(Regex("[,，;；\\n]"))
                             .map { it.trim().take(24) }
@@ -769,10 +766,8 @@ internal fun AppDrawer(
                         vm.setConversationTags(conversation.id, tags)
                         tagsCandidate = null
                     },
-                    modifier = Modifier.weight(1f).height(50.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = OnAccent)
-                ) { Text("保存", fontWeight = FontWeight.Bold) }
+                    modifier = Modifier.weight(1f).height(48.dp)
+                )
             }
         )
     }

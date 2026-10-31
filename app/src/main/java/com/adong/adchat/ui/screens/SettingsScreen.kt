@@ -1526,9 +1526,12 @@ private fun StarIslandSettingsCard() {
             ) else IslandService.stop(context)
         }
         if (enabled && !ready) {
-            TextButton(onClick = ::requestMissingPermission) {
-                Text(if (!overlayReady) "授权悬浮窗" else "授权通知，完成开启")
-            }
+            AsterPillButton(
+                text = if (!overlayReady) "授权悬浮窗" else "授权通知，完成开启",
+                primary = true,
+                onClick = ::requestMissingPermission,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
         SettingSwitch(
             title = "触摸兼容与屏幕提问",
@@ -1543,9 +1546,11 @@ private fun StarIslandSettingsCard() {
             }
         )
         if (touchCompatibilityEnabled && touchHost == null) {
-            TextButton(onClick = { context.startActivity(IslandPermissions.touchCompatibilitySettingsIntent()) }) {
-                Text("等待系统连接，检查无障碍服务")
-            }
+            AsterPillButton(
+                text = "等待系统连接，检查无障碍服务",
+                onClick = { context.startActivity(IslandPermissions.touchCompatibilitySettingsIntent()) },
+                modifier = Modifier.fillMaxWidth()
+            )
         } else if (!touchCompatibilityEnabled) {
             Text("在系统无障碍设置中开启「Aster · 星岛触摸兼容」后生效。",
                 color = MutedInk, style = MaterialTheme.typography.bodySmall)
@@ -1561,18 +1566,37 @@ private fun SettingSwitch(
     enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .appleSpringPressable(pressedScale = 0.985f, enabled = enabled)
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, color = Ink)
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = if (enabled) Ink else MutedInk)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MutedInk)
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+        AsterSwitch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
 @Composable
 private fun EditorSection(title: String, description: String, content: @Composable ColumnScope.() -> Unit) {
-    Column { Text(title, style = MaterialTheme.typography.titleSmall); Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium); Spacer(Modifier.height(10.dp)); Surface(color = Surface, shape = RoundedCornerShape(20.dp)) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(15.dp), content = content) } }
+    Column {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            color = Surface,
+            shape = RoundedCornerShape(22.dp),
+            border = BorderStroke(1.dp, Hairline),
+            shadowElevation = 1.dp
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(15.dp), content = content)
+        }
+    }
 }
 
 @Composable

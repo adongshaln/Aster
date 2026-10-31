@@ -121,8 +121,16 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
     Scaffold(
         containerColor = Canvas,
         snackbarHost = {
-            SnackbarHost(snackbarHostState) { data ->
-                Snackbar(data, containerColor = Night, contentColor = Color.White, shape = RoundedCornerShape(14.dp), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+            ) { data ->
+                AsterPaperSnackbar(
+                    message = data.visuals.message,
+                    actionLabel = data.visuals.actionLabel,
+                    onAction = { data.performAction() },
+                    onDismiss = { data.dismiss() }
+                )
             }
         }
     ) { scaffoldPadding ->

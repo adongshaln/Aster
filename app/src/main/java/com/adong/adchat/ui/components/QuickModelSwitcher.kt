@@ -248,11 +248,12 @@ fun QuickModelSwitcher(
                 }
             }
             Spacer(Modifier.height(12.dp))
-            Surface(onClick = { onDismiss(); onManageApis() }, color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Icon(Icons.Rounded.Settings, null, Modifier.size(17.dp), tint = MutedInk); Spacer(Modifier.width(7.dp)); Text("管理 API 与模型", color = MutedInk, style = MaterialTheme.typography.labelLarge)
-                }
-            }
+            AsterPillButton(
+                text = "管理 API 与模型",
+                icon = Icons.Rounded.Settings,
+                onClick = { onDismiss(); onManageApis() },
+                modifier = Modifier.fillMaxWidth()
+            )
             Spacer(Modifier.navigationBarsPadding().height(14.dp))
         }
     }

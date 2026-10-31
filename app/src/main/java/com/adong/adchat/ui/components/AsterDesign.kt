@@ -445,3 +445,211 @@ fun AsterEmptyState(
         )
     }
 }
+
+/**
+ * Star Island tactile switch: paper-well track with 1dp hairline border and a spring-driven
+ * thumb that squishes horizontally while in flight.
+ */
+@Composable
+fun AsterSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val trackColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> SurfaceInset.copy(alpha = 0.55f)
+            checked -> Accent
+            else -> SurfaceInset
+        },
+        animationSpec = AsterSpring.editorial(),
+        label = "aster-switch-track"
+    )
+    val borderColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> Hairline.copy(alpha = 0.5f)
+            checked -> Accent
+            else -> Hairline
+        },
+        animationSpec = AsterSpring.editorial(),
+        label = "aster-switch-border"
+    )
+    val thumbColor by animateColorAsState(
+        targetValue = when {
+            !enabled -> MutedInk.copy(alpha = 0.42f)
+            checked -> OnAccent
+            else -> Surface
+        },
+        animationSpec = AsterSpring.editorial(),
+        label = "aster-switch-thumb"
+    )
+    val thumbOffset by animateDpAsState(
+        targetValue = if (checked) 21.dp else 3.dp,
+        animationSpec = AsterSpring.jelly(),
+        label = "aster-switch-offset"
+    )
+    Surface(
+        onClick = { if (enabled) onCheckedChange(!checked) },
+        enabled = enabled,
+        interactionSource = interactionSource,
+        color = trackColor,
+        shape = CircleShape,
+        border = BorderStroke(1.dp, borderColor),
+        modifier = modifier
+            .width(46.dp)
+            .height(28.dp)
+            .appleSpringPressable(pressedScale = 0.92f, enabled = enabled, interactionSource = interactionSource)
+    ) {
+        Box(contentAlignment = Alignment.CenterStart) {
+            Box(
+                Modifier
+                    .offset(x = thumbOffset)
+                    .size(21.dp)
+                    .clip(CircleShape)
+                    .background(thumbColor)
+            )
+        }
+    }
+}
+
+/**
+ * Star Island paper-well pill button: replaces bare TextButtons and unstyled chips with a
+ * crisp 1dp hairline border, warm paper fill, and asymmetric spring press feedback.
+ */
+@Composable
+fun AsterPillButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    primary: Boolean = false,
+    destructive: Boolean = false,
+    selected: Boolean = false,
+    compact: Boolean = false,
+    icon: ImageVector? = null
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val fill by animateColorAsState(
+        targetValue = when {
+            primary -> if (enabled) Accent else Accent.copy(alpha = 0.42f)
+            destructive -> if (enabled) DangerSoft else SurfaceInset.copy(alpha = 0.6f)
+            selected -> AccentSoft
+            else -> Surface
+        },
+        animationSpec = AsterSpring.editorial(),
+        label = "pill-btn-fill"
+    )
+    val stroke by animateColorAsState(
+        targetValue = when {
+            primary -> Color.Transparent
+            destructive -> Danger.copy(alpha = if (enabled) 0.35f else 0.15f)
+            selected -> Accent.copy(alpha = 0.48f)
+            else -> Hairline
+        },
+        animationSpec = AsterSpring.editorial(),
+        label = "pill-btn-stroke"
+    )
+    val content by animateColorAsState(
+        targetValue = when {
+            !enabled -> MutedInk.copy(alpha = 0.45f)
+            primary -> OnAccent
+            destructive -> Danger
+            selected -> OnAccentSoft
+            else -> Ink
+        },
+        animationSpec = AsterSpring.editorial(),
+        label = "pill-btn-content"
+    )
+    val minHeight = if (compact) 34.dp else 42.dp
+    val horizontalPadding = if (compact) 13.dp else 16.dp
+    val cornerRadius = if (compact) 17.dp else 21.dp
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        interactionSource = interactionSource,
+        color = fill,
+        contentColor = content,
+        shape = RoundedCornerShape(cornerRadius),
+        border = if (primary) null else BorderStroke(1.dp, stroke),
+        modifier = modifier
+            .heightIn(min = minHeight)
+            .appleSpringPressable(pressedScale = 0.94f, enabled = enabled, interactionSource = interactionSource)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = horizontalPadding, vertical = if (compact) 6.dp else 9.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (icon != null) {
+                Icon(icon, null, Modifier.size(if (compact) 15.dp else 17.dp), tint = content)
+                Spacer(Modifier.width(if (compact) 5.dp else 6.dp))
+            }
+            Text(
+                text = text,
+                color = content,
+                style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.labelLarge,
+                fontWeight = if (primary || selected) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * Star Island paper-tag toast/snackbar: warm paper surface framed by a clay-tinted border,
+ * tactile action pill, and smooth spring dismissal.
+ */
+@Composable
+fun AsterPaperSnackbar(
+    message: String,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {},
+    onDismiss: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val dismissInteraction = remember { MutableInteractionSource() }
+    Surface(
+        onClick = onDismiss,
+        interactionSource = dismissInteraction,
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.2.dp, Accent.copy(alpha = 0.52f)),
+        shadowElevation = 10.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .appleSpringPressable(pressedScale = 0.97f, interactionSource = dismissInteraction)
+    ) {
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(Accent)
+            )
+            Spacer(Modifier.width(11.dp))
+            Text(
+                text = message,
+                modifier = Modifier.weight(1f),
+                color = Ink,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            if (actionLabel != null) {
+                Spacer(Modifier.width(8.dp))
+                AsterPillButton(
+                    text = actionLabel,
+                    onClick = onAction,
+                    primary = true,
+                    compact = true
+                )
+            }
+        }
+    }
+}

@@ -228,26 +228,18 @@ fun ComposerContextSheet(
             onSelect = onSelectWindow
         )
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
+            AsterPillButton(
+                text = "自定义数值",
                 onClick = onCustomize,
                 enabled = model.isNotBlank(),
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .appleSpringPressable(pressedScale = 0.96f, enabled = model.isNotBlank())
-            ) {
-                Text("自定义数值")
-            }
-            OutlinedButton(
+                modifier = Modifier.weight(1f)
+            )
+            AsterPillButton(
+                text = "恢复默认",
                 onClick = onReset,
                 enabled = limits != null,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .appleSpringPressable(pressedScale = 0.96f, enabled = limits != null)
-            ) {
-                Text("恢复默认")
-            }
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

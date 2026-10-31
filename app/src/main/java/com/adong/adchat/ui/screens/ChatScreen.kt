@@ -666,7 +666,12 @@ internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifie
             )
             if (model.isBlank()) {
                 Spacer(Modifier.height(20.dp))
-                Button(onClick = onConfigure, shape = RoundedCornerShape(16.dp)) { Text("连接第一个模型") }
+                AsterPillButton(
+                    text = "连接第一个模型",
+                    icon = Icons.Rounded.Hub,
+                    primary = true,
+                    onClick = onConfigure
+                )
             }
         }
     }
@@ -851,11 +856,16 @@ private fun ChatMessageItem(
                                 ConversationMessageAction(
                                     Icons.Rounded.MoreHoriz,
                                     if (showDetails) "收起" else "详情",
-                                    { showDetails = !showDetails; if (showDetails) onDetailsExpanded() }
+                                    { showDetails = !showDetails; if (showDetails) onDetailsExpanded() },
+                                    accent = showDetails
                                 )
                             }
                         }
-                        if (showDetails) {
+                        AnimatedVisibility(
+                            visible = showDetails,
+                            enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                            exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+                        ) {
                             Column(Modifier.fillMaxWidth().padding(top = 5.dp)) {
                                 RequestTransparencyPanel(message)
                                 if (message.previousContent.isNotBlank()) {
@@ -864,7 +874,11 @@ private fun ChatMessageItem(
                                         Icons.Rounded.History, if (showPrevious) "收起上一版" else "查看上一版",
                                         { showPrevious = !showPrevious }, accent = showPrevious
                                     )
-                                    AnimatedVisibility(showPrevious) {
+                                    AnimatedVisibility(
+                                        visible = showPrevious,
+                                        enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                                        exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+                                    ) {
                                         Surface(
                                             color = SurfaceInset.copy(alpha = .7f), contentColor = Ink,
                                             shape = RoundedCornerShape(13.dp),
@@ -984,8 +998,8 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
             }
             AnimatedVisibility(
                 visible = expanded,
-                enter = fadeIn(tween(150)) + expandVertically(tween(200, easing = FastOutSlowInEasing)),
-                exit = fadeOut(tween(100)) + shrinkVertically(tween(160))
+                enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
             ) {
                 Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     activities.forEach { activity ->
@@ -1147,7 +1161,11 @@ private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
                     trackColor = if (hasCache) SageSoft else AccentSoft
                 )
             }
-            AnimatedVisibility(expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+            ) {
                 Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     UsageLine(
                         "来源",
@@ -1705,8 +1723,25 @@ private fun ZoomedChatImage(model: ImageRequest, description: String, onDismiss:
         scale = (scale * zoom).coerceIn(1f, 5f)
         offset = if (scale <= 1f) Offset.Zero else offset + pan
     }
+    val motionEnabled = LocalAsterMotionEnabled.current
+    var entered by remember { mutableStateOf(!motionEnabled) }
+    LaunchedEffect(Unit) { entered = true }
+    val entryScale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (entered) 1f else 0.90f,
+        animationSpec = if (motionEnabled) AsterSpring.jelly() else androidx.compose.animation.core.snap(),
+        label = "zoomed-image-scale"
+    )
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .94f)), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Night.copy(alpha = .94f))
+                .graphicsLayer {
+                    scaleX = if (motionEnabled) entryScale else 1f
+                    scaleY = if (motionEnabled) entryScale else 1f
+                },
+            contentAlignment = Alignment.Center
+        ) {
             AsyncImage(
                 model = model,
                 contentDescription = description,
@@ -1718,9 +1753,15 @@ private fun ZoomedChatImage(model: ImageRequest, description: String, onDismiss:
                     translationY = offset.y
                 }.transformable(transform)
             )
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
-                Text("关闭", color = Color.White)
-            }
+            AsterPillButton(
+                text = "关闭",
+                compact = true,
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .statusBarsPadding()
+                    .padding(14.dp)
+            )
         }
     }
 }
@@ -2131,17 +2172,17 @@ private fun LinkConfirm(content: @Composable () -> Unit) {
     val handler = LocalUriHandler.current
     CompositionLocalProvider(LocalConfirmLink provides { pending = it }) { content() }
     val url = pending ?: return
-    AlertDialog(
-        onDismissRequest = { pending = null },
-        title = { Text("打开外部链接") },
-        text = { Text("即将离开 Aster，在浏览器中打开：\n$url") },
-        confirmButton = {
-            TextButton(onClick = {
-                pending = null
-                runCatching { handler.openUri(url) }
-            }) { Text("打开") }
+    AdConfirmDialog(
+        title = "打开外部链接",
+        message = "即将离开 Aster，在浏览器中打开：\n$url",
+        confirmLabel = "打开",
+        dismissLabel = "取消",
+        icon = Icons.AutoMirrored.Rounded.OpenInNew,
+        onConfirm = {
+            pending = null
+            runCatching { handler.openUri(url) }
         },
-        dismissButton = { TextButton(onClick = { pending = null }) { Text("取消") } }
+        onDismiss = { pending = null }
     )
 }
 
@@ -2233,12 +2274,12 @@ private fun AskUserCard(
     Surface(
         color = Surface,
         contentColor = Ink,
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(22.dp),
         border = BorderStroke(1.dp, Hairline),
-        shadowElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+        shadowElevation = 4.dp,
+        modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 8.dp)
     ) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(prompt.question, style = MaterialTheme.typography.titleSmall)
             prompt.options.forEach { option ->
                 val custom = option == ASK_USER_CUSTOM_OPTION
@@ -2248,16 +2289,29 @@ private fun AskUserCard(
                         onValueChange = onDraft,
                         placeholder = { Text(option) },
                         singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = Canvas,
+                            unfocusedContainerColor = Canvas,
+                            focusedBorderColor = Accent,
+                            unfocusedBorderColor = Hairline
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
-                    TextButton(onClick = onSubmitDraft, enabled = draft.isNotBlank(), modifier = Modifier.align(Alignment.End)) {
-                        Text("发送")
-                    }
+                    AsterPillButton(
+                        text = "发送",
+                        primary = true,
+                        compact = true,
+                        enabled = draft.isNotBlank(),
+                        onClick = onSubmitDraft,
+                        modifier = Modifier.align(Alignment.End)
+                    )
                 } else {
-                    OutlinedButton(
+                    AsterPillButton(
+                        text = option,
                         onClick = { if (custom) writing = true else onChoose(option) },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text(option) }
+                    )
                 }
             }
         }

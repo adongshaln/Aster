@@ -180,6 +180,7 @@ fun AdActionSheet(
 
 @Composable
 internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector?, onDismiss: () -> Unit) {
+    val closeInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
             Box(
@@ -192,10 +193,21 @@ internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector
             Text(title, style = MaterialTheme.typography.titleLarge)
             Text(subtitle, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
         }
-        IconButton(
+        Surface(
             onClick = onDismiss,
-            colors = IconButtonDefaults.iconButtonColors(containerColor = Surface, contentColor = MutedInk)
-        ) { Icon(Icons.Rounded.Close, "关闭") }
+            interactionSource = closeInteraction,
+            color = Surface,
+            contentColor = MutedInk,
+            shape = CircleShape,
+            border = BorderStroke(1.dp, Hairline),
+            modifier = Modifier
+                .size(38.dp)
+                .appleSpringPressable(pressedScale = 0.90f, interactionSource = closeInteraction)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.Close, "关闭", Modifier.size(18.dp))
+            }
+        }
     }
 }
 

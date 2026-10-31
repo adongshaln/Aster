@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -13,6 +15,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -88,13 +92,55 @@ internal fun HtmlArtifactCard(
     }
     if (fullscreen && canPreview) Dialog(onDismissRequest = { fullscreen = false },
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(color = Canvas, modifier = Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { fullscreen = false }) { Icon(Icons.Rounded.Close, "关闭 HTML 预览") }
-                    Text(filename, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("预览", Modifier.padding(16.dp), color = MutedInk)
+        val motionEnabled = LocalAsterMotionEnabled.current
+        var entered by remember { mutableStateOf(!motionEnabled) }
+        LaunchedEffect(Unit) { entered = true }
+        val scaleX by animateFloatAsState(
+            targetValue = if (entered) 1f else 0.92f,
+            animationSpec = if (motionEnabled) AsterSpring.releaseHorizontal() else snap(),
+            label = "html-fullscreen-scale-x"
+        )
+        val scaleY by animateFloatAsState(
+            targetValue = if (entered) 1f else 0.85f,
+            animationSpec = if (motionEnabled) AsterSpring.releaseVertical() else snap(),
+            label = "html-fullscreen-scale-y"
+        )
+        val alpha by animateFloatAsState(
+            targetValue = if (entered) 1f else 0f,
+            animationSpec = if (motionEnabled) AsterSpring.editorial() else snap(),
+            label = "html-fullscreen-alpha"
+        )
+        Surface(
+            color = Canvas,
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    this.alpha = if (motionEnabled) alpha.coerceIn(0f, 1f) else 1f
+                    this.scaleX = if (motionEnabled) scaleX else 1f
+                    this.scaleY = if (motionEnabled) scaleY else 1f
+                    transformOrigin = TransformOrigin.Center
                 }
+        ) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AsterIconButton(Icons.Rounded.Close, "关闭 HTML 预览", { fullscreen = false })
+                    Text(
+                        filename,
+                        Modifier.weight(1f).padding(start = 6.dp),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    AsterPillButton(
+                        text = "收起",
+                        compact = true,
+                        onClick = { fullscreen = false }
+                    )
+                }
+                HorizontalDivider(color = Hairline)
                 HtmlPreview(code, Modifier.fillMaxWidth().weight(1f), allowScripts, panelActions)
             }
         }
