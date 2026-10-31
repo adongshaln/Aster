@@ -27,7 +27,12 @@ data class MediaVariant(
     val mimeType: String = "video/mp4",
     val fileExtension: String = "mp4",
     val fileSize: Long = 0L,
-    val fallbackMediaUrl: String = ""
+    val fallbackMediaUrl: String = "",
+    val audioUrl: String = "",
+    val fallbackAudioUrl: String = "",
+    val prefersWatermarkFree: Boolean = false,
+    val variantReferer: String? = null,
+    val variantUserAgent: String? = null
 )
 
 data class ResolvedMedia(
@@ -42,6 +47,8 @@ data class ResolvedMedia(
     val userAgent: String,
     val cookieHeader: String = "",
     val compatibilityMediaUrl: String = "",
+    val audioUrl: String = "",
+    val compatibilityAudioUrl: String = "",
     val prefersWatermarkFree: Boolean = false,
     val platform: MediaPlatform = MediaPlatform.Douyin,
     val qualityLabel: String = "",
@@ -55,6 +62,11 @@ data class ResolvedMedia(
         return copy(
             mediaUrl = variant.mediaUrl,
             compatibilityMediaUrl = variant.fallbackMediaUrl,
+            audioUrl = variant.audioUrl,
+            compatibilityAudioUrl = variant.fallbackAudioUrl,
+            prefersWatermarkFree = variant.prefersWatermarkFree,
+            referer = variant.variantReferer ?: referer,
+            userAgent = variant.variantUserAgent ?: userAgent,
             qualityLabel = variant.label,
             mimeType = variant.mimeType,
             fileExtension = variant.fileExtension,

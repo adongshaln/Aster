@@ -42,6 +42,8 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.adong.adchat.media.ResolvedMedia
@@ -81,20 +83,29 @@ fun MediaPreviewPlayer(
     var errorMessage by remember(media.mediaUrl, retryToken) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(media.mediaUrl, retryToken) { mutableStateOf(true) }
 
-    val player = remember(media.mediaUrl, media.userAgent, media.referer, media.cookieHeader, retryToken) {
+    val player = remember(media.mediaUrl, media.audioUrl, media.userAgent, media.referer, media.cookieHeader, retryToken) {
         val headers = buildMap {
             if (media.userAgent.isNotBlank()) put("User-Agent", media.userAgent)
             if (media.referer.isNotBlank()) put("Referer", media.referer)
-            if (media.cookieHeader.isNotBlank()) put("Cookie", media.cookieHeader)
+            if (media.cookieHeader.isNotBlank() && media.referer.isNotBlank()) put("Cookie", media.cookieHeader)
         }
         val httpFactory = OkHttpDataSource.Factory(previewHttpClient).setDefaultRequestProperties(headers)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
         ExoPlayer.Builder(context)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .apply {
                 repeatMode = Player.REPEAT_MODE_OFF
-                setMediaItem(MediaItem.fromUri(media.mediaUrl))
+                if (media.audioUrl.isNotBlank()) {
+                    val videoSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                        .createMediaSource(MediaItem.fromUri(media.mediaUrl))
+                    val audioSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                        .createMediaSource(MediaItem.fromUri(media.audioUrl))
+                    setMediaSource(MergingMediaSource(videoSource, audioSource))
+                } else {
+                    setMediaItem(MediaItem.fromUri(media.mediaUrl))
+                }
                 playWhenReady = true
             }
     }

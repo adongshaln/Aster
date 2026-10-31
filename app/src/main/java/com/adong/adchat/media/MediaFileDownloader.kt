@@ -83,13 +83,117 @@ class MediaFileDownloader(context: Context) {
             finalFile.delete()
         }
 
+        if (media.audioUrl.isNotBlank()) {
+            return@withContext downloadAndMuxDash(
+                media = media,
+                safeId = safeId,
+                extension = extension,
+                finalFile = finalFile,
+                onProgress = onProgress
+            )
+        }
+
+        val activeMedia = downloadTrackToFile(
+            media = media,
+            partialFile = partialFile,
+            extension = extension,
+            onProgress = onProgress
+        )
+        moveIntoPlace(partialFile, finalFile)
+        activeMedia.toRecord(finalFile)
+    }
+
+    private suspend fun downloadAndMuxDash(
+        media: ResolvedMedia,
+        safeId: String,
+        extension: String,
+        finalFile: File,
+        onProgress: suspend (MediaDownloadProgress) -> Unit
+    ): MediaDownloadRecord {
+        val videoTemp = File(outputDirectory, "$safeId.video.m4s.part")
+        val audioTemp = File(outputDirectory, "$safeId.audio.m4s.part")
+        val muxTemp = File(outputDirectory, "$safeId.mux.$extension.part")
+        try {
+            var videoTotalEstimate = (media.expectedFileSize * 85L / 100L).coerceAtLeast(0L)
+            var audioTotalEstimate = (media.expectedFileSize - videoTotalEstimate).coerceAtLeast(0L)
+            var videoBytesDone = 0L
+
+            val activeVideo = downloadTrackToFile(
+                media = media.copy(audioUrl = "", compatibilityAudioUrl = ""),
+                partialFile = videoTemp,
+                extension = "mp4",
+                onProgress = { vp ->
+                    if (vp.totalBytes > 0L) videoTotalEstimate = vp.totalBytes
+                    videoBytesDone = vp.downloadedBytes
+                    val combinedTotal = (videoTotalEstimate + audioTotalEstimate).takeIf { it > 0L } ?: vp.totalBytes
+                    onProgress(
+                        MediaDownloadProgress(
+                            downloadedBytes = vp.downloadedBytes,
+                            totalBytes = combinedTotal,
+                            bytesPerSecond = vp.bytesPerSecond,
+                            connectionCount = vp.connectionCount
+                        )
+                    )
+                }
+            )
+            videoBytesDone = videoTemp.length().coerceAtLeast(videoBytesDone)
+            videoTotalEstimate = videoBytesDone
+
+            val audioMedia = media.copy(
+                mediaUrl = media.audioUrl,
+                compatibilityMediaUrl = media.compatibilityAudioUrl,
+                audioUrl = "",
+                compatibilityAudioUrl = ""
+            )
+            downloadTrackToFile(
+                media = audioMedia,
+                partialFile = audioTemp,
+                extension = "mp4",
+                onProgress = { ap ->
+                    if (ap.totalBytes > 0L) audioTotalEstimate = ap.totalBytes
+                    val combinedTotal = (videoTotalEstimate + audioTotalEstimate).coerceAtLeast(videoBytesDone + ap.downloadedBytes)
+                    onProgress(
+                        MediaDownloadProgress(
+                            downloadedBytes = videoBytesDone + ap.downloadedBytes,
+                            totalBytes = combinedTotal,
+                            bytesPerSecond = ap.bytesPerSecond,
+                            connectionCount = ap.connectionCount
+                        )
+                    )
+                }
+            )
+
+            coroutineContext.ensureActive()
+            val muxed = BilibiliDashMuxer.mux(videoTemp, audioTemp, muxTemp)
+            if (!muxed || !isLikelyMedia(muxTemp, media.mimeType, extension)) {
+                throw ExpiredMediaUrlException("音视频合轨失败，正在重新获取视频源")
+            }
+            moveIntoPlace(muxTemp, finalFile)
+            return activeVideo.copy(prefersWatermarkFree = media.prefersWatermarkFree).toRecord(finalFile)
+        } finally {
+            runCatching { videoTemp.delete() }
+            runCatching { audioTemp.delete() }
+            runCatching { muxTemp.delete() }
+            cleanupSegments(videoTemp)
+            cleanupSegments(audioTemp)
+        }
+    }
+
+    private suspend fun downloadTrackToFile(
+        media: ResolvedMedia,
+        partialFile: File,
+        extension: String,
+        onProgress: suspend (MediaDownloadProgress) -> Unit
+    ): ResolvedMedia {
         var activeMedia = media
         val probe: DownloadProbe = run probeRun@{
             // 三级回退：原 URL → 兼容 URL → 无 Range 的宽容探测。
             // 有些 CDN 只拒绝 Range 试探但放行完整 GET；最后一搏避免误判「地址失效」。
             val candidates: List<ResolvedMedia> = buildList {
                 add(media)
-                if (media.compatibilityMediaUrl.isNotBlank()) add(media.copy(mediaUrl = media.compatibilityMediaUrl, compatibilityMediaUrl = "", prefersWatermarkFree = false))
+                if (media.compatibilityMediaUrl.isNotBlank()) {
+                    add(media.copy(mediaUrl = media.compatibilityMediaUrl, compatibilityMediaUrl = ""))
+                }
             }.distinctBy { it.mediaUrl }
             for (candidate in candidates) {
                 try {
@@ -111,8 +215,7 @@ class MediaFileDownloader(context: Context) {
             partialFile.delete()
         }
         if (probe.totalBytes > 0L && partialFile.length() == probe.totalBytes && isLikelyMedia(partialFile, activeMedia.mimeType, extension)) {
-            moveIntoPlace(partialFile, finalFile)
-            return@withContext activeMedia.toRecord(finalFile)
+            return activeMedia
         }
 
         val existingBytes = partialFile.length().coerceAtLeast(0L)
@@ -145,8 +248,7 @@ class MediaFileDownloader(context: Context) {
             cleanupSegments(partialFile)
             throw ExpiredMediaUrlException("解析结果不是有效视频，正在重新获取")
         }
-        moveIntoPlace(partialFile, finalFile)
-        activeMedia.toRecord(finalFile)
+        return activeMedia
     }
     private suspend fun probe(media: ResolvedMedia): DownloadProbe {
         val request = requestBuilder(media)
@@ -453,9 +555,11 @@ class MediaFileDownloader(context: Context) {
             .header("Accept", "video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,*/*;q=0.4")
             .header("Accept-Encoding", "identity")
         if (media.referer.isNotBlank()) builder.header("Referer", media.referer)
-        if (media.cookieHeader.isNotBlank()) builder.header("Cookie", media.cookieHeader)
-        // B 站 CDN 校验 Origin；其余平台不发（抖音 Referer ACL 只看 Referer，多余 Origin 反而可能被拒）
-        if (media.platform == MediaPlatform.Bilibili) {
+        if (media.cookieHeader.isNotBlank() && media.referer.isNotBlank()) {
+            builder.header("Cookie", media.cookieHeader)
+        }
+        // B 站 Web CDN 校验 Origin；TV 端直链（platform=android，referer 为空）不能带 Web Referer/Origin，否则会触发 403
+        if (media.platform == MediaPlatform.Bilibili && media.referer.isNotBlank()) {
             builder.header("Origin", MediaDownloadPolicy.originHeader(media.platform))
             builder.header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
         }
