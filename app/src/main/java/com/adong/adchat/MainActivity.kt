@@ -252,79 +252,73 @@ private fun AsterApp(
             val pageBottomPadding = if (edgeToEdgePage) 0.dp else padding.calculateBottomPadding()
             val drawerScope = scope
             val drawerOpen: () -> Unit = { drawerScope.launch { drawerState.open() } }
-            val stageOverlayOpen = drawerState.targetValue == DrawerValue.Open || drawerState.isOpen || showStoryCreator
-            AsterStageDepthContainer(
-                isOverlayOpen = stageOverlayOpen,
-                modifier = Modifier.fillMaxSize()
+            Box(
+                Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
+                    .consumeWindowInsets(PaddingValues(bottom = pageBottomPadding))
+                    .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas)))
+                    .drawerEdgeSwipe(drawerOpen),
+                contentAlignment = Alignment.TopCenter
             ) {
-                Box(
-                    Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
-                        .consumeWindowInsets(PaddingValues(bottom = pageBottomPadding))
-                        .background(Brush.verticalGradient(listOf(WarmWhite, Canvas, Canvas)))
-                        .drawerEdgeSwipe(drawerOpen),
-                    contentAlignment = Alignment.TopCenter
-                ) {
-                    val motionEnabled = LocalAsterMotionEnabled.current
-                    val pageTravelPx = with(LocalDensity.current) { 28.dp.roundToPx() }
-                    AnimatedContent(
-                        targetState = page,
-                        modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
-                        transitionSpec = {
-                            val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
-                            val enter = if (motionEnabled) {
-                                fadeIn(tween(180, easing = AsterEase)) +
-                                    slideInHorizontally(AsterSpring.spatial()) { width ->
-                                        minOf(width / 14, pageTravelPx) * direction
-                                    } +
-                                    scaleIn(
-                                        AsterSpring.settle(), initialScale = 0.986f,
-                                        transformOrigin = TransformOrigin(0.5f, 0.35f)
-                                    )
-                            } else EnterTransition.None
-                            val exit = if (motionEnabled) {
-                                fadeOut(tween(120, easing = AsterEase)) +
-                                    slideOutHorizontally(tween(180, easing = AsterEase)) { width ->
-                                        -minOf(width / 32, pageTravelPx / 2) * direction
-                                    }
-                            } else ExitTransition.None
-                            // Only navigation changes this transition; streaming text never resizes it.
-                            (enter togetherWith exit).using(null)
-                        },
-                        label = "page-transition"
-                    ) { target ->
-                        pageStates.SaveableStateProvider(target.name) {
-                            when (target) {
-                                AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
-                                AppPage.Story -> StoryScreen(
-                                    mainVm = vm,
-                                    storyVm = storyVm,
-                                    onOpenDrawer = openDrawer,
-                                    onCreateStory = ::requestStoryCreation,
-                                    onOpenSettings = { navigate(AppPage.Settings) }
+                val motionEnabled = LocalAsterMotionEnabled.current
+                val pageTravelPx = with(LocalDensity.current) { 28.dp.roundToPx() }
+                AnimatedContent(
+                    targetState = page,
+                    modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
+                    transitionSpec = {
+                        val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
+                        val enter = if (motionEnabled) {
+                            fadeIn(tween(180, easing = AsterEase)) +
+                                slideInHorizontally(AsterSpring.spatial()) { width ->
+                                    minOf(width / 14, pageTravelPx) * direction
+                                } +
+                                scaleIn(
+                                    AsterSpring.settle(), initialScale = 0.986f,
+                                    transformOrigin = TransformOrigin(0.5f, 0.35f)
                                 )
-                                AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
-                                AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
-                                AppPage.Settings -> SettingsScreen(
-                                    vm,
-                                    onOpenDrawer = openDrawer,
-                                    openIslandSettings = openIslandSettings,
-                                    onIslandSettingsConsumed = onIslandSettingsConsumed
-                                )
-                            }
+                        } else EnterTransition.None
+                        val exit = if (motionEnabled) {
+                            fadeOut(tween(120, easing = AsterEase)) +
+                                slideOutHorizontally(tween(180, easing = AsterEase)) { width ->
+                                    -minOf(width / 32, pageTravelPx / 2) * direction
+                                }
+                        } else ExitTransition.None
+                        // Only navigation changes this transition; streaming text never resizes it.
+                        (enter togetherWith exit).using(null)
+                    },
+                    label = "page-transition"
+                ) { target ->
+                    pageStates.SaveableStateProvider(target.name) {
+                        when (target) {
+                            AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                            AppPage.Story -> StoryScreen(
+                                mainVm = vm,
+                                storyVm = storyVm,
+                                onOpenDrawer = openDrawer,
+                                onCreateStory = ::requestStoryCreation,
+                                onOpenSettings = { navigate(AppPage.Settings) }
+                            )
+                            AppPage.Draw -> DrawScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                            AppPage.Media -> MediaDownloadScreen(mediaVm, onOpenDrawer = openDrawer)
+                            AppPage.Settings -> SettingsScreen(
+                                vm,
+                                onOpenDrawer = openDrawer,
+                                openIslandSettings = openIslandSettings,
+                                onIslandSettingsConsumed = onIslandSettingsConsumed
+                            )
                         }
                     }
-                    SnackbarHost(
-                        hostState = snackbarHostState,
-                        modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
-                            .padding(top = 64.dp, start = 16.dp, end = 16.dp).widthIn(max = 520.dp)
-                    ) { data ->
-                        AsterPaperSnackbar(
-                            message = data.visuals.message,
-                            actionLabel = data.visuals.actionLabel,
-                            onAction = { data.performAction() },
-                            onDismiss = { data.dismiss() }
-                        )
-                    }
+                }
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding()
+                        .padding(top = 64.dp, start = 16.dp, end = 16.dp).widthIn(max = 520.dp)
+                ) { data ->
+                    AsterPaperSnackbar(
+                        message = data.visuals.message,
+                        actionLabel = data.visuals.actionLabel,
+                        onAction = { data.performAction() },
+                        onDismiss = { data.dismiss() }
+                    )
                 }
             }
         }
