@@ -67,9 +67,6 @@ import com.adong.adchat.data.API_FORMAT_ANTHROPIC
 import com.adong.adchat.data.API_FORMAT_OPENAI
 import com.adong.adchat.data.ApiModel
 import com.adong.adchat.data.ApiProfile
-import com.adong.adchat.data.DEFAULT_FONT_WEIGHT
-import com.adong.adchat.data.FONT_WEIGHT_MAX
-import com.adong.adchat.data.FONT_WEIGHT_MIN
 import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
 import com.adong.adchat.data.THEME_MODE_SYSTEM
@@ -403,7 +400,7 @@ private enum class SettingsDestination(val title: String, val keywords: String =
     Models("默认模型", "默认 对话 绘图 图像 选择 模型"),
     Search("联网搜索", "联网 搜索 网页 X Search 后端", 2),
     Suggestions("输入建议", "输入 建议 补全 预测", 2),
-    Appearance("外观与阅读", "主题 深色 浅色 系统 阅读 字重 字体"),
+    Appearance("外观与阅读", "主题 深色 浅色 系统 阅读"),
     Assistant("助手偏好", "称呼 姓名 角色 提示词 system prompt 风格"),
     Island("星岛", "星岛 悬浮窗 通知 翻译 润色 解释 网页 下载"),
     Skills("技能", "技能 Skill 安装 ZIP"),
@@ -436,7 +433,7 @@ private fun settingsSummary(destination: SettingsDestination, vm: MainViewModel)
     SettingsDestination.Models -> vm.defaultChatProfile.chatModel.ifBlank { "尚未选择默认对话模型" }
     SettingsDestination.Search -> vm.searchProfile.searchModel.ifBlank { "未配置独立搜索模型" }
     SettingsDestination.Suggestions -> vm.suggestionProfile.suggestionModel.ifBlank { "未配置输入建议模型" }
-    SettingsDestination.Appearance -> when (vm.appConfig.themeMode) { THEME_MODE_DARK -> "深色"; THEME_MODE_SYSTEM -> "跟随系统"; else -> "浅色" } + " · 字重 ${vm.appConfig.fontWeight}"
+    SettingsDestination.Appearance -> when (vm.appConfig.themeMode) { THEME_MODE_DARK -> "深色"; THEME_MODE_SYSTEM -> "跟随系统"; else -> "浅色" }
     SettingsDestination.Security -> if (vm.appConfig.allowInsecureCertificates) "证书校验已关闭" else "正常校验服务器证书"
     SettingsDestination.Assistant -> "称呼、角色与回答风格"
     SettingsDestination.Island -> "文字处理、网页阅读与媒体下载"
@@ -628,33 +625,6 @@ private fun ColumnScope.AppearanceSettings(vm: MainViewModel) {
         ThemeModeCard("跟随系统", THEME_MODE_SYSTEM, null,
             vm.appConfig.themeMode, vm::setThemeMode, Modifier.weight(1f))
     }
-    Spacer(Modifier.height(18.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("阅读字重", style = MaterialTheme.typography.titleSmall)
-            Text("拖动滑轨即时调整普通界面文字的粗细", color = MutedInk, style = MaterialTheme.typography.bodySmall)
-        }
-        Text(vm.appConfig.fontWeight.toString(), style = MaterialTheme.typography.labelLarge, color = Accent)
-    }
-    Slider(
-        value = vm.appConfig.fontWeight.toFloat(),
-        onValueChange = { vm.setFontWeight(it.roundToInt(), save = false) },
-        onValueChangeFinished = vm::commitFontWeight,
-        valueRange = FONT_WEIGHT_MIN.toFloat()..FONT_WEIGHT_MAX.toFloat(),
-        steps = FONT_WEIGHT_MAX - FONT_WEIGHT_MIN - 1,
-        modifier = Modifier.fillMaxWidth().semantics {
-            stateDescription = "阅读字重 ${vm.appConfig.fontWeight}"
-        }
-    )
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text("细", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-        Text("标准", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-        Text("粗", color = MutedInk, style = MaterialTheme.typography.labelSmall)
-    }
-    TextButton(
-        onClick = { vm.setFontWeight(DEFAULT_FONT_WEIGHT) },
-        modifier = Modifier.align(Alignment.End)
-    ) { Text("恢复默认") }
 }
 
 @Composable

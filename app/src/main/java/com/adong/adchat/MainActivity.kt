@@ -107,7 +107,7 @@ class MainActivity : ComponentActivity() {
                     followSystem = themeMode == THEME_MODE_SYSTEM
                 )
             }
-            AsterTheme(themeMode = themeMode, fontWeight = viewModel.appConfig.fontWeight) {
+            AsterTheme(themeMode = themeMode) {
                 CompositionLocalProvider(LocalAsterMotionEnabled provides rememberAsterMotionEnabled()) {
                     AsterApp(
                         vm = viewModel,

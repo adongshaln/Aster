@@ -104,7 +104,7 @@ internal class ScreenSelectionView(
         hint = TextView(context).apply {
             text = "拖动框选要提问的区域"
             textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             gravity = Gravity.CENTER
             setTextColor(palette.ink)
             setPadding(dp(18), dp(10), dp(18), dp(10))
@@ -132,7 +132,7 @@ internal class ScreenSelectionView(
         fun button(label: String, primary: Boolean = false, action: () -> Unit) = TextView(context).apply {
             text = label
             textSize = 14f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             gravity = Gravity.CENTER
             setTextColor(if (primary) palette.onClay else palette.ink)
             background = GradientDrawable().apply {
@@ -456,7 +456,7 @@ internal class ScreenSelectionView(
         private val badgeBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
         private val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             textAlign = Paint.Align.CENTER
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             textSize = android.util.TypedValue.applyDimension(
                 android.util.TypedValue.COMPLEX_UNIT_SP, 12f, resources.displayMetrics
             )

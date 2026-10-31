@@ -21,17 +21,10 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.Font
-import androidx.compose.ui.text.font.FontLoadingStrategy
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.adong.adchat.R
-import com.adong.adchat.data.DEFAULT_FONT_WEIGHT
-import com.adong.adchat.data.FONT_WEIGHT_MAX
-import com.adong.adchat.data.FONT_WEIGHT_MIN
 import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
 import com.adong.adchat.data.THEME_MODE_SYSTEM
@@ -106,7 +99,7 @@ val AsterPaletteDark = AsterPalette(
 val LocalAsterPalette = staticCompositionLocalOf { AsterPaletteLight }
 val LocalThemeMode = staticCompositionLocalOf { THEME_MODE_ASTER }
 val LocalThemeDark = staticCompositionLocalOf { false }
-private val LocalAsterFontFamily = staticCompositionLocalOf<FontFamily> { FontFamily.Default }
+private val LocalAsterFontFamily = staticCompositionLocalOf<FontFamily> { FontFamily.Serif }
 
 internal val AsterFontFamily: FontFamily
     @Composable get() = LocalAsterFontFamily.current
@@ -206,75 +199,55 @@ internal fun AsterPalette.toColorScheme(dark: Boolean) = (if (dark) darkColorSch
     scrim = Color.Black
 )
 
-// Compose loads and caches the bundled variable font off the UI thread. Do not copy
-// the font into cacheDir during composition: the resource is about 25 MB.
-@OptIn(androidx.compose.ui.text.ExperimentalTextApi::class)
-private fun asterFontFamily(axisWeight: Int): FontFamily = FontFamily(
-    // Give each semantic weight its own real variable-font instance. A single Regular entry
-    // leaves medium/bold to synthesis and gives async fallback text a misleading light weight.
-    listOf(
-        FontWeight.Normal to 0,
-        FontWeight.Medium to 60,
-        FontWeight.SemiBold to 110,
-        FontWeight.Bold to 160
-    ).map { (weight, increase) ->
-        Font(
-            resId = R.font.noto_serif_sc_variable,
-            weight = weight,
-            loadingStrategy = FontLoadingStrategy.Async,
-            variationSettings = FontVariation.Settings(
-                FontVariation.weight((axisWeight + increase).coerceIn(200, 900))
-            )
-        )
-    }
-)
-
-/** Reading uses a fuller medium face; headings and emphasis retain separate heavier faces. */
-private fun asterTypography(serifFont: FontFamily) = Typography(
+/**
+ * Claude editorial serif typography across headings, reading prose, cards, and controls.
+ * Uses the native serif family (`FontFamily.Serif`), avoiding any bundled 24 MB variable font.
+ */
+private val ClaudeEditorialTypography = Typography(
     displaySmall = TextStyle(
-        fontFamily = serifFont,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 32.sp,
         lineHeight = 40.sp,
         letterSpacing = (-0.4).sp
     ),
     headlineMedium = TextStyle(
-        fontFamily = serifFont,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 27.sp,
         lineHeight = 35.sp,
         letterSpacing = (-0.3).sp
     ),
     headlineSmall = TextStyle(
-        fontFamily = serifFont,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 20.sp,
         lineHeight = 28.sp,
         letterSpacing = (-0.2).sp
     ),
     titleLarge = TextStyle(
-        fontFamily = serifFont,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Medium,
         fontSize = 20.sp,
         lineHeight = 27.sp,
         letterSpacing = (-0.15).sp
     ),
     titleMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         lineHeight = 22.sp,
         letterSpacing = (-0.1).sp
     ),
     titleSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 14.sp,
         lineHeight = 20.sp
     ),
     bodyLarge = TextStyle(
-        fontFamily = serifFont,
-        fontWeight = FontWeight.Medium,
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Normal,
         fontSize = 16.sp,
         lineHeight = 27.5.sp,
         letterSpacing = 0.1.sp,
@@ -282,7 +255,7 @@ private fun asterTypography(serifFont: FontFamily) = Typography(
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 22.sp,
@@ -290,7 +263,7 @@ private fun asterTypography(serifFont: FontFamily) = Typography(
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
     ),
     bodySmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 12.5.sp,
         lineHeight = 19.sp,
@@ -298,19 +271,19 @@ private fun asterTypography(serifFont: FontFamily) = Typography(
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
+        fontFamily = FontFamily.Serif,
+        fontWeight = FontWeight.Medium,
         fontSize = 13.5.sp,
         lineHeight = 18.sp
     ),
     labelMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
         lineHeight = 16.sp
     ),
     labelSmall = TextStyle(
-        fontFamily = FontFamily.SansSerif,
+        fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 14.sp
@@ -328,13 +301,11 @@ private val shapes = Shapes(
 @Composable
 fun AsterTheme(
     themeMode: String = THEME_MODE_ASTER,
-    fontWeight: Int = DEFAULT_FONT_WEIGHT,
     content: @Composable () -> Unit
 ) {
     val dark = themeIsDark(themeMode)
-    val normalizedWeight = fontWeight.coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX)
-    val fontFamily = remember(normalizedWeight) { asterFontFamily(normalizedWeight) }
-    val typography = remember(fontFamily) { asterTypography(fontFamily) }
+    val fontFamily = FontFamily.Serif
+    val typography = ClaudeEditorialTypography
     val target = if (dark) AsterPaletteDark else AsterPaletteLight
     val colorSpring = AsterSpring.editorial<Color>()
 

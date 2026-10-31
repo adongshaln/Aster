@@ -1,6 +1,6 @@
-﻿<resources>
+<resources>
     <style name="Theme.Aster" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">@font/noto_serif_sc_variable</item>
+        <item name="android:fontFamily">serif</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:statusBarColor">#FDF8F2</item>
         <item name="android:navigationBarColor">#FDF8F2</item>

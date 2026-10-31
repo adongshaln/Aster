@@ -798,7 +798,7 @@ class IslandView(
         }
         val badge = TextView(context).apply {
             textSize = 11f
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             setTextColor(palette.clay)
             includeFontPadding = false
             gravity = Gravity.CENTER
@@ -815,7 +815,7 @@ class IslandView(
         })
         val summary = TextView(context).apply {
             textSize = 13f
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             setTextColor(palette.muted)
             includeFontPadding = false
             maxLines = 2
@@ -939,7 +939,7 @@ class IslandView(
         text = action.label
         contentDescription = action.label
         textSize = 14f
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         includeFontPadding = false
         gravity = Gravity.CENTER
         maxLines = 1
@@ -1002,14 +1002,7 @@ class IslandView(
     }
 
     private fun loadTitleTypeface() {
-        val appContext = context.applicationContext
-        Thread({
-            val typeface = IslandTypefaces.title(appContext)
-            mainHandler.post { if (!destroyed) cardTitle.typeface = typeface }
-        }, "island-title-serif").apply {
-            isDaemon = true
-            start()
-        }
+        cardTitle.typeface = IslandTypefaces.bold
     }
 
     private fun renderCard() {

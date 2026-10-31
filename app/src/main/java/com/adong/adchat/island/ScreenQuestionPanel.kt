@@ -57,7 +57,7 @@ internal class ScreenQuestionPanel(
 
     private val title = label("问问这里", 17f)
     private val modeBadge = label("极速模式", 11f).apply {
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         gravity = Gravity.CENTER
         setPadding(dp(8), dp(3), dp(8), dp(3))
     }
@@ -69,7 +69,7 @@ internal class ScreenQuestionPanel(
         contentDescription = "将发送的选中区域"
     }
     private val description = label("已锁定屏幕选区 · 极速直答", 13f).apply {
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         setLineSpacing(dpF(2f), 1f)
     }
     private val previewMeta = label("仅在内存中处理选区 · 支持 Markdown 排版与连续追问", 11.5f)
@@ -97,7 +97,7 @@ internal class ScreenQuestionPanel(
         orientation = VERTICAL
     }
     private val activeUserRole = label("你", 11f).apply {
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        typeface = IslandTypefaces.bold
     }
     private val activeUserQuestion = label("", 13.5f).apply {
         setLineSpacing(dpF(2.5f), 1f)
@@ -112,7 +112,7 @@ internal class ScreenQuestionPanel(
         })
     }
     private val activeAssistantRole = label("星岛 · 极速回答", 11f).apply {
-        typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+        typeface = IslandTypefaces.bold
     }
     private val answerMarkdown = IslandMarkdownView(context, palette)
     private val activeAssistantCard = LinearLayout(context).apply {
@@ -147,7 +147,7 @@ internal class ScreenQuestionPanel(
     private val input = EditText(context).apply {
         hint = "想了解这里的什么？可点上方快捷指令或直接提问…"
         textSize = 14f
-        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         minLines = 1
@@ -252,17 +252,8 @@ internal class ScreenQuestionPanel(
     }
 
     private fun loadTitleTypeface() {
-        val appContext = context.applicationContext
-        Thread({
-            val typeface = IslandTypefaces.title(appContext)
-            post {
-                titleTypeface = typeface
-                title.typeface = typeface
-            }
-        }, "screen-question-title-serif").apply {
-            isDaemon = true
-            start()
-        }
+        titleTypeface = IslandTypefaces.bold
+        title.typeface = titleTypeface
     }
 
     private fun label(value: String, size: Float) = TextView(context).apply {
@@ -270,7 +261,7 @@ internal class ScreenQuestionPanel(
         textSize = size
         includeFontPadding = false
         gravity = Gravity.CENTER_VERTICAL
-        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
     }
 
     private fun pillButton(
@@ -280,7 +271,7 @@ internal class ScreenQuestionPanel(
         compact: Boolean = false,
     ) = label(value, if (compact) 12f else 13f).apply {
         gravity = Gravity.CENTER
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         contentDescription = value
         val padH = dp(if (compact) 12 else 14)
         setPadding(padH, 0, padH, 0)
@@ -408,7 +399,7 @@ internal class ScreenQuestionPanel(
                 }
             }
             val roleLabel = label(if (isUser) "你" else "星岛", 11f).apply {
-                typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+                typeface = IslandTypefaces.bold
                 setTextColor(if (isUser) palette.muted else palette.clay)
             }
             card.addView(roleLabel, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))

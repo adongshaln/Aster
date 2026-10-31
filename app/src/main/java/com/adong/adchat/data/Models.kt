@@ -89,9 +89,6 @@ fun ApiProfile.invalidExtraHeaderLines(): List<String> = extraHeaders.lineSequen
 const val THEME_MODE_ASTER = "aster"
 const val THEME_MODE_DARK = "dark"
 const val THEME_MODE_SYSTEM = "system"
-const val FONT_WEIGHT_MIN = 400
-const val FONT_WEIGHT_MAX = 900
-const val DEFAULT_FONT_WEIGHT = 650
 
 data class AppConfig(
     val profiles: List<ApiProfile>,
@@ -103,7 +100,6 @@ data class AppConfig(
     val allowXSearch: Boolean = false,
     val systemPrompt: String = DEFAULT_SYSTEM_PROMPT,
     val themeMode: String = THEME_MODE_ASTER,
-    val fontWeight: Int = DEFAULT_FONT_WEIGHT,
     val allowInsecureCertificates: Boolean = false,
     /** 用户希望被怎样称呼；空串表示尚未设置（首启弹窗会询问）。 */
     val userName: String = "",
@@ -206,7 +202,6 @@ class ConfigStore(context: Context) {
         .put("allowXSearch", config.allowXSearch)
         .put("systemPrompt", config.systemPrompt)
         .put("themeMode", config.themeMode)
-        .put("fontWeight", config.fontWeight)
         .put("allowInsecureCertificates", config.allowInsecureCertificates)
         .put("userName", config.userName)
         .put("userNamePromptDone", config.userNamePromptDone)
@@ -304,7 +299,6 @@ class ConfigStore(context: Context) {
             allowXSearch = root.optBoolean("allowXSearch", false),
             systemPrompt = migrateSystemPrompt(root.optString("systemPrompt").ifBlank { DEFAULT_SYSTEM_PROMPT }),
             themeMode = root.optString("themeMode").takeIf { it in setOf(THEME_MODE_DARK, THEME_MODE_SYSTEM) } ?: THEME_MODE_ASTER,
-            fontWeight = root.optInt("fontWeight", DEFAULT_FONT_WEIGHT).coerceIn(FONT_WEIGHT_MIN, FONT_WEIGHT_MAX),
             allowInsecureCertificates = root.optBoolean("allowInsecureCertificates", false),
             userName = root.optString("userName").trim().take(24),
             userNamePromptDone = root.optBoolean("userNamePromptDone", false)

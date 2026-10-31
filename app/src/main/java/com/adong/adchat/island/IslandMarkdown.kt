@@ -298,31 +298,13 @@ internal class IslandMarkdownView(
     private var renderedMarkdown: String? = null
     private var renderedPalette: IslandPalette? = null
     private var renderedPlaceholder: Boolean = false
-    private var titleTypeface: Typeface = Typeface.SERIF
+    private var titleTypeface: Typeface = IslandTypefaces.bold
 
     val rawMarkdown: String get() = renderedMarkdown.orEmpty()
     val currentTextColor: Int get() = if (renderedPlaceholder) currentPalette.muted else currentPalette.ink
 
     init {
         orientation = VERTICAL
-        loadSerifTypeface()
-    }
-
-    private fun loadSerifTypeface() {
-        val appContext = context.applicationContext
-        Thread({
-            val loaded = IslandTypefaces.title(appContext)
-            post {
-                if (titleTypeface !== loaded) {
-                    titleTypeface = loaded
-                    renderedPalette = null
-                    renderedMarkdown?.let { setMarkdown(it, renderedPlaceholder) }
-                }
-            }
-        }, "island-markdown-serif").apply {
-            isDaemon = true
-            start()
-        }
     }
 
     fun applyPalette(next: IslandPalette) {
@@ -378,7 +360,7 @@ internal class IslandMarkdownView(
     private fun buildPlaceholderView(text: String): TextView = TextView(context).apply {
         this.text = text
         textSize = 13.5f
-        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         setTextColor(currentPalette.muted)
         setLineSpacing(dpF(3f), 1f)
         includeFontPadding = false
@@ -408,7 +390,7 @@ internal class IslandMarkdownView(
                 3 -> 14.5f
                 else -> 14f
             }
-            typeface = if (block.level <= 2) titleTypeface else Typeface.create("sans-serif-medium", Typeface.BOLD)
+            typeface = titleTypeface
             setTextColor(currentPalette.ink)
             setLineSpacing(dpF(2.5f), 1f)
             includeFontPadding = false
@@ -420,7 +402,7 @@ internal class IslandMarkdownView(
     private fun buildParagraphView(text: String): TextView = TextView(context).apply {
         this.text = IslandMarkdown.formatInline(text, currentPalette)
         textSize = 14f
-        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        typeface = IslandTypefaces.regular
         setTextColor(currentPalette.ink)
         setLineSpacing(dpF(3.5f), 1f)
         includeFontPadding = false
@@ -432,7 +414,7 @@ internal class IslandMarkdownView(
         val markerView = TextView(context).apply {
             text = block.marker
             textSize = if (block.ordered) 12.5f else 13.5f
-            typeface = Typeface.create(if (block.ordered) "monospace" else "sans-serif-medium", Typeface.BOLD)
+            typeface = if (block.ordered) Typeface.create("monospace", Typeface.BOLD) else IslandTypefaces.bold
             setTextColor(currentPalette.clay)
             includeFontPadding = false
             gravity = Gravity.END
@@ -442,7 +424,7 @@ internal class IslandMarkdownView(
         val bodyView = TextView(context).apply {
             text = IslandMarkdown.formatInline(block.text, currentPalette)
             textSize = 14f
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             setTextColor(currentPalette.ink)
             setLineSpacing(dpF(3.2f), 1f)
             includeFontPadding = false
@@ -467,7 +449,7 @@ internal class IslandMarkdownView(
         val text = TextView(context).apply {
             this.text = IslandMarkdown.formatInline(block.text, currentPalette)
             textSize = 13.5f
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            typeface = IslandTypefaces.regular
             setTextColor(IslandMarkdown.blendColor(currentPalette.ink, currentPalette.muted, 0.3f))
             setLineSpacing(dpF(3f), 1f)
             includeFontPadding = false
@@ -548,7 +530,7 @@ internal class IslandMarkdownView(
                 val cell = TextView(context).apply {
                     text = IslandMarkdown.formatInline(cellText, currentPalette)
                     textSize = 12.5f
-                    typeface = Typeface.create("sans-serif", if (isHeader) Typeface.BOLD else Typeface.NORMAL)
+                    typeface = if (isHeader) IslandTypefaces.bold else IslandTypefaces.regular
                     setTextColor(currentPalette.ink)
                     gravity = align
                     includeFontPadding = false

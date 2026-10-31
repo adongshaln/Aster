@@ -270,7 +270,7 @@ fun ComposerReasoningSlider(
         if (selection != resolved) onEffortChange(selection)
     }
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, style = MaterialTheme.typography.titleLarge.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif),
+        Text(label, style = MaterialTheme.typography.titleLarge,
             color = titleColor, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 3.dp))
         TextButton(onClick = onModelClick, contentPadding = PaddingValues(horizontal = 8.dp),
             modifier = Modifier.heightIn(min = 40.dp)) {
