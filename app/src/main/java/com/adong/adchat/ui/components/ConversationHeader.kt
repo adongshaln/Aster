@@ -57,20 +57,14 @@ fun ConversationHeader(
             Surface(
                 onClick = onModelClick,
                 interactionSource = modelInteraction,
-                color = if (modelUnavailable) DangerSoft else Surface,
-                shape = androidx.compose.foundation.shape.CircleShape,
-                border = androidx.compose.foundation.BorderStroke(
-                    width = 1.dp,
-                    color = if (modelUnavailable) Danger.copy(alpha = 0.4f) else Hairline
-                ),
-                modifier = Modifier
-                    .padding(top = 3.dp)
-                    .appleSpringPressable(pressedScale = 0.94f, interactionSource = modelInteraction)
+                color = Color.Transparent,
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.appleSpringPressable(pressedScale = 0.93f, interactionSource = modelInteraction)
             ) {
                 Row(
                     modifier = Modifier
-                        .heightIn(min = 26.dp)
-                        .padding(horizontal = 10.dp, vertical = 3.dp),
+                        .heightIn(min = 28.dp)
+                        .padding(end = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -81,12 +75,12 @@ fun ConversationHeader(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Spacer(Modifier.width(3.dp))
+                    Spacer(Modifier.width(2.dp))
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
                         contentDescription = "切换模型",
                         modifier = Modifier.size(15.dp),
-                        tint = if (modelUnavailable) Danger else MutedInk.copy(alpha = 0.78f)
+                        tint = if (modelUnavailable) Danger else MutedInk.copy(alpha = 0.75f)
                     )
                 }
             }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -58,30 +59,29 @@ internal fun ExpandableUserMessage(messageId: Long, text: String) {
             )
         }
         if (overflowed || expanded) {
-            val pillInteraction = remember { MutableInteractionSource() }
-            Box(Modifier.align(Alignment.End).padding(top = 6.dp)) {
+            val disclosureInteraction = remember { MutableInteractionSource() }
+            Box(Modifier.align(Alignment.End).padding(top = 4.dp)) {
                 Surface(
                     onClick = { expanded = !expanded },
-                    interactionSource = pillInteraction,
-                    color = Surface,
+                    interactionSource = disclosureInteraction,
+                    color = androidx.compose.ui.graphics.Color.Transparent,
                     contentColor = Accent,
-                    shape = CircleShape,
-                    border = BorderStroke(1.dp, Hairline),
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier
-                        .appleSpringPressable(pressedScale = 0.94f, interactionSource = pillInteraction)
+                        .appleSpringPressable(pressedScale = 0.94f, interactionSource = disclosureInteraction)
                         .semantics { stateDescription = if (expanded) "已展开" else "已折叠" }
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             if (expanded) "收起" else "展开",
                             color = Accent,
                             style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.Medium
                         )
-                        Spacer(Modifier.width(3.dp))
+                        Spacer(Modifier.width(2.dp))
                         Icon(
                             Icons.Rounded.ExpandMore,
                             null,

@@ -599,8 +599,8 @@ fun AsterPillButton(
 }
 
 /**
- * Star Island paper-tag toast/snackbar: warm paper surface framed by a clay-tinted border,
- * tactile action pill, and smooth spring dismissal.
+ * Quiet paper-note toast/snackbar: warm paper surface framed by a subtle hairline border,
+ * soft elevation, and a restrained action pill.
  */
 @Composable
 fun AsterPaperSnackbar(
@@ -616,24 +616,17 @@ fun AsterPaperSnackbar(
         interactionSource = dismissInteraction,
         color = Surface,
         contentColor = Ink,
-        shape = RoundedCornerShape(24.dp),
-        border = BorderStroke(1.2.dp, Accent.copy(alpha = 0.52f)),
-        shadowElevation = 10.dp,
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, Hairline),
+        shadowElevation = 6.dp,
         modifier = modifier
             .fillMaxWidth()
-            .appleSpringPressable(pressedScale = 0.97f, interactionSource = dismissInteraction)
+            .appleSpringPressable(pressedScale = 0.98f, interactionSource = dismissInteraction)
     ) {
         Row(
-            modifier = Modifier.padding(start = 16.dp, end = 10.dp, top = 10.dp, bottom = 10.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 11.dp, bottom = 11.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(
-                Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(Accent)
-            )
-            Spacer(Modifier.width(11.dp))
             Text(
                 text = message,
                 modifier = Modifier.weight(1f),
@@ -642,11 +635,11 @@ fun AsterPaperSnackbar(
                 fontWeight = FontWeight.Medium
             )
             if (actionLabel != null) {
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(10.dp))
                 AsterPillButton(
                     text = actionLabel,
                     onClick = onAction,
-                    primary = true,
+                    selected = true,
                     compact = true
                 )
             }

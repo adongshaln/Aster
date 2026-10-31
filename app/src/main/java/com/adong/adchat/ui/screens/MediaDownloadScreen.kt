@@ -266,14 +266,16 @@ private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy:
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Link, null, Modifier.size(21.dp), tint = Accent)
                 Text("视频链接", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium)
-                TextButton(onClick = {
-                    clipboard.getText()?.text?.takeIf(String::isNotBlank)?.let(onValueChange)
-                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                }, enabled = !busy) {
-                    Icon(Icons.Rounded.ContentPaste, null, Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("粘贴")
-                }
+                AsterPillButton(
+                    text = "粘贴",
+                    icon = Icons.Rounded.ContentPaste,
+                    compact = true,
+                    enabled = !busy,
+                    onClick = {
+                        clipboard.getText()?.text?.takeIf(String::isNotBlank)?.let(onValueChange)
+                        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    }
+                )
             }
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(value = value, onValueChange = onValueChange,
@@ -292,14 +294,13 @@ private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy:
                 MediaPlatform.entries.forEach { PlatformMiniLabel(it, it == detectedPlatform) }
             }
             Spacer(Modifier.height(20.dp))
-            Button(onClick = { focusManager.clearFocus(); onResolve() }, enabled = value.isNotBlank() && !busy,
-                modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Night)) {
-                if (busy) AsterLoadingIndicator(size = 18.dp)
-                else Icon(Icons.Rounded.ArrowDownward, null, Modifier.size(19.dp))
-                Spacer(Modifier.width(9.dp))
-                Text(if (busy) "正在处理" else "解析链接")
-            }
+            AsterPrimaryButton(
+                text = if (busy) "正在处理" else "解析链接",
+                icon = if (busy) null else Icons.Rounded.ArrowDownward,
+                enabled = value.isNotBlank() && !busy,
+                onClick = { focusManager.clearFocus(); onResolve() },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
@@ -467,11 +468,12 @@ private fun ResolvedMediaCard(
                     media.availableVariants.forEach { variant ->
                         val selected = variant.mediaUrl == media.mediaUrl
                         Surface(
+                            onClick = { onVariantSelected(variant.id) },
                             color = if (selected) platformSoftColor(media.platform) else Canvas,
                             contentColor = if (selected) platformColor(media.platform) else MutedInk,
                             shape = CircleShape,
                             border = BorderStroke(1.dp, if (selected) platformColor(media.platform).copy(alpha = .24f) else Hairline),
-                            modifier = Modifier.clickable { onVariantSelected(variant.id) }
+                            modifier = Modifier.appleSpringPressable(pressedScale = 0.95f)
                         ) {
                             Row(Modifier.padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                                 if (selected) { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
@@ -486,18 +488,19 @@ private fun ResolvedMediaCard(
             Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
                 if (downloading) DownloadProgressBlock(progress, savingToGallery, onCancel)
                 else Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    OutlinedButton(
-                        onClick = { previewVisible = true }, modifier = Modifier.weight(.4f).height(46.dp),
-                        shape = RoundedCornerShape(15.dp), border = BorderStroke(1.dp, Hairline),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
-                    ) {
-                        Icon(Icons.Rounded.PlayArrow, null, Modifier.size(18.dp)); Spacer(Modifier.width(5.dp)); Text("预览")
-                    }
-                    PrimaryButton(
-                        if (alreadyDownloaded) "打开" else "下载",
-                        if (alreadyDownloaded) Icons.AutoMirrored.Rounded.OpenInNew else Icons.Rounded.Download,
-                        Modifier.weight(.6f)
-                    ) { if (alreadyDownloaded) downloadedRecord?.let(onOpenDownloaded) else onDownload() }
+                    AsterPillButton(
+                        text = "预览",
+                        icon = Icons.Rounded.PlayArrow,
+                        onClick = { previewVisible = true },
+                        modifier = Modifier.weight(.4f).height(48.dp)
+                    )
+                    AsterPillButton(
+                        text = if (alreadyDownloaded) "打开" else "下载",
+                        icon = if (alreadyDownloaded) Icons.AutoMirrored.Rounded.OpenInNew else Icons.Rounded.Download,
+                        primary = true,
+                        onClick = { if (alreadyDownloaded) downloadedRecord?.let(onOpenDownloaded) else onDownload() },
+                        modifier = Modifier.weight(.6f).height(48.dp)
+                    )
                 }
             }
         }

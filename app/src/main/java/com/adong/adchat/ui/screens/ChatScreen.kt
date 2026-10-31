@@ -951,7 +951,7 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
         waiting -> Sage
         failed -> Danger
         running -> Accent
-        else -> Sage
+        else -> MutedInk
     }
     val label = when {
         waiting -> "请从下面的选项里选一个"
@@ -960,39 +960,87 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
         activities.size == 1 -> latest.label
         else -> "已完成 ${activities.size} 项工具操作"
     }
-    // 状态线性化：进行中是唯一的底色（过程态），完成态退成描边线，失败仍是危险底色。
-    // 以前完成态也发一整个色块，和过程态、异常态视觉权重一样，分不清轻重。
-    Surface(
-        onClick = { if (activities.size > 1) expanded = !expanded },
-        color = when {
-            waiting -> SageSoft
-            failed -> DangerSoft
-            running -> AccentSoft.copy(alpha = .72f)
-            else -> Color.Transparent
-        },
-        contentColor = Ink,
-        shape = RoundedCornerShape(13.dp),
-        border = if (waiting || running || failed) null else BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
-        // 高度动画只留 AnimatedVisibility 一层；工具状态在流式期间会反复刷新，
-        // 再叠 animateContentSize 会让卡片高度持续微动画，和正文滚动叠加成噪声。
-        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
-    ) {
-        Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                when {
-                    waiting -> Icon(Icons.Rounded.HelpOutline, null, Modifier.size(18.dp), tint = Sage)
-                    running -> AsterLoadingIndicator(size = 17.dp, tint = tint)
-                    failed -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp), tint = tint)
-                    else -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(18.dp), tint = tint)
+    val chevronRotation by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = AsterSpring.jelly(),
+        label = "tool-chevron"
+    )
+    if (waiting || running || failed) {
+        Surface(
+            onClick = { if (activities.size > 1) expanded = !expanded },
+            color = when {
+                waiting -> SageSoft
+                failed -> DangerSoft
+                else -> AccentSoft.copy(alpha = .72f)
+            },
+            contentColor = Ink,
+            shape = RoundedCornerShape(13.dp),
+            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    when {
+                        waiting -> Icon(Icons.Rounded.HelpOutline, null, Modifier.size(18.dp), tint = Sage)
+                        running -> AsterLoadingIndicator(size = 17.dp, tint = tint)
+                        else -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp), tint = tint)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, style = MaterialTheme.typography.labelLarge, color = if (running) MutedInk else tint, modifier = Modifier.weight(1f))
+                    if (activities.size > 1) {
+                        Icon(
+                            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            null,
+                            Modifier.size(18.dp),
+                            tint = MutedInk
+                        )
+                    }
                 }
-                Spacer(Modifier.width(8.dp))
-                Text(label, style = MaterialTheme.typography.labelLarge, color = if (running) MutedInk else tint, modifier = Modifier.weight(1f))
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                    exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+                ) {
+                    Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                        activities.forEach { activity ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (activity.name == "web_search") Icons.Rounded.TravelExplore else Icons.Rounded.Description,
+                                    null,
+                                    Modifier.size(15.dp),
+                                    tint = MutedInk
+                                )
+                                Spacer(Modifier.width(7.dp))
+                                Text(activity.label, style = MaterialTheme.typography.labelMedium, color = MutedInk, modifier = Modifier.weight(1f))
+                                if (activity.status == TOOL_STATUS_COMPLETED) {
+                                    Icon(Icons.Rounded.Check, null, Modifier.size(14.dp), tint = Sage)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // 完成态向思考面板看齐：零外框、零背景盒，平时仅一行轻巧文字，展开时用左侧 1.5dp 细线承接。
+        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = activities.size > 1) { expanded = !expanded }
+                    .appleSpringPressable(pressedScale = 0.95f, enabled = activities.size > 1)
+                    .padding(vertical = 4.dp, horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.CheckCircle, null, Modifier.size(15.dp), tint = Sage.copy(alpha = 0.85f))
+                Spacer(Modifier.width(6.dp))
+                Text(label, style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp), color = MutedInk)
                 if (activities.size > 1) {
+                    Spacer(Modifier.width(3.dp))
                     Icon(
-                        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        Icons.Rounded.ChevronRight,
                         null,
-                        Modifier.size(18.dp),
-                        tint = MutedInk
+                        Modifier.size(16.dp).graphicsLayer { rotationZ = chevronRotation },
+                        tint = MutedInk.copy(alpha = 0.72f)
                     )
                 }
             }
@@ -1001,19 +1049,30 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
                 enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
                 exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
             ) {
-                Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                    activities.forEach { activity ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (activity.name == "web_search") Icons.Rounded.TravelExplore else Icons.Rounded.Description,
-                                null,
-                                Modifier.size(15.dp),
-                                tint = MutedInk
-                            )
-                            Spacer(Modifier.width(7.dp))
-                            Text(activity.label, style = MaterialTheme.typography.labelMedium, color = MutedInk, modifier = Modifier.weight(1f))
-                            if (activity.status == TOOL_STATUS_COMPLETED) {
-                                Icon(Icons.Rounded.Check, null, Modifier.size(14.dp), tint = Sage)
+                Row(
+                    Modifier
+                        .padding(top = 5.dp, start = 4.dp, bottom = 4.dp)
+                        .height(IntrinsicSize.Min)
+                ) {
+                    Box(
+                        Modifier
+                            .width(1.5.dp)
+                            .fillMaxHeight()
+                            .clip(CircleShape)
+                            .background(Hairline)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        activities.forEach { activity ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (activity.name == "web_search") Icons.Rounded.TravelExplore else Icons.Rounded.Description,
+                                    null,
+                                    Modifier.size(14.dp),
+                                    tint = MutedInk
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(activity.label, style = MaterialTheme.typography.labelMedium, color = MutedInk)
                             }
                         }
                     }
@@ -1127,11 +1186,10 @@ private fun TokenUsagePanel(usage: com.adong.adchat.data.TokenUsage) {
     // 和过程态、异常态争视觉权重。
     Surface(
         onClick = { expanded = !expanded },
-        color = Color.Transparent,
+        color = SurfaceInset.copy(alpha = 0.55f),
         contentColor = Ink,
-        shape = RoundedCornerShape(13.dp),
-        border = BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
-        modifier = Modifier.fillMaxWidth().padding(top = 9.dp)
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
     ) {
         Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1203,10 +1261,9 @@ private fun RequestTransparencyPanel(message: ChatMessage) {
         else -> Triple(Icons.Rounded.CheckCircle, Sage, "已完成")
     }
     Surface(
-        color = Color.Transparent,
+        color = SurfaceInset.copy(alpha = 0.55f),
         contentColor = Ink,
-        shape = RoundedCornerShape(13.dp),
-        border = BorderStroke(1.dp, Hairline.copy(alpha = .8f)),
+        shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
     ) {
         Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1492,17 +1549,75 @@ internal fun StructuredMessageText(
 @Composable
 private fun CodeBlock(language: String?, code: String, selectable: Boolean) {
     val context = LocalContext.current
-    Surface(color = Night, contentColor = Color(0xFFF4F0EA), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+    var copied by remember(code) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            kotlinx.coroutines.delay(1800)
+            copied = false
+        }
+    }
+    Surface(
+        color = SurfaceInset,
+        contentColor = Ink,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Hairline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
         Column {
-            Row(Modifier.fillMaxWidth().padding(start = 13.dp, end = 5.dp, top = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(language?.uppercase() ?: "CODE", color = Color(0xFFAAA49D), style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
-                IconButton(
-                    onClick = { context.getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("code", code)) },
-                    modifier = Modifier.size(48.dp)
-                ) { Icon(Icons.Outlined.ContentCopy, "复制代码", Modifier.size(16.dp), tint = Color(0xFFCCC6BE)) }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    language?.uppercase() ?: "CODE",
+                    color = MutedInk,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
+                val copyInteraction = remember { MutableInteractionSource() }
+                Surface(
+                    onClick = {
+                        context.getSystemService(android.content.ClipboardManager::class.java)
+                            .setPrimaryClip(android.content.ClipData.newPlainText("code", code))
+                        copied = true
+                    },
+                    interactionSource = copyInteraction,
+                    color = Color.Transparent,
+                    contentColor = if (copied) Accent else MutedInk,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.appleSpringPressable(pressedScale = 0.92f, interactionSource = copyInteraction)
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (copied) Icons.Rounded.Check else Icons.Outlined.ContentCopy,
+                            "复制代码",
+                            Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            if (copied) "已复制" else "复制",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
             }
             val contentBlock: @Composable () -> Unit = {
-                Text(code, fontFamily = FontFamily.Monospace, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.horizontalScroll(rememberScrollState()).padding(start = 13.dp, end = 13.dp, bottom = 13.dp, top = 3.dp))
+                Text(
+                    code,
+                    color = Ink,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 20.sp,
+                    modifier = Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(start = 14.dp, end = 14.dp, bottom = 14.dp, top = 4.dp)
+                )
             }
             if (selectable) SelectionContainer { contentBlock() } else contentBlock()
         }

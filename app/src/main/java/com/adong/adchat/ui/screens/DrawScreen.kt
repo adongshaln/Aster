@@ -611,10 +611,19 @@ private fun PromptStudio(
             }
             }
             }
-            AnimatedVisibility(visible = error != null) {
+            AnimatedVisibility(
+                visible = error != null,
+                enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+            ) {
                 Column {
                     Spacer(Modifier.height(14.dp))
-                    Surface(color = DangerSoft, contentColor = Danger, shape = RoundedCornerShape(14.dp)) {
+                    Surface(
+                        color = DangerSoft,
+                        contentColor = Danger,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, Danger.copy(alpha = 0.25f))
+                    ) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Top) {
                             Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
@@ -626,7 +635,11 @@ private fun PromptStudio(
                     }
                 }
             }
-            AnimatedVisibility(visible = loading) {
+            AnimatedVisibility(
+                visible = loading,
+                enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+            ) {
                 Column {
                     Spacer(Modifier.height(16.dp))
                     GenerationStatus(
@@ -729,10 +742,15 @@ private fun GenerationStatus(
     }
     val seconds = elapsedMs / 1000
     val elapsed = String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
-    Surface(color = AccentSoft, contentColor = Ink, shape = RoundedCornerShape(17.dp)) {
+    Surface(
+        color = AccentSoft,
+        contentColor = Ink,
+        shape = RoundedCornerShape(17.dp),
+        border = BorderStroke(1.dp, Accent.copy(alpha = 0.28f))
+    ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(30.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.72f)), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(30.dp).clip(CircleShape).background(Surface), contentAlignment = Alignment.Center) {
                     Icon(if (mangaTranslation) Icons.Rounded.Translate else Icons.Rounded.AutoAwesome, null, Modifier.size(16.dp), tint = Accent)
                 }
                 Spacer(Modifier.width(10.dp))
@@ -765,8 +783,8 @@ private fun GenerationStatus(
                     onClick = onStopLatest,
                     modifier = Modifier.size(34.dp),
                     colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = Color.White.copy(alpha = .72f),
-                        contentColor = Night
+                        containerColor = Surface,
+                        contentColor = Ink
                     )
                 ) {
                     Icon(Icons.Rounded.Stop, "停止最近提交的任务", Modifier.size(17.dp))
@@ -812,26 +830,26 @@ private fun StudioLabel(text: String) {
 @Composable
 private fun StyleChoiceCard(text: String, detail: String, icon: androidx.compose.ui.graphics.vector.ImageVector, selected: Boolean, onClick: () -> Unit) {
     val container by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary else Canvas, AsterSpring.editorial(), label = "style-container"
+        if (selected) AccentSoft else Canvas, AsterSpring.editorial(), label = "style-container"
     )
     val foreground by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.onPrimary else Ink, AsterSpring.editorial(), label = "style-foreground"
+        if (selected) OnAccentSoft else Ink, AsterSpring.editorial(), label = "style-foreground"
     )
     Surface(
         onClick = onClick,
         color = container,
         contentColor = foreground,
-        border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else Hairline),
+        border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = 0.5f) else Hairline),
         shape = RoundedCornerShape(17.dp),
         modifier = Modifier.width(112.dp).appleSpringPressable(pressedScale = .97f, enableHaptics = false)
     ) {
         Column(Modifier.padding(12.dp)) {
-            Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(if (selected) foreground.copy(alpha = .12f) else Surface), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(18.dp), tint = if (selected) foreground else MutedInk)
+            Box(Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(Surface), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(18.dp), tint = if (selected) Accent else MutedInk)
             }
             Spacer(Modifier.height(10.dp))
             Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-            Text(detail, color = if (selected) foreground.copy(alpha = .76f) else MutedInk, style = MaterialTheme.typography.labelSmall)
+            Text(detail, color = MutedInk, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -887,7 +905,7 @@ private fun MangaArtworkSeriesCard(
     val arrowRotation by animateFloatAsState(if (expanded) 180f else 0f, AsterSpring.jelly(), label = "series-arrow")
     val first = collection.images.first()
     Column(modifier) {
-        Surface(color = Surface, shape = RoundedCornerShape(24.dp), shadowElevation = 1.dp) {
+        Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
             Column {
                 Row(
                     Modifier.fillMaxWidth().appleSpringPressable(pressedScale = .985f, enableHaptics = false)

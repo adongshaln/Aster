@@ -200,8 +200,9 @@ internal fun AsterPalette.toColorScheme(dark: Boolean) = (if (dark) darkColorSch
 )
 
 /**
- * Claude editorial serif typography across headings, reading prose, cards, and controls.
- * Uses the native serif family (`FontFamily.Serif`), avoiding any bundled 24 MB variable font.
+ * Claude editorial typography:
+ * - Literary Serif (`FontFamily.Serif`) for headings, titles, and long-form prose reading (`bodyLarge`);
+ * - Crisp Sans-Serif (`FontFamily.SansSerif`) for compact UI controls, model IDs, metadata, and badges.
  */
 private val ClaudeEditorialTypography = Typography(
     displaySmall = TextStyle(
@@ -233,14 +234,14 @@ private val ClaudeEditorialTypography = Typography(
         letterSpacing = (-0.15).sp
     ),
     titleMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 16.sp,
         lineHeight = 22.sp,
         letterSpacing = (-0.1).sp
     ),
     titleSmall = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.SemiBold,
         fontSize = 14.sp,
         lineHeight = 20.sp
@@ -255,7 +256,7 @@ private val ClaudeEditorialTypography = Typography(
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
     ),
     bodyMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
         lineHeight = 22.sp,
@@ -263,7 +264,7 @@ private val ClaudeEditorialTypography = Typography(
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
     ),
     bodySmall = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Normal,
         fontSize = 12.5.sp,
         lineHeight = 19.sp,
@@ -271,19 +272,19 @@ private val ClaudeEditorialTypography = Typography(
         lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
     ),
     labelLarge = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 13.5.sp,
         lineHeight = 18.sp
     ),
     labelMedium = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 12.sp,
         lineHeight = 16.sp
     ),
     labelSmall = TextStyle(
-        fontFamily = FontFamily.Serif,
+        fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
         lineHeight = 14.sp

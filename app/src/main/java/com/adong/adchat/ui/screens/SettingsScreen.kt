@@ -274,7 +274,12 @@ private fun SettingsHome(
                             item {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("我的服务", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Ink)
-                                    TextButton(onClick = { addMenu = true }) { Icon(Icons.Rounded.Add, null, Modifier.size(18.dp)); Text("添加") }
+                                    AsterPillButton(
+                                        text = "添加",
+                                        icon = Icons.Rounded.Add,
+                                        compact = true,
+                                        onClick = { addMenu = true }
+                                    )
                                 }
                             }
                             items(vm.profiles, key = { it.id }) { profile ->
@@ -557,8 +562,14 @@ private fun SettingsNavigationRow(destination: SettingsDestination, summary: Str
 
 @Composable
 private fun SettingsActionRow(title: String, summary: String, icon: ImageVector, onClick: () -> Unit) {
-    Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f),
-        color = Surface, contentColor = Ink, shape = RoundedCornerShape(22.dp)) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f),
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(22.dp),
+        border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
+    ) {
         Row(Modifier.heightIn(min = 76.dp).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
                 Icon(icon, null, Modifier.size(20.dp), tint = OnAccentSoft)
@@ -574,7 +585,12 @@ private fun SettingsActionRow(title: String, summary: String, icon: ImageVector,
 
 @Composable
 private fun SettingsContentCard(content: @Composable ColumnScope.() -> Unit) {
-    Surface(color = Surface, contentColor = Ink, shape = RoundedCornerShape(24.dp)) {
+    Surface(
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
+    ) {
         Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp), content = content)
     }
 }
@@ -598,9 +614,11 @@ private fun ColumnScope.AssistantSettings(vm: MainViewModel) {
                 color = MutedInk, style = MaterialTheme.typography.bodySmall
             )
         }
-        TextButton(onClick = { editingName = true }) {
-            Text(if (vm.appConfig.userName.isBlank()) "设置" else "修改")
-        }
+        AsterPillButton(
+            text = if (vm.appConfig.userName.isBlank()) "设置" else "修改",
+            compact = true,
+            onClick = { editingName = true }
+        )
     }
     Spacer(Modifier.height(14.dp))
     OutlinedTextField(
@@ -704,28 +722,24 @@ private fun ProfileTransferDialog(
             }
         },
         actions = {
-            OutlinedButton(
+            AsterPillButton(
+                text = "取消",
                 onClick = onDismiss,
-                modifier = Modifier.weight(1f).height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Ink)
-            ) { Text("取消", fontWeight = FontWeight.SemiBold) }
-            Button(
+                modifier = Modifier.weight(1f).height(48.dp)
+            )
+            AsterPillButton(
+                text = if (exporting) "复制 JSON" else "导入",
+                icon = if (exporting) Icons.Rounded.ContentCopy else Icons.Rounded.FileUpload,
+                primary = true,
+                enabled = exporting || importText.isNotBlank(),
                 onClick = {
                     if (exporting) {
                         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Aster API Profiles", exportJson))
                         onDismiss()
                     } else onImport()
                 },
-                enabled = exporting || importText.isNotBlank(),
-                modifier = Modifier.weight(1f).height(50.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = if (exporting) Ink else Accent, contentColor = if (exporting) OnInk else OnAccent)
-            ) {
-                Icon(if (exporting) Icons.Rounded.ContentCopy else Icons.Rounded.FileUpload, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (exporting) "复制 JSON" else "导入", fontWeight = FontWeight.Bold)
-            }
+                modifier = Modifier.weight(1f).height(48.dp)
+            )
         }
     )
 }
@@ -1019,9 +1033,14 @@ private fun ProfileCard(
         animationSpec = tween(180),
         label = "profile-status"
     )
-    Surface(onClick = onEdit, color = Surface, contentColor = Ink,
+    Surface(
+        onClick = onEdit,
+        color = Surface,
+        contentColor = Ink,
         shape = RoundedCornerShape(22.dp),
-        modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f)) {
+        border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f)),
+        modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f)
+    ) {
         Row(Modifier.padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(Canvas), contentAlignment = Alignment.Center) {
                 if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 19.dp, tint = statusColor)
@@ -1131,19 +1150,24 @@ private fun ProfileEditor(
         })
     BackHandler(isActive) { if (draft != initial) confirmDiscard = true else onBack() }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { if (draft != initial) confirmDiscard = true else onBack() }) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, "返回") }
-            Column(Modifier.weight(1f)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            AsterIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "返回", { if (draft != initial) confirmDiscard = true else onBack() })
+            Column(Modifier.weight(1f).padding(start = 4.dp)) {
                 Text(if (isNew) "添加 API" else "编辑 API", style = MaterialTheme.typography.titleLarge)
                 Text("连接服务，选择默认模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
             AnimatedVisibility(draft != initial) {
                 StatusBadge("未保存", AccentSoft, OnAccentSoft)
             }
+            Spacer(Modifier.width(8.dp))
+            AsterPillButton(
+                text = "保存",
+                primary = true,
+                compact = true,
+                enabled = valid,
+                onClick = { onSave(normalizedDraft) }
+            )
             Spacer(Modifier.width(4.dp))
-            TextButton(onClick = { onSave(normalizedDraft) }, enabled = valid) {
-                Text("保存", fontWeight = FontWeight.Bold)
-            }
         }
         LazyColumn(
             Modifier.weight(1f).imePadding(),
@@ -1236,11 +1260,13 @@ private fun ProfileEditor(
                         color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("对话模型", draft.chatModel, availableModels.filterNot { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
                     val limits = draft.modelContexts[draft.chatModel.trim()]
-                    OutlinedButton(onClick = { contextEditor = true }, enabled = draft.chatModel.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
-                        Icon(Icons.Outlined.Tune, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(limits?.let { "上下文 ${it.windowTokens} · 输出 ${it.outputTokens} Token" } ?: "设置此模型的上下文长度")
-                    }
+                    AsterPillButton(
+                        text = limits?.let { "上下文 ${it.windowTokens} · 输出 ${it.outputTokens} Token" } ?: "设置此模型的上下文长度",
+                        icon = Icons.Outlined.Tune,
+                        enabled = draft.chatModel.isNotBlank(),
+                        onClick = { contextEditor = true },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     Text("按模型独立保存，普通对话与故事共用。切换上方模型可编辑其他模型。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
                     EditorModelField("绘图模型（可选）", draft.imageModel, availableModels.filter { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
                 }
@@ -1382,15 +1408,13 @@ private fun ConnectionEditorCard(
                 Text(disabledReason ?: state.detail, color = tone, style = MaterialTheme.typography.bodySmall)
             }
             Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = onTest,
+            AsterPillButton(
+                text = if (state.phase == ConnectionPhase.Testing) "正在测试…" else "测试并同步",
+                primary = true,
+                compact = true,
                 enabled = canTest && state.phase != ConnectionPhase.Testing,
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Ink, contentColor = OnInk)
-            ) {
-                if (state.phase == ConnectionPhase.Testing) AsterLoadingIndicator(size = 16.dp, tint = LocalContentColor.current)
-                else Text("测试并同步")
-            }
+                onClick = onTest
+            )
         }
     }
 }
@@ -1407,7 +1431,6 @@ private fun SettingsDisclosure(
         color = Surface,
         shape = RoundedCornerShape(22.dp),
         border = BorderStroke(1.dp, Hairline.copy(alpha = .75f)),
-        shadowElevation = 1.dp,
         modifier = Modifier.fillMaxWidth()
     ) {
         Column {
@@ -1556,13 +1579,12 @@ private fun SettingSwitch(
 private fun EditorSection(title: String, description: String, content: @Composable ColumnScope.() -> Unit) {
     Column {
         Text(title, style = MaterialTheme.typography.titleSmall)
-        Text(description, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Text(description, color = MutedInk, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(10.dp))
         Surface(
             color = Surface,
             shape = RoundedCornerShape(22.dp),
-            border = BorderStroke(1.dp, Hairline),
-            shadowElevation = 1.dp
+            border = BorderStroke(1.dp, Hairline.copy(alpha = 0.75f))
         ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(15.dp), content = content)
         }
