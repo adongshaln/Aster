@@ -60,6 +60,7 @@ android {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     implementation("org.jsoup:jsoup:1.23.2")
+    implementation("com.google.zxing:core:3.5.3")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
     implementation(platform("androidx.compose:compose-bom:2025.05.01"))
     implementation("androidx.activity:activity-compose:1.10.1")

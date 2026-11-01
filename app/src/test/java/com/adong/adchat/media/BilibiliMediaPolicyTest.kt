@@ -30,13 +30,27 @@ class BilibiliMediaPolicyTest {
         val path = BilibiliMediaPolicy.buildTvPlayurlPath(
             aid = 117534648963255L,
             cid = 43205266609L,
-            qn = 80,
+            qn = 127,
             fnval = 4048,
+            accessKey = "demo_token_123",
             timestampSeconds = 1761900000L
         )
-        assertTrue(path.startsWith("/x/tv/playurl?appkey=4409e2ce8ffd12b8&build=106500&cid=43205266609&device=android&fnval=4048&fnver=0&fourk=1&mid=0&mobi_app=android_tv_yst&object_id=117534648963255&platform=android&playurl_type=1&qn=80&ts=1761900000&sign="))
+        assertTrue(path.startsWith("/x/tv/playurl?access_key=demo_token_123&appkey=4409e2ce8ffd12b8&build=106500&cid=43205266609&device=android&fnval=4048&fnver=0&fourk=1&mid=0&mobi_app=android_tv_yst&object_id=117534648963255&platform=android&playurl_type=1&qn=127&ts=1761900000&sign="))
         val sign = path.substringAfter("&sign=")
         assertEquals(32, sign.length)
+    }
+
+    @Test
+    fun qualityRankSorts4kAndHighFrameRateAbove1080pAnd720p() {
+        val rank4k = BilibiliMediaPolicy.qualityRankFromIdOrLabel("bili-tv-120", "4K · 无水印")
+        val rank1080p60 = BilibiliMediaPolicy.qualityRankFromIdOrLabel("bili-tv-116", "1080P60 · 无水印")
+        val rank1080pPlus = BilibiliMediaPolicy.qualityRankFromIdOrLabel("bili-tv-112", "1080P+ · 无水印")
+        val rank1080p = BilibiliMediaPolicy.qualityRankFromIdOrLabel("bili-dash-80", "1080P")
+        val rank720p = BilibiliMediaPolicy.qualityRankFromIdOrLabel("bili-tv-64", "720P · 无水印")
+        assertTrue(rank4k > rank1080p60)
+        assertTrue(rank1080p60 > rank1080pPlus)
+        assertTrue(rank1080pPlus > rank1080p)
+        assertTrue(rank1080p > rank720p)
     }
 
     @Test

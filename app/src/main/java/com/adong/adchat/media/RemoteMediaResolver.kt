@@ -20,8 +20,12 @@ import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 
-class RemoteMediaResolver internal constructor(private val client: OkHttpClient) {
+class RemoteMediaResolver internal constructor(
+    private val client: OkHttpClient = defaultClient(),
+    private val biliAuthProvider: () -> BilibiliTvSession? = { BilibiliTvAuthStore.currentSession() }
+) {
     constructor() : this(defaultClient())
+    constructor(biliAuthProvider: () -> BilibiliTvSession?) : this(defaultClient(), biliAuthProvider)
 
     @Volatile private var biliCookieHeader: String = ""
 
@@ -169,8 +173,14 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
         val bvidOrAid = extractBiliId(resolvedSource)
             ?: extractBiliId(input.mediaId)
             ?: throw MediaResolveException("无法识别 B 站视频编号")
+        val tvSession = biliAuthProvider()
         val headers = biliHeaders(resolvedSource).toMutableMap()
-        resolveBiliAnonymousCookie(headers)?.let { headers["Cookie"] = it }
+        val anonCookie = resolveBiliAnonymousCookie(headers)
+        val mergedCookie = listOfNotNull(
+            anonCookie?.takeIf { it.isNotBlank() },
+            tvSession?.cookieHeader?.takeIf { it.isNotBlank() }
+        ).joinToString("; ")
+        if (mergedCookie.isNotBlank()) headers["Cookie"] = mergedCookie
         val data = resolveBiliViewData(bvidOrAid, resolvedSource, headers, onProgress)
         val bvid = data.optString("bvid").ifBlank { bvidOrAid.takeIf { it.startsWith("BV") }.orEmpty() }
         val aid = data.optLong("aid", 0L).takeIf { it > 0L }
@@ -181,7 +191,7 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
 
         onProgress("正在获取无水印视频流")
         val defaultReferer = resolvedSource.takeIf { it.contains("bilibili.com") } ?: "https://www.bilibili.com/"
-        val variants = resolveBiliVariants(bvid, aid, cid, headers, defaultReferer, onProgress)
+        val variants = resolveBiliVariants(bvid, aid, cid, tvSession?.accessToken.orEmpty(), headers, defaultReferer, onProgress)
         val selected = variants.firstOrNull()
             ?: throw MediaResolveException("B 站没有返回可直接保存的视频流")
         val thumbnail = BilibiliMediaPolicy.normalizeThumbnail(data.optString("pic"))
@@ -300,6 +310,7 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
         bvid: String,
         aid: Long,
         cid: Long,
+        tvAccessKey: String,
         headers: Map<String, String>,
         defaultReferer: String,
         onProgress: (String) -> Unit
@@ -308,11 +319,18 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
         var lastError: Throwable? = null
 
         // 1. Primary lane: Bilibili TV DASH endpoint (`/x/tv/playurl`, `mobi_app=android_tv_yst`, `fnval=4048`).
-        //    Unlike Web/HTML5 streams which have the uploader's `bilibili` watermark burned into the video frames,
-        //    the TV DASH transcode (`*-30320.m4s`, `*-100068.m4s`, `*-30288.m4s`) is completely watermark-free.
+        //    - Anonymous: yields up to 720P watermark-free;
+        //    - Free account (`tvAccessKey`): yields up to 1080P watermark-free;
+        //    - VIP account (`tvAccessKey`): yields up to 1080P+ / 1080P60 / 4K / 8K watermark-free!
         if (aid > 0L) {
             try {
-                val tvPath = BilibiliMediaPolicy.buildTvPlayurlPath(aid = aid, cid = cid, qn = 80, fnval = 4048)
+                val tvPath = BilibiliMediaPolicy.buildTvPlayurlPath(
+                    aid = aid,
+                    cid = cid,
+                    qn = 127,
+                    fnval = 4048,
+                    accessKey = tvAccessKey
+                )
                 val tvRoot = requestBiliJson(tvPath, headers, rounds = 2)
                 val tvData = tvRoot.optJSONObject("data") ?: tvRoot
                 tvVariants += extractBiliDashVariants(
@@ -329,84 +347,103 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
             }
         }
 
-        // 2. Secondary lane: Web HTML5 progressive MP4 (`fnval=0&platform=html5&high_quality=1&try_look=1`).
-        //    Provides higher resolution options (e.g., 1080P when anonymous TV caps at 720P) or serves as fallback.
-        val webVariants = mutableListOf<MediaVariant>()
+        // 2. Secondary lane: Web DASH (`fnval=4048&try_look=1`).
+        //    Unlocks 1080P (`qn=80`) in one fast request even without logging in!
+        val webDashVariants = mutableListOf<MediaVariant>()
         var sawDash = false
-        val qualities = listOf(80, 64, 32, 16)
-        qualities.forEachIndexed { index, requestedQuality ->
-            val path = "/x/player/playurl?bvid=$bvid&cid=$cid&qn=$requestedQuality&fnval=0&fourk=1&platform=html5&high_quality=1&try_look=1"
-            val root = try {
-                requestBiliJson(path, headers, rounds = if (tvVariants.isNotEmpty()) 1 else 2)
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                currentCoroutineContext().ensureActive()
-                lastError = error
-                if (index == 0 && tvVariants.isEmpty()) onProgress("播放接口波动，正在切换线路")
-                return@forEachIndexed
+        try {
+            val dashPath = "/x/player/playurl?bvid=$bvid&cid=$cid&qn=127&fnval=4048&fnver=0&fourk=1&try_look=1"
+            val dashRoot = requestBiliJson(dashPath, headers, rounds = if (tvVariants.isNotEmpty()) 1 else 2)
+            val dashData = dashRoot.optJSONObject("data")
+            if (dashData != null) {
+                if (dashData.optJSONObject("dash") != null) sawDash = true
+                webDashVariants += extractBiliDashVariants(
+                    playData = dashData,
+                    idPrefix = "bili-dash",
+                    watermarkFree = false,
+                    variantReferer = defaultReferer,
+                    variantUserAgent = DESKTOP_USER_AGENT
+                )
             }
-            val play = root.optJSONObject("data") ?: return@forEachIndexed
-            if (play.optJSONObject("dash") != null) sawDash = true
-            val durl = play.optJSONArray("durl") ?: return@forEachIndexed
-            if (durl.length() != 1) return@forEachIndexed
-            val item = durl.optJSONObject(0) ?: return@forEachIndexed
-            val backups = item.optJSONArray("backup_url")
-            val primaryUrl = item.optString("url")
-            val fallbackUrl = backups?.optString(0).orEmpty()
-                .takeIf { it.isNotBlank() && it != primaryUrl }
-                .orEmpty()
-            val mediaUrl = primaryUrl.ifBlank { fallbackUrl }
-            if (mediaUrl.isBlank()) return@forEachIndexed
-            val actualQuality = play.optInt("quality", requestedQuality)
-            webVariants += MediaVariant(
-                id = "bili-web-$actualQuality",
-                label = biliQualityLabel(actualQuality),
-                mediaUrl = mediaUrl,
-                fallbackMediaUrl = fallbackUrl.takeIf { primaryUrl.isNotBlank() }.orEmpty(),
-                mimeType = "video/mp4",
-                fileExtension = "mp4",
-                fileSize = item.optLong("size", 0L),
-                prefersWatermarkFree = false,
-                variantReferer = defaultReferer,
-                variantUserAgent = DESKTOP_USER_AGENT
-            )
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            currentCoroutineContext().ensureActive()
+            lastError = error
         }
 
-        // 3. Fallback lane: Web DASH (`fnval=4048&try_look=1`) if neither TV DASH nor Web durl yielded streams.
-        if (tvVariants.isEmpty() && webVariants.isEmpty()) {
-            runCatching {
-                val dashPath = "/x/player/playurl?bvid=$bvid&cid=$cid&qn=80&fnval=4048&fnver=0&fourk=1&try_look=1"
-                val dashRoot = requestBiliJson(dashPath, headers, rounds = 1)
-                val dashData = dashRoot.optJSONObject("data")
-                if (dashData != null) {
-                    webVariants += extractBiliDashVariants(
-                        playData = dashData,
-                        idPrefix = "bili-dash",
-                        watermarkFree = false,
-                        variantReferer = defaultReferer,
-                        variantUserAgent = DESKTOP_USER_AGENT
-                    )
+        // 3. Legacy fallback lane: Web HTML5 progressive MP4 (`fnval=0&platform=html5&high_quality=1&try_look=1`)
+        //    only needed for legacy videos where neither TV DASH nor Web DASH returned streams.
+        val webDurlVariants = mutableListOf<MediaVariant>()
+        if (tvVariants.isEmpty() && webDashVariants.isEmpty()) {
+            val qualities = listOf(80, 64, 32, 16)
+            qualities.forEachIndexed { index, requestedQuality ->
+                val path = "/x/player/playurl?bvid=$bvid&cid=$cid&qn=$requestedQuality&fnval=0&fourk=1&platform=html5&high_quality=1&try_look=1"
+                val root = try {
+                    requestBiliJson(path, headers, rounds = 2)
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    currentCoroutineContext().ensureActive()
+                    lastError = error
+                    if (index == 0) onProgress("播放接口波动，正在切换线路")
+                    return@forEachIndexed
                 }
-            }.onFailure { if (it is CancellationException) throw it }
+                val play = root.optJSONObject("data") ?: return@forEachIndexed
+                if (play.optJSONObject("dash") != null) sawDash = true
+                val durl = play.optJSONArray("durl") ?: return@forEachIndexed
+                if (durl.length() != 1) return@forEachIndexed
+                val item = durl.optJSONObject(0) ?: return@forEachIndexed
+                val backups = item.optJSONArray("backup_url")
+                val primaryUrl = item.optString("url")
+                val fallbackUrl = backups?.optString(0).orEmpty()
+                    .takeIf { it.isNotBlank() && it != primaryUrl }
+                    .orEmpty()
+                val mediaUrl = primaryUrl.ifBlank { fallbackUrl }
+                if (mediaUrl.isBlank()) return@forEachIndexed
+                val actualQuality = play.optInt("quality", requestedQuality)
+                webDurlVariants += MediaVariant(
+                    id = "bili-web-$actualQuality",
+                    label = biliQualityLabel(actualQuality),
+                    mediaUrl = mediaUrl,
+                    fallbackMediaUrl = fallbackUrl.takeIf { primaryUrl.isNotBlank() }.orEmpty(),
+                    mimeType = "video/mp4",
+                    fileExtension = "mp4",
+                    fileSize = item.optLong("size", 0L),
+                    prefersWatermarkFree = false,
+                    variantReferer = defaultReferer,
+                    variantUserAgent = DESKTOP_USER_AGENT
+                )
+            }
         }
+
+        val sortedTv = tvVariants.distinctBy { variantRank(it) }.sortedByDescending { variantRank(it) }
+        val tvRanks = sortedTv.map { variantRank(it) }.toSet()
+        val extraWeb = (webDashVariants + webDurlVariants)
+            .distinctBy { variantRank(it) }
+            .sortedByDescending { variantRank(it) }
+            .filter { sortedTv.isEmpty() || variantRank(it) !in tvRanks }
 
         val combined = buildList {
-            // Watermark-free TV variants come first so default selection is always watermark-free!
-            addAll(tvVariants.distinctBy { it.id }.sortedByDescending { qualityNumber(it.label) })
-            val tvQualities = tvVariants.map { qualityNumber(it.label) }.toSet()
-            // Keep Web variants that offer higher resolution (e.g. 1080P) or when TV had no streams
-            webVariants.distinctBy { it.id }
-                .sortedByDescending { qualityNumber(it.label) }
-                .forEach { webVar ->
-                    if (tvVariants.isEmpty() || qualityNumber(webVar.label) !in tvQualities) {
-                        add(webVar)
-                    }
-                }
+            if (sortedTv.isNotEmpty()) {
+                // Default to the highest watermark-free TV quality first, followed immediately
+                // by any higher-resolution Web option (e.g. anonymous 1080P), then remaining TV/Web tiers.
+                val topTvRank = variantRank(sortedTv.first())
+                val higherWeb = extraWeb.filter { variantRank(it) > topTvRank }
+                val lowerWeb = extraWeb.filter { variantRank(it) < topTvRank }
+                add(sortedTv.first())
+                addAll(higherWeb)
+                addAll(sortedTv.drop(1))
+                addAll(lowerWeb)
+            } else {
+                addAll(extraWeb)
+            }
         }
         if (combined.isNotEmpty()) return combined
         if (sawDash) throw MediaResolveException("该 B 站视频仅提供受保护的分轨流，当前无法直接保存")
         throw MediaResolveException(lastError?.message ?: "B 站播放地址暂时不可用，已自动重试")
     }
+
+    private fun variantRank(variant: MediaVariant): Int =
+        BilibiliMediaPolicy.qualityRankFromIdOrLabel(variant.id, variant.label)
 
     private fun extractBiliDashVariants(
         playData: JSONObject,
@@ -421,7 +458,14 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
         val durationSec = dash.optLong("duration", 0L).coerceAtLeast(0L)
 
         val audioItems = (0 until audios.length()).mapNotNull { audios.optJSONObject(it) }
-        val bestAudio = audioItems.maxByOrNull { it.optInt("bandwidth", it.optInt("id", 0)) } ?: return emptyList()
+        // Prefer standard MP4-compatible AAC (`mp4a` / non-FLAC) so Android's MediaMuxer always muxes cleanly
+        val aacAudios = audioItems.filter {
+            val codecs = it.optString("codecs")
+            codecs.isBlank() || codecs.startsWith("mp4a", ignoreCase = true)
+        }
+        val bestAudio = (aacAudios.ifEmpty { audioItems })
+            .maxByOrNull { it.optInt("bandwidth", it.optInt("id", 0)) }
+            ?: return emptyList()
         val (primaryAudioUrl, fallbackAudioUrl) = extractDashUrls(bestAudio)
         if (primaryAudioUrl.isBlank()) return emptyList()
         val audioBandwidth = bestAudio.optLong("bandwidth", 0L).coerceAtLeast(0L)
@@ -431,9 +475,14 @@ class RemoteMediaResolver internal constructor(private val client: OkHttpClient)
         val variants = mutableListOf<MediaVariant>()
 
         for ((qn, candidates) in groupedByQuality.entries.sortedByDescending { it.key }) {
-            // Prefer AVC / H.264 (`codecid == 7` or `avc1`) for universal Android MediaMuxer & gallery compatibility
+            // Codec priority for Android MediaMuxer MP4 output:
+            // 1. AVC / H.264 (`codecid == 7` / `avc*`) for universal compatibility;
+            // 2. HEVC / H.265 (`codecid == 12` / `hev*` / `hvc*`) — required for 4K / HDR / 8K streams!
             val chosen = candidates.firstOrNull {
                 it.optInt("codecid") == 7 || it.optString("codecs").startsWith("avc", ignoreCase = true)
+            } ?: candidates.firstOrNull {
+                val c = it.optString("codecs")
+                it.optInt("codecid") == 12 || c.startsWith("hev", ignoreCase = true) || c.startsWith("hvc", ignoreCase = true)
             } ?: candidates.firstOrNull() ?: continue
             val (primaryVideoUrl, fallbackVideoUrl) = extractDashUrls(chosen)
             if (primaryVideoUrl.isBlank()) continue

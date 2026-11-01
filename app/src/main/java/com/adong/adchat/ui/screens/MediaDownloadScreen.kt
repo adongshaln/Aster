@@ -77,6 +77,7 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
     val state by vm.state
     val snackbarHostState = remember { SnackbarHostState() }
     var deleteCandidate by remember { mutableStateOf<MediaDownloadRecord?>(null) }
+    var biliAuthDialogVisible by remember { mutableStateOf(false) }
     val gifVm: VideoToGifViewModel = viewModel()
     var gifSource by remember { mutableStateOf<MediaDownloadRecord?>(null) }
     var pendingGifGalleryRecord by remember { mutableStateOf<MediaDownloadRecord?>(null) }
@@ -146,8 +147,10 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
                 LinkInputCard(
                     value = state.input,
                     detectedPlatform = state.detectedPlatform,
+                    biliSession = state.biliSession,
                     busy = state.phase in setOf(MediaWorkspacePhase.Resolving, MediaWorkspacePhase.Verification, MediaWorkspacePhase.Downloading),
                     onValueChange = vm::updateInput,
+                    onOpenBiliAuth = { biliAuthDialogVisible = true },
                     onResolve = vm::resolve
                 )
             }
@@ -189,8 +192,17 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
                                     (it.qualityLabel == media.qualityLabel || media.availableVariants.size <= 1)
                             }
                             ResolvedMediaCard(
-                                media, phase == MediaWorkspacePhase.Downloading, state.savingToGallery, state.downloadProgress, record,
-                                vm::selectVariant, vm::startDownload, vm::openDownload, vm::cancelDownload
+                                media,
+                                phase == MediaWorkspacePhase.Downloading,
+                                state.savingToGallery,
+                                state.downloadProgress,
+                                record,
+                                state.biliSession,
+                                vm::selectVariant,
+                                { biliAuthDialogVisible = true },
+                                vm::startDownload,
+                                vm::openDownload,
+                                vm::cancelDownload
                             )
                         }
                         MediaWorkspacePhase.Error -> ErrorCard(state.errorMessage, state.input.isNotBlank(), vm::resolve)
@@ -229,6 +241,15 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
         )
     }
 
+    if (biliAuthDialogVisible) {
+        BilibiliAuthDialog(
+            currentSession = state.biliSession,
+            onAuthorized = vm::onBilibiliAuthorized,
+            onLogout = vm::logoutBilibili,
+            onDismiss = { biliAuthDialogVisible = false }
+        )
+    }
+
     if (gifSource != null) {
         VideoToGifSheet(
             vm = gifVm,
@@ -257,7 +278,15 @@ private fun MediaHeader() {
 }
 
 @Composable
-private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy: Boolean, onValueChange: (String) -> Unit, onResolve: () -> Unit) {
+private fun LinkInputCard(
+    value: String,
+    detectedPlatform: MediaPlatform?,
+    biliSession: BilibiliTvSession?,
+    busy: Boolean,
+    onValueChange: (String) -> Unit,
+    onOpenBiliAuth: () -> Unit,
+    onResolve: () -> Unit
+) {
     val clipboard = LocalClipboardManager.current
     val focusManager = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
@@ -290,8 +319,13 @@ private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy:
                     unfocusedContainerColor = Canvas, disabledContainerColor = Canvas,
                     focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent))
             Spacer(Modifier.height(14.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 MediaPlatform.entries.forEach { PlatformMiniLabel(it, it == detectedPlatform) }
+                BilibiliHdAuthChip(session = biliSession, onClick = onOpenBiliAuth)
             }
             Spacer(Modifier.height(20.dp))
             AsterPrimaryButton(
@@ -300,6 +334,46 @@ private fun LinkInputCard(value: String, detectedPlatform: MediaPlatform?, busy:
                 enabled = value.isNotBlank() && !busy,
                 onClick = { focusManager.clearFocus(); onResolve() },
                 modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun BilibiliHdAuthChip(
+    session: BilibiliTvSession?,
+    onClick: () -> Unit
+) {
+    val active = session != null
+    val tint = if (active) platformColor(MediaPlatform.Bilibili) else MutedInk
+    val bg = if (active) platformSoftColor(MediaPlatform.Bilibili) else Canvas
+    val border = if (active) tint.copy(alpha = 0.24f) else Hairline
+    Surface(
+        onClick = onClick,
+        color = bg,
+        contentColor = tint,
+        shape = CircleShape,
+        border = BorderStroke(1.dp, border),
+        modifier = Modifier.appleSpringPressable(pressedScale = 0.96f)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (active) Icons.Rounded.CheckCircle else Icons.Rounded.Hd,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp)
+            )
+            Spacer(Modifier.width(5.dp))
+            Text(
+                text = if (active) {
+                    "B站 ${session?.uname?.ifBlank { "已授权" }} · ${session?.vipLabel?.ifBlank { "1080P 无水印" }}"
+                } else {
+                    "B站 1080P/4K 无水印"
+                },
+                fontSize = 11.sp,
+                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium
             )
         }
     }
@@ -394,7 +468,9 @@ private fun ResolvedMediaCard(
     savingToGallery: Boolean,
     progress: MediaDownloadProgress,
     downloadedRecord: MediaDownloadRecord?,
+    biliSession: BilibiliTvSession?,
     onVariantSelected: (String) -> Unit,
+    onOpenBiliAuth: () -> Unit,
     onDownload: () -> Unit,
     onOpenDownloaded: (MediaDownloadRecord) -> Unit,
     onCancel: () -> Unit
@@ -451,7 +527,7 @@ private fun ResolvedMediaCard(
                                 buildString {
                                     append(media.qualityLabel.ifBlank { "原始画质" })
                                     if (media.expectedFileSize > 0L) append(" · ${formatBytes(media.expectedFileSize)}")
-                                    if (media.prefersWatermarkFree) append(" · 无水印")
+                                    if (media.prefersWatermarkFree && "无水印" !in media.qualityLabel) append(" · 无水印")
                                 },
                                 color = platformColor(media.platform), style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold
                             )
@@ -460,10 +536,11 @@ private fun ResolvedMediaCard(
                 }
             }
 
-            if (media.availableVariants.size > 1 && !downloading) {
+            if ((media.availableVariants.size > 1 || (media.platform == MediaPlatform.Bilibili && biliSession == null)) && !downloading) {
                 Row(
                     Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     media.availableVariants.forEach { variant ->
                         val selected = variant.mediaUrl == media.mediaUrl
@@ -478,6 +555,22 @@ private fun ResolvedMediaCard(
                             Row(Modifier.padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                                 if (selected) { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(14.dp)); Spacer(Modifier.width(4.dp)) }
                                 Text(variant.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                    if (media.platform == MediaPlatform.Bilibili && biliSession == null) {
+                        Surface(
+                            onClick = onOpenBiliAuth,
+                            color = Canvas,
+                            contentColor = platformColor(MediaPlatform.Bilibili),
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, platformColor(MediaPlatform.Bilibili).copy(alpha = 0.28f)),
+                            modifier = Modifier.appleSpringPressable(pressedScale = 0.95f)
+                        ) {
+                            Row(Modifier.padding(horizontal = 11.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Rounded.Hd, null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("解锁 1080P/4K 无水印", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }

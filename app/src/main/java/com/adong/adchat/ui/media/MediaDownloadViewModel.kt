@@ -1,4 +1,4 @@
-﻿package com.adong.adchat.ui.media
+package com.adong.adchat.ui.media
 
 import android.app.Application
 import android.content.ActivityNotFoundException
@@ -8,6 +8,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.adong.adchat.media.BilibiliTvAuthStore
+import com.adong.adchat.media.BilibiliTvSession
 import com.adong.adchat.media.DouyinResolveRequest
 import com.adong.adchat.media.DouyinUrlParser
 import com.adong.adchat.media.ExpiredMediaUrlException
@@ -52,14 +54,18 @@ data class MediaDownloadUiState(
     val errorMessage: String = "",
     val savingToGallery: Boolean = false,
     val galleryPermissionRecordId: String? = null,
-    val notice: String? = null
+    val notice: String? = null,
+    val biliSession: BilibiliTvSession? = null
 )
 
 class MediaDownloadViewModel(application: Application) : AndroidViewModel(application) {
     private val store = MediaDownloadStore(application)
+    private val biliAuthStore = BilibiliTvAuthStore(application)
     private val downloader = MediaFileDownloader(application)
     private val gallerySaver = MediaGallerySaver(application)
-    private val remoteResolver = RemoteMediaResolver()
+    private val remoteResolver = RemoteMediaResolver(
+        biliAuthProvider = { BilibiliTvAuthStore.currentSession(application) }
+    )
     private val historyWriteMutex = Mutex()
     private var historyMutationSequence = 0L
     private var requestSequence = 0L
@@ -74,12 +80,54 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
     init {
         val initialHistoryVersion = historyMutationSequence
         viewModelScope.launch {
-            val records = withContext(Dispatchers.IO) {
-                store.load().filter { File(it.filePath).exists() }
+            val (records, biliSession) = withContext(Dispatchers.IO) {
+                val loadedRecords = store.load().filter { File(it.filePath).exists() }
+                val loadedBili = biliAuthStore.load()
+                BilibiliTvAuthStore.updateCachedSession(loadedBili)
+                loadedRecords to loadedBili
             }
-            if (historyMutationSequence == initialHistoryVersion) {
-                update { copy(downloads = records) }
+            update {
+                copy(
+                    downloads = if (historyMutationSequence == initialHistoryVersion) records else downloads,
+                    biliSession = biliSession
+                )
             }
+        }
+    }
+
+    fun onBilibiliAuthorized(session: BilibiliTvSession) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                biliAuthStore.save(session)
+                BilibiliTvAuthStore.updateCachedSession(session)
+            }
+            val shouldRefreshBili = state.value.phase == MediaWorkspacePhase.Ready &&
+                state.value.resolvedMedia?.platform == MediaPlatform.Bilibili
+            update {
+                copy(
+                    biliSession = session,
+                    notice = "已连接 ${session.uname} · 已解锁 ${session.vipLabel}"
+                )
+            }
+            if (shouldRefreshBili) resolve()
+        }
+    }
+
+    fun logoutBilibili() {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                biliAuthStore.clear()
+                BilibiliTvAuthStore.updateCachedSession(null)
+            }
+            val shouldRefreshBili = state.value.phase == MediaWorkspacePhase.Ready &&
+                state.value.resolvedMedia?.platform == MediaPlatform.Bilibili
+            update {
+                copy(
+                    biliSession = null,
+                    notice = "已退出 B 站授权"
+                )
+            }
+            if (shouldRefreshBili) resolve()
         }
     }
 
