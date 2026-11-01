@@ -189,6 +189,7 @@ class IslandView(
     private val cardTitle: TextView
     private val cardBadge: TextView
     private val cardSummary: TextView
+    private val mediaProgressBar: MediaProgressTrackView
     private val actionGrid: LinearLayout
     private val outputScroll: ScrollView
     private val outputMarkdown: IslandMarkdownView
@@ -236,6 +237,7 @@ class IslandView(
         cardTitle = card.title
         cardBadge = card.badge
         cardSummary = card.summary
+        mediaProgressBar = card.mediaProgress
         actionGrid = card.actions
         outputScroll = card.outputScroll
         outputMarkdown = card.outputMarkdown
@@ -329,15 +331,20 @@ class IslandView(
     fun updateTask(task: StarIslandTaskState): Unit = onMain {
         val card = state as? State.Card ?: return@onMain
         val enteringTask = card.task == null
+        val phaseChanged = card.task?.phase != task.phase || card.task?.action != task.action
         state = card.copy(task = task)
         mainHandler.removeCallbacks(hideRunnable)
-        if (enteringTask) {
+        if (enteringTask && task.action != StarIslandAction.Download) {
             outputMarkdown.setMarkdown("")
             outputScroll.scrollTo(0, 0)
         }
         renderCard()
-        // Only the ready/task transition changes geometry. A text delta never resizes the window.
-        if (enteringTask) prepareExpandedViewport()
+        if (enteringTask || (task.action == StarIslandAction.Download && phaseChanged)) {
+            prepareExpandedViewport()
+        }
+        if (task.action == StarIslandAction.Download && task.phase == StarIslandPhase.Complete) {
+            mainHandler.postDelayed(hideRunnable, 2_400L)
+        }
     }
 
     fun clearTask(): Unit = onMain {
@@ -757,7 +764,8 @@ class IslandView(
 
     private data class CardParts(
         val host: LinearLayout, val icon: ImageView, val title: TextView, val badge: TextView,
-        val summary: TextView, val actions: LinearLayout, val outputScroll: ScrollView,
+        val summary: TextView, val mediaProgress: MediaProgressTrackView,
+        val actions: LinearLayout, val outputScroll: ScrollView,
         val outputMarkdown: IslandMarkdownView,
     )
 
@@ -828,9 +836,15 @@ class IslandView(
                 cornerRadius = dpF(12f)
             }
         }
+        val mediaProgress = MediaProgressTrackView(context).apply {
+            visibility = GONE
+        }
         texts.addView(titleRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         texts.addView(summary, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(7)
+        })
+        texts.addView(mediaProgress, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(4)).apply {
+            topMargin = dp(8)
         })
         headerRow.addView(texts, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
             marginStart = dp(12)
@@ -861,7 +875,7 @@ class IslandView(
         })
         host.addView(headerRow, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
         host.addView(body, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        return CardParts(host, icon, title, badge, summary, actions, scroll, output)
+        return CardParts(host, icon, title, badge, summary, mediaProgress, actions, scroll, output)
     }
 
     private fun jellyLayoutTransition() = LayoutTransition().apply {
@@ -890,6 +904,7 @@ class IslandView(
             setStroke(max(1, dp(1)), next.edge)
             cornerRadius = dpF(12f)
         }
+        mediaProgressBar.invalidate()
         outputMarkdown.applyPalette(next)
         screenPanel?.applyPalette(next)
         outputScroll.background = GradientDrawable().apply {
@@ -1009,27 +1024,54 @@ class IslandView(
         val card = state as? State.Card ?: return
         val content = card.content
         val task = card.task
-        val title = if (task == null) IslandCardText.title(content) else when (task.phase) {
-            StarIslandPhase.Working -> "${task.action.label}中…"
-            StarIslandPhase.Complete -> "${task.action.label}完成"
-            StarIslandPhase.Stopped -> "已停止${task.action.label}"
-            StarIslandPhase.Error -> "${task.action.label}未完成"
+        val isMediaDownload = task?.action == StarIslandAction.Download
+        val title = when {
+            task == null -> IslandCardText.title(content)
+            isMediaDownload -> task.output.ifBlank { IslandCardText.title(content) }
+            else -> when (task.phase) {
+                StarIslandPhase.Working -> "${task.action.label}中…"
+                StarIslandPhase.Complete -> "${task.action.label}完成"
+                StarIslandPhase.Stopped -> "已停止${task.action.label}"
+                StarIslandPhase.Error -> "${task.action.label}未完成"
+            }
         }
         if (cardTitle.text.toString() != title) cardTitle.text = title
-        val badgeLabel = if (task == null) when (content.kind) {
-            StarIslandKind.Text -> "${content.text.length} 字 · 极速"
-            StarIslandKind.Web -> "网页 · 极速"
-            StarIslandKind.Media -> "媒体直链"
-        } else when (task.phase) {
-            StarIslandPhase.Working -> "极速响应中"
-            StarIslandPhase.Complete -> "已完成"
-            StarIslandPhase.Stopped -> "已中止"
-            StarIslandPhase.Error -> "需关注"
+        val badgeLabel = when {
+            task == null -> when (content.kind) {
+                StarIslandKind.Text -> "${content.text.length} 字 · 极速"
+                StarIslandKind.Web -> "网页 · 极速"
+                StarIslandKind.Media -> "无水印直链"
+            }
+            isMediaDownload -> task.badge.ifBlank {
+                when (task.phase) {
+                    StarIslandPhase.Working -> "解析中"
+                    StarIslandPhase.Complete -> "已存相册"
+                    StarIslandPhase.Stopped -> "已中止"
+                    StarIslandPhase.Error -> "需关注"
+                }
+            }
+            else -> when (task.phase) {
+                StarIslandPhase.Working -> "极速响应中"
+                StarIslandPhase.Complete -> "已完成"
+                StarIslandPhase.Stopped -> "已中止"
+                StarIslandPhase.Error -> "需关注"
+            }
         }
         if (cardBadge.text.toString() != badgeLabel) cardBadge.text = badgeLabel
-        val summary = IslandCardText.summary(content)
+        val summary = if (isMediaDownload && task.detail.isNotBlank()) {
+            task.detail
+        } else {
+            IslandCardText.summary(content)
+        }
         if (cardSummary.text.toString() != summary) cardSummary.text = summary
-        cardSummary.maxLines = if (task == null) 2 else 1
+        cardSummary.maxLines = if (task == null || isMediaDownload) 2 else 1
+        mediaProgressBar.visibility = if (isMediaDownload && task.phase == StarIslandPhase.Working) VISIBLE else GONE
+        if (isMediaDownload && task.phase == StarIslandPhase.Working) {
+            mediaProgressBar.setProgress(task.progress)
+        } else {
+            mediaProgressBar.stopPulse()
+        }
+
         val iconKey = "${content.kind}:${content.mediaLink?.platform}"
         if (renderedIconKey != iconKey) {
             renderedIconKey = iconKey
@@ -1044,8 +1086,8 @@ class IslandView(
             } else platformIcon.setImageDrawable(ContentGlyph(content.kind))
         }
 
-        outputScroll.visibility = if (task == null) GONE else VISIBLE
-        if (task != null) {
+        outputScroll.visibility = if (task == null || isMediaDownload) GONE else VISIBLE
+        if (task != null && !isMediaDownload) {
             val nearEnd = !outputScroll.canScrollVertically(1) ||
                 outputMarkdown.height - outputScroll.height - outputScroll.scrollY < dp(28)
             val isPlaceholder = task.output.isBlank()
@@ -1079,7 +1121,7 @@ class IslandView(
                 request(StarIslandAction.CopyLink), dismiss)
             StarIslandKind.Media -> listOf(request(StarIslandAction.Download, true), request(StarIslandAction.OpenLink),
                 request(StarIslandAction.CopyLink), dismiss)
-        } else if (task.action == StarIslandAction.Download) when (task.phase) {
+        } else if (isMediaDownload) when (task.phase) {
             StarIslandPhase.Working -> listOf(CardAction("停止", true) { callbacks.onStopRequested() }, dismiss)
             StarIslandPhase.Complete -> listOf(
                 CardAction("查看下载", true) { content.mediaLink?.let(callbacks::onParseRequested) },
@@ -1087,16 +1129,14 @@ class IslandView(
             )
             StarIslandPhase.Stopped -> listOf(
                 CardAction("重新下载", true) { callbacks.onActionRequested(content, StarIslandAction.Download) },
-                CardAction("返回") { callbacks.onBackRequested() },
                 dismiss
             )
             StarIslandPhase.Error -> listOf(
                 if (task.needsConfiguration) {
-                    CardAction("打开 Aster 解析", true) { content.mediaLink?.let(callbacks::onParseRequested) }
+                    CardAction("打开 Aster 验证", true) { content.mediaLink?.let(callbacks::onParseRequested) }
                 } else {
                     CardAction("重试", true) { callbacks.onActionRequested(content, StarIslandAction.Download) }
                 },
-                CardAction("打开 Aster") { content.mediaLink?.let(callbacks::onParseRequested) },
                 dismiss
             )
         } else when (task.phase) {
@@ -1115,8 +1155,76 @@ class IslandView(
                 add(dismiss)
             }
         }
-        // Two fixed rows across every task phase keep final/error transitions from resizing the tag.
-        renderActions(actionKey, actions, reserveTwoRows = true)
+        renderActions(actionKey, actions, reserveTwoRows = !isMediaDownload)
+    }
+
+    /** Delicate paper-and-terracotta progress strip for media resolution, download, and synthesis. */
+    private inner class MediaProgressTrackView(context: Context) : View(context) {
+        private var fraction: Float = -1f
+        private var pulsePhase: Float = 0f
+        private var pulseAnimator: ValueAnimator? = null
+        private val trackPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val rect = android.graphics.RectF()
+
+        fun setProgress(value: Float) {
+            val clamped = if (value < 0f) -1f else value.coerceIn(0.03f, 1f)
+            if (clamped < 0f) {
+                startPulseIfNeeded()
+            } else {
+                stopPulse()
+            }
+            if (fraction != clamped) {
+                fraction = clamped
+                invalidate()
+            }
+        }
+
+        fun stopPulse() {
+            pulseAnimator?.cancel()
+            pulseAnimator = null
+        }
+
+        private fun startPulseIfNeeded() {
+            if (pulseAnimator?.isRunning == true || !ValueAnimator.areAnimatorsEnabled()) return
+            pulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 1_150L
+                repeatCount = ValueAnimator.INFINITE
+                repeatMode = ValueAnimator.REVERSE
+                addUpdateListener {
+                    pulsePhase = it.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+        }
+
+        override fun onDetachedFromWindow() {
+            stopPulse()
+            super.onDetachedFromWindow()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) return
+            val radius = h / 2f
+            trackPaint.color = IslandMarkdown.blendColor(palette.well, palette.edge, 0.55f)
+            rect.set(0f, 0f, w, h)
+            canvas.drawRoundRect(rect, radius, radius, trackPaint)
+
+            fillPaint.color = palette.clay
+            if (fraction < 0f) {
+                val segW = w * 0.32f
+                val left = (w - segW) * pulsePhase.coerceIn(0f, 1f)
+                rect.set(left, 0f, left + segW, h)
+                canvas.drawRoundRect(rect, radius, radius, fillPaint)
+            } else {
+                val fillW = (w * fraction).coerceAtLeast(h)
+                rect.set(0f, 0f, fillW.coerceAtMost(w), h)
+                canvas.drawRoundRect(rect, radius, radius, fillPaint)
+            }
+        }
     }
 
     /** Small vector-like ink glyphs keep text and web cards distinct without another bitmap asset. */

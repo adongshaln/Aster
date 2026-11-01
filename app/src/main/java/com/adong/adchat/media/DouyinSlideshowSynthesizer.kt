@@ -290,7 +290,11 @@ internal object DouyinSlideshowSynthesizer {
             }
 
             drainEncoder(endOfStream = true)
-            return muxerStarted && writtenFrames > 0L
+            if (muxerStarted) {
+                runCatching { muxer.stop() }
+                muxerStarted = false
+            }
+            return writtenFrames > 0L && outputFile.exists() && outputFile.length() > 0L
         } finally {
             runCatching { inputSurface?.release() }
             runCatching { encoder.stop() }
@@ -311,15 +315,22 @@ internal object DouyinSlideshowSynthesizer {
                 val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
                 if (mime.startsWith("audio/", ignoreCase = true)) {
                     if (format.containsKey(MediaFormat.KEY_DURATION)) {
-                        return format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L)
+                        val dur = format.getLong(MediaFormat.KEY_DURATION)
+                        if (dur > 0L) return dur
                     }
+                    val bitRate = runCatching {
+                        if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 128_000
+                    }.getOrDefault(128_000).coerceAtLeast(32_000)
+                    return (audioFile.length() * 8L * 1_000_000L) / bitRate.toLong()
                 }
             }
         } catch (_: Throwable) {
         } finally {
             runCatching { extractor.release() }
         }
-        return 0L
+        return if (audioFile.length() > 8_192L) {
+            (audioFile.length() * 8L * 1_000_000L) / 128_000L
+        } else 0L
     }
 
     /**
@@ -354,13 +365,15 @@ internal object DouyinSlideshowSynthesizer {
             // Fast path: already AAC (`audio/mp4a-latm`) -> copy samples directly with looping/trimming
             if (inputMime.equals(MediaFormat.MIMETYPE_AUDIO_AAC, ignoreCase = true)) {
                 val muxer = MediaMuxer(outputM4aFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                var muxerStopped = false
                 try {
                     val outTrack = muxer.addTrack(inputFormat)
                     muxer.start()
                     val buf = ByteBuffer.allocate(256 * 1024)
                     val info = MediaCodec.BufferInfo()
                     var timeOffsetUs = 0L
-                    var lastSampleUs = 0L
+                    var lastSampleUs = -1L
+                    var samplesWritten = 0
                     while (timeOffsetUs < targetDurationUs) {
                         val pts = extractor.sampleTime
                         if (pts < 0L) {
@@ -369,7 +382,7 @@ internal object DouyinSlideshowSynthesizer {
                             extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                             continue
                         }
-                        val effectivePts = timeOffsetUs + pts
+                        val effectivePts = (timeOffsetUs + pts).coerceAtLeast(lastSampleUs + 1L)
                         if (effectivePts > targetDurationUs) break
                         buf.clear()
                         val sz = extractor.readSampleData(buf, 0)
@@ -382,11 +395,14 @@ internal object DouyinSlideshowSynthesizer {
                         } else 0
                         muxer.writeSampleData(outTrack, buf, info)
                         lastSampleUs = effectivePts
+                        samplesWritten += 1
                         extractor.advance()
                     }
                     muxer.stop()
-                    return outputM4aFile.exists() && outputM4aFile.length() > 0L
+                    muxerStopped = true
+                    return samplesWritten > 0 && outputM4aFile.exists() && outputM4aFile.length() > 0L
                 } finally {
+                    if (!muxerStopped) runCatching { muxer.stop() }
                     runCatching { muxer.release() }
                 }
             }
@@ -394,6 +410,7 @@ internal object DouyinSlideshowSynthesizer {
             // General path: decode (`audio/mpeg` MP3, etc.) -> PCM -> encode AAC (`audio/mp4a-latm`)
             val sampleRate = runCatching { inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE) }.getOrDefault(44100)
             val channelCount = runCatching { inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT) }.getOrDefault(2).coerceIn(1, 2)
+            val bytesPerSecond = (sampleRate * channelCount * 2L).coerceAtLeast(1L)
             val decoder = MediaCodec.createDecoderByType(inputMime)
             val encoderFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channelCount).apply {
                 setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
@@ -404,6 +421,39 @@ internal object DouyinSlideshowSynthesizer {
             val muxer = MediaMuxer(outputM4aFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             var muxerStarted = false
             var outTrack = -1
+            var samplesWritten = 0
+
+            fun drainAacEncoder(): Boolean {
+                val encInfo = MediaCodec.BufferInfo()
+                while (true) {
+                    val encOutIdx = encoder.dequeueOutputBuffer(encInfo, 2_000L)
+                    when {
+                        encOutIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> return false
+                        encOutIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                            if (!muxerStarted) {
+                                outTrack = muxer.addTrack(encoder.outputFormat)
+                                muxer.start()
+                                muxerStarted = true
+                            }
+                        }
+                        encOutIdx >= 0 -> {
+                            val encOutBuf = encoder.getOutputBuffer(encOutIdx)
+                            if ((encInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+                                encInfo.size = 0
+                            }
+                            if (encOutBuf != null && encInfo.size > 0 && muxerStarted) {
+                                encOutBuf.position(encInfo.offset)
+                                encOutBuf.limit(encInfo.offset + encInfo.size)
+                                muxer.writeSampleData(outTrack, encOutBuf, encInfo)
+                                samplesWritten += 1
+                            }
+                            val eos = (encInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                            encoder.releaseOutputBuffer(encOutIdx, false)
+                            if (eos) return true
+                        }
+                    }
+                }
+            }
 
             try {
                 decoder.configure(inputFormat, null, null, 0)
@@ -412,37 +462,34 @@ internal object DouyinSlideshowSynthesizer {
                 encoder.start()
 
                 val decInfo = MediaCodec.BufferInfo()
-                val encInfo = MediaCodec.BufferInfo()
                 var extractorDone = false
                 var decoderDone = false
                 var encoderDone = false
-                var timeOffsetUs = 0L
-                var lastInputPtsUs = 0L
+                var totalPcmBytesQueued = 0L
 
                 while (!encoderDone) {
                     if (!extractorDone) {
-                        val inIdx = decoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
+                        val inIdx = decoder.dequeueInputBuffer(2_000L)
                         if (inIdx >= 0) {
                             val inBuf = decoder.getInputBuffer(inIdx)!!
                             inBuf.clear()
-                            var pts = extractor.sampleTime
-                            if (pts < 0L && lastInputPtsUs > 0L && lastInputPtsUs < targetDurationUs) {
-                                timeOffsetUs = lastInputPtsUs + 26_000L
-                                extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-                                pts = extractor.sampleTime
-                            }
-                            val effectivePts = if (pts >= 0L) timeOffsetUs + pts else -1L
-                            if (pts < 0L || effectivePts > targetDurationUs) {
-                                decoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            val currentPcmPtsUs = (totalPcmBytesQueued * 1_000_000L) / bytesPerSecond
+                            if (currentPcmPtsUs >= targetDurationUs) {
+                                decoder.queueInputBuffer(inIdx, 0, 0, currentPcmPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                 extractorDone = true
                             } else {
-                                val sz = extractor.readSampleData(inBuf, 0)
+                                var sz = extractor.readSampleData(inBuf, 0)
+                                if (sz < 0 && totalPcmBytesQueued > 0L) {
+                                    // Loop BGM from the beginning if it's shorter than the slideshow
+                                    extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                                    sz = extractor.readSampleData(inBuf, 0)
+                                }
                                 if (sz < 0) {
-                                    decoder.queueInputBuffer(inIdx, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    decoder.queueInputBuffer(inIdx, 0, 0, currentPcmPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                                     extractorDone = true
                                 } else {
-                                    decoder.queueInputBuffer(inIdx, 0, sz, effectivePts, 0)
-                                    lastInputPtsUs = effectivePts
+                                    val pts = extractor.sampleTime.coerceAtLeast(0L)
+                                    decoder.queueInputBuffer(inIdx, 0, sz, pts, 0)
                                     extractor.advance()
                                 }
                             }
@@ -458,8 +505,9 @@ internal object DouyinSlideshowSynthesizer {
                             decOutBuf.position(decInfo.offset)
                             decOutBuf.limit(decInfo.offset + decInfo.size)
                             while (decOutBuf.hasRemaining()) {
+                                drainAacEncoder()
                                 val encInIdx = encoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
-                                if (encInIdx < 0) break
+                                if (encInIdx < 0) continue
                                 val encInBuf = encoder.getInputBuffer(encInIdx)!!
                                 encInBuf.clear()
                                 val toCopy = min(decOutBuf.remaining(), encInBuf.remaining())
@@ -467,50 +515,36 @@ internal object DouyinSlideshowSynthesizer {
                                 decOutBuf.limit(decOutBuf.position() + toCopy)
                                 encInBuf.put(decOutBuf)
                                 decOutBuf.limit(oldLimit)
-                                encoder.queueInputBuffer(encInIdx, 0, toCopy, decInfo.presentationTimeUs.coerceAtLeast(0L), 0)
+                                val pcmPtsUs = (totalPcmBytesQueued * 1_000_000L) / bytesPerSecond
+                                totalPcmBytesQueued += toCopy.toLong()
+                                encoder.queueInputBuffer(encInIdx, 0, toCopy, pcmPtsUs, 0)
                             }
                         }
                         decoder.releaseOutputBuffer(decOutIdx, false)
                         if (isEos) {
-                            val encInIdx = encoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
-                            if (encInIdx >= 0) {
-                                encoder.queueInputBuffer(encInIdx, 0, 0, lastInputPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            while (true) {
+                                drainAacEncoder()
+                                val encInIdx = encoder.dequeueInputBuffer(CODEC_TIMEOUT_US)
+                                if (encInIdx >= 0) {
+                                    val eosPtsUs = (totalPcmBytesQueued * 1_000_000L) / bytesPerSecond
+                                    encoder.queueInputBuffer(encInIdx, 0, 0, eosPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                    break
+                                }
                             }
                             decoderDone = true
                         }
                     }
 
-                    while (true) {
-                        val encOutIdx = encoder.dequeueOutputBuffer(encInfo, 2_000L)
-                        when {
-                            encOutIdx == MediaCodec.INFO_TRY_AGAIN_LATER -> break
-                            encOutIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
-                                if (!muxerStarted) {
-                                    outTrack = muxer.addTrack(encoder.outputFormat)
-                                    muxer.start()
-                                    muxerStarted = true
-                                }
-                            }
-                            encOutIdx >= 0 -> {
-                                val encOutBuf = encoder.getOutputBuffer(encOutIdx)
-                                if ((encInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                                    encInfo.size = 0
-                                }
-                                if (encOutBuf != null && encInfo.size > 0 && muxerStarted) {
-                                    encOutBuf.position(encInfo.offset)
-                                    encOutBuf.limit(encInfo.offset + encInfo.size)
-                                    muxer.writeSampleData(outTrack, encOutBuf, encInfo)
-                                }
-                                encoder.releaseOutputBuffer(encOutIdx, false)
-                                if ((encInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                                    encoderDone = true
-                                    break
-                                }
-                            }
-                        }
+                    if (drainAacEncoder()) {
+                        encoderDone = true
                     }
                 }
-                return muxerStarted && outputM4aFile.exists() && outputM4aFile.length() > 0L
+
+                if (muxerStarted) {
+                    runCatching { muxer.stop() }
+                    muxerStarted = false
+                }
+                return samplesWritten > 0 && outputM4aFile.exists() && outputM4aFile.length() > 0L
             } finally {
                 runCatching { decoder.stop() }
                 runCatching { decoder.release() }

@@ -670,13 +670,17 @@ internal class DouyinResolverSession(
               }
               function pickBestImageUrl(item) {
                 if (!item || typeof item !== 'object') return '';
-                var lists = [item.url_list, item.urlList, item.download_url_list, item.downloadUrlList];
+                var lists = [item.url_list, item.urlList];
                 for (var li = 0; li < lists.length; li++) {
                   var arr = lists[li];
                   if (!Array.isArray(arr) || !arr.length) continue;
                   for (var ai = 0; ai < arr.length; ai++) {
                     var u = normalize(arr[ai]);
-                    if (/^https?:\/\//i.test(u) && !/\.webp(?:\?|$)/i.test(u)) return u;
+                    if (/^https?:\/\//i.test(u) && !/tplv-dy-water/i.test(u) && !/\.webp(?:\?|$)/i.test(u)) return u;
+                  }
+                  for (var bi = 0; bi < arr.length; bi++) {
+                    var u2 = normalize(arr[bi]);
+                    if (/^https?:\/\//i.test(u2) && !/tplv-dy-water/i.test(u2)) return u2;
                   }
                   var first = normalize(arr[0]);
                   if (/^https?:\/\//i.test(first)) return first;
@@ -878,13 +882,13 @@ internal class DouyinResolverSession(
           }
           function pickImage(item) {
             if (!item) return '';
-            var lists = [item.url_list, item.download_url_list];
+            var lists = [item.url_list, item.urlList];
             for (var l = 0; l < lists.length; l++) {
               var arr = lists[l];
               if (!Array.isArray(arr) || !arr.length) continue;
               for (var i = 0; i < arr.length; i++) {
                 var u = String(arr[i] || '');
-                if (/^https?:\/\//i.test(u) && !/\.webp(?:\?|$)/i.test(u)) return u;
+                if (/^https?:\/\//i.test(u) && !/tplv-dy-water/i.test(u) && !/\.webp(?:\?|$)/i.test(u)) return u;
               }
               if (/^https?:\/\//i.test(String(arr[0] || ''))) return String(arr[0]);
             }

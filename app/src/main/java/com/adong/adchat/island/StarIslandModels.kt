@@ -30,4 +30,6 @@ data class StarIslandTaskState(
     val output: String = "",
     val detail: String = "",
     val needsConfiguration: Boolean = false,
+    val progress: Float = -1f,
+    val badge: String = "",
 )

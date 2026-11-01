@@ -389,7 +389,9 @@ class IslandService : Service(), IslandView.Callbacks {
             StarIslandTaskState(
                 action = StarIslandAction.Download,
                 phase = StarIslandPhase.Working,
-                detail = "正在解析 ${link.displayName} 无水印资源…"
+                detail = "正在解析 ${link.displayName} 无水印资源…",
+                badge = "解析中",
+                progress = -1f
             )
         )
         taskJob = scope.launch {
@@ -404,7 +406,9 @@ class IslandService : Service(), IslandView.Callbacks {
                                     StarIslandTaskState(
                                         action = StarIslandAction.Download,
                                         phase = StarIslandPhase.Working,
-                                        detail = progressText
+                                        detail = progressText,
+                                        badge = "解析中",
+                                        progress = -1f
                                     )
                                 )
                             }
@@ -413,30 +417,36 @@ class IslandService : Service(), IslandView.Callbacks {
                 }
                 if (generation != taskGeneration || stopRequestedGeneration == generation) return@launch
 
-                val badge = buildString {
+                val specLabel = buildString {
                     append(resolved.qualityLabel.ifBlank { "高清" })
                     if (resolved.prefersWatermarkFree && "无水印" !in resolved.qualityLabel) append(" · 无水印")
                 }
-                val titleMarkdown = "**${resolved.title}**\n$badge"
+                val cleanTitle = resolved.title.replace('\n', ' ').trim().ifBlank { "${link.displayName}作品" }
                 publishTask(
                     StarIslandTaskState(
                         action = StarIslandAction.Download,
                         phase = StarIslandPhase.Working,
-                        output = titleMarkdown,
-                        detail = if (resolved.imageUrls.isNotEmpty()) "正在拉取图文并合成配乐视频…" else "正在连接高速下载源…"
+                        output = cleanTitle,
+                        detail = if (resolved.imageUrls.isNotEmpty()) "$specLabel · 正在拉取原图与配乐" else "$specLabel · 正在高速拉流",
+                        badge = "0%",
+                        progress = 0.04f
                     )
                 )
 
                 var lastUpdateMs = 0L
                 val downloadedRecord = mediaDownloader.download(resolved) { progress ->
                     val now = android.os.SystemClock.elapsedRealtime()
-                    if (generation == taskGeneration && stopRequestedGeneration != generation && now - lastUpdateMs >= 200L) {
+                    if (generation == taskGeneration && stopRequestedGeneration != generation && now - lastUpdateMs >= 160L) {
                         lastUpdateMs = now
-                        val pct = (progress.fraction.coerceIn(0f, 1f) * 100f).toInt()
-                        val detailText = when {
-                            resolved.imageUrls.isNotEmpty() && pct >= 58 -> "正在合成 1080P 配乐视频 $pct%"
-                            progress.totalBytes > 0L -> "正在下载 $pct%"
-                            else -> "正在下载…"
+                        val fraction = progress.fraction.coerceIn(0f, 1f)
+                        val pct = (fraction * 100f).toInt()
+                        val (stageBadge, stageDetail) = when {
+                            resolved.imageUrls.isNotEmpty() && pct >= 58 ->
+                                "合成 $pct%" to "$specLabel · 正在合成 1080P 配乐视频"
+                            progress.totalBytes > 0L ->
+                                "下载 $pct%" to "$specLabel · 正在下载无水印源文件"
+                            else ->
+                                "下载中" to "$specLabel · 正在下载无水印源文件"
                         }
                         withContext(Dispatchers.Main.immediate) {
                             if (generation == taskGeneration && stopRequestedGeneration != generation) {
@@ -444,8 +454,10 @@ class IslandService : Service(), IslandView.Callbacks {
                                     StarIslandTaskState(
                                         action = StarIslandAction.Download,
                                         phase = StarIslandPhase.Working,
-                                        output = titleMarkdown,
-                                        detail = detailText
+                                        output = cleanTitle,
+                                        detail = stageDetail,
+                                        badge = stageBadge,
+                                        progress = if (progress.totalBytes > 0L) fraction else -1f
                                     )
                                 )
                             }
@@ -470,15 +482,12 @@ class IslandService : Service(), IslandView.Callbacks {
                         StarIslandTaskState(
                             action = StarIslandAction.Download,
                             phase = StarIslandPhase.Complete,
-                            output = titleMarkdown,
-                            detail = if (savedToGallery) "已存入系统相册" else "已保存在 Aster 下载页"
+                            output = cleanTitle,
+                            detail = if (savedToGallery) "$specLabel · 已存入系统相册" else "$specLabel · 已保存至下载页",
+                            badge = if (savedToGallery) "已存相册" else "已完成",
+                            progress = 1f
                         )
                     )
-                    Toast.makeText(
-                        this@IslandService,
-                        if (savedToGallery) "已无水印存入系统相册" else "下载完成",
-                        Toast.LENGTH_SHORT
-                    ).show()
                 }
             } catch (cancelled: CancellationException) {
                 if (generation == taskGeneration && stopRequestedGeneration == generation) {
@@ -496,6 +505,7 @@ class IslandService : Service(), IslandView.Callbacks {
                             action = StarIslandAction.Download,
                             phase = StarIslandPhase.Error,
                             detail = error.message ?: "下载失败，可点按打开 Aster 重试",
+                            badge = "需关注",
                             needsConfiguration = link.platform == MediaPlatform.Douyin
                         )
                     )
@@ -524,7 +534,9 @@ class IslandService : Service(), IslandView.Callbacks {
                                 StarIslandTaskState(
                                     action = StarIslandAction.Download,
                                     phase = StarIslandPhase.Working,
-                                    detail = msg
+                                    detail = msg,
+                                    badge = "解析中",
+                                    progress = -1f
                                 )
                             )
                         }
