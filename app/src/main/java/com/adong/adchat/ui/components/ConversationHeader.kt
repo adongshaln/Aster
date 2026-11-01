@@ -44,7 +44,6 @@ fun ConversationHeader(
             modifier = Modifier
                 .weight(1f)
                 .padding(start = 8.dp)
-                .animateContentSize(animationSpec = AsterSpring.spatial())
         ) {
             Text(
                 text = title,
@@ -59,7 +58,9 @@ fun ConversationHeader(
                 interactionSource = modelInteraction,
                 color = Color.Transparent,
                 shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.appleSpringPressable(pressedScale = 0.93f, interactionSource = modelInteraction)
+                modifier = Modifier
+                    .animateContentSize(animationSpec = AsterSpring.spatial())
+                    .appleSpringPressable(pressedScale = 0.93f, interactionSource = modelInteraction)
             ) {
                 Row(
                     modifier = Modifier

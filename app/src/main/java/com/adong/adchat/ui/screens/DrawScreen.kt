@@ -857,13 +857,13 @@ private fun StyleChoiceCard(text: String, detail: String, icon: androidx.compose
 @Composable
 private fun CanvasChoiceCard(value: String, label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val container by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.secondaryContainer else Canvas,
+        if (selected) AccentSoft else Canvas,
         AsterSpring.editorial(), label = "canvas-container"
     )
     Surface(
         onClick = onClick,
         color = container,
-        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else Ink,
+        contentColor = if (selected) OnAccentSoft else Ink,
         border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .5f) else Hairline),
         shape = RoundedCornerShape(17.dp),
         modifier = modifier.appleSpringPressable(pressedScale = .97f, enableHaptics = false)
@@ -876,8 +876,8 @@ private fun CanvasChoiceCard(value: String, label: String, selected: Boolean, on
                     else -> Modifier.size(30.dp)
                 }
                 Box(frame.clip(RoundedCornerShape(5.dp)).background(if (selected) Accent else SurfaceInset))
-                if (selected) Box(Modifier.align(Alignment.TopEnd).padding(end = 9.dp).size(17.dp).clip(CircleShape).background(MaterialTheme.colorScheme.secondary), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Rounded.Check, null, Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSecondary)
+                if (selected) Box(Modifier.align(Alignment.TopEnd).padding(end = 9.dp).size(17.dp).clip(CircleShape).background(Accent), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.Check, null, Modifier.size(12.dp), tint = OnAccent)
                 }
             }
             Spacer(Modifier.height(7.dp))
@@ -934,7 +934,11 @@ private fun MangaArtworkSeriesCard(
                         )
                     }
                 }
-                AnimatedVisibility(visible = !expanded, enter = fadeIn(tween(180)), exit = fadeOut(tween(100))) {
+                AnimatedVisibility(
+                    visible = !expanded,
+                    enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+                    exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
+                ) {
                     Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 13.dp)) {
                         Row(
                             Modifier.fillMaxWidth().height(148.dp).clip(RoundedCornerShape(18.dp)),
@@ -982,8 +986,8 @@ private fun MangaArtworkSeriesCard(
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn(tween(180)),
-            exit = fadeOut(tween(120))
+            enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
+            exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
         ) {
             Column {
                 collection.images.forEach { image ->
@@ -1014,11 +1018,11 @@ private fun ArtworkCard(
     val ratio = when (image.size) { "1536x1024" -> 1.5f; "1024x1536" -> 0.667f; else -> 1f }
     var imageLoaded by remember(image.source) { mutableStateOf(false) }
     var imageFailed by remember(image.source) { mutableStateOf(false) }
-    val imageAlpha by animateFloatAsState(if (imageLoaded) 1f else 0f, tween(240), label = "artwork-image")
+    val imageAlpha by animateFloatAsState(if (imageLoaded) 1f else 0f, AsterSpring.editorial(), label = "artwork-image")
     Surface(
         color = Surface,
         shape = RoundedCornerShape(24.dp),
-        shadowElevation = 1.dp,
+        border = BorderStroke(1.dp, Hairline.copy(alpha = 0.85f)),
         modifier = modifier
     ) {
         Column {
@@ -1122,7 +1126,16 @@ private fun ArtworkActionPill(
     contentColor: Color,
     onClick: () -> Unit
 ) {
-    Surface(onClick = onClick, color = color, contentColor = contentColor, shape = CircleShape) {
+    val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    Surface(
+        onClick = onClick,
+        interactionSource = interactionSource,
+        color = color,
+        contentColor = contentColor,
+        shape = CircleShape,
+        border = BorderStroke(1.dp, if (color == AccentSoft) Accent.copy(alpha = 0.32f) else Hairline),
+        modifier = Modifier.appleSpringPressable(pressedScale = 0.94f, interactionSource = interactionSource)
+    ) {
         Row(Modifier.padding(horizontal = 13.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(icon, null, Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))

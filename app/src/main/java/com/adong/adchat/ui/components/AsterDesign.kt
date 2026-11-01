@@ -677,6 +677,21 @@ fun AsterSwitch(
     enabled: Boolean = true
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val motionEnabled = LocalAsterMotionEnabled.current
+    val transition = updateTransition(checked, label = "aster-switch")
+    val leading by transition.animateFloat(
+        transitionSpec = {
+            if (targetState) AsterSpring.snappy() else AsterSpring.releaseHorizontal()
+        },
+        label = "aster-switch-leading"
+    ) { if (it) 1f else 0f }
+    val trailing by transition.animateFloat(
+        transitionSpec = {
+            if (targetState) AsterSpring.releaseHorizontal() else AsterSpring.snappy()
+        },
+        label = "aster-switch-trailing"
+    ) { if (it) 1f else 0f }
+
     val trackColor by animateColorAsState(
         targetValue = when {
             !enabled -> SurfaceInset.copy(alpha = 0.55f)
@@ -704,11 +719,8 @@ fun AsterSwitch(
         animationSpec = AsterSpring.editorial(),
         label = "aster-switch-thumb"
     )
-    val thumbOffset by animateDpAsState(
-        targetValue = if (checked) 21.dp else 3.dp,
-        animationSpec = AsterSpring.jelly(),
-        label = "aster-switch-offset"
-    )
+    val minOffsetPx = with(LocalDensity.current) { 3.dp.toPx() }
+    val travelPx = with(LocalDensity.current) { 18.dp.toPx() }
     Surface(
         onClick = { if (enabled) onCheckedChange(!checked) },
         enabled = enabled,
@@ -724,8 +736,16 @@ fun AsterSwitch(
         Box(contentAlignment = Alignment.CenterStart) {
             Box(
                 Modifier
-                    .offset(x = thumbOffset)
                     .size(21.dp)
+                    .graphicsLayer {
+                        val l = if (motionEnabled) leading else if (checked) 1f else 0f
+                        val r = if (motionEnabled) trailing else if (checked) 1f else 0f
+                        val centerProgress = ((l + r) * 0.5f).coerceIn(-0.08f, 1.08f)
+                        val stretch = (1f + kotlin.math.abs(l - r) * 0.34f).coerceIn(1f, 1.24f)
+                        translationX = minOffsetPx + centerProgress * travelPx
+                        scaleX = stretch
+                        scaleY = 1f - (stretch - 1f) * 0.28f
+                    }
                     .clip(CircleShape)
                     .background(thumbColor)
             )

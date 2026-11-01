@@ -112,52 +112,6 @@ fun ClawdBigOverlay(
     var ghosts by remember { mutableStateOf<List<Ghost>>(emptyList()) }
     val ghostSpawn = remember { java.util.concurrent.atomic.AtomicInteger(0) }
 
-    ForegroundEffect(runtime, rig, night, palWithSticks) {
-        var frameT = 0L
-        while (true) {
-            withFrameNanos {
-                // 帧循环时钟必须与 runtime 的 clipStartMs 同域（elapsedRealtime）：
-                // withFrameNanos 给的是 System.nanoTime 域（不含深睡），混用会让
-                // elapsed = nowMs - startMs 恒为负 → 每个剪辑永远冻结在 t=0 第一帧
-                val nowMs = android.os.SystemClock.elapsedRealtime()
-                if (nowMs == frameT) return@withFrameNanos
-                frameT = nowMs
-                val v = runtime.visualAt(nowMs)
-                var s = session
-                if (s.seq != v.seq || s.clipId != v.clipId) {
-                    // 换剪辑：上一帧还在的道具层甩出去（原版 clawdRigDropProps 的 drop 动画）
-                    val props = frame.parts.filter { it.part == "propA" || it.part == "propB" }
-                    if (props.isNotEmpty()) {
-                        ghosts = ghosts + props.map { p ->
-                            Ghost(
-                                part = p, bornAt = nowMs,
-                                dir = if (s.mirror) -1 else 1,
-                                id = ghostSpawn.incrementAndGet(),
-                            )
-                        }
-                    }
-                    ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
-                    s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs, rate = v.rate)
-                    session = s
-                    // 彩棒换色（原版：每次播 glowstick 系列重新掷）
-                    if (v.clipId?.startsWith("glowstick") == true) {
-                        val n = STICK_COLORS.size
-                        val a = (Math.random() * n).toInt()
-                        val b = (a + 1 + (Math.random() * (n - 1)).toInt()) % n
-                        stickA = STICK_COLORS[a]
-                        stickB = STICK_COLORS[b]
-                    }
-                } else if (s.rate != v.rate) {
-                    // 倍速在会话中途变化：换算 startMs 保持已播进度连续
-                    val elapsed = (nowMs - s.startMs).toDouble()
-                    s = ClipSession(s.seq, s.clipId, s.mirror, nowMs - (elapsed / s.rate * v.rate).toLong(), v.rate)
-                    session = s
-                }
-                frame = computeFrame(rig, palWithSticks, bitmapCache, win, symPivot, s, v, nowMs)
-            }
-        }
-    }
-
     // 物理层：订阅 version（runtime.onChanged 驱动），拖拽/弹道逐帧重组
     val phys = remember(version) { runtime.visualAt(android.os.SystemClock.elapsedRealtime()) }
     // ghost 活跃时使绘制失效；帧值只在 Canvas 内观察，不重组整个组件。
@@ -169,6 +123,63 @@ fun ClawdBigOverlay(
                 ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
                 ghostTick++
             }
+        }
+    }
+
+    ForegroundEffect(runtime, rig, night, palWithSticks) {
+        var frameT = 0L
+        while (true) {
+            val checkNow = android.os.SystemClock.elapsedRealtime()
+            val checkVisual = runtime.visualAt(checkNow)
+            val isPureIdle = checkVisual.clipId == null &&
+                checkVisual.rhythmDy == 0.0 &&
+                checkVisual.rhythmDx == 0.0 &&
+                ghosts.isEmpty()
+            if (isPureIdle) {
+                // Rest state: claws move by only 1 cell (3dp) over 1400ms and eyes blink every 4.4s.
+                // Sampling at ~24fps (42ms) during rest instead of 120fps cuts idle GPU/CPU wakeups by 80%
+                // while switching back to full 120Hz VSync immediately when any clip, typing, or drag starts.
+                val blinkMod = (checkNow % 4400L)
+                val inBlinkWindow = blinkMod in 3960L..4340L
+                kotlinx.coroutines.delay(if (inBlinkWindow) 24L else 42L)
+            } else {
+                withFrameNanos { }
+            }
+            val nowMs = android.os.SystemClock.elapsedRealtime()
+            if (nowMs == frameT) continue
+            frameT = nowMs
+            val v = runtime.visualAt(nowMs)
+            var s = session
+            if (s.seq != v.seq || s.clipId != v.clipId) {
+                // 换剪辑：上一帧还在的道具层甩出去（原版 clawdRigDropProps 的 drop 动画）
+                val props = frame.parts.filter { it.part == "propA" || it.part == "propB" }
+                if (props.isNotEmpty()) {
+                    ghosts = ghosts + props.map { p ->
+                        Ghost(
+                            part = p, bornAt = nowMs,
+                            dir = if (s.mirror) -1 else 1,
+                            id = ghostSpawn.incrementAndGet(),
+                        )
+                    }
+                }
+                ghosts = ghosts.filter { nowMs - it.bornAt < GHOST_MS }
+                s = ClipSession(seq = v.seq, clipId = v.clipId, mirror = v.mirror, startMs = v.startMs, rate = v.rate)
+                session = s
+                // 彩棒换色（原版：每次播 glowstick 系列重新掷）
+                if (v.clipId?.startsWith("glowstick") == true) {
+                    val n = STICK_COLORS.size
+                    val a = (Math.random() * n).toInt()
+                    val b = (a + 1 + (Math.random() * (n - 1)).toInt()) % n
+                    stickA = STICK_COLORS[a]
+                    stickB = STICK_COLORS[b]
+                }
+            } else if (s.rate != v.rate) {
+                // 倍速在会话中途变化：换算 startMs 保持已播进度连续
+                val elapsed = (nowMs - s.startMs).toDouble()
+                s = ClipSession(s.seq, s.clipId, s.mirror, nowMs - (elapsed / s.rate * v.rate).toLong(), v.rate)
+                session = s
+            }
+            frame = computeFrame(rig, palWithSticks, bitmapCache, win, symPivot, s, v, nowMs)
         }
     }
 

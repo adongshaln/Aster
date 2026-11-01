@@ -79,15 +79,13 @@ internal fun HtmlArtifactCard(
             IconButton(onClick = {
                 context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(filename, code))
             }) { Icon(Icons.Rounded.ContentCopy, "复制 HTML 代码", tint = MutedInk, modifier = Modifier.size(18.dp)) }
-            TextButton(
-                onClick = { pendingExport = code; export.launch(filename) },
+            AsterPillButton(
+                text = "下载 HTML",
+                icon = Icons.Rounded.Download,
+                compact = true,
                 enabled = ready,
-                contentPadding = PaddingValues(horizontal = 10.dp)
-            ) {
-                Icon(Icons.Rounded.Download, null, Modifier.size(18.dp), tint = Accent)
-                Spacer(Modifier.width(4.dp))
-                Text("下载 HTML", color = Accent, style = MaterialTheme.typography.labelLarge)
-            }
+                onClick = { pendingExport = code; export.launch(filename) }
+            )
         }
     }
     if (fullscreen && canPreview) Dialog(onDismissRequest = { fullscreen = false },

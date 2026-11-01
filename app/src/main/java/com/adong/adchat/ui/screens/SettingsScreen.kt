@@ -1422,7 +1422,7 @@ private fun ProfileCard(
             ConnectionPhase.Testing -> Accent
             ConnectionPhase.Idle -> MutedInk
         },
-        animationSpec = tween(180),
+        animationSpec = AsterSpring.editorial(),
         label = "profile-status"
     )
     Surface(

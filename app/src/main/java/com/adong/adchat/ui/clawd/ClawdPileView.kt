@@ -118,11 +118,27 @@ fun ClawdPileOverlay(
     }
 
     // 动画时钟：hop/squash/Z 飘/星星按 elapsed 采样（原版 Web Animations）
-    // 必须与 hopAt/squashAt 的 elapsedRealtime 同域——nanoTime 域相减恒负，动作全部冻结
-    var animNow by remember { mutableLongStateOf(0L) }
-    ForegroundEffect(pile) {
+    // 必须与 hopAt/squashAt 的 elapsedRealtime 同域——nanoTime 域相减恒负，动作全部冻结。
+    // 优化：当三只小爪没有走路、跳跃、挤压或拖拽时，只有 Z 飘特效需要 ~25fps 更新，
+    // 无需每 8ms (120Hz) 强制重绘全部 4 张全尺寸 Canvas。
+    var animNow by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    ForegroundEffect(pile, version, dragInfo != null) {
         while (true) {
-            withFrameNanos { animNow = android.os.SystemClock.elapsedRealtime() }
+            val now = android.os.SystemClock.elapsedRealtime()
+            val fastMotion = dragInfo != null ||
+                pile.hasFlights ||
+                actors.any { a ->
+                    a.mode == ClawdPileState.Mode.WALK ||
+                        (a.hopAt > 0L && now - a.hopAt in 0L..850L) ||
+                        (a.squashAt > 0L && now - a.squashAt in 0L..350L)
+                }
+            if (fastMotion) {
+                withFrameNanos { animNow = android.os.SystemClock.elapsedRealtime() }
+            } else {
+                val anySleeping = actors.any { it.mode == ClawdPileState.Mode.SLEEP }
+                kotlinx.coroutines.delay(if (anySleeping) 40L else 120L)
+                animNow = android.os.SystemClock.elapsedRealtime()
+            }
         }
     }
 

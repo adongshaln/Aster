@@ -45,14 +45,39 @@ import kotlinx.coroutines.delay
 
 /** Small controls may overshoot; large surfaces and colors settle more firmly. */
 object AsterSpring {
-    fun <T> jelly(): SpringSpec<T> = spring(dampingRatio = 0.58f, stiffness = 380f)
-    fun <T> spatial(): SpringSpec<T> = spring(dampingRatio = 0.78f, stiffness = 300f)
-    fun <T> snappy(): SpringSpec<T> = spring(dampingRatio = 0.78f, stiffness = 620f)
-    fun <T> editorial(): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 420f)
-    fun <T> press(): SpringSpec<T> = spring(dampingRatio = 0.94f, stiffness = 1100f)
-    fun <T> releaseHorizontal(): SpringSpec<T> = spring(dampingRatio = 0.54f, stiffness = 440f)
-    fun <T> releaseVertical(): SpringSpec<T> = spring(dampingRatio = 0.62f, stiffness = 320f)
-    fun <T> settle(): SpringSpec<T> = spring(dampingRatio = 0.72f, stiffness = 300f)
+    private val JELLY = spring<Any>(dampingRatio = 0.58f, stiffness = 380f)
+    private val SPATIAL = spring<Any>(dampingRatio = 0.78f, stiffness = 300f)
+    private val SNAPPY = spring<Any>(dampingRatio = 0.78f, stiffness = 620f)
+    private val EDITORIAL = spring<Any>(dampingRatio = 1f, stiffness = 420f)
+    private val PRESS = spring<Any>(dampingRatio = 0.94f, stiffness = 1100f)
+    private val RELEASE_HORIZONTAL = spring<Any>(dampingRatio = 0.54f, stiffness = 440f)
+    private val RELEASE_VERTICAL = spring<Any>(dampingRatio = 0.62f, stiffness = 320f)
+    private val SETTLE = spring<Any>(dampingRatio = 0.72f, stiffness = 300f)
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> jelly(): SpringSpec<T> = JELLY as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> spatial(): SpringSpec<T> = SPATIAL as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> snappy(): SpringSpec<T> = SNAPPY as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> editorial(): SpringSpec<T> = EDITORIAL as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> press(): SpringSpec<T> = PRESS as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> releaseHorizontal(): SpringSpec<T> = RELEASE_HORIZONTAL as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> releaseVertical(): SpringSpec<T> = RELEASE_VERTICAL as SpringSpec<T>
+
+    @Suppress("UNCHECKED_CAST")
+    fun <T> settle(): SpringSpec<T> = SETTLE as SpringSpec<T>
+
     fun <T> gentleBounce(): SpringSpec<T> = jelly()
 }
 

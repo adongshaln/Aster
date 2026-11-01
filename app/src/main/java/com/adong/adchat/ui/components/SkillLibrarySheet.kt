@@ -164,7 +164,7 @@ fun SkillLibrarySheet(conversationScope: String?, onDismiss: () -> Unit) {
                             Text(skill.description.ifBlank { "此技能未提供简介" }, maxLines = 3, overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.bodySmall, color = MutedInk)
                         }
-                        if (conversationScope != null) Checkbox(
+                        if (conversationScope != null) AsterSwitch(
                             checked = skill.sourceUrl in selected,
                             modifier = Modifier.testTag("skill-select-${skill.sourceUrl}"),
                             enabled = !busy && skill.enabled,

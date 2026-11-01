@@ -93,31 +93,25 @@ fun QuickModelSwitcher(
         dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
     ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
-                    Icon(when (kind) {
-                        RouteKind.Chat -> Icons.Rounded.Hub
-                        RouteKind.Image -> Icons.Rounded.Palette
-                        RouteKind.Analysis -> Icons.Rounded.Psychology
-                    }, null, Modifier.size(23.dp), tint = OnAccentSoft)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(when (kind) {
-                        RouteKind.Chat -> "选择对话模型"
-                        RouteKind.Image -> "选择绘图模型"
-                        RouteKind.Analysis -> "选择漫画辅助模型"
-                    }, style = MaterialTheme.typography.titleLarge)
-                    Text(when (kind) {
-                        RouteKind.Chat -> "切换后作用于之后的对话"
-                        RouteKind.Image -> "先确认 API 路由，再选择模型"
-                        RouteKind.Analysis -> "用于理解多页设定并整理逐页译文"
-                    }, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
-                }
-                IconButton(onClick = onDismiss, colors = IconButtonDefaults.iconButtonColors(containerColor = Surface, contentColor = MutedInk)) {
-                    Icon(Icons.Rounded.Close, "关闭")
-                }
+            val subtitle = when (kind) {
+                RouteKind.Chat -> "切换后作用于之后的对话"
+                RouteKind.Image -> "先确认 API 路由，再选择模型"
+                RouteKind.Analysis -> "用于理解多页设定并整理逐页译文"
             }
+            AsterSheetHeader(
+                title = when (kind) {
+                    RouteKind.Chat -> "选择对话模型"
+                    RouteKind.Image -> "选择绘图模型"
+                    RouteKind.Analysis -> "选择漫画辅助模型"
+                },
+                subtitle = subtitle,
+                icon = when (kind) {
+                    RouteKind.Chat -> Icons.Rounded.Hub
+                    RouteKind.Image -> Icons.Rounded.Palette
+                    RouteKind.Analysis -> Icons.Rounded.Psychology
+                },
+                onDismiss = onDismiss
+            )
             Spacer(Modifier.height(18.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("API 路由", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
@@ -128,16 +122,20 @@ fun QuickModelSwitcher(
                 items(vm.profiles, key = { it.id }) { profile ->
                     val selected = profile.id == selectedProfileId
                     val connection = vm.connectionFor(profile.id)
+                    val profileInteraction = remember(profile.id) { androidx.compose.foundation.interaction.MutableInteractionSource() }
                     Surface(
                         onClick = {
                             selectedProfileId = profile.id
                             query = ""
                         },
+                        interactionSource = profileInteraction,
                         color = if (selected) AccentSoft else Surface,
                         contentColor = Ink,
                         border = if (selected) BorderStroke(1.dp, Accent.copy(alpha = .5f)) else BorderStroke(1.dp, Hairline),
                         shape = RoundedCornerShape(19.dp),
-                        modifier = Modifier.width(228.dp)
+                        modifier = Modifier
+                            .width(228.dp)
+                            .appleSpringPressable(pressedScale = 0.97f, interactionSource = profileInteraction)
                     ) {
                         Column(Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -212,9 +210,11 @@ fun QuickModelSwitcher(
                         val peakRate = remember(model.id, nowMs / 60_000L) {
                             ModelCatalogCopy.peakRateBadgeFor(model.id, nowMs)
                         }
+                        val modelInteraction = remember(model.id) { androidx.compose.foundation.interaction.MutableInteractionSource() }
                         Column {
                             Surface(
                                 enabled = modelSelectionEnabled,
+                                interactionSource = modelInteraction,
                                 onClick = {
                                     when (kind) {
                                         RouteKind.Chat -> (onSelectChatModel ?: vm::selectChatModel)(selectedProfile.id, model.id)
@@ -227,7 +227,13 @@ fun QuickModelSwitcher(
                                 contentColor = Ink,
                                 border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .5f) else Hairline.copy(alpha = 0.65f)),
                                 shape = RoundedCornerShape(18.dp),
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .appleSpringPressable(
+                                        pressedScale = 0.98f,
+                                        enabled = modelSelectionEnabled,
+                                        interactionSource = modelInteraction
+                                    )
                             ) {
                                 Row(
                                     Modifier

@@ -143,6 +143,7 @@ fun AdActionSheet(
 ) {
     AsterOptionsSheet(title = title, subtitle = subtitle, onDismiss = onDismiss, headerIcon = headerIcon) {
             actions.forEach { action ->
+                val actionInteraction = remember(action.id) { androidx.compose.foundation.interaction.MutableInteractionSource() }
                 val actionColor = when {
                     !action.enabled -> Ink.copy(alpha = .38f)
                     action.destructive -> OnDangerSoft
@@ -156,10 +157,19 @@ fun AdActionSheet(
                 Surface(
                     onClick = { if (action.enabled) onAction(action) },
                     enabled = action.enabled,
+                    interactionSource = actionInteraction,
                     color = if (action.destructive) DangerSoft else Surface,
                     contentColor = actionColor,
+                    border = BorderStroke(1.dp, if (action.destructive) Danger.copy(alpha = 0.28f) else Hairline.copy(alpha = 0.7f)),
                     shape = RoundedCornerShape(18.dp),
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 9.dp)
+                        .appleSpringPressable(
+                            pressedScale = 0.975f,
+                            enabled = action.enabled,
+                            interactionSource = actionInteraction
+                        )
                 ) {
                     Row(Modifier.padding(horizontal = 14.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(
@@ -220,14 +230,18 @@ private fun ChoiceRow(option: AdChoiceOption, selected: Boolean, onClick: () -> 
     val brand = remember(option.id, option.title) { com.adong.adchat.data.ModelCatalogCopy.brandFor(option.id, option.title) }
     val modelDesc = remember(option.id, option.title) { com.adong.adchat.data.ModelCatalogCopy.descriptionFor(option.id, option.title) }
     val peakRate = remember(option.id) { com.adong.adchat.data.ModelCatalogCopy.peakRateBadgeFor(option.id) }
+    val choiceInteraction = remember(option.id) { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Surface(
         selected = selected,
         onClick = onClick,
+        interactionSource = choiceInteraction,
         color = container,
         contentColor = Ink,
         border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .35f) else Hairline.copy(alpha = .6f)),
         shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .appleSpringPressable(pressedScale = 0.98f, interactionSource = choiceInteraction)
     ) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             if (brand != null) {

@@ -240,49 +240,33 @@ fun AdToggleCard(
     dark: Boolean = false,
     warning: Boolean = false
 ) {
-    val colors = if (dark) AsterPaletteDark.toColorScheme(dark = true) else MaterialTheme.colorScheme
-    val selectedColor = colors.secondaryContainer
-    val idleColor = colors.surface
+    val palette = if (dark) AsterPaletteDark else LocalAsterPalette.current
+    val selectedColor = if (warning) palette.dangerSoft else palette.accentSoft
+    val idleColor = palette.surface
     val container by animateColorAsState(
         targetValue = if (checked) selectedColor else idleColor,
         animationSpec = AsterSpring.editorial(),
         label = "toggleContainer"
     )
-    val track by animateColorAsState(
-        targetValue = when {
-            !enabled -> colors.onSurface.copy(alpha = .12f).compositeOver(container)
-            checked -> colors.secondary
-            else -> colors.surfaceVariant
-        },
-        animationSpec = AsterSpring.editorial(),
-        label = "toggleTrack"
-    )
-    val thumbOffset by animateDpAsState(
-        targetValue = if (checked) 20.dp else 3.dp,
-        animationSpec = AsterSpring.snappy(),
-        label = "toggleThumb"
-    )
-    val titleColor = if (enabled) colors.onSurface else colors.onSurface.copy(alpha = .38f)
+    val titleColor = if (enabled) palette.ink else palette.ink.copy(alpha = .38f)
     val subtitleColor = when {
-        !enabled -> colors.onSurface.copy(alpha = .38f)
-        warning && checked -> colors.onErrorContainer
-        else -> colors.onSurfaceVariant
+        !enabled -> palette.mutedInk.copy(alpha = .38f)
+        warning && checked -> palette.danger
+        else -> palette.mutedInk
     }
-    val thumbColor by animateColorAsState(
-        targetValue = when {
-            !enabled -> colors.onSurface.copy(alpha = .38f).compositeOver(track)
-            checked -> colors.onSecondary
-            else -> colors.onSurfaceVariant
-        }, animationSpec = AsterSpring.editorial(), label = "toggleThumbColor"
-    )
+    val borderColor = when {
+        checked && enabled && warning -> palette.danger.copy(alpha = .42f)
+        checked && enabled -> palette.accent.copy(alpha = .42f)
+        else -> palette.hairline
+    }
 
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f, enabled = enabled),
         onClick = { onCheckedChange(!checked) },
         enabled = enabled,
         color = container,
         contentColor = titleColor,
-        border = BorderStroke(1.dp, if (checked && enabled) colors.secondary.copy(alpha = .5f) else colors.outlineVariant),
+        border = BorderStroke(1.dp, borderColor),
         shape = RoundedCornerShape(18.dp)
     ) {
         Row(
@@ -295,14 +279,11 @@ fun AdToggleCard(
                 Text(subtitle, color = subtitleColor, style = MaterialTheme.typography.bodySmall)
             }
             Spacer(Modifier.width(14.dp))
-            Box(
-                Modifier.width(46.dp).height(28.dp).clip(CircleShape).background(track),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Box(
-                    Modifier.offset { IntOffset(thumbOffset.roundToPx(), 0) }.size(22.dp).clip(CircleShape).background(thumbColor)
-                )
-            }
+            AsterSwitch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                enabled = enabled
+            )
         }
     }
 }

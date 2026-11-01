@@ -308,28 +308,39 @@ fun AsterTheme(
     val fontFamily = FontFamily.Serif
     val typography = ClaudeEditorialTypography
     val target = if (dark) AsterPaletteDark else AsterPaletteLight
-    val colorSpring = AsterSpring.editorial<Color>()
-
-    val palette = AsterPalette(
-        canvas = animateColorAsState(target.canvas, colorSpring, label = "p-canvas").value,
-        surface = animateColorAsState(target.surface, colorSpring, label = "p-surface").value,
-        ink = animateColorAsState(target.ink, colorSpring, label = "p-ink").value,
-        mutedInk = animateColorAsState(target.mutedInk, colorSpring, label = "p-mutedInk").value,
-        hairline = animateColorAsState(target.hairline, colorSpring, label = "p-hairline").value,
-        accent = animateColorAsState(target.accent, colorSpring, label = "p-accent").value,
-        accentSoft = animateColorAsState(target.accentSoft, colorSpring, label = "p-accentSoft").value,
-        sage = animateColorAsState(target.sage, colorSpring, label = "p-sage").value,
-        sageSoft = animateColorAsState(target.sageSoft, colorSpring, label = "p-sageSoft").value,
-        surfaceInset = animateColorAsState(target.surfaceInset, colorSpring, label = "p-surfaceInset").value,
-        warmWhite = animateColorAsState(target.warmWhite, colorSpring, label = "p-warmWhite").value,
-        danger = animateColorAsState(target.danger, colorSpring, label = "p-danger").value,
-        dangerSoft = animateColorAsState(target.dangerSoft, colorSpring, label = "p-dangerSoft").value,
-        night = animateColorAsState(target.night, colorSpring, label = "p-night").value,
-        quoteAmber = animateColorAsState(target.quoteAmber, colorSpring, label = "p-quoteAmber").value,
-        bracketBlue = animateColorAsState(target.bracketBlue, colorSpring, label = "p-bracketBlue").value,
-        nameInk = animateColorAsState(target.nameInk, colorSpring, label = "p-nameInk").value,
-        amberSoft = animateColorAsState(target.amberSoft, colorSpring, label = "p-amberSoft").value
+    val motionEnabled = LocalAsterMotionEnabled.current
+    val blend by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (dark) 1f else 0f,
+        animationSpec = if (motionEnabled) AsterSpring.editorial() else androidx.compose.animation.core.snap(),
+        label = "theme-palette-blend"
     )
+
+    val palette = if (blend <= 0.001f) {
+        AsterPaletteLight
+    } else if (blend >= 0.999f) {
+        AsterPaletteDark
+    } else {
+        AsterPalette(
+            canvas = androidx.compose.ui.graphics.lerp(AsterPaletteLight.canvas, AsterPaletteDark.canvas, blend),
+            surface = androidx.compose.ui.graphics.lerp(AsterPaletteLight.surface, AsterPaletteDark.surface, blend),
+            ink = androidx.compose.ui.graphics.lerp(AsterPaletteLight.ink, AsterPaletteDark.ink, blend),
+            mutedInk = androidx.compose.ui.graphics.lerp(AsterPaletteLight.mutedInk, AsterPaletteDark.mutedInk, blend),
+            hairline = androidx.compose.ui.graphics.lerp(AsterPaletteLight.hairline, AsterPaletteDark.hairline, blend),
+            accent = androidx.compose.ui.graphics.lerp(AsterPaletteLight.accent, AsterPaletteDark.accent, blend),
+            accentSoft = androidx.compose.ui.graphics.lerp(AsterPaletteLight.accentSoft, AsterPaletteDark.accentSoft, blend),
+            sage = androidx.compose.ui.graphics.lerp(AsterPaletteLight.sage, AsterPaletteDark.sage, blend),
+            sageSoft = androidx.compose.ui.graphics.lerp(AsterPaletteLight.sageSoft, AsterPaletteDark.sageSoft, blend),
+            surfaceInset = androidx.compose.ui.graphics.lerp(AsterPaletteLight.surfaceInset, AsterPaletteDark.surfaceInset, blend),
+            warmWhite = androidx.compose.ui.graphics.lerp(AsterPaletteLight.warmWhite, AsterPaletteDark.warmWhite, blend),
+            danger = androidx.compose.ui.graphics.lerp(AsterPaletteLight.danger, AsterPaletteDark.danger, blend),
+            dangerSoft = androidx.compose.ui.graphics.lerp(AsterPaletteLight.dangerSoft, AsterPaletteDark.dangerSoft, blend),
+            night = androidx.compose.ui.graphics.lerp(AsterPaletteLight.night, AsterPaletteDark.night, blend),
+            quoteAmber = androidx.compose.ui.graphics.lerp(AsterPaletteLight.quoteAmber, AsterPaletteDark.quoteAmber, blend),
+            bracketBlue = androidx.compose.ui.graphics.lerp(AsterPaletteLight.bracketBlue, AsterPaletteDark.bracketBlue, blend),
+            nameInk = androidx.compose.ui.graphics.lerp(AsterPaletteLight.nameInk, AsterPaletteDark.nameInk, blend),
+            amberSoft = androidx.compose.ui.graphics.lerp(AsterPaletteLight.amberSoft, AsterPaletteDark.amberSoft, blend)
+        )
+    }
     CompositionLocalProvider(
         LocalAsterPalette provides palette,
         LocalThemeMode provides themeMode,

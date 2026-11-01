@@ -604,23 +604,10 @@ private fun ResolvedMediaCard(
 }
 
 @Composable
-private fun PrimaryButton(text: String, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = modifier.height(48.dp).appleSpringPressable(pressedScale = .97f, enableHaptics = false),
-        shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.secondary, contentColor = MaterialTheme.colorScheme.onSecondary
-        )
-    ) {
-        Icon(icon, null, Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text(text, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
 private fun DownloadProgressBlock(progress: MediaDownloadProgress, savingToGallery: Boolean, onCancel: () -> Unit) {
-    // Progress represents received bytes; it must not bounce past the reported value or 100%.
+    // Progress represents received bytes; critically damped editorial spring keeps motion fluid without overshooting.
     val animatedProgress by animateFloatAsState(
-        progress.fraction.coerceIn(0f, 1f), tween(180, easing = LinearEasing), label = "download-progress"
+        progress.fraction.coerceIn(0f, 1f), AsterSpring.editorial(), label = "download-progress"
     )
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -648,7 +635,7 @@ private fun DownloadProgressBlock(progress: MediaDownloadProgress, savingToGalle
         }
         Spacer(Modifier.height(9.dp))
         if (progress.totalBytes > 0L) {
-            LinearProgressIndicator(progress = { animatedProgress }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = Accent, trackColor = AccentSoft)
+            LinearProgressIndicator(progress = { animatedProgress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = Accent, trackColor = AccentSoft)
         } else {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(6.dp).clip(CircleShape), color = Accent, trackColor = AccentSoft)
         }
@@ -686,12 +673,19 @@ private fun DownloadHistoryItem(
 ) {
     val isGif = record.isGifFile()
     var showActions by remember(record.id) { mutableStateOf(false) }
+    val itemInteraction = remember(record.id) { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Surface(
-        color = Surface, shape = RoundedCornerShape(18.dp), border = BorderStroke(1.dp, Hairline),
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen)
+        onClick = onOpen,
+        interactionSource = itemInteraction,
+        color = Surface,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, Hairline),
+        modifier = Modifier
+            .fillMaxWidth()
+            .appleSpringPressable(pressedScale = 0.98f, interactionSource = itemInteraction)
     ) {
         Row(Modifier.padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(76.dp, 48.dp).clip(RoundedCornerShape(11.dp)).background(Color(0xFFEDE9E3)), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(76.dp, 48.dp).clip(RoundedCornerShape(11.dp)).background(SurfaceInset), contentAlignment = Alignment.Center) {
                 if (isGif) {
                     Icon(Icons.Rounded.Gif, contentDescription = "GIF", tint = Accent, modifier = Modifier.size(28.dp))
                 } else {

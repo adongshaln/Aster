@@ -1000,10 +1000,15 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
                     Spacer(Modifier.width(8.dp))
                     Text(label, style = MaterialTheme.typography.labelLarge, color = if (running) MutedInk else tint, modifier = Modifier.weight(1f))
                     if (activities.size > 1) {
+                        val activeRotation by androidx.compose.animation.core.animateFloatAsState(
+                            targetValue = if (expanded) 180f else 0f,
+                            animationSpec = AsterSpring.jelly(),
+                            label = "tool-active-chevron"
+                        )
                         Icon(
-                            if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                            Icons.Rounded.ExpandMore,
                             null,
-                            Modifier.size(18.dp),
+                            Modifier.size(18.dp).graphicsLayer { rotationZ = activeRotation },
                             tint = MutedInk
                         )
                     }

@@ -149,32 +149,17 @@ fun ConversationComposer(
     val progress = if (motionEnabled) opening.coerceIn(0f, 1f) else if (expanded) 1f else 0f
     val shellProgress = if (motionEnabled) opening.coerceIn(-0.035f, 1.06f) else progress
     val keepTools = expanded || progress > 0.001f
-    // Let the expanded toolbar arrive as a small wave instead of one flat opacity jump.
-    // Exit stays quick so controls never linger after the capsule is closed.
-    val contextRevealSpec = if (!motionEnabled) snap<Float>() else if (expanded) {
-        tween(durationMillis = 190, delayMillis = 18, easing = FastOutSlowInEasing)
-    } else tween(100, easing = FastOutLinearInEasing)
-    val expandRevealSpec = if (!motionEnabled) snap<Float>() else if (expanded) {
-        tween(durationMillis = 190, delayMillis = 42, easing = FastOutSlowInEasing)
-    } else tween(100, easing = FastOutLinearInEasing)
-    val reasoningRevealSpec = if (!motionEnabled) snap<Float>() else if (expanded) {
-        tween(durationMillis = 190, delayMillis = 66, easing = FastOutSlowInEasing)
-    } else tween(100, easing = FastOutLinearInEasing)
-    val contextReveal by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = contextRevealSpec,
-        label = "composer-context-reveal"
-    )
-    val expandReveal by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = expandRevealSpec,
-        label = "composer-expand-reveal"
-    )
-    val reasoningReveal by animateFloatAsState(
-        targetValue = if (expanded) 1f else 0f,
-        animationSpec = reasoningRevealSpec,
-        label = "composer-reasoning-reveal"
-    )
+    // Derive the staggered toolbar wave directly from the single spring `opening` progress
+    // instead of running 3 extra frame-by-frame tween animators on every focus toggle.
+    val contextReveal = if (!motionEnabled) progress else if (expanded) {
+        ((progress - 0.05f) / 0.85f).coerceIn(0f, 1f)
+    } else (progress * 1.35f).coerceIn(0f, 1f)
+    val expandReveal = if (!motionEnabled) progress else if (expanded) {
+        ((progress - 0.14f) / 0.86f).coerceIn(0f, 1f)
+    } else (progress * 1.25f).coerceIn(0f, 1f)
+    val reasoningReveal = if (!motionEnabled) progress else if (expanded) {
+        ((progress - 0.22f) / 0.78f).coerceIn(0f, 1f)
+    } else (progress * 1.15f).coerceIn(0f, 1f)
     val sendSuggestion = suggestion?.takeIf {
         it.isNotBlank() && fieldValue.text.isEmpty() && value.isEmpty() &&
             attachments.isEmpty() && !loading && !attachmentLoading && !configureRequired
