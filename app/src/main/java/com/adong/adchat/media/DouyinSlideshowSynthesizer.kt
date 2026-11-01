@@ -35,6 +35,190 @@ internal object DouyinSlideshowSynthesizer {
     private const val AUDIO_BITRATE = 128_000
     private const val CODEC_TIMEOUT_US = 12_000L
 
+    /**
+     * Synthesizes a Douyin Live Photo / 动态图文 note (`motionFiles` moving MP4 clips + `audioFile` BGM)
+     * into a single standard `.mp4` file where the moving video clips play smoothly with the background music.
+     */
+    fun synthesizeMotionNote(
+        motionFiles: List<File>,
+        audioFile: File?,
+        outputFile: File,
+        onProgress: (Float) -> Unit = {}
+    ): Boolean {
+        val validMotions = motionFiles.filter { it.exists() && it.length() > 512L }
+        if (validMotions.isEmpty()) return false
+
+        val hasBgm = audioFile != null && audioFile.exists() && audioFile.length() > 256L
+        if (!hasBgm && validMotions.size == 1) {
+            if (outputFile.exists()) outputFile.delete()
+            validMotions.first().copyTo(outputFile, overwrite = true)
+            onProgress(1f)
+            return outputFile.exists() && outputFile.length() > 0L
+        }
+
+        val workDir = outputFile.parentFile ?: validMotions.first().parentFile
+        val videoTemp = File(workDir, "${outputFile.name}.motion_video.mp4.tmp")
+        val audioTemp = File(workDir, "${outputFile.name}.motion_audio.m4a.tmp")
+        try {
+            val totalVideoDurationUs = buildConcatenatedMotionVideo(
+                motionFiles = validMotions,
+                loopSingleShortClip = hasBgm,
+                outputFile = videoTemp,
+                onProgress = { f -> onProgress(f * 0.72f) }
+            )
+            if (totalVideoDurationUs <= 0L || !videoTemp.exists() || videoTemp.length() <= 0L) {
+                return false
+            }
+
+            if (hasBgm) {
+                val audioReady = runCatching {
+                    transcodeOrCopyAudioToAacM4a(
+                        inputAudioFile = audioFile!!,
+                        targetDurationUs = totalVideoDurationUs,
+                        outputM4aFile = audioTemp
+                    )
+                }.getOrDefault(false)
+                onProgress(0.90f)
+                if (audioReady && audioTemp.exists() && audioTemp.length() > 0L) {
+                    if (BilibiliDashMuxer.mux(videoTemp, audioTemp, outputFile)) {
+                        onProgress(1f)
+                        return true
+                    }
+                }
+            }
+
+            if (outputFile.exists()) outputFile.delete()
+            if (!videoTemp.renameTo(outputFile)) {
+                videoTemp.copyTo(outputFile, overwrite = true)
+            }
+            onProgress(1f)
+            return outputFile.exists() && outputFile.length() > 0L
+        } catch (error: Throwable) {
+            Log.e(TAG, "synthesizeMotionNote failed: ${error.message}", error)
+            return false
+        } finally {
+            runCatching { videoTemp.delete() }
+            runCatching { audioTemp.delete() }
+        }
+    }
+
+    private fun buildConcatenatedMotionVideo(
+        motionFiles: List<File>,
+        loopSingleShortClip: Boolean,
+        outputFile: File,
+        onProgress: (Float) -> Unit
+    ): Long {
+        if (outputFile.exists()) outputFile.delete()
+        var muxer: MediaMuxer? = null
+        var outVideoTrack = -1
+        var muxerStarted = false
+        var muxerStopped = false
+        var globalPtsOffsetUs = 0L
+        var lastWrittenPtsUs = -1L
+        val buffer = ByteBuffer.allocate(2 * 1024 * 1024)
+        val info = MediaCodec.BufferInfo()
+
+        try {
+            // If there is a single short Live Photo (< 5.5s) paired with BGM, play it twice (~8-9s)
+            val firstDurationUs = probeVideoDurationUs(motionFiles.first())
+            val sequence = if (motionFiles.size == 1 && loopSingleShortClip && firstDurationUs in 500_000L..5_500_000L) {
+                listOf(motionFiles.first(), motionFiles.first())
+            } else {
+                motionFiles
+            }
+
+            sequence.forEachIndexed { clipIndex, file ->
+                val extractor = MediaExtractor()
+                try {
+                    extractor.setDataSource(file.absolutePath)
+                    var videoTrackIdx = -1
+                    var videoFormat: MediaFormat? = null
+                    for (i in 0 until extractor.trackCount) {
+                        val fmt = extractor.getTrackFormat(i)
+                        val mime = fmt.getString(MediaFormat.KEY_MIME).orEmpty()
+                        if (mime.startsWith("video/", ignoreCase = true)) {
+                            videoTrackIdx = i
+                            videoFormat = fmt
+                            break
+                        }
+                    }
+                    if (videoTrackIdx < 0 || videoFormat == null) return@forEachIndexed
+                    extractor.selectTrack(videoTrackIdx)
+
+                    if (!muxerStarted) {
+                        muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4).apply {
+                            val rotation = runCatching {
+                                if (videoFormat.containsKey(MediaFormat.KEY_ROTATION)) {
+                                    videoFormat.getInteger(MediaFormat.KEY_ROTATION)
+                                } else 0
+                            }.getOrDefault(0)
+                            if (rotation != 0) runCatching { setOrientationHint(rotation) }
+                            outVideoTrack = addTrack(videoFormat)
+                            start()
+                            muxerStarted = true
+                        }
+                    }
+
+                    var firstClipSamplePtsUs = -1L
+                    var lastClipSamplePtsUs = 0L
+                    while (true) {
+                        val rawPts = extractor.sampleTime
+                        if (rawPts < 0L) break
+                        if (firstClipSamplePtsUs < 0L) firstClipSamplePtsUs = rawPts
+                        val normalizedPts = (rawPts - firstClipSamplePtsUs).coerceAtLeast(0L)
+                        val effectivePts = (globalPtsOffsetUs + normalizedPts).coerceAtLeast(lastWrittenPtsUs + 1_000L)
+                        buffer.clear()
+                        val sampleSize = extractor.readSampleData(buffer, 0)
+                        if (sampleSize < 0) break
+                        info.offset = 0
+                        info.size = sampleSize
+                        info.presentationTimeUs = effectivePts
+                        info.flags = if ((extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
+                            MediaCodec.BUFFER_FLAG_KEY_FRAME
+                        } else 0
+                        muxer?.writeSampleData(outVideoTrack, buffer, info)
+                        lastWrittenPtsUs = effectivePts
+                        lastClipSamplePtsUs = normalizedPts
+                        extractor.advance()
+                    }
+                    globalPtsOffsetUs = (lastWrittenPtsUs + 33_333L).coerceAtLeast(globalPtsOffsetUs + lastClipSamplePtsUs)
+                } finally {
+                    runCatching { extractor.release() }
+                }
+                onProgress((clipIndex + 1).toFloat() / sequence.size.toFloat())
+            }
+
+            if (muxerStarted) {
+                muxer?.stop()
+                muxerStopped = true
+            }
+            return if (lastWrittenPtsUs > 0L) lastWrittenPtsUs + 33_333L else 0L
+        } finally {
+            if (muxerStarted && !muxerStopped) {
+                runCatching { muxer?.stop() }
+            }
+            runCatching { muxer?.release() }
+        }
+    }
+
+    private fun probeVideoDurationUs(videoFile: File): Long {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(videoFile.absolutePath)
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME).orEmpty()
+                if (mime.startsWith("video/", ignoreCase = true) && format.containsKey(MediaFormat.KEY_DURATION)) {
+                    return format.getLong(MediaFormat.KEY_DURATION).coerceAtLeast(0L)
+                }
+            }
+        } catch (_: Throwable) {
+        } finally {
+            runCatching { extractor.release() }
+        }
+        return 0L
+    }
+
     fun synthesize(
         imageFiles: List<File>,
         audioFile: File?,

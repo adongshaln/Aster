@@ -14,8 +14,8 @@ data class DouyinLink(
      */
     val resolverUrl: String
         get() = videoId?.let { id ->
-            val kind = if (isNote) "note" else "video"
-            "https://www.iesdouyin.com/share/$kind/$id/"
+            if (isNote) "https://www.douyin.com/note/$id"
+            else "https://www.iesdouyin.com/share/video/$id/"
         } ?: sourceUrl
 }
 
@@ -46,8 +46,10 @@ object DouyinUrlParser {
 
     fun canonicalResolverUrl(url: String): String {
         val isNote = notePathPattern.containsMatchIn(url)
-        val kind = if (isNote) "note" else "video"
-        return extractVideoId(url)?.let { "https://www.iesdouyin.com/share/$kind/$it/" } ?: url
+        return extractVideoId(url)?.let { id ->
+            if (isNote) "https://www.douyin.com/note/$id"
+            else "https://www.iesdouyin.com/share/video/$id/"
+        } ?: url
     }
 
     private fun isDouyinHost(host: String): Boolean {

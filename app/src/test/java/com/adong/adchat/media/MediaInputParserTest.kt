@@ -28,7 +28,7 @@ class MediaInputParserTest {
         val noteLink = DouyinUrlParser.parse("7.43 复制打开抖音 https://www.douyin.com/note/7469411074119322899 看图文配乐")
         assertEquals("7469411074119322899", noteLink?.videoId)
         assertTrue(noteLink?.isNote == true)
-        assertEquals("https://www.iesdouyin.com/share/note/7469411074119322899/", noteLink?.resolverUrl)
+        assertEquals("https://www.douyin.com/note/7469411074119322899", noteLink?.resolverUrl)
 
         val slidesInput = MediaInputParser.parse("https://www.iesdouyin.com/share/slides/7469411074119322899/?did=1")
         assertEquals(MediaPlatform.Douyin, slidesInput?.platform)

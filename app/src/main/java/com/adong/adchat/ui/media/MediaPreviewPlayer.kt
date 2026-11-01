@@ -87,8 +87,9 @@ fun MediaPreviewPlayer(
     var errorMessage by remember(media.mediaUrl, retryToken) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(media.mediaUrl, retryToken) { mutableStateOf(true) }
 
-    val isSlideshow = media.imageUrls.isNotEmpty()
-    val player = remember(media.mediaUrl, media.audioUrl, media.imageUrls, media.userAgent, media.referer, media.cookieHeader, retryToken) {
+    val isMotionNote = media.motionVideoUrls.isNotEmpty()
+    val isSlideshow = media.imageUrls.isNotEmpty() && !isMotionNote
+    val player = remember(media.mediaUrl, media.audioUrl, media.imageUrls, media.motionVideoUrls, media.userAgent, media.referer, media.cookieHeader, retryToken) {
         val headers = buildMap {
             if (media.userAgent.isNotBlank()) put("User-Agent", media.userAgent)
             if (media.referer.isNotBlank()) put("Referer", media.referer)
@@ -101,8 +102,13 @@ fun MediaPreviewPlayer(
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .apply {
-                repeatMode = if (isSlideshow) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+                repeatMode = if (isSlideshow || isMotionNote) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
                 when {
+                    isMotionNote -> {
+                        setMediaItems(media.motionVideoUrls.map { MediaItem.fromUri(it) })
+                        volume = if (media.audioUrl.isNotBlank()) 0f else 1f
+                        playWhenReady = true
+                    }
                     isSlideshow -> {
                         if (media.audioUrl.isNotBlank()) {
                             setMediaItem(MediaItem.fromUri(media.audioUrl))
@@ -123,6 +129,37 @@ fun MediaPreviewPlayer(
                     }
                 }
             }
+    }
+
+    val bgmPlayer = remember(isMotionNote, media.audioUrl, media.userAgent, media.referer, retryToken) {
+        if (!isMotionNote || media.audioUrl.isBlank()) null
+        else {
+            val headers = buildMap {
+                if (media.userAgent.isNotBlank()) put("User-Agent", media.userAgent)
+                if (media.referer.isNotBlank()) put("Referer", media.referer)
+            }
+            val httpFactory = OkHttpDataSource.Factory(previewHttpClient).setDefaultRequestProperties(headers)
+            val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
+            ExoPlayer.Builder(context)
+                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+                .build()
+                .apply {
+                    repeatMode = Player.REPEAT_MODE_ALL
+                    setMediaItem(MediaItem.fromUri(media.audioUrl))
+                    playWhenReady = true
+                    prepare()
+                }
+        }
+    }
+
+    DisposableEffect(bgmPlayer) {
+        onDispose { bgmPlayer?.release() }
+    }
+
+    LaunchedEffect(playing, bgmPlayer) {
+        if (bgmPlayer != null) {
+            if (playing) bgmPlayer.play() else bgmPlayer.pause()
+        }
     }
 
     DisposableEffect(player) {

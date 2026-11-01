@@ -83,6 +83,16 @@ class MediaFileDownloader(context: Context) {
             finalFile.delete()
         }
 
+        if (media.motionVideoUrls.isNotEmpty()) {
+            return@withContext downloadAndSynthesizeMotionNote(
+                media = media,
+                safeId = safeId,
+                extension = extension,
+                finalFile = finalFile,
+                onProgress = onProgress
+            )
+        }
+
         if (media.imageUrls.isNotEmpty()) {
             return@withContext downloadAndSynthesizeSlideshow(
                 media = media,
@@ -186,6 +196,92 @@ class MediaFileDownloader(context: Context) {
             runCatching { muxTemp.delete() }
             cleanupSegments(videoTemp)
             cleanupSegments(audioTemp)
+        }
+    }
+
+    private suspend fun downloadAndSynthesizeMotionNote(
+        media: ResolvedMedia,
+        safeId: String,
+        extension: String,
+        finalFile: File,
+        onProgress: suspend (MediaDownloadProgress) -> Unit
+    ): MediaDownloadRecord {
+        val motionFiles = mutableListOf<File>()
+        val audioTemp = File(outputDirectory, "$safeId.motion.audio.part")
+        val synthTemp = File(outputDirectory, "$safeId.motion.$extension.part")
+        val virtualTotal = 10_000_000L
+        try {
+            val totalAssets = media.motionVideoUrls.size + (if (media.audioUrl.isNotBlank()) 1 else 0)
+            media.motionVideoUrls.forEachIndexed { index, motionUrl ->
+                coroutineContext.ensureActive()
+                val clipFile = File(outputDirectory, "$safeId.motion_$index.mp4.part")
+                motionFiles += clipFile
+                downloadRawResourceToFile(media.copy(mediaUrl = motionUrl), clipFile)
+                val fetchFraction = ((index + 1).toFloat() / totalAssets.coerceAtLeast(1).toFloat()) * 0.65f
+                onProgress(
+                    MediaDownloadProgress(
+                        downloadedBytes = (virtualTotal * fetchFraction).toLong(),
+                        totalBytes = virtualTotal,
+                        bytesPerSecond = 0L,
+                        connectionCount = 1
+                    )
+                )
+            }
+
+            val validMotions = motionFiles.filter { it.exists() && it.length() > 512L }
+            if (validMotions.isEmpty()) {
+                throw ExpiredMediaUrlException("实况动图资源已失效，正在重新获取")
+            }
+
+            var activeAudioFile: File? = null
+            if (media.audioUrl.isNotBlank()) {
+                coroutineContext.ensureActive()
+                val audioBytes = runCatching {
+                    downloadRawResourceToFile(media.copy(mediaUrl = media.audioUrl), audioTemp)
+                }.getOrDefault(0L)
+                if (audioBytes > 256L && audioTemp.exists()) {
+                    activeAudioFile = audioTemp
+                }
+                onProgress(
+                    MediaDownloadProgress(
+                        downloadedBytes = (virtualTotal * 0.72f).toLong(),
+                        totalBytes = virtualTotal,
+                        bytesPerSecond = 0L,
+                        connectionCount = 1
+                    )
+                )
+            }
+
+            coroutineContext.ensureActive()
+            val synthesized = DouyinSlideshowSynthesizer.synthesizeMotionNote(
+                motionFiles = validMotions,
+                audioFile = activeAudioFile,
+                outputFile = synthTemp,
+                onProgress = { synthFraction ->
+                    val overall = 0.72f + synthFraction.coerceIn(0f, 1f) * 0.28f
+                    runCatching {
+                        kotlinx.coroutines.runBlocking {
+                            onProgress(
+                                MediaDownloadProgress(
+                                    downloadedBytes = (virtualTotal * overall).toLong(),
+                                    totalBytes = virtualTotal,
+                                    bytesPerSecond = 0L,
+                                    connectionCount = 1
+                                )
+                            )
+                        }
+                    }
+                }
+            )
+            if (!synthesized || !isLikelyMedia(synthTemp, media.mimeType, extension)) {
+                throw ExpiredMediaUrlException("实况动图与配乐合轨失败，请重试")
+            }
+            moveIntoPlace(synthTemp, finalFile)
+            return media.copy(prefersWatermarkFree = true).toRecord(finalFile)
+        } finally {
+            motionFiles.forEach { runCatching { it.delete() } }
+            runCatching { audioTemp.delete() }
+            runCatching { synthTemp.delete() }
         }
     }
 

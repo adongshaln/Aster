@@ -107,7 +107,7 @@ internal class DouyinResolverSession(
                 mediaPlaybackRequiresUserGesture = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 cacheMode = WebSettings.LOAD_DEFAULT
-                userAgentString = WebSettings.getDefaultUserAgent(context)
+                userAgentString = if (request.link.isNote) DESKTOP_CHROME_UA else WebSettings.getDefaultUserAgent(context)
             }
             cookieManager.setAcceptThirdPartyCookies(this, true)
             webChromeClient = object : WebChromeClient() {
@@ -116,13 +116,15 @@ internal class DouyinResolverSession(
                     when {
                         newProgress < 35 -> onProgress("正在连接抖音页面")
                         newProgress < 75 -> onProgress("页面正在完成安全验证")
-                        else -> onProgress("正在寻找清晰的视频源")
+                        else -> onProgress("正在寻找清晰的媒体源")
                     }
                 }
             }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                    lastPageUrl = url.orEmpty().ifBlank { lastPageUrl }
+                    val target = url.orEmpty()
+                    if (redirectMobileNoteToDesktop(view, Uri.parse(target))) return
+                    lastPageUrl = target.ifBlank { lastPageUrl }
                     onProgress("正在载入媒体页面")
                 }
 
@@ -135,12 +137,15 @@ internal class DouyinResolverSession(
                 }
 
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (redirectMobileNoteToDesktop(view, request.url)) return true
                     return shouldBlockNavigation(request.url)
                 }
 
                 @Suppress("OVERRIDE_DEPRECATION")
                 override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
-                    return shouldBlockNavigation(Uri.parse(url))
+                    val parsed = Uri.parse(url)
+                    if (redirectMobileNoteToDesktop(view, parsed)) return true
+                    return shouldBlockNavigation(parsed)
                 }
 
                 override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -235,22 +240,30 @@ internal class DouyinResolverSession(
                 Log.d("AsterMedia", "detail api failed (status/perm), relying on sniff fallback")
             }
             val noteImages = payload?.optJSONArray("noteImages")?.let(::extractHttpUrlList).orEmpty()
-            if (noteImages.isNotEmpty()) {
-                val musicUrl = normalizeCandidateUrl(payload?.optString("musicUrl").orEmpty())
-                    .takeIf { it.startsWith("http") }
-                    .orEmpty()
-                finishWithImageNote(
-                    images = noteImages,
-                    musicUrl = musicUrl,
-                    rawId = payload?.optString("videoId").orEmpty(),
-                    rawTitle = payload?.optString("title").orEmpty(),
-                    rawAuthor = payload?.optString("author").orEmpty(),
-                    pageUrl = payload?.optString("pageUrl").orEmpty(),
-                    view = view
-                )
-                return@evaluateJavascript
+            val noteMotions = payload?.optJSONArray("noteMotions")?.let(::extractHttpUrlList).orEmpty()
+            val musicUrl = normalizeCandidateUrl(payload?.optString("musicUrl").orEmpty())
+                .takeIf { it.startsWith("http") }
+                .orEmpty()
+            val isNotePage = payload?.optBoolean("isNotePage", false) == true || request.link.isNote
+            if (noteImages.isNotEmpty() || noteMotions.isNotEmpty()) {
+                // On a note page, give self.__pace_f / detail fetch up to 3 polls to populate musicUrl & motions
+                // before accepting a bare DOM image fallback.
+                val hasRichNoteData = noteMotions.isNotEmpty() || musicUrl.isNotBlank() || pollCount >= 4
+                if (hasRichNoteData) {
+                    finishWithImageNote(
+                        images = noteImages,
+                        motions = noteMotions,
+                        musicUrl = musicUrl,
+                        rawId = payload?.optString("videoId").orEmpty(),
+                        rawTitle = payload?.optString("title").orEmpty(),
+                        rawAuthor = payload?.optString("author").orEmpty(),
+                        pageUrl = payload?.optString("pageUrl").orEmpty(),
+                        view = view
+                    )
+                    return@evaluateJavascript
+                }
             }
-            if (candidateLikely) {
+            if (candidateLikely && !isNotePage) {
                 finishWithPayload(candidate, payload ?: JSONObject(), view)
                 return@evaluateJavascript
             }
@@ -295,12 +308,14 @@ internal class DouyinResolverSession(
      */
     private fun finishWithApiDetail(detail: JSONObject, view: WebView): Boolean {
         val detailImages = detail.optJSONArray("images")?.let(::extractHttpUrlList).orEmpty()
-        if (detailImages.isNotEmpty()) {
+        val detailMotions = detail.optJSONArray("motions")?.let(::extractHttpUrlList).orEmpty()
+        if (detailImages.isNotEmpty() || detailMotions.isNotEmpty()) {
             val musicUrl = normalizeCandidateUrl(detail.optString("musicUrl"))
                 .takeIf { it.startsWith("http") }
                 .orEmpty()
             finishWithImageNote(
                 images = detailImages,
+                motions = detailMotions,
                 musicUrl = musicUrl,
                 rawId = detail.optString("aweme_id"),
                 rawTitle = detail.optString("desc"),
@@ -381,6 +396,7 @@ internal class DouyinResolverSession(
 
     private fun finishWithImageNote(
         images: List<String>,
+        motions: List<String>,
         musicUrl: String,
         rawId: String,
         rawTitle: String,
@@ -402,29 +418,44 @@ internal class DouyinResolverSession(
             .trim()
             .ifBlank { "抖音图文 $resolvedId" }
         val cookieHeader = CookieManager.getInstance().getCookie("https://www.douyin.com/").orEmpty()
-        val label = if (musicUrl.isNotBlank()) "图文配乐合成 (${images.size}张) · 无水印" else "图文合成视频 (${images.size}张) · 无水印"
+        val cleanedMotions = motions.map { DouyinMediaSourceSelector.preferWatermarkFree(it).primaryUrl }.distinct()
+        val isMotionNote = cleanedMotions.isNotEmpty()
+        val count = if (isMotionNote) cleanedMotions.size else images.size
+        val label = when {
+            isMotionNote && musicUrl.isNotBlank() -> "实况动图配乐 (${count}段) · 无水印"
+            isMotionNote -> "实况动图视频 (${count}段) · 无水印"
+            musicUrl.isNotBlank() -> "图文配乐合成 (${count}张) · 无水印"
+            else -> "图文合成视频 (${count}张) · 无水印"
+        }
+        val primaryPreviewUrl = if (isMotionNote) cleanedMotions.first() else images.first()
+        val coverUrl = images.firstOrNull().orEmpty().ifBlank { primaryPreviewUrl }
         val variant = MediaVariant(
-            id = "douyin-slideshow-${images.size}",
+            id = "douyin-note-$count",
             label = label,
-            mediaUrl = images.first(),
+            mediaUrl = primaryPreviewUrl,
             audioUrl = musicUrl,
             imageUrls = images,
+            motionVideoUrls = cleanedMotions,
             prefersWatermarkFree = true,
             mimeType = "video/mp4",
             fileExtension = "mp4"
         )
-        Log.d("AsterMedia", "douyin image-note resolved: id=$resolvedId images=${images.size} hasMusic=${musicUrl.isNotBlank()}")
-        onProgress("已识别图文配乐（${images.size} 张无水印原图）")
+        Log.d(
+            "AsterMedia",
+            "douyin note resolved: id=$resolvedId images=${images.size} motions=${cleanedMotions.size} hasMusic=${musicUrl.isNotBlank()}"
+        )
+        onProgress(if (isMotionNote) "已识别实况动图与背景配乐" else "已识别图文配乐（${images.size} 张无水印原图）")
         onResolved(
             ResolvedMedia(
                 videoId = resolvedId,
                 title = title,
                 author = rawAuthor.trim(),
-                thumbnailUrl = images.first(),
+                thumbnailUrl = coverUrl,
                 thumbnailFallbackUrl = images.getOrNull(1).orEmpty(),
-                mediaUrl = images.first(),
+                mediaUrl = primaryPreviewUrl,
                 audioUrl = musicUrl,
                 imageUrls = images,
+                motionVideoUrls = cleanedMotions,
                 sourceUrl = request.link.sourceUrl,
                 referer = currentUrl.ifBlank { "https://www.douyin.com/" },
                 userAgent = view.settings.userAgentString.orEmpty(),
@@ -437,6 +468,34 @@ internal class DouyinResolverSession(
                 availableVariants = listOf(variant)
             )
         )
+    }
+
+    /**
+     * `iesdouyin.com/share/note/<id>` under Mobile UA does not embed `videoInfoRes`,
+     * whereas `www.douyin.com/note/<id>` under Desktop Chrome UA embeds the complete
+     * `self.__pace_f` payload (`images`, Live Photo `images[].video.playAddr`, and `music.playUrl`).
+     */
+    private fun redirectMobileNoteToDesktop(view: WebView, uri: Uri?): Boolean {
+        val full = uri?.toString().orEmpty()
+        if (full.isBlank()) return false
+        val path = uri?.path.orEmpty()
+        if (!path.contains("/note/", ignoreCase = true) && !path.contains("/slides/", ignoreCase = true)) {
+            return false
+        }
+        val host = uri?.host?.lowercase().orEmpty()
+        if (host.contains("iesdouyin.com") || host == "m.douyin.com") {
+            val noteId = DouyinUrlParser.extractVideoId(full) ?: request.link.videoId
+            if (!noteId.isNullOrBlank()) {
+                val desktopUrl = "https://www.douyin.com/note/$noteId"
+                if (lastPageUrl != desktopUrl) {
+                    lastPageUrl = desktopUrl
+                    view.settings.userAgentString = DESKTOP_CHROME_UA
+                    view.loadUrl(desktopUrl)
+                    return true
+                }
+            }
+        }
+        return false
     }
 
     private fun extractHttpUrlList(array: JSONArray): List<String> =
@@ -572,6 +631,8 @@ internal class DouyinResolverSession(
     private companion object {
         const val VERIFICATION_REVEAL_MS = 7_500L
         const val RESOLVE_TIMEOUT_MS = 55_000L
+        const val DESKTOP_CHROME_UA =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
         val IMAGE_MARKERS = listOf(".jpeg", ".jpg", ".png", ".webp", "avatar", "cover", "poster")
         val VIDEO_MARKERS = listOf(
@@ -608,9 +669,12 @@ internal class DouyinResolverSession(
               function isImage(url) {
                 return /(?:\.jpe?g|\.png|\.webp|avatar|cover|poster)/i.test(url);
               }
+              function isAudioOnly(url) {
+                return /(?:\.mp3|\.m4a)(?:\?|$)|ies-music|douyinstatic\.com\/obj\/tos-cn-ve-2774|mime_type=audio/i.test(url);
+              }
               function scoreUrl(value, originScore) {
                 var url = normalize(value);
-                if (!/^https?:\/\//i.test(url) || isImage(url) || /\.m3u8(?:\?|$)/i.test(url)) return 0;
+                if (!/^https?:\/\//i.test(url) || isImage(url) || isAudioOnly(url) || /\.m3u8(?:\?|$)/i.test(url)) return 0;
                 var fromMediaElement = (originScore || 0) >= 1000;
                 var strongMarker = /douyinvod|\/video\/tos\/|\/video\/play|\/aweme\/v1\/play|\.mp4(?:\?|$)|video_id=|mime_type=video/i.test(url);
                 if (!fromMediaElement && !strongMarker) return 0;
@@ -627,10 +691,40 @@ internal class DouyinResolverSession(
                 return score;
               }
 
+              var foundTitle = '';
+              var foundAuthor = '';
+              var foundMusicUrl = '';
+              var noteImages = [];
+              var noteImageSeen = {};
+              var noteMotions = [];
+              var noteMotionSeen = {};
+              var isNotePage = /\/(?:note|slides)\//i.test(location.pathname || '');
+
+              function addNoteImage(rawUrl) {
+                var u = normalize(rawUrl);
+                if (!/^https?:\/\//i.test(u) || /avatar|user-avatar/i.test(u)) return;
+                if (!noteImageSeen[u]) {
+                  noteImageSeen[u] = true;
+                  noteImages.push(u);
+                }
+              }
+              function addNoteMotion(rawUrl) {
+                var u = normalize(rawUrl);
+                if (!/^https?:\/\//i.test(u) || isImage(u) || isAudioOnly(u)) return;
+                if (!noteMotionSeen[u]) {
+                  noteMotionSeen[u] = true;
+                  noteMotions.push(u);
+                }
+              }
+
               var candidates = [];
               var seen = {};
               function add(value, originScore) {
                 var url = normalize(value);
+                if (isAudioOnly(url)) {
+                  if (!foundMusicUrl && /^https?:\/\//i.test(url)) foundMusicUrl = url;
+                  return;
+                }
                 var score = scoreUrl(url, originScore);
                 if (!score || seen[url]) return;
                 seen[url] = true;
@@ -639,13 +733,23 @@ internal class DouyinResolverSession(
 
               try {
                 Array.prototype.slice.call(document.querySelectorAll('video')).forEach(function (node) {
-                  add(node.currentSrc, 1200);
-                  add(node.src, 1100);
-                  add(node.getAttribute('src'), 1050);
+                  var isBgmPlayer = node.getAttribute('data-index') === '-1';
+                  var srcs = [node.currentSrc, node.src, node.getAttribute('src')];
+                  Array.prototype.slice.call(node.querySelectorAll('source')).forEach(function (sNode) {
+                    srcs.push(sNode.src || sNode.getAttribute('src'));
+                  });
+                  srcs.forEach(function (rawSrc) {
+                    var u = normalize(rawSrc);
+                    if (!/^https?:\/\//i.test(u)) return;
+                    if (isBgmPlayer || isAudioOnly(u)) {
+                      if (!foundMusicUrl) foundMusicUrl = u;
+                    } else if (isNotePage) {
+                      addNoteMotion(u);
+                    } else {
+                      add(u, 1150);
+                    }
+                  });
                   if (!window.__adchatPoster && node.poster) window.__adchatPoster = node.poster;
-                });
-                Array.prototype.slice.call(document.querySelectorAll('video source')).forEach(function (node) {
-                  add(node.src || node.getAttribute('src'), 1000);
                 });
               } catch (error) {}
 
@@ -655,19 +759,6 @@ internal class DouyinResolverSession(
                 });
               } catch (error) {}
 
-              var foundTitle = '';
-              var foundAuthor = '';
-              var foundMusicUrl = '';
-              var noteImages = [];
-              var noteImageSeen = {};
-              function addNoteImage(rawUrl) {
-                var u = normalize(rawUrl);
-                if (!/^https?:\/\//i.test(u) || /avatar|user-avatar/i.test(u)) return;
-                if (!noteImageSeen[u]) {
-                  noteImageSeen[u] = true;
-                  noteImages.push(u);
-                }
-              }
               function pickBestImageUrl(item) {
                 if (!item || typeof item !== 'object') return '';
                 var lists = [item.url_list, item.urlList];
@@ -687,6 +778,28 @@ internal class DouyinResolverSession(
                 }
                 return '';
               }
+              function pickMotionVideoUrl(item) {
+                if (!item || typeof item !== 'object' || !item.video || typeof item.video !== 'object') return '';
+                var v = item.video;
+                var nodes = [v.play_addr_h264, v.play_addr, v.playAddr, v.download_addr, v.downloadAddr];
+                for (var ni = 0; ni < nodes.length; ni++) {
+                  var node = nodes[ni];
+                  if (!node) continue;
+                  if (Array.isArray(node) && node.length) {
+                    var first = node[0];
+                    var src = typeof first === 'string' ? normalize(first) : normalize((first && (first.src || first.url)) || '');
+                    if (/^https?:\/\//i.test(src) && !isAudioOnly(src)) return src;
+                  }
+                  var list = node.url_list || node.urlList;
+                  if (Array.isArray(list) && list.length) {
+                    var u0 = normalize(list[0]);
+                    if (/^https?:\/\//i.test(u0) && !isAudioOnly(u0)) return u0;
+                  }
+                }
+                var api = normalize(v.playApi || v.play_api || '');
+                if (/^https?:\/\//i.test(api)) return api;
+                return '';
+              }
               function pickMusicFromAddr(addr) {
                 if (!addr || typeof addr !== 'object') return '';
                 var list = addr.url_list || addr.urlList;
@@ -702,14 +815,6 @@ internal class DouyinResolverSession(
                 Array.prototype.slice.call(document.querySelectorAll('audio')).forEach(function (node) {
                   var au = normalize(node.currentSrc || node.src || node.getAttribute('src'));
                   if (!foundMusicUrl && /^https?:\/\//i.test(au)) foundMusicUrl = au;
-                });
-              } catch (error) {}
-              try {
-                performance.getEntriesByType('resource').forEach(function (entry) {
-                  var rn = normalize(entry.name);
-                  if (!foundMusicUrl && /^https?:\/\//i.test(rn) && /(?:\.mp3|\.m4a)(?:\?|$)|ies-music|obj\/tos-cn-ve-2774/i.test(rn)) {
-                    foundMusicUrl = rn;
-                  }
                 });
               } catch (error) {}
 
@@ -757,9 +862,12 @@ internal class DouyinResolverSession(
                     (value.image_post_info && Array.isArray(value.image_post_info.images) ? value.image_post_info.images : null);
                   var isImageNote = !!(rawImages && rawImages.length);
                   if (isImageNote) {
+                    isNotePage = true;
                     for (var ii = 0; ii < rawImages.length; ii++) {
                       var pickedImg = pickBestImageUrl(rawImages[ii]);
                       if (pickedImg) addNoteImage(pickedImg);
+                      var pickedMotion = pickMotionVideoUrl(rawImages[ii]);
+                      if (pickedMotion) addNoteMotion(pickedMotion);
                     }
                   }
                   if (value.music && typeof value.music === 'object' && !foundMusicUrl) {
@@ -813,6 +921,25 @@ internal class DouyinResolverSession(
               } catch (error) {}
 
               try {
+                var pace = window.__pace_f || self.__pace_f || [];
+                for (var pi = 0; pi < pace.length; pi++) {
+                  var pEntry = pace[pi];
+                  var chunk = Array.isArray(pEntry) ? pEntry[1] : '';
+                  if (typeof chunk !== 'string' || !chunk) continue;
+                  var lines = chunk.split('\n');
+                  for (var li = 0; li < lines.length; li++) {
+                    var line = lines[li].trim();
+                    if (!line || !(/aweme|images|videoDetail|music/.test(line))) continue;
+                    var colon = line.indexOf(':');
+                    var jsonPart = colon >= 0 ? line.slice(colon + 1).trim() : line;
+                    if (jsonPart.charAt(0) === '[' || jsonPart.charAt(0) === '{') {
+                      try { walk(JSON.parse(jsonPart), '', 0); } catch (e) {}
+                    }
+                  }
+                }
+              } catch (error) {}
+
+              try {
                 [window._SSR_DATA, window.SSR_RENDER_DATA, window._ROUTER_DATA, window.__INITIAL_STATE__, window.__NEXT_DATA__].forEach(function (state) {
                   if (state) walk(state, '', 0);
                 });
@@ -850,6 +977,8 @@ internal class DouyinResolverSession(
                 thumbnail: foundThumbnail || '',
                 thumbnailCandidates: thumbnailCandidates.slice(0, 4),
                 noteImages: noteImages.slice(0, 36),
+                noteMotions: noteMotions.slice(0, 36),
+                isNotePage: isNotePage,
                 musicUrl: foundMusicUrl || '',
                 pageUrl: pageUrl,
                 videoId: idMatch ? idMatch[1] : '',
@@ -894,16 +1023,39 @@ internal class DouyinResolverSession(
             }
             return '';
           }
+          function pickMotion(item) {
+            if (!item || !item.video) return '';
+            var v = item.video;
+            var nodes = [v.play_addr_h264, v.play_addr, v.playAddr, v.download_addr, v.downloadAddr];
+            for (var n = 0; n < nodes.length; n++) {
+              var node = nodes[n];
+              if (!node) continue;
+              if (Array.isArray(node) && node.length) {
+                var f = node[0];
+                var s = typeof f === 'string' ? f : ((f && (f.src || f.url)) || '');
+                if (/^https?:\/\//i.test(String(s || ''))) return String(s);
+              }
+              var list = node.url_list || node.urlList;
+              if (Array.isArray(list) && list.length && /^https?:\/\//i.test(String(list[0] || ''))) {
+                return String(list[0]);
+              }
+            }
+            if (typeof v.playApi === 'string' && /^https?:\/\//i.test(v.playApi)) return v.playApi;
+            return '';
+          }
           function pickMusic(detail) {
             var m = detail.music || {};
             var playUrl = m.play_url || m.playUrl || {};
             if (Array.isArray(playUrl.url_list) && playUrl.url_list.length && /^https?:\/\//i.test(playUrl.url_list[0])) {
               return String(playUrl.url_list[0]);
             }
+            if (Array.isArray(playUrl.urlList) && playUrl.urlList.length && /^https?:\/\//i.test(playUrl.urlList[0])) {
+              return String(playUrl.urlList[0]);
+            }
             if (typeof playUrl.uri === 'string' && /^https?:\/\//i.test(playUrl.uri)) {
               return playUrl.uri;
             }
-            var vAddr = (detail.video || {}).play_addr || {};
+            var vAddr = (detail.video || {}).play_addr || (detail.video || {}).playAddr || {};
             if (Array.isArray(vAddr.url_list) && vAddr.url_list.length && /^https?:\/\//i.test(vAddr.url_list[0])) {
               return String(vAddr.url_list[0]);
             }
@@ -917,12 +1069,15 @@ internal class DouyinResolverSession(
             var rawImages = Array.isArray(detail.images) && detail.images.length ? detail.images :
               (detail.image_post_info && Array.isArray(detail.image_post_info.images) ? detail.image_post_info.images : []);
             var images = [];
+            var motions = [];
             for (var i = 0; i < rawImages.length; i++) {
               var imgUrl = pickImage(rawImages[i]);
               if (imgUrl && images.indexOf(imgUrl) < 0) images.push(imgUrl);
+              var motionUrl = pickMotion(rawImages[i]);
+              if (motionUrl && motions.indexOf(motionUrl) < 0) motions.push(motionUrl);
             }
             var gears = [];
-            if (!images.length) {
+            if (!images.length && !motions.length) {
               (video.bit_rate || []).forEach(function (entry) {
                 var addr = slimAddr(entry.play_addr);
                 var gear = entry.gear_name || '';
@@ -933,12 +1088,13 @@ internal class DouyinResolverSession(
             var originCover = (video.origin_cover && video.origin_cover.url_list && video.origin_cover.url_list[0]) || video.origin_cover || '';
             var cover = (video.cover && video.cover.url_list && video.cover.url_list[0]) || video.cover || '';
             return {
-              aweme_id: detail.aweme_id || '',
+              aweme_id: detail.aweme_id || detail.awemeId || '',
               desc: detail.desc || '',
-              nickname: (detail.author || {}).nickname || '',
+              nickname: (detail.author || detail.authorInfo || {}).nickname || '',
               images: images.slice(0, 36),
-              musicUrl: images.length ? pickMusic(detail) : '',
-              play: images.length ? null : slimAddr(video.play_addr),
+              motions: motions.slice(0, 36),
+              musicUrl: (images.length || motions.length) ? pickMusic(detail) : '',
+              play: (images.length || motions.length) ? null : slimAddr(video.play_addr),
               gears: gears.slice(0, 5),
               originCover: typeof originCover === 'string' ? originCover : '',
               cover: typeof cover === 'string' ? cover : ''
