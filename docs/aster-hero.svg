@@ -58,7 +58,7 @@
     </g>
     <text x="92" y="53" class="serif-hero ink" font-size="58" font-weight="600" letter-spacing="-1.2">Aster</text>
     <rect x="252" y="22" width="76" height="26" rx="13" class="well"/>
-    <text x="290" y="39" text-anchor="middle" class="mono-ui clay-fill" font-size="12" font-weight="600">v4.2.0</text>
+    <text x="290" y="39" text-anchor="middle" class="mono-ui clay-fill" font-size="12" font-weight="600">v4.3.0</text>
   </g>
 
   <!-- Editorial Subtitle -->
