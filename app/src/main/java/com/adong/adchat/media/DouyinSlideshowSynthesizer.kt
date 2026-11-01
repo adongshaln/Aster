@@ -159,17 +159,16 @@ internal object DouyinSlideshowSynthesizer {
                         }
                     }
 
-                    var firstClipSamplePtsUs = -1L
+                    var firstClipSamplePtsUs = Long.MIN_VALUE
                     var lastClipSamplePtsUs = 0L
                     while (true) {
-                        val rawPts = extractor.sampleTime
-                        if (rawPts < 0L) break
-                        if (firstClipSamplePtsUs < 0L) firstClipSamplePtsUs = rawPts
-                        val normalizedPts = (rawPts - firstClipSamplePtsUs).coerceAtLeast(0L)
-                        val effectivePts = (globalPtsOffsetUs + normalizedPts).coerceAtLeast(lastWrittenPtsUs + 1_000L)
                         buffer.clear()
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
+                        val rawPts = extractor.sampleTime
+                        if (firstClipSamplePtsUs == Long.MIN_VALUE) firstClipSamplePtsUs = rawPts
+                        val normalizedPts = (rawPts - firstClipSamplePtsUs).coerceAtLeast(0L)
+                        val effectivePts = (globalPtsOffsetUs + normalizedPts).coerceAtLeast(lastWrittenPtsUs + 1_000L)
                         info.offset = 0
                         info.size = sampleSize
                         info.presentationTimeUs = effectivePts
@@ -556,21 +555,26 @@ internal object DouyinSlideshowSynthesizer {
                     val buf = ByteBuffer.allocate(256 * 1024)
                     val info = MediaCodec.BufferInfo()
                     var timeOffsetUs = 0L
+                    var passBasePtsUs = Long.MIN_VALUE
                     var lastSampleUs = -1L
                     var samplesWritten = 0
                     while (timeOffsetUs < targetDurationUs) {
-                        val pts = extractor.sampleTime
-                        if (pts < 0L) {
+                        buf.clear()
+                        val sz = extractor.readSampleData(buf, 0)
+                        if (sz < 0) {
                             if (lastSampleUs <= 0L) break
                             timeOffsetUs = lastSampleUs + 23_219L
+                            passBasePtsUs = Long.MIN_VALUE
                             extractor.seekTo(0L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                             continue
                         }
-                        val effectivePts = (timeOffsetUs + pts).coerceAtLeast(lastSampleUs + 1L)
+                        val rawPts = extractor.sampleTime
+                        if (passBasePtsUs == Long.MIN_VALUE) {
+                            passBasePtsUs = rawPts.coerceAtMost(0L)
+                        }
+                        val normalizedPts = (rawPts - passBasePtsUs).coerceAtLeast(0L)
+                        val effectivePts = (timeOffsetUs + normalizedPts).coerceAtLeast(lastSampleUs + 1L)
                         if (effectivePts > targetDurationUs) break
-                        buf.clear()
-                        val sz = extractor.readSampleData(buf, 0)
-                        if (sz < 0) break
                         info.offset = 0
                         info.size = sz
                         info.presentationTimeUs = effectivePts

@@ -104,22 +104,31 @@ internal object BilibiliDashMuxer {
         }.getOrDefault(DEFAULT_BUFFER_SIZE)
         var buffer = ByteBuffer.allocate(capacity)
 
+        var basePtsUs = Long.MIN_VALUE
+        var lastPtsUs = -1L
         while (true) {
-            val sampleTimeUs = extractor.sampleTime
-            if (sampleTimeUs < 0L) break
             buffer.clear()
             val sampleSize = try {
                 extractor.readSampleData(buffer, 0)
             } catch (_: IllegalArgumentException) {
+                val retryPts = extractor.sampleTime.coerceAtLeast(0L)
                 capacity *= 2
                 buffer = ByteBuffer.allocate(capacity)
-                extractor.seekTo(sampleTimeUs, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                extractor.seekTo(retryPts, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
                 continue
             }
             if (sampleSize < 0) break
+            val rawPts = extractor.sampleTime
+            if (basePtsUs == Long.MIN_VALUE) {
+                // M4A files with an `elst` edit list (e.g. 2048 priming samples) report negative
+                // sampleTime (-46439 us) on the first 2 samples; shift them to start at 0 us.
+                basePtsUs = rawPts.coerceAtMost(0L)
+            }
+            val effectivePts = (rawPts - basePtsUs).coerceAtLeast(lastPtsUs + 1L)
+            lastPtsUs = effectivePts
             info.offset = 0
             info.size = sampleSize
-            info.presentationTimeUs = sampleTimeUs
+            info.presentationTimeUs = effectivePts
             val rawFlags = extractor.sampleFlags
             var codecFlags = 0
             if ((rawFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
