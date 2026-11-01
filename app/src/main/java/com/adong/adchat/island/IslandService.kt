@@ -27,6 +27,20 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.adong.adchat.MainActivity
 import com.adong.adchat.data.ChatMessage
+import com.adong.adchat.media.BilibiliTvAuthStore
+import com.adong.adchat.media.DouyinResolveRequest
+import com.adong.adchat.media.DouyinUrlParser
+import com.adong.adchat.media.MediaDownloadRecord
+import com.adong.adchat.media.MediaDownloadStore
+import com.adong.adchat.media.MediaFileDownloader
+import com.adong.adchat.media.MediaGallerySaveResult
+import com.adong.adchat.media.MediaGallerySaver
+import com.adong.adchat.media.MediaPlatform
+import com.adong.adchat.media.RemoteMediaResolver
+import com.adong.adchat.media.ResolvedMedia
+import com.adong.adchat.ui.media.DouyinResolverSession
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +48,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.collectLatest
@@ -81,6 +96,12 @@ class IslandService : Service(), IslandView.Callbacks {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val runner by lazy { StarIslandTaskRunner(applicationContext) }
+    private val mediaResolver by lazy {
+        RemoteMediaResolver(biliAuthProvider = { BilibiliTvAuthStore.currentSession(applicationContext) })
+    }
+    private val mediaDownloader by lazy { MediaFileDownloader(applicationContext) }
+    private val mediaGallerySaver by lazy { MediaGallerySaver(applicationContext) }
+    private val mediaDownloadStore by lazy { MediaDownloadStore(applicationContext) }
     private var islandView: IslandView? = null
     private var resolveJob: Job? = null
     private var linkGeneration = 0L
@@ -281,6 +302,7 @@ class IslandService : Service(), IslandView.Callbacks {
     private fun invalidateTask() {
         taskGeneration++
         stopRequestedGeneration = null
+        mediaDownloader.cancel()
         taskJob?.cancel()
         taskJob = null
         currentTask = null
@@ -301,7 +323,7 @@ class IslandService : Service(), IslandView.Callbacks {
     override fun onActionRequested(content: StarIslandContent, action: StarIslandAction) {
         if (islandView?.displayedContent?.key != content.key) return
         when (action) {
-            StarIslandAction.Download -> content.mediaLink?.let(::onParseRequested)
+            StarIslandAction.Download -> content.mediaLink?.let { startMediaDownloadTask(content, it) }
             StarIslandAction.OpenLink -> (content.mediaLink?.let { it.cleanedUrl.ifBlank { it.originalUrl } }
                 ?: content.url)?.let { url ->
                 val uri = Uri.parse(url)
@@ -358,11 +380,190 @@ class IslandService : Service(), IslandView.Callbacks {
         }
     }
 
+    private fun startMediaDownloadTask(content: StarIslandContent, link: IslandLink) {
+        if (currentTask?.phase == StarIslandPhase.Working) return
+        invalidateTask()
+        invalidateLinkResolution()
+        val generation = taskGeneration
+        publishTask(
+            StarIslandTaskState(
+                action = StarIslandAction.Download,
+                phase = StarIslandPhase.Working,
+                detail = "正在解析 ${link.displayName} 无水印资源…"
+            )
+        )
+        taskJob = scope.launch {
+            try {
+                val resolved = if (link.platform == MediaPlatform.Douyin) {
+                    resolveDouyinInBackground(link, generation)
+                } else {
+                    mediaResolver.resolve(link.input) { progressText ->
+                        if (generation == taskGeneration && stopRequestedGeneration != generation) {
+                            scope.launch {
+                                publishTask(
+                                    StarIslandTaskState(
+                                        action = StarIslandAction.Download,
+                                        phase = StarIslandPhase.Working,
+                                        detail = progressText
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                if (generation != taskGeneration || stopRequestedGeneration == generation) return@launch
+
+                val badge = buildString {
+                    append(resolved.qualityLabel.ifBlank { "高清" })
+                    if (resolved.prefersWatermarkFree && "无水印" !in resolved.qualityLabel) append(" · 无水印")
+                }
+                val titleMarkdown = "**${resolved.title}**\n$badge"
+                publishTask(
+                    StarIslandTaskState(
+                        action = StarIslandAction.Download,
+                        phase = StarIslandPhase.Working,
+                        output = titleMarkdown,
+                        detail = if (resolved.imageUrls.isNotEmpty()) "正在拉取图文并合成配乐视频…" else "正在连接高速下载源…"
+                    )
+                )
+
+                var lastUpdateMs = 0L
+                val downloadedRecord = mediaDownloader.download(resolved) { progress ->
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (generation == taskGeneration && stopRequestedGeneration != generation && now - lastUpdateMs >= 200L) {
+                        lastUpdateMs = now
+                        val pct = (progress.fraction.coerceIn(0f, 1f) * 100f).toInt()
+                        val detailText = when {
+                            resolved.imageUrls.isNotEmpty() && pct >= 58 -> "正在合成 1080P 配乐视频 $pct%"
+                            progress.totalBytes > 0L -> "正在下载 $pct%"
+                            else -> "正在下载…"
+                        }
+                        withContext(Dispatchers.Main.immediate) {
+                            if (generation == taskGeneration && stopRequestedGeneration != generation) {
+                                publishTask(
+                                    StarIslandTaskState(
+                                        action = StarIslandAction.Download,
+                                        phase = StarIslandPhase.Working,
+                                        output = titleMarkdown,
+                                        detail = detailText
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+
+                val savedRecord = withContext(Dispatchers.IO) {
+                    val galleryResult = mediaGallerySaver.save(downloadedRecord)
+                    val finalRec = if (galleryResult is MediaGallerySaveResult.Saved) {
+                        downloadedRecord.copy(galleryUri = galleryResult.uri)
+                    } else {
+                        downloadedRecord
+                    }
+                    mediaDownloadStore.add(finalRec)
+                    finalRec
+                }
+
+                if (generation == taskGeneration) {
+                    val savedToGallery = savedRecord.galleryUri.isNotBlank()
+                    publishTask(
+                        StarIslandTaskState(
+                            action = StarIslandAction.Download,
+                            phase = StarIslandPhase.Complete,
+                            output = titleMarkdown,
+                            detail = if (savedToGallery) "已存入系统相册" else "已保存在 Aster 下载页"
+                        )
+                    )
+                    Toast.makeText(
+                        this@IslandService,
+                        if (savedToGallery) "已无水印存入系统相册" else "下载完成",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } catch (cancelled: CancellationException) {
+                if (generation == taskGeneration && stopRequestedGeneration == generation) {
+                    currentTask?.let { publishTask(it.stopped()) }
+                }
+                throw cancelled
+            } catch (verification: DouyinVerificationNeededException) {
+                if (generation == taskGeneration) {
+                    onParseRequested(link)
+                }
+            } catch (error: Exception) {
+                if (generation == taskGeneration) {
+                    publishTask(
+                        StarIslandTaskState(
+                            action = StarIslandAction.Download,
+                            phase = StarIslandPhase.Error,
+                            detail = error.message ?: "下载失败，可点按打开 Aster 重试",
+                            needsConfiguration = link.platform == MediaPlatform.Douyin
+                        )
+                    )
+                }
+            } finally {
+                if (generation == taskGeneration) taskJob = null
+            }
+        }
+    }
+
+    private suspend fun resolveDouyinInBackground(link: IslandLink, generation: Long): ResolvedMedia =
+        withContext(Dispatchers.Main.immediate) {
+            val douyinLink = DouyinUrlParser.parse(link.originalUrl.ifBlank { link.cleanedUrl })
+                ?: throw IllegalStateException("抖音链接格式不正确")
+            suspendCancellableCoroutine { cont ->
+                var sessionRef: DouyinResolverSession? = null
+                val session = DouyinResolverSession(
+                    request = DouyinResolveRequest(
+                        token = System.nanoTime(),
+                        link = douyinLink,
+                        message = "正在安全解析抖音作品…"
+                    ),
+                    onProgress = { msg ->
+                        if (generation == taskGeneration && stopRequestedGeneration != generation && cont.isActive) {
+                            publishTask(
+                                StarIslandTaskState(
+                                    action = StarIslandAction.Download,
+                                    phase = StarIslandPhase.Working,
+                                    detail = msg
+                                )
+                            )
+                        }
+                    },
+                    onVerificationRequired = {
+                        sessionRef?.destroy()
+                        if (cont.isActive) {
+                            cont.resumeWithException(DouyinVerificationNeededException())
+                        }
+                    },
+                    onResolved = { media ->
+                        sessionRef?.destroy()
+                        if (cont.isActive) {
+                            cont.resume(media)
+                        }
+                    },
+                    onFailure = { reason ->
+                        sessionRef?.destroy()
+                        if (cont.isActive) {
+                            cont.resumeWithException(IllegalStateException(reason))
+                        }
+                    }
+                )
+                sessionRef = session
+                session.createWebView(applicationContext)
+                cont.invokeOnCancellation {
+                    session.destroy()
+                }
+            }
+        }
+
+    private class DouyinVerificationNeededException : Exception()
+
     override fun onStopRequested() {
         val task = currentTask ?: return
         if (task.phase != StarIslandPhase.Working) return
         // Keep this generation alive until the runner flushes its final throttled fragment.
         stopRequestedGeneration = taskGeneration
+        mediaDownloader.cancel()
         taskJob?.cancel()
         publishTask(task.stopped())
     }

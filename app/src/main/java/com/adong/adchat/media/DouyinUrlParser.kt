@@ -4,21 +4,25 @@ import java.net.URI
 
 data class DouyinLink(
     val sourceUrl: String,
-    val videoId: String? = null
+    val videoId: String? = null,
+    val isNote: Boolean = false
 ) {
     /**
-     * 移动端分享页（iesdouyin.com / m.douyin.com / /share/video/）内嵌 _ROUTER_DATA，
-     * 含 video_id 及 /aweme/v1/playwm/ 地址，经 DouyinMediaSourceSelector 改写为
-     * /aweme/v1/play/ 即可拿到真无水印源。若强行改写为 PC 端 www.douyin.com/jingxuan，
-     * 在 Android WebView 的移动端 UA 下 detail API 会失败且页面播放器只会吐出带水印 CDN 直链。
+     * 移动端分享页（iesdouyin.com / m.douyin.com / /share/video/ 或 /share/note/）内嵌 _ROUTER_DATA，
+     * 含 video_id 及 /aweme/v1/playwm/ 地址或图文 images[] + music，经 DouyinMediaSourceSelector 改写为
+     * /aweme/v1/play/ 即可拿到真无水印源。
      */
     val resolverUrl: String
-        get() = videoId?.let { "https://www.iesdouyin.com/share/video/$it/" } ?: sourceUrl
+        get() = videoId?.let { id ->
+            val kind = if (isNote) "note" else "video"
+            "https://www.iesdouyin.com/share/$kind/$id/"
+        } ?: sourceUrl
 }
 
 object DouyinUrlParser {
     private val urlPattern = Regex("https?://[^\\s<>\\\"']+", RegexOption.IGNORE_CASE)
-    private val idPattern = Regex("(?:/video/|[?&](?:modal_id|aweme_id)=)(\\d{8,})", RegexOption.IGNORE_CASE)
+    private val idPattern = Regex("(?:/(?:video|note|slides)/|[?&](?:modal_id|aweme_id)=)(\\d{8,})", RegexOption.IGNORE_CASE)
+    private val notePathPattern = Regex("/(?:share/)?(?:note|slides)/", RegexOption.IGNORE_CASE)
     private val trailingPunctuation = Regex("[)\\]}>，。！？；、,.!?;:]+$")
 
     fun parse(input: String): DouyinLink? {
@@ -30,7 +34,8 @@ object DouyinUrlParser {
         if (!isDouyinHost(host)) return null
         return DouyinLink(
             sourceUrl = candidate,
-            videoId = extractVideoId(candidate)
+            videoId = extractVideoId(candidate),
+            isNote = notePathPattern.containsMatchIn(candidate)
         )
     }
 
@@ -40,7 +45,9 @@ object DouyinUrlParser {
     }
 
     fun canonicalResolverUrl(url: String): String {
-        return extractVideoId(url)?.let { "https://www.iesdouyin.com/share/video/$it/" } ?: url
+        val isNote = notePathPattern.containsMatchIn(url)
+        val kind = if (isNote) "note" else "video"
+        return extractVideoId(url)?.let { "https://www.iesdouyin.com/share/$kind/$it/" } ?: url
     }
 
     private fun isDouyinHost(host: String): Boolean {

@@ -30,6 +30,7 @@ data class MediaVariant(
     val fallbackMediaUrl: String = "",
     val audioUrl: String = "",
     val fallbackAudioUrl: String = "",
+    val imageUrls: List<String> = emptyList(),
     val prefersWatermarkFree: Boolean = false,
     val variantReferer: String? = null,
     val variantUserAgent: String? = null
@@ -49,6 +50,7 @@ data class ResolvedMedia(
     val compatibilityMediaUrl: String = "",
     val audioUrl: String = "",
     val compatibilityAudioUrl: String = "",
+    val imageUrls: List<String> = emptyList(),
     val prefersWatermarkFree: Boolean = false,
     val platform: MediaPlatform = MediaPlatform.Douyin,
     val qualityLabel: String = "",
@@ -64,6 +66,7 @@ data class ResolvedMedia(
             compatibilityMediaUrl = variant.fallbackMediaUrl,
             audioUrl = variant.audioUrl,
             compatibilityAudioUrl = variant.fallbackAudioUrl,
+            imageUrls = variant.imageUrls,
             prefersWatermarkFree = variant.prefersWatermarkFree,
             referer = variant.variantReferer ?: referer,
             userAgent = variant.variantUserAgent ?: userAgent,

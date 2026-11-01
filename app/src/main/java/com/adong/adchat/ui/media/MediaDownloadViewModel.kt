@@ -78,7 +78,11 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
         private set
 
     init {
-        val initialHistoryVersion = historyMutationSequence
+        refreshHistory()
+    }
+
+    fun refreshHistory() {
+        val snapshotVersion = historyMutationSequence
         viewModelScope.launch {
             val (records, biliSession) = withContext(Dispatchers.IO) {
                 val loadedRecords = store.load().filter { File(it.filePath).exists() }
@@ -88,7 +92,7 @@ class MediaDownloadViewModel(application: Application) : AndroidViewModel(applic
             }
             update {
                 copy(
-                    downloads = if (historyMutationSequence == initialHistoryVersion) records else downloads,
+                    downloads = if (historyMutationSequence == snapshotVersion) records else downloads,
                     biliSession = biliSession
                 )
             }

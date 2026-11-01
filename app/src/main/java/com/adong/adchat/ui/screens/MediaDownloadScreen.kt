@@ -105,6 +105,9 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
         }
     }
 
+    LaunchedEffect(Unit) {
+        vm.refreshHistory()
+    }
     LaunchedEffect(state.notice) {
         state.notice?.let { snackbarHostState.showSnackbar(it); vm.consumeNotice() }
     }

@@ -83,6 +83,16 @@ class MediaFileDownloader(context: Context) {
             finalFile.delete()
         }
 
+        if (media.imageUrls.isNotEmpty()) {
+            return@withContext downloadAndSynthesizeSlideshow(
+                media = media,
+                safeId = safeId,
+                extension = extension,
+                finalFile = finalFile,
+                onProgress = onProgress
+            )
+        }
+
         if (media.audioUrl.isNotBlank()) {
             return@withContext downloadAndMuxDash(
                 media = media,
@@ -176,6 +186,139 @@ class MediaFileDownloader(context: Context) {
             runCatching { muxTemp.delete() }
             cleanupSegments(videoTemp)
             cleanupSegments(audioTemp)
+        }
+    }
+
+    private suspend fun downloadAndSynthesizeSlideshow(
+        media: ResolvedMedia,
+        safeId: String,
+        extension: String,
+        finalFile: File,
+        onProgress: suspend (MediaDownloadProgress) -> Unit
+    ): MediaDownloadRecord {
+        val slideFiles = mutableListOf<File>()
+        val audioTemp = File(outputDirectory, "$safeId.slideshow.audio.part")
+        val synthTemp = File(outputDirectory, "$safeId.slideshow.$extension.part")
+        val virtualTotal = 10_000_000L
+        try {
+            val totalAssets = media.imageUrls.size + (if (media.audioUrl.isNotBlank()) 1 else 0)
+            var downloadedBytes = 0L
+
+            media.imageUrls.forEachIndexed { index, imgUrl ->
+                coroutineContext.ensureActive()
+                val imgFile = File(outputDirectory, "$safeId.slide_$index.img.part")
+                slideFiles += imgFile
+                val bytes = downloadRawResourceToFile(media.copy(mediaUrl = imgUrl), imgFile)
+                if (bytes > 0L) downloadedBytes += bytes
+                val fetchFraction = ((index + 1).toFloat() / totalAssets.coerceAtLeast(1).toFloat()) * 0.55f
+                onProgress(
+                    MediaDownloadProgress(
+                        downloadedBytes = (virtualTotal * fetchFraction).toLong(),
+                        totalBytes = virtualTotal,
+                        bytesPerSecond = 0L,
+                        connectionCount = 1
+                    )
+                )
+            }
+
+            val validSlides = slideFiles.filter { it.exists() && it.length() > 256L }
+            if (validSlides.isEmpty()) {
+                throw ExpiredMediaUrlException("图文资源已失效，正在重新获取")
+            }
+
+            var activeAudioFile: File? = null
+            if (media.audioUrl.isNotBlank()) {
+                coroutineContext.ensureActive()
+                val audioBytes = runCatching {
+                    downloadRawResourceToFile(media.copy(mediaUrl = media.audioUrl), audioTemp)
+                }.getOrDefault(0L)
+                if (audioBytes > 256L && audioTemp.exists()) {
+                    activeAudioFile = audioTemp
+                    downloadedBytes += audioBytes
+                }
+                onProgress(
+                    MediaDownloadProgress(
+                        downloadedBytes = (virtualTotal * 0.58f).toLong(),
+                        totalBytes = virtualTotal,
+                        bytesPerSecond = 0L,
+                        connectionCount = 1
+                    )
+                )
+            }
+
+            coroutineContext.ensureActive()
+            val synthesized = DouyinSlideshowSynthesizer.synthesize(
+                imageFiles = validSlides,
+                audioFile = activeAudioFile,
+                outputFile = synthTemp,
+                onProgress = { synthFraction ->
+                    val overall = 0.58f + synthFraction.coerceIn(0f, 1f) * 0.42f
+                    runCatching {
+                         kotlinx.coroutines.runBlocking {
+                            onProgress(
+                                MediaDownloadProgress(
+                                    downloadedBytes = (virtualTotal * overall).toLong(),
+                                    totalBytes = virtualTotal,
+                                    bytesPerSecond = 0L,
+                                    connectionCount = 1
+                                )
+                            )
+                        }
+                    }
+                }
+            )
+            if (!synthesized || !isLikelyMedia(synthTemp, media.mimeType, extension)) {
+                throw ExpiredMediaUrlException("图文配乐合成视频失败，请重试")
+            }
+            moveIntoPlace(synthTemp, finalFile)
+            return media.copy(prefersWatermarkFree = true).toRecord(finalFile)
+        } finally {
+            slideFiles.forEach { runCatching { it.delete() } }
+            runCatching { audioTemp.delete() }
+            runCatching { synthTemp.delete() }
+        }
+    }
+
+    private suspend fun downloadRawResourceToFile(media: ResolvedMedia, targetFile: File): Long {
+        if (targetFile.exists()) targetFile.delete()
+        val request = Request.Builder()
+            .url(media.mediaUrl)
+            .header("User-Agent", media.userAgent.ifBlank { DEFAULT_VIDEO_USER_AGENT })
+            .header("Accept", "*/*")
+            .apply {
+                if (media.referer.isNotBlank()) header("Referer", media.referer)
+                if (media.cookieHeader.isNotBlank() && media.referer.isNotBlank()) {
+                    header("Cookie", media.cookieHeader)
+                }
+            }
+            .build()
+        val call = client.newCall(request)
+        activeCalls += call
+        try {
+            call.execute().use { response ->
+                throwForStatus(response)
+                if (!response.isSuccessful) throw MediaSourceUnavailableException(response.code)
+                val body = response.body ?: throw IOException("资源为空")
+                var total = 0L
+                body.byteStream().use { input ->
+                    FileOutputStream(targetFile).use { output ->
+                        val buffer = ByteArray(SINGLE_BUFFER_SIZE)
+                        while (true) {
+                            coroutineContext.ensureActive()
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            output.write(buffer, 0, read)
+                            total += read
+                        }
+                        output.fd.sync()
+                    }
+                }
+                return total
+            }
+        } catch (error: IOException) {
+            translateCancellation(call, error)
+        } finally {
+            activeCalls -= call
         }
     }
 

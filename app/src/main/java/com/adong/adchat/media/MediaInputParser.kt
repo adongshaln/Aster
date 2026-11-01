@@ -22,7 +22,8 @@ object MediaInputParser {
         }
 
         val id = when (platform) {
-            MediaPlatform.Douyin -> Regex("(?:video|note)/(\\d+)").find(url)?.groupValues?.getOrNull(1)
+            MediaPlatform.Douyin -> Regex("(?:video|note|slides)/(\\d+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.getOrNull(1)
+                ?: Regex("[?&](?:modal_id|aweme_id)=(\\d+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.getOrNull(1)
                 ?: Regex("/(\\d{10,})").find(url)?.groupValues?.getOrNull(1)
             MediaPlatform.Twitter -> Regex("(?:status|statuses)/(\\d+)").find(url)?.groupValues?.getOrNull(1)
             MediaPlatform.Bilibili -> Regex("BV[0-9A-Za-z]{10}").find(url)?.value

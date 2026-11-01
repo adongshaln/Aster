@@ -1067,7 +1067,7 @@ class IslandView(
                 if (nearEnd && task.phase == StarIslandPhase.Working) outputScroll.post { outputScroll.fullScroll(FOCUS_DOWN) }
             }
         }
-        val actionKey = "${content.kind}:${task?.phase}:${task?.needsConfiguration}:${task?.output?.isBlank()}"
+        val actionKey = "${content.kind}:${task?.action}:${task?.phase}:${task?.needsConfiguration}:${task?.output?.isBlank()}"
         val dismiss = CardAction("收起") { collapse() }
         fun request(action: StarIslandAction, primary: Boolean = false) = CardAction(action.label, primary) {
             displayedContent?.let { callbacks.onActionRequested(it, action) }
@@ -1079,6 +1079,26 @@ class IslandView(
                 request(StarIslandAction.CopyLink), dismiss)
             StarIslandKind.Media -> listOf(request(StarIslandAction.Download, true), request(StarIslandAction.OpenLink),
                 request(StarIslandAction.CopyLink), dismiss)
+        } else if (task.action == StarIslandAction.Download) when (task.phase) {
+            StarIslandPhase.Working -> listOf(CardAction("停止", true) { callbacks.onStopRequested() }, dismiss)
+            StarIslandPhase.Complete -> listOf(
+                CardAction("查看下载", true) { content.mediaLink?.let(callbacks::onParseRequested) },
+                dismiss
+            )
+            StarIslandPhase.Stopped -> listOf(
+                CardAction("重新下载", true) { callbacks.onActionRequested(content, StarIslandAction.Download) },
+                CardAction("返回") { callbacks.onBackRequested() },
+                dismiss
+            )
+            StarIslandPhase.Error -> listOf(
+                if (task.needsConfiguration) {
+                    CardAction("打开 Aster 解析", true) { content.mediaLink?.let(callbacks::onParseRequested) }
+                } else {
+                    CardAction("重试", true) { callbacks.onActionRequested(content, StarIslandAction.Download) }
+                },
+                CardAction("打开 Aster") { content.mediaLink?.let(callbacks::onParseRequested) },
+                dismiss
+            )
         } else when (task.phase) {
             StarIslandPhase.Working -> listOf(CardAction("停止", true) { callbacks.onStopRequested() }, dismiss)
             StarIslandPhase.Complete, StarIslandPhase.Stopped -> listOf(

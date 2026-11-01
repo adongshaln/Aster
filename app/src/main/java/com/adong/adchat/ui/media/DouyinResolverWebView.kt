@@ -67,7 +67,7 @@ fun DouyinResolverWebView(
     }
 }
 
-private class DouyinResolverSession(
+internal class DouyinResolverSession(
     private val request: DouyinResolveRequest,
     private val onProgress: (String) -> Unit,
     private val onVerificationRequired: (String) -> Unit,
@@ -191,7 +191,9 @@ private class DouyinResolverSession(
             ?: request.link.videoId
             ?: return
         val currentHost = runCatching { Uri.parse(view.url.orEmpty()).host?.lowercase().orEmpty() }.getOrDefault("")
-        if (currentHost != "douyin.com" && !currentHost.endsWith(".douyin.com")) return
+        val supportedHost = currentHost == "douyin.com" || currentHost.endsWith(".douyin.com") ||
+            currentHost == "iesdouyin.com" || currentHost.endsWith(".iesdouyin.com")
+        if (!supportedHost) return
         detailFetchInjected = true
         Log.d("AsterMedia", "inject detail fetch: videoId=$videoId page=${view.url.orEmpty().take(100)}")
         view.evaluateJavascript(DOUYIN_DETAIL_FETCH.replace("__VIDEO_ID__", videoId), null)
@@ -231,6 +233,22 @@ private class DouyinResolverSession(
             }
             if (apiDetail == null && detailState == "failed") {
                 Log.d("AsterMedia", "detail api failed (status/perm), relying on sniff fallback")
+            }
+            val noteImages = payload?.optJSONArray("noteImages")?.let(::extractHttpUrlList).orEmpty()
+            if (noteImages.isNotEmpty()) {
+                val musicUrl = normalizeCandidateUrl(payload?.optString("musicUrl").orEmpty())
+                    .takeIf { it.startsWith("http") }
+                    .orEmpty()
+                finishWithImageNote(
+                    images = noteImages,
+                    musicUrl = musicUrl,
+                    rawId = payload?.optString("videoId").orEmpty(),
+                    rawTitle = payload?.optString("title").orEmpty(),
+                    rawAuthor = payload?.optString("author").orEmpty(),
+                    pageUrl = payload?.optString("pageUrl").orEmpty(),
+                    view = view
+                )
+                return@evaluateJavascript
             }
             if (candidateLikely) {
                 finishWithPayload(candidate, payload ?: JSONObject(), view)
@@ -276,6 +294,23 @@ private class DouyinResolverSession(
      * 返回 true 表示已完成解析；false = detail 无可用直链，继续嗅探轮询。
      */
     private fun finishWithApiDetail(detail: JSONObject, view: WebView): Boolean {
+        val detailImages = detail.optJSONArray("images")?.let(::extractHttpUrlList).orEmpty()
+        if (detailImages.isNotEmpty()) {
+            val musicUrl = normalizeCandidateUrl(detail.optString("musicUrl"))
+                .takeIf { it.startsWith("http") }
+                .orEmpty()
+            finishWithImageNote(
+                images = detailImages,
+                musicUrl = musicUrl,
+                rawId = detail.optString("aweme_id"),
+                rawTitle = detail.optString("desc"),
+                rawAuthor = detail.optString("nickname"),
+                pageUrl = view.url.orEmpty().ifBlank { lastPageUrl },
+                view = view
+            )
+            return true
+        }
+
         val play = detail.optJSONObject("play")
         val urls = play?.optJSONArray("urls")
         var primary = ""
@@ -343,6 +378,72 @@ private class DouyinResolverSession(
         )
         return true
     }
+
+    private fun finishWithImageNote(
+        images: List<String>,
+        musicUrl: String,
+        rawId: String,
+        rawTitle: String,
+        rawAuthor: String,
+        pageUrl: String,
+        view: WebView
+    ) {
+        if (finished) return
+        finished = true
+        handler.removeCallbacksAndMessages(null)
+        val currentUrl = pageUrl.ifBlank { view.url.orEmpty() }.ifBlank { lastPageUrl }
+        val resolvedId = rawId
+            .ifBlank { request.link.videoId.orEmpty() }
+            .ifBlank { DouyinUrlParser.extractVideoId(currentUrl).orEmpty() }
+            .ifBlank { System.currentTimeMillis().toString() }
+        val title = rawTitle
+            .substringBefore(" - 抖音")
+            .substringBefore("_抖音")
+            .trim()
+            .ifBlank { "抖音图文 $resolvedId" }
+        val cookieHeader = CookieManager.getInstance().getCookie("https://www.douyin.com/").orEmpty()
+        val label = if (musicUrl.isNotBlank()) "图文配乐合成 (${images.size}张) · 无水印" else "图文合成视频 (${images.size}张) · 无水印"
+        val variant = MediaVariant(
+            id = "douyin-slideshow-${images.size}",
+            label = label,
+            mediaUrl = images.first(),
+            audioUrl = musicUrl,
+            imageUrls = images,
+            prefersWatermarkFree = true,
+            mimeType = "video/mp4",
+            fileExtension = "mp4"
+        )
+        Log.d("AsterMedia", "douyin image-note resolved: id=$resolvedId images=${images.size} hasMusic=${musicUrl.isNotBlank()}")
+        onProgress("已识别图文配乐（${images.size} 张无水印原图）")
+        onResolved(
+            ResolvedMedia(
+                videoId = resolvedId,
+                title = title,
+                author = rawAuthor.trim(),
+                thumbnailUrl = images.first(),
+                thumbnailFallbackUrl = images.getOrNull(1).orEmpty(),
+                mediaUrl = images.first(),
+                audioUrl = musicUrl,
+                imageUrls = images,
+                sourceUrl = request.link.sourceUrl,
+                referer = currentUrl.ifBlank { "https://www.douyin.com/" },
+                userAgent = view.settings.userAgentString.orEmpty(),
+                cookieHeader = cookieHeader,
+                prefersWatermarkFree = true,
+                platform = com.adong.adchat.media.MediaPlatform.Douyin,
+                qualityLabel = label,
+                mimeType = "video/mp4",
+                fileExtension = "mp4",
+                availableVariants = listOf(variant)
+            )
+        )
+    }
+
+    private fun extractHttpUrlList(array: JSONArray): List<String> =
+        (0 until array.length())
+            .map { normalizeCandidateUrl(array.optString(it)) }
+            .filter { it.startsWith("http://") || it.startsWith("https://") }
+            .distinct()
 
     /**
      * yt-dlp 的做法：aweme/v1 包装链接可能被限流（"Downloads from API might
@@ -556,6 +657,58 @@ private class DouyinResolverSession(
 
               var foundTitle = '';
               var foundAuthor = '';
+              var foundMusicUrl = '';
+              var noteImages = [];
+              var noteImageSeen = {};
+              function addNoteImage(rawUrl) {
+                var u = normalize(rawUrl);
+                if (!/^https?:\/\//i.test(u) || /avatar|user-avatar/i.test(u)) return;
+                if (!noteImageSeen[u]) {
+                  noteImageSeen[u] = true;
+                  noteImages.push(u);
+                }
+              }
+              function pickBestImageUrl(item) {
+                if (!item || typeof item !== 'object') return '';
+                var lists = [item.url_list, item.urlList, item.download_url_list, item.downloadUrlList];
+                for (var li = 0; li < lists.length; li++) {
+                  var arr = lists[li];
+                  if (!Array.isArray(arr) || !arr.length) continue;
+                  for (var ai = 0; ai < arr.length; ai++) {
+                    var u = normalize(arr[ai]);
+                    if (/^https?:\/\//i.test(u) && !/\.webp(?:\?|$)/i.test(u)) return u;
+                  }
+                  var first = normalize(arr[0]);
+                  if (/^https?:\/\//i.test(first)) return first;
+                }
+                return '';
+              }
+              function pickMusicFromAddr(addr) {
+                if (!addr || typeof addr !== 'object') return '';
+                var list = addr.url_list || addr.urlList;
+                if (Array.isArray(list) && list.length) {
+                  var u0 = normalize(list[0]);
+                  if (/^https?:\/\//i.test(u0)) return u0;
+                }
+                var uri = normalize(addr.uri);
+                if (/^https?:\/\//i.test(uri)) return uri;
+                return '';
+              }
+              try {
+                Array.prototype.slice.call(document.querySelectorAll('audio')).forEach(function (node) {
+                  var au = normalize(node.currentSrc || node.src || node.getAttribute('src'));
+                  if (!foundMusicUrl && /^https?:\/\//i.test(au)) foundMusicUrl = au;
+                });
+              } catch (error) {}
+              try {
+                performance.getEntriesByType('resource').forEach(function (entry) {
+                  var rn = normalize(entry.name);
+                  if (!foundMusicUrl && /^https?:\/\//i.test(rn) && /(?:\.mp3|\.m4a)(?:\?|$)|ies-music|obj\/tos-cn-ve-2774/i.test(rn)) {
+                    foundMusicUrl = rn;
+                  }
+                });
+              } catch (error) {}
+
               var thumbnailCandidates = [];
               var thumbnailSeen = {};
               function addThumbnail(value, depth) {
@@ -596,21 +749,46 @@ private class DouyinResolverSession(
                   return;
                 }
                 if (typeof value === 'object') {
+                  var rawImages = Array.isArray(value.images) && value.images.length ? value.images :
+                    (value.image_post_info && Array.isArray(value.image_post_info.images) ? value.image_post_info.images : null);
+                  var isImageNote = !!(rawImages && rawImages.length);
+                  if (isImageNote) {
+                    for (var ii = 0; ii < rawImages.length; ii++) {
+                      var pickedImg = pickBestImageUrl(rawImages[ii]);
+                      if (pickedImg) addNoteImage(pickedImg);
+                    }
+                  }
+                  if (value.music && typeof value.music === 'object' && !foundMusicUrl) {
+                    var mUrl = pickMusicFromAddr(value.music.play_url || value.music.playUrl);
+                    if (!mUrl && typeof value.music.extra === 'string' && value.music.extra) {
+                      try { mUrl = normalize(JSON.parse(value.music.extra).original_song_url); } catch (e) {}
+                    }
+                    if (/^https?:\/\//i.test(mUrl)) foundMusicUrl = mUrl;
+                  }
                   if (value.video && typeof value.video === 'object') {
                     addThumbnail(value.video.origin_cover, 0);
                     addThumbnail(value.video.cover, 0);
                     addThumbnail(value.video.dynamic_cover, 0);
                     addThumbnail(value.video.animated_cover, 0);
-                    var playAddr = value.video.play_addr;
-                    var vid = (playAddr && typeof playAddr.uri === 'string' && playAddr.uri) ||
-                      (typeof value.video.vid === 'string' && value.video.vid) || '';
-                    if (vid && /^[a-z0-9_]{10,}$/i.test(vid)) {
-                      add('https://aweme.snssdk.com/aweme/v1/playwm/?video_id=' + vid + '&ratio=1080p&line=0', 950);
+                    var playAddr = value.video.play_addr || value.video.playAddr;
+                    if (isImageNote) {
+                      // On Douyin image notes, video.play_addr holds the background music MP3/M4A!
+                      if (!foundMusicUrl) {
+                        var noteBgm = pickMusicFromAddr(playAddr);
+                        if (/^https?:\/\//i.test(noteBgm)) foundMusicUrl = noteBgm;
+                      }
+                    } else {
+                      var vid = (playAddr && typeof playAddr.uri === 'string' && playAddr.uri) ||
+                        (typeof value.video.vid === 'string' && value.video.vid) || '';
+                      if (vid && /^[a-z0-9_]{10,}$/i.test(vid) && !/^https?:\/\//i.test(vid)) {
+                        add('https://aweme.snssdk.com/aweme/v1/playwm/?video_id=' + vid + '&ratio=1080p&line=0', 950);
+                      }
                     }
                   }
                   var keys = Object.keys(value);
                   for (var j = 0; j < keys.length && j < 120; j++) {
                     var childKey = keys[j];
+                    if (isImageNote && childKey === 'video') continue;
                     if (/cover|poster|thumbnail/i.test(childKey)) addThumbnail(value[childKey], 0);
                     walk(value[childKey], childKey, depth + 1);
                   }
@@ -621,7 +799,7 @@ private class DouyinResolverSession(
                 Array.prototype.slice.call(document.scripts || []).forEach(function (script) {
                   var id = script.id || '';
                   var raw = script.textContent || '';
-                  if (!raw || !(/RENDER_DATA|UNIVERSAL|SIGI_STATE/i.test(id) || /videoDetail|aweme_detail|bitRateList/.test(raw))) return;
+                  if (!raw || !(/RENDER_DATA|UNIVERSAL|SIGI_STATE/i.test(id) || /videoDetail|aweme_detail|bitRateList|note_\(id\)/.test(raw))) return;
                   var variants = [raw];
                   try { variants.push(decodeURIComponent(raw)); } catch (error) {}
                   for (var i = 0; i < variants.length; i++) {
@@ -631,10 +809,22 @@ private class DouyinResolverSession(
               } catch (error) {}
 
               try {
-                [window._SSR_DATA, window._ROUTER_DATA, window.__INITIAL_STATE__, window.__NEXT_DATA__].forEach(function (state) {
+                [window._SSR_DATA, window.SSR_RENDER_DATA, window._ROUTER_DATA, window.__INITIAL_STATE__, window.__NEXT_DATA__].forEach(function (state) {
                   if (state) walk(state, '', 0);
                 });
               } catch (error) {}
+
+              if (!noteImages.length) {
+                try {
+                  Array.prototype.slice.call(document.querySelectorAll('img')).forEach(function (img) {
+                    var s = normalize(img.src || '');
+                    if (s.indexOf('douyinpic') >= 0 && s.indexOf('WEBPC_RELATED') < 0 &&
+                        (s.indexOf('biz_tag=aweme_images') >= 0 || s.indexOf('tplv-dy-aweme-images') >= 0)) {
+                      addNoteImage(s);
+                    }
+                  });
+                } catch (error) {}
+              }
 
               candidates.sort(function (a, b) { return b.score - a.score; });
               function meta(selector) {
@@ -643,18 +833,20 @@ private class DouyinResolverSession(
               }
               addThumbnail(meta('meta[property="og:image"]'), 0);
               addThumbnail(meta('meta[name="twitter:image"]'), 0);
-              foundThumbnail = thumbnailCandidates.length ? thumbnailCandidates[0] : '';
+              foundThumbnail = thumbnailCandidates.length ? thumbnailCandidates[0] : (noteImages.length ? noteImages[0] : '');
               var pageText = text(document.body && document.body.innerText).slice(0, 1200);
               var challenge = /安全验证|完成验证|拖动滑块|验证码|captcha|verify/i.test(pageText) ||
                 !!document.querySelector('[class*="captcha"], iframe[src*="verify"], [id*="captcha"]');
               var pageUrl = location.href || '';
-              var idMatch = pageUrl.match(/(?:\/video\/|[?&](?:modal_id|aweme_id)=)(\d{8,})/);
+              var idMatch = pageUrl.match(/(?:\/(?:video|note|slides)\/|[?&](?:modal_id|aweme_id)=)(\d{8,})/);
               return JSON.stringify({
                 url: candidates.length ? candidates[0].url : '',
                 title: foundTitle || meta('meta[property="og:title"]') || document.title || '',
                 author: foundAuthor || meta('meta[name="author"]') || '',
                 thumbnail: foundThumbnail || '',
                 thumbnailCandidates: thumbnailCandidates.slice(0, 4),
+                noteImages: noteImages.slice(0, 36),
+                musicUrl: foundMusicUrl || '',
                 pageUrl: pageUrl,
                 videoId: idMatch ? idMatch[1] : '',
                 challenge: challenge,
@@ -671,9 +863,7 @@ private class DouyinResolverSession(
         """.trimIndent()
 
     /**
-     * 页面上下文直调官方 detail 接口。端点对新鲜 Cookie 不要求 a_bogus（yt-dlp
-     * DouyinIE 同款调用）；同源 fetch 免 CORS，Cookie/UA 由 WebView 自带。
-     * 只跑一次；结果瘦身后存 window.__asterDetail 供探针读取，失败静默（嗅探兜底）。
+     * 页面上下文直调官方 detail / slidesinfo 接口。支持普通视频与图文配乐作品。
      */
     val DOUYIN_DETAIL_FETCH = """
         (function () {
@@ -686,36 +876,83 @@ private class DouyinResolverSession(
             if (!addr || !addr.url_list || !addr.url_list.length) return null;
             return { urls: addr.url_list.slice(0, 3), size: addr.data_size || 0 };
           }
+          function pickImage(item) {
+            if (!item) return '';
+            var lists = [item.url_list, item.download_url_list];
+            for (var l = 0; l < lists.length; l++) {
+              var arr = lists[l];
+              if (!Array.isArray(arr) || !arr.length) continue;
+              for (var i = 0; i < arr.length; i++) {
+                var u = String(arr[i] || '');
+                if (/^https?:\/\//i.test(u) && !/\.webp(?:\?|$)/i.test(u)) return u;
+              }
+              if (/^https?:\/\//i.test(String(arr[0] || ''))) return String(arr[0]);
+            }
+            return '';
+          }
+          function pickMusic(detail) {
+            var m = detail.music || {};
+            var playUrl = m.play_url || m.playUrl || {};
+            if (Array.isArray(playUrl.url_list) && playUrl.url_list.length && /^https?:\/\//i.test(playUrl.url_list[0])) {
+              return String(playUrl.url_list[0]);
+            }
+            if (typeof playUrl.uri === 'string' && /^https?:\/\//i.test(playUrl.uri)) {
+              return playUrl.uri;
+            }
+            var vAddr = (detail.video || {}).play_addr || {};
+            if (Array.isArray(vAddr.url_list) && vAddr.url_list.length && /^https?:\/\//i.test(vAddr.url_list[0])) {
+              return String(vAddr.url_list[0]);
+            }
+            if (typeof vAddr.uri === 'string' && /^https?:\/\//i.test(vAddr.uri)) {
+              return vAddr.uri;
+            }
+            return '';
+          }
           function slim(detail) {
             var video = detail.video || {};
+            var rawImages = Array.isArray(detail.images) && detail.images.length ? detail.images :
+              (detail.image_post_info && Array.isArray(detail.image_post_info.images) ? detail.image_post_info.images : []);
+            var images = [];
+            for (var i = 0; i < rawImages.length; i++) {
+              var imgUrl = pickImage(rawImages[i]);
+              if (imgUrl && images.indexOf(imgUrl) < 0) images.push(imgUrl);
+            }
             var gears = [];
-            (video.bit_rate || []).forEach(function (entry) {
-              var addr = slimAddr(entry.play_addr);
-              var gear = entry.gear_name || '';
-              if (!addr || !gear || entry.is_bytevc2) return;
-              gears.push({ gear: gear, urls: addr.urls, size: addr.size });
-            });
+            if (!images.length) {
+              (video.bit_rate || []).forEach(function (entry) {
+                var addr = slimAddr(entry.play_addr);
+                var gear = entry.gear_name || '';
+                if (!addr || !gear || entry.is_bytevc2) return;
+                gears.push({ gear: gear, urls: addr.urls, size: addr.size });
+              });
+            }
+            var originCover = (video.origin_cover && video.origin_cover.url_list && video.origin_cover.url_list[0]) || video.origin_cover || '';
+            var cover = (video.cover && video.cover.url_list && video.cover.url_list[0]) || video.cover || '';
             return {
               aweme_id: detail.aweme_id || '',
               desc: detail.desc || '',
               nickname: (detail.author || {}).nickname || '',
-              play: slimAddr(video.play_addr),
+              images: images.slice(0, 36),
+              musicUrl: images.length ? pickMusic(detail) : '',
+              play: images.length ? null : slimAddr(video.play_addr),
               gears: gears.slice(0, 5),
-              originCover: video.origin_cover || '',
-              cover: video.cover || ''
+              originCover: typeof originCover === 'string' ? originCover : '',
+              cover: typeof cover === 'string' ? cover : ''
             };
           }
+          var host = location.hostname || '';
+          var endpoint = host.indexOf('iesdouyin.com') >= 0
+            ? ('/web/api/v2/aweme/slidesinfo/?reflow_source=reflow_page&web_id=75123456789012345&device_id=75123456789012345&aweme_ids=%5B' + videoId + '%5D&request_source=200')
+            : ('/aweme/v1/web/aweme/detail/?aweme_id=' + videoId + '&device_platform=webapp&aid=6383&cookie_enabled=true&platform=PC&downlink=10&effective_type=4g');
           try {
-            fetch('/aweme/v1/web/aweme/detail/?aweme_id=' + videoId +
-                  '&device_platform=webapp&aid=6383&cookie_enabled=true&platform=PC&downlink=10&effective_type=4g',
-                  { method: 'GET', credentials: 'include', headers: { 'Accept': 'application/json' } })
+            fetch(endpoint, { method: 'GET', credentials: 'include', headers: { 'Accept': 'application/json' } })
               .then(function (response) {
                 if (!response.ok) { done(false, null); return null; }
                 return response.json();
               })
               .then(function (json) {
-                var detail = json && (json.aweme_detail || (json.data && json.data.aweme_detail));
-                if (detail && detail.video) { done(true, slim(detail)); }
+                var detail = json && (json.aweme_detail || (json.data && json.data.aweme_detail) || (json.aweme_details && json.aweme_details[0]));
+                if (detail && (detail.video || (detail.images && detail.images.length))) { done(true, slim(detail)); }
                 else { done(false, null); }
               })
               .catch(function () { done(false, null); });

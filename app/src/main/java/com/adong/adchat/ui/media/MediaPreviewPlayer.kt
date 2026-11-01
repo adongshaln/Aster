@@ -4,6 +4,7 @@ import android.graphics.Color as AndroidColor
 import com.adong.adchat.data.applyNetworkTrust
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
@@ -26,9 +27,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -83,7 +87,8 @@ fun MediaPreviewPlayer(
     var errorMessage by remember(media.mediaUrl, retryToken) { mutableStateOf<String?>(null) }
     var controlsVisible by remember(media.mediaUrl, retryToken) { mutableStateOf(true) }
 
-    val player = remember(media.mediaUrl, media.audioUrl, media.userAgent, media.referer, media.cookieHeader, retryToken) {
+    val isSlideshow = media.imageUrls.isNotEmpty()
+    val player = remember(media.mediaUrl, media.audioUrl, media.imageUrls, media.userAgent, media.referer, media.cookieHeader, retryToken) {
         val headers = buildMap {
             if (media.userAgent.isNotBlank()) put("User-Agent", media.userAgent)
             if (media.referer.isNotBlank()) put("Referer", media.referer)
@@ -96,17 +101,27 @@ fun MediaPreviewPlayer(
             .setMediaSourceFactory(mediaSourceFactory)
             .build()
             .apply {
-                repeatMode = Player.REPEAT_MODE_OFF
-                if (media.audioUrl.isNotBlank()) {
-                    val videoSource = ProgressiveMediaSource.Factory(dataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(media.mediaUrl))
-                    val audioSource = ProgressiveMediaSource.Factory(dataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(media.audioUrl))
-                    setMediaSource(MergingMediaSource(videoSource, audioSource))
-                } else {
-                    setMediaItem(MediaItem.fromUri(media.mediaUrl))
+                repeatMode = if (isSlideshow) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+                when {
+                    isSlideshow -> {
+                        if (media.audioUrl.isNotBlank()) {
+                            setMediaItem(MediaItem.fromUri(media.audioUrl))
+                            playWhenReady = true
+                        }
+                    }
+                    media.audioUrl.isNotBlank() -> {
+                        val videoSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                            .createMediaSource(MediaItem.fromUri(media.mediaUrl))
+                        val audioSource = ProgressiveMediaSource.Factory(dataSourceFactory)
+                            .createMediaSource(MediaItem.fromUri(media.audioUrl))
+                        setMediaSource(MergingMediaSource(videoSource, audioSource))
+                        playWhenReady = true
+                    }
+                    else -> {
+                        setMediaItem(MediaItem.fromUri(media.mediaUrl))
+                        playWhenReady = true
+                    }
                 }
-                playWhenReady = true
             }
     }
 
@@ -144,9 +159,15 @@ fun MediaPreviewPlayer(
             }
         }
         player.addListener(listener)
-        buffering = true
-        errorMessage = null
-        player.prepare()
+        if (isSlideshow && media.audioUrl.isBlank()) {
+            buffering = false
+            playing = true
+            controlsVisible = false
+        } else {
+            buffering = true
+            errorMessage = null
+            player.prepare()
+        }
         onDispose {
             player.removeListener(listener)
             player.release()
@@ -174,27 +195,55 @@ fun MediaPreviewPlayer(
         }
     }
 
+    var slideIndex by remember(media.imageUrls) { mutableIntStateOf(0) }
+    LaunchedEffect(isSlideshow, playing, media.imageUrls.size) {
+        if (!isSlideshow || media.imageUrls.size <= 1) return@LaunchedEffect
+        while (playing) {
+            delay(2600L)
+            slideIndex = (slideIndex + 1) % media.imageUrls.size
+        }
+    }
+
     Box(
         modifier = modifier.background(Color.Black).clickable {
             if (errorMessage == null && !buffering) controlsVisible = !controlsVisible
         }
     ) {
-        AndroidView(
-            factory = { viewContext ->
-                PlayerView(viewContext).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(AndroidColor.BLACK)
-                    this.player = player
-                }
-            },
-            update = {
-                it.player = player
-                it.keepScreenOn = playing
-            },
-            onRelease = { it.player = null },
-            modifier = Modifier.fillMaxSize()
-        )
+        if (isSlideshow) {
+            val activeSlideUrl = media.imageUrls.getOrElse(slideIndex % media.imageUrls.size) { media.mediaUrl }
+            Crossfade(targetState = activeSlideUrl, modifier = Modifier.fillMaxSize(), label = "slideshow-preview") { url ->
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(url)
+                        .apply {
+                            if (media.referer.isNotBlank()) addHeader("Referer", media.referer)
+                            if (media.userAgent.isNotBlank()) addHeader("User-Agent", media.userAgent)
+                        }
+                        .crossfade(true)
+                        .build(),
+                    contentDescription = media.title,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        } else {
+            AndroidView(
+                factory = { viewContext ->
+                    PlayerView(viewContext).apply {
+                        useController = false
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        setShutterBackgroundColor(AndroidColor.BLACK)
+                        this.player = player
+                    }
+                },
+                update = {
+                    it.player = player
+                    it.keepScreenOn = playing
+                },
+                onRelease = { it.player = null },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         Row(
             Modifier.align(Alignment.TopCenter).fillMaxWidth()
