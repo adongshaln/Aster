@@ -38,6 +38,7 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.rounded.*
@@ -766,7 +767,7 @@ private fun ChatMessageItem(
                 if (message.toolActivities.isNotEmpty()) {
                     ToolActivitySummary(message.toolActivities)
                 }
-                if (waitingForFirstToken && message.reasoning.isBlank()) {
+                if (waitingForFirstToken && message.reasoning.isBlank() && message.toolActivities.isEmpty()) {
                     ConversationThinkingIndicator()
                 } else {
                     RichMessageText(
@@ -779,7 +780,7 @@ private fun ChatMessageItem(
                             message.isStreaming,
                             message.content.isBlank(),
                             waitingOnUser(message.toolActivities)
-                        )
+                        ) && message.toolActivities.none { it.status == TOOL_STATUS_RUNNING }
                     ) {
                         ModelWorkingFoot(modelWorkingCaption(message.toolActivities, message.isRecovering))
                     }
@@ -957,143 +958,121 @@ private fun StreamRecoveryStatus(
 
 @Composable
 private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
-    var expanded by remember(activities.size) { mutableStateOf(false) }
+    var expanded by remember { mutableStateOf(false) }
     val latest = activities.last()
     val waiting = latest.name == ASK_USER_TOOL && latest.status == TOOL_STATUS_RUNNING
-    val running = !waiting && activities.any { it.status == TOOL_STATUS_RUNNING }
-    val failed = !waiting && activities.any { it.status == TOOL_STATUS_FAILED }
-    val tint = when {
-        waiting -> Sage
-        failed -> Danger
-        running -> Accent
-        else -> MutedInk
-    }
+    val runningActivity = activities.lastOrNull { it.status == TOOL_STATUS_RUNNING }
+    val running = !waiting && runningActivity != null
+    val failedActivity = activities.lastOrNull { it.status == TOOL_STATUS_FAILED }
+    val failed = !waiting && !running && failedActivity != null
+    val expandable = activities.size > 1
     val label = when {
-        waiting -> "请从下面的选项里选一个"
-        running -> latest.label
-        failed -> latest.label
+        waiting -> "请从下方选项中选择"
+        running -> runningActivity!!.label
+        failed -> failedActivity!!.label
         activities.size == 1 -> latest.label
         else -> "已完成 ${activities.size} 项工具操作"
+    }
+    val textColor = when {
+        waiting -> Sage
+        failed -> Danger
+        else -> MutedInk
     }
     val chevronRotation by androidx.compose.animation.core.animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
         animationSpec = AsterSpring.jelly(),
         label = "tool-chevron"
     )
-    if (waiting || running || failed) {
-        Surface(
-            onClick = { if (activities.size > 1) expanded = !expanded },
-            color = when {
-                waiting -> SageSoft
-                failed -> DangerSoft
-                else -> AccentSoft.copy(alpha = .72f)
-            },
-            contentColor = Ink,
-            shape = RoundedCornerShape(13.dp),
-            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+    val interactionSource = remember { MutableInteractionSource() }
+
+    // 调用中与完成态完全统一：零外框、零胶囊背景盒，与思考面板同构；展开时以左侧 1.5dp 极细导引线承接。
+    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(
+                    enabled = expandable,
+                    interactionSource = interactionSource,
+                    indication = null
+                ) { expanded = !expanded }
+                .appleSpringPressable(pressedScale = 0.94f, enabled = expandable)
+                .padding(vertical = 4.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.padding(horizontal = 11.dp, vertical = 9.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    when {
-                        waiting -> Icon(Icons.Rounded.HelpOutline, null, Modifier.size(18.dp), tint = Sage)
-                        running -> AsterLoadingIndicator(size = 17.dp, tint = tint)
-                        else -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(18.dp), tint = tint)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Text(label, style = MaterialTheme.typography.labelLarge, color = if (running) MutedInk else tint, modifier = Modifier.weight(1f))
-                    if (activities.size > 1) {
-                        val activeRotation by androidx.compose.animation.core.animateFloatAsState(
-                            targetValue = if (expanded) 180f else 0f,
-                            animationSpec = AsterSpring.jelly(),
-                            label = "tool-active-chevron"
-                        )
-                        Icon(
-                            Icons.Rounded.ExpandMore,
-                            null,
-                            Modifier.size(18.dp).graphicsLayer { rotationZ = activeRotation },
-                            tint = MutedInk
-                        )
-                    }
-                }
-                AnimatedVisibility(
-                    visible = expanded,
-                    enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
-                    exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
-                ) {
-                    Column(Modifier.padding(top = 9.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                        activities.forEach { activity ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    if (activity.name in setOf("web_search", DELEGATED_WEB_SEARCH_TOOL, FETCH_WEB_TOOL)) Icons.Rounded.TravelExplore else Icons.Rounded.Description,
-                                    null,
-                                    Modifier.size(15.dp),
-                                    tint = MutedInk
-                                )
-                                Spacer(Modifier.width(7.dp))
-                                Text(activity.label, style = MaterialTheme.typography.labelMedium, color = MutedInk, modifier = Modifier.weight(1f))
-                                if (activity.status == TOOL_STATUS_COMPLETED) {
-                                    Icon(Icons.Rounded.Check, null, Modifier.size(14.dp), tint = Sage)
-                                }
-                            }
-                        }
-                    }
-                }
+            when {
+                waiting -> Icon(Icons.AutoMirrored.Rounded.HelpOutline, null, Modifier.size(15.dp), tint = Sage)
+                running -> AsterLoadingIndicator(size = 14.dp, tint = Accent)
+                failed -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(15.dp), tint = Danger)
+                else -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(15.dp), tint = Sage.copy(alpha = 0.85f))
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge.copy(
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 13.sp
+                ),
+                color = textColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .then(if (running) Modifier.claudeStreamingPulse() else Modifier)
+            )
+            if (expandable) {
+                Spacer(Modifier.width(3.dp))
+                Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = if (expanded) "收起工具详情" else "展开工具详情",
+                    modifier = Modifier.size(16.dp).graphicsLayer { rotationZ = chevronRotation },
+                    tint = MutedInk.copy(alpha = 0.72f)
+                )
             }
         }
-    } else {
-        // 完成态向思考面板看齐：零外框、零背景盒，平时仅一行轻巧文字，展开时用左侧 1.5dp 细线承接。
-        Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(AsterSpring.editorial()) + expandVertically(expandFrom = Alignment.Top, animationSpec = AsterSpring.spatial()),
+            exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(shrinkTowards = Alignment.Top, animationSpec = AsterSpring.snappy())
+        ) {
             Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(enabled = activities.size > 1) { expanded = !expanded }
-                    .appleSpringPressable(pressedScale = 0.95f, enabled = activities.size > 1)
-                    .padding(vertical = 4.dp, horizontal = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
+                Modifier
+                    .padding(top = 5.dp, start = 4.dp, bottom = 4.dp)
+                    .height(IntrinsicSize.Min)
             ) {
-                Icon(Icons.Rounded.CheckCircle, null, Modifier.size(15.dp), tint = Sage.copy(alpha = 0.85f))
-                Spacer(Modifier.width(6.dp))
-                Text(label, style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp), color = MutedInk)
-                if (activities.size > 1) {
-                    Spacer(Modifier.width(3.dp))
-                    Icon(
-                        Icons.Rounded.ChevronRight,
-                        null,
-                        Modifier.size(16.dp).graphicsLayer { rotationZ = chevronRotation },
-                        tint = MutedInk.copy(alpha = 0.72f)
-                    )
-                }
-            }
-            AnimatedVisibility(
-                visible = expanded,
-                enter = fadeIn(AsterSpring.editorial()) + expandVertically(AsterSpring.spatial()),
-                exit = fadeOut(AsterSpring.snappy()) + shrinkVertically(AsterSpring.snappy())
-            ) {
-                Row(
+                Box(
                     Modifier
-                        .padding(top = 5.dp, start = 4.dp, bottom = 4.dp)
-                        .height(IntrinsicSize.Min)
-                ) {
-                    Box(
-                        Modifier
-                            .width(1.5.dp)
-                            .fillMaxHeight()
-                            .clip(CircleShape)
-                            .background(Hairline)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        activities.forEach { activity ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    if (activity.name in setOf("web_search", DELEGATED_WEB_SEARCH_TOOL, FETCH_WEB_TOOL)) Icons.Rounded.TravelExplore else Icons.Rounded.Description,
+                        .width(1.5.dp)
+                        .fillMaxHeight()
+                        .clip(CircleShape)
+                        .background(Hairline)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    activities.forEach { activity ->
+                        val itemRunning = activity.status == TOOL_STATUS_RUNNING
+                        val itemFailed = activity.status == TOOL_STATUS_FAILED
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            when {
+                                itemRunning -> AsterLoadingIndicator(size = 13.dp, tint = Accent)
+                                itemFailed -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(14.dp), tint = Danger)
+                                else -> Icon(
+                                    if (activity.name in setOf("web_search", DELEGATED_WEB_SEARCH_TOOL, FETCH_WEB_TOOL)) {
+                                        Icons.Rounded.TravelExplore
+                                    } else {
+                                        Icons.Rounded.Description
+                                    },
                                     null,
                                     Modifier.size(14.dp),
                                     tint = MutedInk
                                 )
-                                Spacer(Modifier.width(6.dp))
-                                Text(activity.label, style = MaterialTheme.typography.labelMedium, color = MutedInk)
                             }
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = activity.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (itemFailed) Danger else MutedInk,
+                                modifier = if (itemRunning) Modifier.claudeStreamingPulse() else Modifier
+                            )
                         }
                     }
                 }
