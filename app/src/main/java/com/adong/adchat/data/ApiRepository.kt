@@ -1,6 +1,9 @@
 package com.adong.adchat.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -120,7 +123,18 @@ class ApiRepository internal constructor(
         }
         val requireSkillLoad = requestedSkillUrl != null || requestedInstalledSkill != null
         var skillLoadingEnabled = requestedSkillSelectors.isNotEmpty()
-        val delegatedSearchEnabled = profile.webSearchEnabled && !profile.usesResponses(model) && searchBackend != null
+        val effectiveSearchBackend = when {
+            !profile.webSearchEnabled || profile.usesResponses(model) -> null
+            searchBackend != null -> searchBackend
+            !model.isDedicatedChatSearchModel() -> SearchBackendConfig(
+                profile = profile,
+                model = model,
+                allowXSearch = false,
+                directSearch = true
+            )
+            else -> null
+        }
+        val delegatedSearchEnabled = effectiveSearchBackend != null
         require(!skillLoadingEnabled || !profile.webSearchEnabled || profile.usesResponses(model) || delegatedSearchEnabled) {
             "当前 Chat 服务的原生联网搜索与技能工具不能同时使用；请配置 Aster 联网搜索后端，或关闭联网搜索/Skill。"
         }
@@ -170,7 +184,7 @@ class ApiRepository internal constructor(
                     profile, model, systemPrompt, prepared.history, cacheKey,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
-                    searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
+                    searchBackend = effectiveSearchBackend,
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
                     allowReasoningContinuation = allowReasoningContinuation,
@@ -197,7 +211,7 @@ class ApiRepository internal constructor(
                     profile, model, systemPrompt, prepared.history, cacheKey, explicitCache = false,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
                     requestSkillLoader = requestSkillLoader, requireSkillLoad = requireSkillLoad,
-                    searchBackend = searchBackend.takeIf { delegatedSearchEnabled },
+                    searchBackend = effectiveSearchBackend,
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
                     allowReasoningContinuation = allowReasoningContinuation,
@@ -304,6 +318,7 @@ class ApiRepository internal constructor(
         val delegatedSearchEnabled = profile.webSearchEnabled && searchBackend != null
         val effectiveSystemPrompt = listOf(
             systemPrompt,
+            WEB_SEARCH_AGENT_INSTRUCTION.takeIf { delegatedSearchEnabled }.orEmpty(),
             ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
             SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
         ).filter(String::isNotBlank).joinToString("\n\n")
@@ -535,6 +550,14 @@ class ApiRepository internal constructor(
             messages.put(AnthropicMessages.assistantToolUseMessage(round.text, orderedToolCalls))
             val results = mutableListOf<Pair<String, String>>()
             var usedDelegatedSearchThisRound = false
+            val batchSearchResults = executeDelegatedSearchBatch(
+                calls = orderedToolCalls,
+                searchBackend = searchBackend,
+                delegatedSearchCache = delegatedSearchCache,
+                initialSearchCallCount = delegatedSearchCalls,
+                recordActivity = ::recordActivity
+            )
+            delegatedSearchCalls = batchSearchResults.updatedCallCount
             orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
@@ -542,36 +565,16 @@ class ApiRepository internal constructor(
                     executeAskUser(call, onAskUser) { recordActivity(it) }
                 } else if (call.name == DELEGATED_WEB_SEARCH_TOOL) {
                     usedDelegatedSearchThisRound = true
-                    val backend = searchBackend ?: throw IllegalStateException("联网搜索后端尚未配置")
-                    val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
-                    val query = args.optString("query").trim()
-                    val source = args.optString("source").ifBlank { "web" }.lowercase()
-                    val searchKey = source + "\n" + query.lowercase().replace(Regex("\\s+"), " ")
-                    val cached = delegatedSearchCache[searchKey]
-                    val search = when {
-                        query.isBlank() -> DelegatedSearchResult(
-                            JSONObject().put("ok", false).put("error", "search_query_empty").toString(),
-                            emptyList(), ChatToolActivity(call.callId, call.name, "搜索查询为空", TOOL_STATUS_FAILED)
-                        )
-                        cached != null -> cached.copy(
-                            output = delegatedSearchToolOutput(query, source, backend.model, JSONObject(cached.output).optString("research"), cached.citations, reused = true),
-                            activity = ChatToolActivity(call.callId, call.name, "已复用联网搜索结果", TOOL_STATUS_COMPLETED)
-                        )
-                        delegatedSearchCalls >= MAX_DELEGATED_SEARCH_CALLS -> DelegatedSearchResult(
-                            JSONObject().put("ok", false).put("error", "search_call_limit_reached").put("limit", MAX_DELEGATED_SEARCH_CALLS).toString(),
-                            emptyList(), ChatToolActivity(call.callId, call.name, "联网搜索已达到本轮上限", TOOL_STATUS_FAILED)
-                        )
-                        else -> {
-                            delegatedSearchCalls += 1
-                            recordActivity(ChatToolActivity(call.callId, call.name, "正在通过 ${backend.model} 搜索", TOOL_STATUS_RUNNING))
-                            executeDelegatedSearch(backend, call.callId, query, source)
-                        }
-                    }
-                    if (cached == null && runCatching { JSONObject(search.output).optBoolean("ok") }.getOrDefault(false)) {
-                        delegatedSearchCache[searchKey] = search
-                    }
+                    val search = batchSearchResults.byCallId[call.callId]
+                        ?: throw IllegalStateException("联网搜索结果缺失")
                     search.citations.forEach { citations[it.url] = it }
                     ToolExecutionResult(search.output, activity = search.activity)
+                } else if (call.name == FETCH_WEB_TOOL) {
+                    usedDelegatedSearchThisRound = true
+                    val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
+                    val targetUrl = args.optString("url").trim()
+                    recordActivity(ChatToolActivity(call.callId, call.name, "正在读取网页：${targetUrl.take(24)}", TOOL_STATUS_RUNNING))
+                    FastWebSearchClient.executeFetchPage(profile, call.callId, targetUrl, client)
                 } else {
                     val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                     recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
@@ -641,6 +644,7 @@ class ApiRepository internal constructor(
         val messages = JSONArray()
         val effectiveSystemPrompt = listOf(
             systemPrompt,
+            WEB_SEARCH_AGENT_INSTRUCTION.takeIf { delegatedSearchEnabled }.orEmpty(),
             ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
             SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
         ).filter(String::isNotBlank).joinToString("\n\n")
@@ -813,7 +817,13 @@ class ApiRepository internal constructor(
                 )
             }
             if (roundText.isBlank() && calls.isEmpty()) throw IllegalStateException("No recognizable message content or tool call in API response")
-            return ProtocolRoundResult(roundText.toString(), roundUsage, calls, roundCitations.values.toList())
+            return ProtocolRoundResult(
+                text = roundText.toString(),
+                usage = roundUsage,
+                toolCalls = calls,
+                citations = roundCitations.values.toList(),
+                reasoningText = producedReasoning
+            )
         }
 
         var completedNormally = false
@@ -869,8 +879,21 @@ class ApiRepository internal constructor(
             messages.put(JSONObject()
                 .put("role", "assistant")
                 .put("content", round.text.takeIf(String::isNotBlank) ?: JSONObject.NULL)
+                .apply {
+                    if (round.reasoningText.isNotBlank()) {
+                        put("reasoning_content", round.reasoningText)
+                    }
+                }
                 .put("tool_calls", assistantToolCalls))
             var usedDelegatedSearchThisRound = false
+            val batchSearchResults = executeDelegatedSearchBatch(
+                calls = orderedToolCalls,
+                searchBackend = searchBackend,
+                delegatedSearchCache = delegatedSearchCache,
+                initialSearchCallCount = delegatedSearchCalls,
+                recordActivity = ::recordActivity
+            )
+            delegatedSearchCalls = batchSearchResults.updatedCallCount
             orderedToolCalls.forEach { call ->
                 currentCoroutineContext().ensureActive()
                 require(call.name != CREATE_FILE_TOOL || profile.fileCreationEnabled) { "当前会话未启用创建文件工具" }
@@ -878,36 +901,16 @@ class ApiRepository internal constructor(
                     executeAskUser(call, onAskUser) { recordActivity(it) }
                 } else if (call.name == DELEGATED_WEB_SEARCH_TOOL) {
                     usedDelegatedSearchThisRound = true
-                    val backend = searchBackend ?: throw IllegalStateException("联网搜索后端尚未配置")
-                    val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
-                    val query = args.optString("query").trim()
-                    val source = args.optString("source").ifBlank { "web" }.lowercase()
-                    val cacheKey = source + "\n" + query.lowercase().replace(Regex("\\s+"), " ")
-                    val cached = delegatedSearchCache[cacheKey]
-                    val search = when {
-                        query.isBlank() -> DelegatedSearchResult(
-                            JSONObject().put("ok", false).put("error", "search_query_empty").toString(),
-                            emptyList(), ChatToolActivity(call.callId, call.name, "搜索查询为空", TOOL_STATUS_FAILED)
-                        )
-                        cached != null -> cached.copy(
-                            output = delegatedSearchToolOutput(query, source, backend.model, JSONObject(cached.output).optString("research"), cached.citations, reused = true),
-                            activity = ChatToolActivity(call.callId, call.name, "已复用联网搜索结果", TOOL_STATUS_COMPLETED)
-                        )
-                        delegatedSearchCalls >= MAX_DELEGATED_SEARCH_CALLS -> DelegatedSearchResult(
-                            JSONObject().put("ok", false).put("error", "search_call_limit_reached").put("limit", MAX_DELEGATED_SEARCH_CALLS).toString(),
-                            emptyList(), ChatToolActivity(call.callId, call.name, "联网搜索已达到本轮上限", TOOL_STATUS_FAILED)
-                        )
-                        else -> {
-                            delegatedSearchCalls += 1
-                            recordActivity(ChatToolActivity(call.callId, call.name, "正在通过 ${backend.model} 搜索", TOOL_STATUS_RUNNING))
-                            executeDelegatedSearch(backend, call.callId, query, source)
-                        }
-                    }
-                    if (cached == null && runCatching { JSONObject(search.output).optBoolean("ok") }.getOrDefault(false)) {
-                        delegatedSearchCache[cacheKey] = search
-                    }
+                    val search = batchSearchResults.byCallId[call.callId]
+                        ?: throw IllegalStateException("联网搜索结果缺失")
                     search.citations.forEach { citations[it.url] = it }
                     ToolExecutionResult(search.output, activity = search.activity)
+                } else if (call.name == FETCH_WEB_TOOL) {
+                    usedDelegatedSearchThisRound = true
+                    val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
+                    val targetUrl = args.optString("url").trim()
+                    recordActivity(ChatToolActivity(call.callId, call.name, "正在读取网页：${targetUrl.take(24)}", TOOL_STATUS_RUNNING))
+                    FastWebSearchClient.executeFetchPage(profile, call.callId, targetUrl, client)
                 } else {
                     val runningLabel = when (call.name) { LOAD_SKILL_TOOL -> "正在读取技能说明"; READ_SKILL_FILE_TOOL -> "正在读取技能资料"; else -> "正在创建文件" }
                     recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
@@ -1411,20 +1414,130 @@ class ApiRepository internal constructor(
         }
     }
 
+    private data class DelegatedSearchBatchResult(
+        val byCallId: Map<String, DelegatedSearchResult>,
+        val updatedCallCount: Int
+    )
+
+    private suspend fun executeDelegatedSearchBatch(
+        calls: List<PendingToolCall>,
+        searchBackend: SearchBackendConfig?,
+        delegatedSearchCache: MutableMap<String, DelegatedSearchResult>,
+        initialSearchCallCount: Int,
+        recordActivity: suspend (ChatToolActivity) -> Unit
+    ): DelegatedSearchBatchResult {
+        val searchCalls = calls.filter { it.name == DELEGATED_WEB_SEARCH_TOOL }
+        if (searchCalls.isEmpty()) return DelegatedSearchBatchResult(emptyMap(), initialSearchCallCount)
+        val backend = searchBackend ?: throw IllegalStateException("联网搜索后端尚未配置")
+        var callCount = initialSearchCallCount
+        val results = linkedMapOf<String, DelegatedSearchResult>()
+        data class PendingExecution(
+            val call: PendingToolCall,
+            val queries: List<String>,
+            val primaryQuery: String,
+            val source: String,
+            val cacheKey: String
+        )
+        val toExecute = mutableListOf<PendingExecution>()
+
+        for (call in searchCalls) {
+            val args = runCatching { JSONObject(call.arguments) }.getOrElse { JSONObject() }
+            val queries = extractSearchQueries(args)
+            val primaryQuery = queries.joinToString(" | ")
+            val source = args.optString("source").ifBlank { "web" }.lowercase()
+            val cacheKey = source + "\n" + queries.joinToString("\n") { it.lowercase().replace(Regex("\\s+"), " ") }
+            val cached = delegatedSearchCache[cacheKey]
+            when {
+                queries.isEmpty() -> {
+                    results[call.callId] = DelegatedSearchResult(
+                        JSONObject().put("ok", false).put("error", "search_query_empty").toString(),
+                        emptyList(),
+                        ChatToolActivity(call.callId, call.name, "搜索查询为空", TOOL_STATUS_FAILED)
+                    )
+                }
+                cached != null -> {
+                    results[call.callId] = cached.copy(
+                        output = delegatedSearchToolOutput(
+                            primaryQuery,
+                            source,
+                            backend.model,
+                            JSONObject(cached.output).optString("research"),
+                            cached.citations,
+                            reused = true
+                        ),
+                        activity = ChatToolActivity(call.callId, call.name, "已复用搜索结果：${queries.first().take(18)}", TOOL_STATUS_COMPLETED)
+                    )
+                }
+                callCount >= MAX_DELEGATED_SEARCH_CALLS -> {
+                    results[call.callId] = DelegatedSearchResult(
+                        JSONObject().put("ok", false).put("error", "search_call_limit_reached").put("limit", MAX_DELEGATED_SEARCH_CALLS).toString(),
+                        emptyList(),
+                        ChatToolActivity(call.callId, call.name, "联网搜索已达到本轮上限", TOOL_STATUS_FAILED)
+                    )
+                }
+                else -> {
+                    callCount += 1
+                    val queryPreview = if (queries.size == 1) queries.first().take(22) else "${queries.first().take(14)} 等 ${queries.size} 项"
+                    val runningLabel = if (backend.directSearch || backend.model.isGeminiModel() || backend.model.isDeepSeekModel()) {
+                        "正在搜索：$queryPreview"
+                    } else {
+                        "正在通过 ${backend.model} 搜索：$queryPreview"
+                    }
+                    recordActivity(ChatToolActivity(call.callId, call.name, runningLabel, TOOL_STATUS_RUNNING))
+                    toExecute += PendingExecution(call, queries, primaryQuery, source, cacheKey)
+                }
+            }
+        }
+
+        if (toExecute.isNotEmpty()) {
+            val executed = coroutineScope {
+                toExecute.map { pending ->
+                    async {
+                        pending to executeDelegatedSearch(
+                            backend = backend,
+                            callId = pending.call.callId,
+                            queries = pending.queries,
+                            source = pending.source
+                        )
+                    }
+                }.awaitAll()
+            }
+            for ((pending, search) in executed) {
+                if (runCatching { JSONObject(search.output).optBoolean("ok") }.getOrDefault(false)) {
+                    delegatedSearchCache[pending.cacheKey] = search
+                }
+                results[pending.call.callId] = search
+            }
+        }
+
+        return DelegatedSearchBatchResult(results, callCount)
+    }
+
     private suspend fun executeDelegatedSearch(
         backend: SearchBackendConfig,
         callId: String,
-        query: String,
+        queries: List<String>,
         source: String
     ): DelegatedSearchResult = runCatching {
         validateProfile(backend.profile)
         require(backend.model.isNotBlank()) { "联网搜索模型不能为空" }
+        val query = queries.joinToString(" | ").trim()
         val normalizedSource = when (source.lowercase()) {
             "x" -> {
                 require(backend.allowXSearch) { "当前未启用 X Search" }
                 "x"
             }
             else -> "web"
+        }
+        // High-speed direct search path: used when directSearch is enabled or when the model is Gemini / DeepSeek.
+        if (normalizedSource == "web" && (backend.directSearch || backend.model.isGeminiModel() || backend.model.isDeepSeekModel())) {
+            return@runCatching FastWebSearchClient.executeSearch(
+                profile = backend.profile,
+                model = backend.model,
+                callId = callId,
+                queries = queries,
+                source = normalizedSource
+            )
         }
         val toolType = if (normalizedSource == "x") "x_search" else "web_search"
         val input = """You are Aster's retrieval worker, not the final-answer assistant. Use the required server-side search tool to research the query below. Return concise factual research notes. Preserve important dates, names, versions, numbers, disagreements, and uncertainty. Prefer primary/official sources where available. Do not assume access to the user's full conversation.
@@ -1443,25 +1556,8 @@ $query"""
             val searchRoot = runCatching { JSONObject(searchRaw) }.getOrElse { throw IllegalStateException("Step 搜索返回的不是有效 JSON") }
             val (evidence, sources) = parseStepSearch(searchRoot)
             require(sources.isNotEmpty()) { "Step 搜索没有返回结果" }
-            val research = runCatching {
-                val summaryCall = requestBuilder(backend.profile, resolveUrl(backend.profile.baseUrl, backend.profile.messagesPath))
-                if (backend.profile.apiKey.isNotBlank()) {
-                    summaryCall.header("x-api-key", backend.profile.apiKey.trim())
-                    summaryCall.header("anthropic-version", "2023-06-01")
-                }
-                val summaryRequest = summaryCall
-                    .postModelRequest(stepResearchRequest(backend.model, query, evidence).toString().toRequestBody(jsonMedia))
-                    .build()
-                val summaryRaw = executeTextCall(client.newCall(summaryRequest))
-                val summaryRoot = JSONObject(summaryRaw)
-                parseAnthropicSearch(summaryRoot).first
-            }.getOrElse { error ->
-                if (error is CancellationException) throw error
-                currentCoroutineContext().ensureActive()
-                ""
-            }
             return@runCatching DelegatedSearchResult(
-                output = delegatedSearchToolOutput(query, normalizedSource, backend.model, research.ifBlank { evidence }, sources),
+                output = delegatedSearchToolOutput(query, normalizedSource, backend.model, evidence, sources),
                 citations = sources,
                 activity = ChatToolActivity(callId, DELEGATED_WEB_SEARCH_TOOL,
                     "已通过 ${backend.model} 搜索 · ${sources.size} 个来源", TOOL_STATUS_COMPLETED)
@@ -2133,7 +2229,7 @@ private fun String.isGpt56Family(): Boolean {
 }
 
 /** Retain safe connect-route fallback; each model POST supplies a one-shot request body. */
-private fun defaultApiClient(): OkHttpClient = OkHttpClient.Builder()
+internal fun defaultApiClient(): OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(20, TimeUnit.SECONDS)
     .readTimeout(180, TimeUnit.SECONDS)
     .writeTimeout(60, TimeUnit.SECONDS)

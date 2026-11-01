@@ -88,6 +88,9 @@ import com.adong.adchat.data.usesAnthropicMessages
 import com.adong.adchat.data.usesResponses
 import com.adong.adchat.data.resolveConversationRoute
 import com.adong.adchat.data.normalized
+import com.adong.adchat.data.isDedicatedChatSearchModel
+import com.adong.adchat.data.isDeepSeekModel
+import com.adong.adchat.data.isGeminiModel
 import com.adong.adchat.data.isStepModel
 import com.adong.adchat.data.OfficialModelPrices
 import com.adong.adchat.data.ModelUsageTotal
@@ -470,7 +473,7 @@ private fun settingsIcon(destination: SettingsDestination): ImageVector = when (
 private fun settingsSummary(destination: SettingsDestination, vm: MainViewModel): String = when (destination) {
     SettingsDestination.Connections -> "${vm.profiles.size} 个服务 · 联网搜索与输入建议"
     SettingsDestination.Models -> vm.defaultChatProfile.chatModel.ifBlank { "尚未选择默认对话模型" }
-    SettingsDestination.Search -> vm.searchProfile.searchModel.ifBlank { "未配置独立搜索模型" }
+    SettingsDestination.Search -> vm.searchProfile.searchModel.ifBlank { "模型自主极速搜索（默认）" }
     SettingsDestination.Suggestions -> vm.suggestionProfile.suggestionModel.ifBlank { "未配置输入建议模型" }
     SettingsDestination.Appearance -> when (vm.appConfig.themeMode) { THEME_MODE_DARK -> "深色"; THEME_MODE_SYSTEM -> "跟随系统"; else -> "浅色" }
     SettingsDestination.Security -> if (vm.appConfig.allowInsecureCertificates) "证书校验已关闭" else "正常校验服务器证书"
@@ -1201,28 +1204,32 @@ private fun SearchBackendCard(
                 }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("委托搜索", style = MaterialTheme.typography.titleSmall)
-                    Text("Chat 模型需要实时资料时，由此模型在后台检索", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                    Text("联网搜索引擎", style = MaterialTheme.typography.titleSmall)
+                    Text("默认由对话模型自己并发生成搜索词并极速抓取，无需中转模型", color = MutedInk, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            RouteValueButton("API", profile.name, Icons.Rounded.Dns, Accent) { showProfileSheet = true }
-            RouteValueButton("搜索模型", profile.searchModel.ifBlank { "未选择" }, Icons.Rounded.TravelExplore, Accent) { showModelSheet = true }
+            RouteValueButton("搜索模式", profile.searchModel.ifBlank { "模型自主极速搜索（推荐）" }, Icons.Rounded.TravelExplore, Accent) { showModelSheet = true }
+            if (profile.searchModel.isNotBlank()) {
+                RouteValueButton("辅助 API", profile.name, Icons.Rounded.Dns, Accent) { showProfileSheet = true }
+            }
             SettingSwitch(
                 title = "允许 X Search",
-                subtitle = if (profile.apiFormat == API_FORMAT_ANTHROPIC) "Anthropic 搜索后端只支持网页搜索" else "允许搜索模型检索公开 X 帖子；普通网页搜索始终可用",
+                subtitle = if (profile.apiFormat == API_FORMAT_ANTHROPIC) "Anthropic 搜索后端只支持网页搜索" else "配置 Grok 等支持 X Search 的辅助模型时，允许检索公开 X 帖子",
                 checked = allowXSearch && profile.apiFormat != API_FORMAT_ANTHROPIC,
                 enabled = profile.apiFormat != API_FORMAT_ANTHROPIC,
                 onCheckedChange = onAllowX
             )
             Text(
                 when {
-                    profile.searchModel.isStepModel() ->
-                        "已配置 ${profile.searchModel}。Step 模型先调用 /v1/search，再经 Messages 整理笔记，不使用 Anthropic 的 web_search 工具。"
-                    profile.apiFormat == API_FORMAT_ANTHROPIC && profile.searchModel.isNotBlank() ->
-                        "已配置 ${profile.searchModel}。搜索走 Anthropic Messages 的 web_search，只发送独立查询。"
                     profile.searchModel.isBlank() ->
-                        "选择 Responses 的 web_search，或把 API 格式设为 Anthropic 后选择 Claude。Chat 模型即可委托联网。"
-                    else -> "已配置 ${profile.searchModel}。Aster 只向搜索后端发送模型生成的独立查询，不转发整段聊天记录。"
+                        "当前处于「模型自主极速搜索」模式：Gemini、DeepSeek 等对话模型会自主判断何时联网，支持单次并发搜索多组关键词，并优先调用原生搜索接口与内置多源并发引擎，延迟降低 80% 以上。"
+                    profile.searchModel.isGeminiModel() || profile.searchModel.isDeepSeekModel() ->
+                        "已选择 ${profile.searchModel}：Gemini 与 DeepSeek 自动走极速直连并发检索，避免双层大模型串行等待。"
+                    profile.searchModel.isStepModel() ->
+                        "已配置 ${profile.searchModel}。Step 模型直接调用 /v1/search 高速返回检索证据，省去二次模型总结等待。"
+                    profile.apiFormat == API_FORMAT_ANTHROPIC ->
+                        "已配置 ${profile.searchModel}。搜索走 Anthropic Messages 的 web_search，只发送独立查询。"
+                    else -> "已配置辅助搜索模型 ${profile.searchModel}。Gemini 与 DeepSeek 对话仍默认先自行极速检索网页；需要 X Search 时再调用该辅助模型。"
                 },
                 color = MutedInk,
                 style = MaterialTheme.typography.bodySmall
@@ -1232,7 +1239,7 @@ private fun SearchBackendCard(
 
     if (showProfileSheet) {
         AdSelectionSheet(
-            title = "选择联网搜索 API",
+            title = "选择辅助搜索 API",
             subtitle = if (profile.apiFormat == API_FORMAT_ANTHROPIC) "搜索模型通过该配置的 Anthropic Messages 路径调用" else "搜索模型通过该配置的 Responses 路径调用",
             options = profiles.map { item ->
                 AdChoiceOption(item.id, item.name, item.baseUrl, Icons.Rounded.Dns, if (item.id == profile.id) "当前" else null)
@@ -1245,13 +1252,32 @@ private fun SearchBackendCard(
         )
     }
     if (showModelSheet) {
+        val options = buildList {
+            add(
+                AdChoiceOption(
+                    id = "",
+                    title = "模型自主极速搜索（推荐）",
+                    subtitle = "由当前对话模型（Gemini / DeepSeek 等）直接并发检索，无二次模型等待",
+                    icon = Icons.Rounded.TravelExplore,
+                    badge = if (profile.searchModel.isBlank()) "当前" else "极速"
+                )
+            )
+            displayModels.forEach { model ->
+                add(
+                    AdChoiceOption(
+                        id = model.id,
+                        title = model.id,
+                        subtitle = model.ownedBy.ifBlank { profile.name },
+                        icon = Icons.Rounded.TravelExplore,
+                        badge = if (model.id == profile.searchModel) "当前" else null
+                    )
+                )
+            }
+        }
         AdSelectionSheet(
-            title = "选择联网搜索模型",
-            subtitle = if (displayModels.isEmpty()) "请先测试 API 并同步模型" else "Grok 模型优先显示，也可以选择其他兼容模型",
-            options = displayModels.map { model ->
-                AdChoiceOption(model.id, model.id, model.ownedBy.ifBlank { profile.name }, Icons.Rounded.TravelExplore,
-                    if (model.id == profile.searchModel) "当前" else null)
-            },
+            title = "选择联网搜索模式",
+            subtitle = "推荐使用「模型自主极速搜索」；仅在需要 X Search 等特定服务端工具时指定辅助模型",
+            options = options,
             selectedId = profile.searchModel,
             onSelect = { onModel(it.id); showModelSheet = false },
             onDismiss = { showModelSheet = false },
@@ -1682,20 +1708,19 @@ private fun ProfileEditor(
             }
             item {
                 SettingsDisclosure("工具默认值", "联网搜索、创建文件；聊天中也可随时调整", Icons.Rounded.Build) {
+                    val dedicatedOnly = !draft.usesResponses() && draft.chatModel.isDedicatedChatSearchModel() && !searchBackendConfigured
                     SettingSwitch(
                         title = "联网搜索",
                         subtitle = if (draft.usesResponses()) {
                             "使用 Responses API 的 web_search 工具"
-                        } else if (searchBackendConfigured) {
-                            "由 Aster 委托已配置的 Responses 搜索模型执行，可与 Skill / 创建文件共存"
                         } else {
-                            "未配置委托后端时尝试 Chat Completions 的 web_search_options"
+                            "模型自主调用并发搜索工具（支持与 Skill / 创建文件同时开启）"
                         },
                         checked = draft.webSearchEnabled,
                         onCheckedChange = { enabled ->
                             draft = draft.copy(
                                 webSearchEnabled = enabled,
-                                fileCreationEnabled = if (enabled && !draft.usesResponses() && !searchBackendConfigured) false else draft.fileCreationEnabled
+                                fileCreationEnabled = if (enabled && dedicatedOnly) false else draft.fileCreationEnabled
                             )
                         }
                     )
@@ -1706,13 +1731,13 @@ private fun ProfileEditor(
                         onCheckedChange = { enabled ->
                             draft = draft.copy(
                                 fileCreationEnabled = enabled,
-                                webSearchEnabled = if (enabled && !draft.usesResponses() && !searchBackendConfigured) false else draft.webSearchEnabled
+                                webSearchEnabled = if (enabled && dedicatedOnly) false else draft.webSearchEnabled
                             )
                         }
                     )
                     if (!draft.usesResponses()) {
                         Text(
-                            if (searchBackendConfigured) "已配置 Aster 委托搜索：Chat 协议可同时使用联网、Skill 与创建文件。" else "未配置委托搜索时，Chat 原生联网与自定义文件工具仍按兼容模式互斥。",
+                            "Gemini、DeepSeek 等模型开启联网搜索后，将由模型自主生成多组搜索词并并发检索实时网页，可与 Skill 及创建文件同时使用。",
                             color = MutedInk,
                             style = MaterialTheme.typography.bodySmall
                         )

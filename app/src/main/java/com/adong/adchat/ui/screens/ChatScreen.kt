@@ -101,6 +101,8 @@ import com.adong.adchat.data.ChatFileAttachment
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.ChatCitation
 import com.adong.adchat.data.ChatToolActivity
+import com.adong.adchat.data.DELEGATED_WEB_SEARCH_TOOL
+import com.adong.adchat.data.FETCH_WEB_TOOL
 import com.adong.adchat.data.TOOL_STATUS_COMPLETED
 import com.adong.adchat.data.TOOL_STATUS_FAILED
 import com.adong.adchat.data.TOOL_STATUS_RUNNING
@@ -1022,7 +1024,7 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
                         activities.forEach { activity ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    if (activity.name == "web_search") Icons.Rounded.TravelExplore else Icons.Rounded.Description,
+                                    if (activity.name in setOf("web_search", DELEGATED_WEB_SEARCH_TOOL, FETCH_WEB_TOOL)) Icons.Rounded.TravelExplore else Icons.Rounded.Description,
                                     null,
                                     Modifier.size(15.dp),
                                     tint = MutedInk
@@ -1084,7 +1086,7 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
                         activities.forEach { activity ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    if (activity.name == "web_search") Icons.Rounded.TravelExplore else Icons.Rounded.Description,
+                                    if (activity.name in setOf("web_search", DELEGATED_WEB_SEARCH_TOOL, FETCH_WEB_TOOL)) Icons.Rounded.TravelExplore else Icons.Rounded.Description,
                                     null,
                                     Modifier.size(14.dp),
                                     tint = MutedInk

@@ -191,6 +191,7 @@ internal fun buildChatTools(
     }
     if (delegatedSearchEnabled) {
         put(JSONObject().put("type", "function").put("function", delegatedSearchDefinition(allowXSearch)))
+        put(JSONObject().put("type", "function").put("function", fetchWebDefinition()))
     }
     if (askUserEnabled) {
         put(JSONObject().put("type", "function").put("function", askUserDefinition(responsesApi = false)))

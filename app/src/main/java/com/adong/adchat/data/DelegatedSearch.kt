@@ -4,12 +4,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 const val DELEGATED_WEB_SEARCH_TOOL = "search_web"
-const val MAX_DELEGATED_SEARCH_CALLS = 4
+const val FETCH_WEB_TOOL = "fetch_web"
+const val MAX_DELEGATED_SEARCH_CALLS = 6
+
+const val WEB_SEARCH_AGENT_INSTRUCTION =
+    "已启用实时联网搜索与网页读取工具（search_web / fetch_web）。遇到需要最新信息、近期事件、版本动态、价格参数、外部网页资料或任何无法百分百确定的事实时，请先主动调用 search_web 自行检索（可通过 queries 参数一次性并发搜索最多 4 个不同维度的精准关键词），必要时调用 fetch_web 读取关键网页全文，再结合检索证据回答。"
 
 data class SearchBackendConfig(
     val profile: ApiProfile,
     val model: String,
-    val allowXSearch: Boolean = false
+    val allowXSearch: Boolean = false,
+    val directSearch: Boolean = false
 )
 
 data class DelegatedSearchResult(
@@ -23,19 +28,47 @@ internal fun delegatedSearchDefinition(allowXSearch: Boolean): JSONObject {
     if (allowXSearch) sourceValues += "x"
     return JSONObject()
         .put("name", DELEGATED_WEB_SEARCH_TOOL)
-        .put("description", "Search current internet information through Aster's configured search backend. Use this when the answer depends on recent, changing, external, or source-verifiable information. The backend performs real server-side search. Do not invent search results. Prefer one focused query; make another call only when materially different evidence is needed.")
+        .put("description", "Search current internet information in real time. Proactively call this tool first whenever the answer depends on recent events, versions, facts, prices, or verifiable external sources. Do not invent search results. To research faster, you may pass multiple focused queries in `queries` (1-4 items) so they execute in parallel in a single round.")
         .put("parameters", JSONObject()
             .put("type", "object")
             .put("properties", JSONObject()
                 .put("query", JSONObject()
                     .put("type", "string")
-                    .put("description", "A self-contained search query. Include names, dates, versions, or constraints needed to research the user's question without the full chat history."))
+                    .put("description", "Primary self-contained search query with specific keywords, names, dates, or versions."))
+                .put("queries", JSONObject()
+                    .put("type", "array")
+                    .put("items", JSONObject().put("type", "string"))
+                    .put("description", "Optional list of up to 4 parallel search queries to run concurrently in one call for multi-angle research."))
                 .put("source", JSONObject()
                     .put("type", "string")
                     .put("enum", JSONArray(sourceValues))
                     .put("description", if (allowXSearch) "Use web for normal internet research or x for public X posts." else "Internet source; only web is enabled.")))
             .put("required", JSONArray(listOf("query")))
             .put("additionalProperties", false))
+}
+
+internal fun fetchWebDefinition(): JSONObject = JSONObject()
+    .put("name", FETCH_WEB_TOOL)
+    .put("description", "Fetch and read the full text content of a specific HTTP/HTTPS web page URL when search snippets are insufficient or when the user provides a URL.")
+    .put("parameters", JSONObject()
+        .put("type", "object")
+        .put("properties", JSONObject()
+            .put("url", JSONObject()
+                .put("type", "string")
+                .put("description", "The full HTTP or HTTPS URL of the web page to read.")))
+        .put("required", JSONArray(listOf("url")))
+        .put("additionalProperties", false))
+
+internal fun extractSearchQueries(args: JSONObject): List<String> {
+    val list = mutableListOf<String>()
+    args.optString("query").trim().takeIf(String::isNotBlank)?.let(list::add)
+    val array = args.optJSONArray("queries")
+    if (array != null) {
+        for (i in 0 until array.length()) {
+            array.optString(i).trim().takeIf(String::isNotBlank)?.let(list::add)
+        }
+    }
+    return list.distinct().take(4)
 }
 
 internal fun parseServerSideSearchSources(root: JSONObject): List<ChatCitation> {

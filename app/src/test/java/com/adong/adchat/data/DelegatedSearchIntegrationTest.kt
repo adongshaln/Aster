@@ -127,6 +127,88 @@ class DelegatedSearchIntegrationTest {
         }
     }
 
+    @Test
+    fun deepSeekThinkingModePreservesReasoningContentAcrossToolCallRound() = runBlocking {
+        val server = MockWebServer()
+        server.start()
+        try {
+            server.enqueue(sse("""
+                data: {"choices":[{"delta":{"reasoning_content":"用户询问实时消息，我需要先调用 search_web 搜索。"},"finish_reason":null}]}
+
+                data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-ds","function":{"name":"search_web","arguments":"{\"query\":\"DeepSeek V4.1 Flash\"}"}}]},"finish_reason":"tool_calls"}]}
+
+                data: [DONE]
+
+            """.trimIndent()))
+            server.enqueue(MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("""
+                    {
+                      "id":"resp-search",
+                      "status":"completed",
+                      "output":[
+                        {
+                          "type":"web_search_call",
+                          "id":"ws-1",
+                          "action":{
+                            "type":"search",
+                            "query":"DeepSeek V4.1 Flash",
+                            "sources":[{"title":"DeepSeek News","url":"https://www.deepseek.com/news"}]
+                          }
+                        },
+                        {
+                          "type":"message",
+                          "role":"assistant",
+                          "content":[{"type":"output_text","text":"DeepSeek V4.1 Flash 已正式发布。"}]
+                        }
+                      ]
+                    }
+                """.trimIndent()))
+            server.enqueue(sse("""
+                data: {"choices":[{"delta":{"content":"DeepSeek V4.1 Flash 已经发布。"},"finish_reason":"stop"}]}
+
+                data: [DONE]
+
+            """.trimIndent()))
+
+            val profile = ApiProfile(
+                name = "deepseek",
+                baseUrl = server.url("/").toString(),
+                apiKey = "test-key",
+                chatModel = "deepseek-flash",
+                chatPath = "/v1/chat/completions",
+                responsesPath = "/v1/responses",
+                webSearchEnabled = true
+            )
+            val result = ApiRepository().streamChat(
+                profile = profile,
+                model = profile.chatModel,
+                systemPrompt = "",
+                history = listOf(ChatMessage(role = "user", content = "DeepSeek 最新 Flash 模型是什么？")),
+                cacheKey = "ds-thinking-search",
+                searchBackend = SearchBackendConfig(profile, "grok-4.6", allowXSearch = false, directSearch = false)
+            ) {}
+
+            assertEquals("DeepSeek V4.1 Flash 已经发布。", result.text)
+            assertTrue(result.reasoning.contains("需要先调用 search_web"))
+
+            server.takeRequest() // 1st chat request
+            server.takeRequest() // search request
+            val third = server.takeRequest() // 2nd chat request after tool call
+            val finalBody = JSONObject(third.body.readUtf8())
+            val messages = finalBody.getJSONArray("messages")
+            val assistantToolMsg = (0 until messages.length())
+                .map { messages.getJSONObject(it) }
+                .first { it.optString("role") == "assistant" && it.has("tool_calls") }
+            assertEquals(
+                "用户询问实时消息，我需要先调用 search_web 搜索。",
+                assistantToolMsg.getString("reasoning_content")
+            )
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private fun sse(body: String): MockResponse = MockResponse()
         .setHeader("Content-Type", "text/event-stream")
         .setBody(body)

@@ -110,5 +110,59 @@ class DelegatedSearchTest {
         assertEquals("step-5-preview", followUp.getString("model"))
     }
 
+    @Test
+    fun extractSearchQueriesMergesSingleAndBatchQueriesUpToFour() {
+        val args = JSONObject()
+            .put("query", "Gemini 4 Argon benchmark")
+            .put("queries", JSONArray(listOf("Gemini 4 Argon release date", "Gemini 4 Argon pricing", "Gemini 4 Argon benchmark", "DeepSeek V4.1 Flash", "Extra ignored")))
+        val queries = extractSearchQueries(args)
+        assertEquals(
+            listOf("Gemini 4 Argon benchmark", "Gemini 4 Argon release date", "Gemini 4 Argon pricing", "DeepSeek V4.1 Flash"),
+            queries
+        )
+    }
+
+    @Test
+    fun fastWebSearchParsesDeepSeekAndGeminiAndBingRss() {
+        val deepSeekJson = JSONObject().put("results", JSONArray().put(JSONObject()
+            .put("title", "DeepSeek V4 Released")
+            .put("url", "https://www.deepseek.com/news/v4")
+            .put("snippet", "Short snippet")
+            .put("summary", "Detailed summary for model reading.")
+            .put("site_name", "DeepSeek")
+            .put("date", "2026-10-17T00:00:00+00:00")))
+        val dsItems = FastWebSearchClient.parseDeepSeekSearchResponse(deepSeekJson)
+        assertEquals(1, dsItems.size)
+        assertEquals("https://www.deepseek.com/news/v4", dsItems.single().url)
+        assertEquals("Detailed summary for model reading.", dsItems.single().summary)
+        assertEquals("2026-10-17", dsItems.single().publishedDate)
+
+        val geminiJson = JSONObject().put("candidates", JSONArray().put(JSONObject()
+            .put("content", JSONObject().put("parts", JSONArray()
+                .put(JSONObject().put("text", "Thinking...").put("thought", true))
+                .put(JSONObject().put("text", "Gemini 4 Argon is Google's frontier model."))))
+            .put("groundingMetadata", JSONObject().put("groundingChunks", JSONArray()
+                .put(JSONObject().put("web", JSONObject().put("uri", "https://deepmind.google/argon").put("title", "DeepMind Argon")))))))
+        val (geminiItems, geminiNote) = FastWebSearchClient.parseGeminiGroundingResponse(geminiJson)
+        assertEquals("Gemini 4 Argon is Google's frontier model.", geminiNote)
+        assertEquals("https://deepmind.google/argon", geminiItems.single().url)
+
+        val rssXml = """
+            <?xml version="1.0" encoding="utf-8" ?>
+            <rss version="2.0"><channel>
+            <item>
+              <title>Gemini 4 Argon Docs</title>
+              <link>https://ai.google.dev/gemini-api/docs</link>
+              <description>Official documentation for &amp;quot;Gemini 4 Argon&amp;quot;.</description>
+              <pubDate>Sun, 01 Nov 2026 01:00:00 GMT</pubDate>
+            </item>
+            </channel></rss>
+        """.trimIndent()
+        val rssItems = FastWebSearchClient.parseBingRssXml(rssXml)
+        assertEquals(1, rssItems.size)
+        assertEquals("https://ai.google.dev/gemini-api/docs", rssItems.single().url)
+        assertTrue(rssItems.single().snippet.contains("Official documentation"))
+    }
+
     private fun JSONArray.toStringList(): List<String> = (0 until length()).map(::getString)
 }

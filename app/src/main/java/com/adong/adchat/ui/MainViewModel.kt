@@ -227,9 +227,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val suggestionProfile: ApiProfile get() = appConfig.suggestionProfile()
     val allowXSearch: Boolean get() = appConfig.allowXSearch
     private fun searchBackendConfig(): SearchBackendConfig? {
-        val profile = appConfig.searchProfile()
-        val model = profile.searchModel.trim()
-        return model.takeIf(String::isNotBlank)?.let { SearchBackendConfig(profile, it, appConfig.allowXSearch) }
+        val activeChat = chatProfile
+        val chatModel = activeChat.chatModel.trim()
+        val configuredProfile = appConfig.searchProfile()
+        val configuredModel = configuredProfile.searchModel.trim()
+        // Gemini 与 DeepSeek 默认始终先由模型自己发起极速并发搜索，避免慢速双模型中转瓶颈
+        if (chatModel.isGeminiModel() || chatModel.isDeepSeekModel()) {
+            return SearchBackendConfig(
+                profile = if (configuredModel.isNotBlank() && appConfig.allowXSearch) configuredProfile else activeChat,
+                model = configuredModel.takeIf { it.isNotBlank() && appConfig.allowXSearch } ?: chatModel,
+                allowXSearch = appConfig.allowXSearch && configuredModel.isNotBlank(),
+                directSearch = true
+            )
+        }
+        if (configuredModel.isNotBlank()) {
+            val useDirect = configuredModel.isGeminiModel() || configuredModel.isDeepSeekModel()
+            return SearchBackendConfig(configuredProfile, configuredModel, appConfig.allowXSearch, directSearch = useDirect)
+        }
+        if (!activeChat.usesResponses(chatModel) && chatModel.isNotBlank() && !chatModel.isDedicatedChatSearchModel()) {
+            return SearchBackendConfig(activeChat, chatModel, allowXSearch = false, directSearch = true)
+        }
+        return null
     }
     val mangaAnalysisProfile: ApiProfile
         get() {
@@ -402,11 +420,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectSearchModel(profileId: String, model: String) {
+        if (profiles.none { it.id == profileId }) return
         val selected = model.trim()
-        if (selected.isBlank()) return
         updateProfile(profileId) { it.copy(searchModel = selected) }
         appConfig = appConfig.copy(activeSearchProfileId = profileId)
-        persist(); notice = "联网搜索模型已设置为 $selected"
+        persist()
+        notice = if (selected.isBlank()) "已切换为模型自主极速搜索" else "辅助搜索模型已设置为 $selected"
     }
 
     fun selectSuggestionProfile(profileId: String) {
@@ -532,11 +551,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatWebSearchEnabled(enabled: Boolean) {
         val profile = chatProfile
-        val delegated = !profile.usesResponses() && searchBackendConfig() != null
+        val dedicatedOnly = !profile.usesResponses() && profile.chatModel.isDedicatedChatSearchModel() && searchBackendConfig() == null
         updateProfile(profile.id) {
             it.copy(
                 webSearchEnabled = enabled,
-                fileCreationEnabled = if (enabled && !profile.usesResponses() && !delegated) false else it.fileCreationEnabled
+                fileCreationEnabled = if (enabled && dedicatedOnly) false else it.fileCreationEnabled
             )
         }
         persist()
@@ -544,11 +563,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setChatFileCreationEnabled(enabled: Boolean) {
         val profile = chatProfile
-        val delegated = !profile.usesResponses() && searchBackendConfig() != null
+        val dedicatedOnly = !profile.usesResponses() && profile.chatModel.isDedicatedChatSearchModel() && searchBackendConfig() == null
         updateProfile(profile.id) {
             it.copy(
                 fileCreationEnabled = enabled,
-                webSearchEnabled = if (enabled && !profile.usesResponses() && !delegated) false else it.webSearchEnabled
+                webSearchEnabled = if (enabled && dedicatedOnly) false else it.webSearchEnabled
             )
         }
         persist()
