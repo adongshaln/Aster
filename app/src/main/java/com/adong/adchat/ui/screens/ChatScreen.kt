@@ -359,6 +359,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         ChatHeader(
             vm, onOpenDrawer, onSwitchModel = { showSwitcher = true },
             showNavigation = questionIndices.size > 1,
+            canExportMarkdown = vm.messages.isNotEmpty() && !vm.isChatLoading,
             previousEnabled = questionTargets.previous != null,
             nextEnabled = questionTargets.next != null,
             onPrevious = {
@@ -371,6 +372,21 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 questionTargets.next?.let { target ->
                     autoFollow = false
                     scope.launch { listState.animateScrollToItem(target) }
+                }
+            },
+            onExportMarkdown = {
+                vm.buildConversationMarkdownExport()?.let { (filename, bytes) ->
+                    val file = ChatFileAttachment(
+                        name = filename,
+                        mimeType = "text/markdown",
+                        content = String(bytes, Charsets.UTF_8)
+                    )
+                    pendingFileExport = file
+                    fileExportLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "text/markdown"
+                        putExtra(Intent.EXTRA_TITLE, filename)
+                    })
                 }
             }
         )
@@ -425,6 +441,20 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                                 }
                             },
                             onConfigureContext = { showContextDialog = true },
+                            onQuoteReply = {
+                                val snippet = message.content
+                                    .replace(Regex("\\s+"), " ")
+                                    .trim()
+                                    .take(96)
+                                    .let { if (message.content.length > 96) "$it…" else it }
+                                val prefix = "> $snippet\n\n"
+                                val nextInput = if (vm.chatInput.isBlank()) prefix else "${vm.chatInput.trimEnd()}\n\n$prefix"
+                                vm.updateChatInput(nextInput)
+                                scope.launch {
+                                    withFrameNanos { }
+                                    composerFocusRequester.requestFocus()
+                                }
+                            },
                             onSaveFile = { file ->
                                 pendingFileExport = file
                                 fileExportLauncher.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -593,10 +623,12 @@ private fun ChatHeader(
     onOpenDrawer: () -> Unit,
     onSwitchModel: () -> Unit,
     showNavigation: Boolean,
+    canExportMarkdown: Boolean,
     previousEnabled: Boolean,
     nextEnabled: Boolean,
     onPrevious: () -> Unit,
-    onNext: () -> Unit
+    onNext: () -> Unit,
+    onExportMarkdown: () -> Unit
 ) {
     var showActions by remember { mutableStateOf(false) }
     ConversationHeader(
@@ -604,16 +636,30 @@ private fun ChatHeader(
         model = vm.chatProfile.chatModel.ifBlank { "选择对话模型" },
         onOpenDrawer = onOpenDrawer, onModelClick = onSwitchModel
     ) {
-        if (showNavigation) AsterIconButton(Icons.Rounded.MoreHoriz, "对话导航", { showActions = true })
+        if (showNavigation || canExportMarkdown) {
+            AsterIconButton(Icons.Rounded.MoreHoriz, "对话操作", { showActions = true })
+        }
         AsterIconButton(Icons.Rounded.AddComment, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
     }
     if (showActions) AdActionSheet(
-        title = "对话导航", subtitle = "按提问定位，继续阅读",
-        actions = listOf(
-            AdActionOption("previous", "回到上一个提问", icon = Icons.Rounded.KeyboardArrowUp, enabled = previousEnabled),
-            AdActionOption("next", "前往下一个提问", icon = Icons.Rounded.KeyboardArrowDown, enabled = nextEnabled)
-        ),
-        onAction = { showActions = false; if (it.id == "previous") onPrevious() else onNext() },
+        title = "对话操作", subtitle = "按提问定位，或导出整段对话",
+        actions = buildList {
+            if (showNavigation) {
+                add(AdActionOption("previous", "回到上一个提问", icon = Icons.Rounded.KeyboardArrowUp, enabled = previousEnabled))
+                add(AdActionOption("next", "前往下一个提问", icon = Icons.Rounded.KeyboardArrowDown, enabled = nextEnabled))
+            }
+            if (canExportMarkdown) {
+                add(AdActionOption("export_md", "导出为 Markdown", "保存包含思考过程与参考来源的完整问答记录", icon = Icons.Rounded.FileDownload))
+            }
+        },
+        onAction = {
+            showActions = false
+            when (it.id) {
+                "previous" -> onPrevious()
+                "next" -> onNext()
+                "export_md" -> onExportMarkdown()
+            }
+        },
         onDismiss = { showActions = false }
     )
 }
@@ -711,6 +757,7 @@ private fun ChatMessageItem(
     onDetailsExpanded: () -> Unit,
     onEditResend: () -> Unit = {},
     onConfigureContext: () -> Unit = {},
+    onQuoteReply: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val user = message.role == "user"
@@ -850,6 +897,9 @@ private fun ChatMessageItem(
                     Column(Modifier.fillMaxWidth().padding(top = 9.dp)) {
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             ConversationCopyAction(message.content)
+                            if (!message.isError) {
+                                ConversationMessageAction(Icons.Rounded.FormatQuote, "引用追问", onQuoteReply)
+                            }
                             if (message.isError) {
                                 if (canRetry) {
                                     ConversationMessageAction(Icons.Rounded.Refresh, "重试", onRetry)

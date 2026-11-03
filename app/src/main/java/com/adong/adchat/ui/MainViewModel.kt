@@ -1421,6 +1421,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearChat() = newConversation()
 
+    /**
+     * Seamlessly hand off clipboard content (and any Star Island initial output) into a fresh
+     * main-app conversation so the user can continue asking follow-up questions in depth.
+     */
+    fun startConversationFromStarIsland(source: String, result: String, actionLabel: String) {
+        if (isChatLoading) return
+        stashCurrentDraft()
+        clearInputSuggestion()
+        activeConversationId = null
+        lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
+        messages.clear()
+        chatAttachments.clear()
+        val trimmedSource = source.trim()
+        val trimmedResult = result.trim()
+        if (trimmedSource.isNotBlank() && trimmedResult.isNotBlank()) {
+            val actionTag = actionLabel.ifBlank { "星岛处理" }
+            messages += ChatMessage(
+                role = "user",
+                content = "【星岛 · $actionTag】\n$trimmedSource"
+            )
+            messages += ChatMessage(
+                role = "assistant",
+                content = trimmedResult,
+                profileName = chatProfile.name,
+                model = chatProfile.chatModel
+            )
+            persistCurrentConversation()
+            chatInput = ""
+            notice = "已从星岛带入对话，可继续深入追问"
+        } else if (trimmedSource.isNotBlank()) {
+            updateChatInput(trimmedSource)
+            notice = "已将星岛内容填入输入框"
+        }
+    }
+
+    /** Build a clean Markdown document for the active conversation. */
+    fun buildConversationMarkdownExport(): Pair<String, ByteArray>? {
+        if (messages.isEmpty()) return null
+        val title = conversations.firstOrNull { it.id == activeConversationId }?.title
+            ?.takeIf { it.isNotBlank() } ?: "Aster-对话记录"
+        val safeFileName = title.replace(Regex("[\\\\/:*?\"<>|\\s]+"), "_").take(36).ifBlank { "Aster-对话记录" } + ".md"
+        val md = buildString {
+            append("# ").append(title).append("\n\n")
+            messages.filterNot { it.isContinuation }.forEach { msg ->
+                val roleHeader = if (msg.role == "user") "## 提问" else "## 回答${msg.model.takeIf { it.isNotBlank() }?.let { " ($it)" }.orEmpty()}"
+                append(roleHeader).append("\n\n")
+                if (msg.reasoning.isNotBlank()) {
+                    append("<details><summary>思考过程</summary>\n\n")
+                    append(msg.reasoning.trim()).append("\n\n</details>\n\n")
+                }
+                append(msg.content.trim()).append("\n\n")
+                if (msg.citations.isNotEmpty()) {
+                    append("**参考来源：**\n")
+                    msg.citations.forEachIndexed { idx, c ->
+                        append("${idx + 1}. [${c.title}](${c.url})\n")
+                    }
+                    append("\n")
+                }
+                append("---\n\n")
+            }
+        }
+        return safeFileName to md.toByteArray(Charsets.UTF_8)
+    }
+
     fun selectConversation(id: String) {
         if (id == activeConversationId) return
         if (isChatLoading) {

@@ -18,6 +18,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.provider.CalendarContract
 import android.hardware.display.DisplayManager
 import android.view.Display
 import android.view.Surface
@@ -59,6 +60,10 @@ class IslandService : Service(), IslandView.Callbacks {
         const val ACTION_START = "com.adong.adchat.island.START"
         const val ACTION_STOP = "com.adong.adchat.island.STOP"
         const val ACTION_OPEN_SETTINGS = "com.adong.adchat.island.OPEN_SETTINGS"
+        const val ACTION_CONTINUE_IN_CHAT = "com.adong.adchat.island.CONTINUE_IN_CHAT"
+        const val EXTRA_CHAT_SOURCE = "com.adong.adchat.island.EXTRA_CHAT_SOURCE"
+        const val EXTRA_CHAT_RESULT = "com.adong.adchat.island.EXTRA_CHAT_RESULT"
+        const val EXTRA_CHAT_ACTION = "com.adong.adchat.island.EXTRA_CHAT_ACTION"
         const val ACTION_THEME_CHANGED = "com.adong.adchat.island.THEME_CHANGED"
         const val EXTRA_THEME_NIGHT = "com.adong.adchat.island.THEME_NIGHT"
         const val EXTRA_THEME_FOLLOW_SYSTEM = "com.adong.adchat.island.THEME_FOLLOW_SYSTEM"
@@ -335,7 +340,39 @@ class IslandService : Service(), IslandView.Callbacks {
                 if (it.platform == com.adong.adchat.media.MediaPlatform.Douyin) it.originalUrl
                 else it.cleanedUrl.ifBlank { it.originalUrl }
             } ?: content.url)?.let { copyText(it, "链接已复制") }
-            StarIslandAction.Translate, StarIslandAction.Polish, StarIslandAction.Explain ->
+            StarIslandAction.CopyExtracted -> {
+                val code = content.textInsight.extractedCode?.takeIf { it.isNotBlank() } ?: content.text
+                copyText(code, "已复制：$code")
+                islandView?.collapse()
+            }
+            StarIslandAction.AddCalendar -> {
+                val title = content.textInsight.suggestedScheduleTitle.ifBlank {
+                    content.text.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty().take(36)
+                }
+                val calIntent = Intent(Intent.ACTION_INSERT).apply {
+                    data = CalendarContract.Events.CONTENT_URI
+                    putExtra(CalendarContract.Events.TITLE, title)
+                    putExtra(CalendarContract.Events.DESCRIPTION, content.text)
+                }
+                openActivity(calIntent)
+            }
+            StarIslandAction.ContinueInChat -> {
+                val taskOutput = currentTask?.output.orEmpty()
+                val taskLabel = currentTask?.action?.label.orEmpty()
+                openActivity(Intent(this, MainActivity::class.java).apply {
+                    setAction(ACTION_CONTINUE_IN_CHAT)
+                    putExtra(EXTRA_CHAT_SOURCE, content.url ?: content.text)
+                    putExtra(EXTRA_CHAT_RESULT, taskOutput)
+                    putExtra(EXTRA_CHAT_ACTION, taskLabel)
+                })
+            }
+            StarIslandAction.Translate,
+            StarIslandAction.Polish,
+            StarIslandAction.Explain,
+            StarIslandAction.Summarize,
+            StarIslandAction.SmartReply,
+            StarIslandAction.ExtractInfo,
+            StarIslandAction.FactCheck ->
                 if (content.kind == StarIslandKind.Text) startTask(content, action)
             StarIslandAction.ReadWeb -> if (content.kind == StarIslandKind.Web) startTask(content, action)
             StarIslandAction.AskScreen -> Unit // Screen input is accepted only after explicit crop confirmation.

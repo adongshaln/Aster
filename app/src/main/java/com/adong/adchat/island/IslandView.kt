@@ -1038,7 +1038,11 @@ class IslandView(
         if (cardTitle.text.toString() != title) cardTitle.text = title
         val badgeLabel = when {
             task == null -> when (content.kind) {
-                StarIslandKind.Text -> "${content.text.length} 字 · 极速"
+                StarIslandKind.Text -> {
+                    val sceneBadge = content.textInsight.scene.badge
+                    if (sceneBadge.isNotBlank()) "$sceneBadge · ${content.text.length} 字"
+                    else "${content.text.length} 字 · 极速"
+                }
                 StarIslandKind.Web -> "网页 · 极速"
                 StarIslandKind.Media -> "无水印直链"
             }
@@ -1109,18 +1113,40 @@ class IslandView(
                 if (nearEnd && task.phase == StarIslandPhase.Working) outputScroll.post { outputScroll.fullScroll(FOCUS_DOWN) }
             }
         }
-        val actionKey = "${content.kind}:${task?.action}:${task?.phase}:${task?.needsConfiguration}:${task?.output?.isBlank()}"
+        val actionKey = "${content.kind}:${content.textInsight.scene}:${content.textInsight.extractedCode}:${task?.action}:${task?.phase}:${task?.needsConfiguration}:${task?.output?.isBlank()}"
         val dismiss = CardAction("收起") { collapse() }
-        fun request(action: StarIslandAction, primary: Boolean = false) = CardAction(action.label, primary) {
-            displayedContent?.let { callbacks.onActionRequested(it, action) }
-        }
+        fun request(action: StarIslandAction, primary: Boolean = false, customLabel: String? = null) =
+            CardAction(customLabel ?: action.label, primary) {
+                displayedContent?.let { callbacks.onActionRequested(it, action) }
+            }
         val actions = if (task == null) when (content.kind) {
-            StarIslandKind.Text -> listOf(request(StarIslandAction.Translate, true), request(StarIslandAction.Polish),
-                request(StarIslandAction.Explain), dismiss)
-            StarIslandKind.Web -> listOf(request(StarIslandAction.ReadWeb, true), request(StarIslandAction.OpenLink),
-                request(StarIslandAction.CopyLink), dismiss)
-            StarIslandKind.Media -> listOf(request(StarIslandAction.Download, true), request(StarIslandAction.OpenLink),
-                request(StarIslandAction.CopyLink), dismiss)
+            StarIslandKind.Text -> {
+                val insight = content.textInsight
+                val primaryList = insight.primaryActions.ifEmpty {
+                    listOf(StarIslandAction.Translate, StarIslandAction.Polish, StarIslandAction.Explain)
+                }
+                buildList {
+                    primaryList.take(3).forEachIndexed { idx, act ->
+                        val customLabel = if (act == StarIslandAction.CopyExtracted && insight.extractedLabel.isNotBlank()) {
+                            insight.extractedLabel
+                        } else null
+                        add(request(act, primary = idx == 0, customLabel = customLabel))
+                    }
+                    add(dismiss)
+                }
+            }
+            StarIslandKind.Web -> listOf(
+                request(StarIslandAction.ReadWeb, true),
+                request(StarIslandAction.ContinueInChat),
+                request(StarIslandAction.OpenLink),
+                dismiss
+            )
+            StarIslandKind.Media -> listOf(
+                request(StarIslandAction.Download, true),
+                request(StarIslandAction.OpenLink),
+                request(StarIslandAction.CopyLink),
+                dismiss
+            )
         } else if (isMediaDownload) when (task.phase) {
             StarIslandPhase.Working -> listOf(CardAction("停止", true) { callbacks.onStopRequested() }, dismiss)
             StarIslandPhase.Complete -> listOf(
@@ -1143,7 +1169,10 @@ class IslandView(
             StarIslandPhase.Working -> listOf(CardAction("停止", true) { callbacks.onStopRequested() }, dismiss)
             StarIslandPhase.Complete, StarIslandPhase.Stopped -> listOf(
                 CardAction("复制结果", true, task.output.isNotBlank()) { callbacks.onCopyRequested() },
-                CardAction("返回") { callbacks.onBackRequested() }, dismiss)
+                request(StarIslandAction.ContinueInChat, customLabel = "转入对话"),
+                CardAction("返回") { callbacks.onBackRequested() },
+                dismiss
+            )
             StarIslandPhase.Error -> buildList {
                 add(if (task.needsConfiguration) CardAction("打开 Aster", true) { callbacks.onConfigureRequested() }
                     else CardAction("重试", true) {

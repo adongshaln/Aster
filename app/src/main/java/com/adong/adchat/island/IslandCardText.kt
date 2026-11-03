@@ -15,7 +15,7 @@ internal object IslandCardText {
     }
 
     fun title(content: StarIslandContent): String = when (content.kind) {
-        StarIslandKind.Text -> "剪贴板文字"
+        StarIslandKind.Text -> content.textInsight.scene.title
         StarIslandKind.Web -> "网页链接"
         StarIslandKind.Media -> title(checkNotNull(content.mediaLink).platform)
     }

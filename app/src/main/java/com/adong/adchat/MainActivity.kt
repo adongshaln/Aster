@@ -81,11 +81,13 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var pendingMediaShare by mutableStateOf<String?>(null)
     private var pendingIslandSettings by mutableStateOf(false)
+    private var pendingIslandChatHandoff by mutableStateOf<Triple<String, String, String>?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingMediaShare = extractSharedMediaText(intent)
         pendingIslandSettings = intent?.action == IslandService.ACTION_OPEN_SETTINGS
+        pendingIslandChatHandoff = extractIslandChatHandoff(intent)
         enableEdgeToEdge()
         if (com.adong.adchat.island.IslandPermissions.isEnabled(this) &&
             com.adong.adchat.island.IslandPermissions.isReady(this)
@@ -117,6 +119,11 @@ class MainActivity : ComponentActivity() {
                         onIslandSettingsConsumed = {
                             pendingIslandSettings = false
                             if (intent?.action == IslandService.ACTION_OPEN_SETTINGS) intent.action = null
+                        },
+                        islandChatHandoff = pendingIslandChatHandoff,
+                        onIslandChatHandoffConsumed = {
+                            pendingIslandChatHandoff = null
+                            if (intent?.action == IslandService.ACTION_CONTINUE_IN_CHAT) intent.action = null
                         }
                     )
                 }
@@ -129,6 +136,7 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         pendingMediaShare = extractSharedMediaText(intent)
         pendingIslandSettings = intent.action == IslandService.ACTION_OPEN_SETTINGS
+        pendingIslandChatHandoff = extractIslandChatHandoff(intent)
     }
 
     private fun extractSharedMediaText(intent: Intent?): String? = when (intent?.action) {
@@ -136,6 +144,15 @@ class MainActivity : ComponentActivity() {
         Intent.ACTION_VIEW -> intent.dataString
         else -> null
     }?.trim()?.takeIf { it.isNotBlank() }
+
+    private fun extractIslandChatHandoff(intent: Intent?): Triple<String, String, String>? {
+        if (intent?.action != IslandService.ACTION_CONTINUE_IN_CHAT) return null
+        val source = intent.getStringExtra(IslandService.EXTRA_CHAT_SOURCE).orEmpty().trim()
+        if (source.isBlank()) return null
+        val result = intent.getStringExtra(IslandService.EXTRA_CHAT_RESULT).orEmpty().trim()
+        val actionLabel = intent.getStringExtra(IslandService.EXTRA_CHAT_ACTION).orEmpty().trim()
+        return Triple(source, result, actionLabel)
+    }
 }
 
 internal enum class AppPage(val label: String, val icon: ImageVector) {
@@ -153,6 +170,8 @@ private fun AsterApp(
     onMediaTextConsumed: () -> Unit,
     openIslandSettings: Boolean,
     onIslandSettingsConsumed: () -> Unit,
+    islandChatHandoff: Triple<String, String, String>? = null,
+    onIslandChatHandoffConsumed: () -> Unit = {},
 ) {
     var page by rememberSaveable { mutableStateOf(AppPage.Chat) }
     if (!vm.appConfig.userNamePromptDone) {
@@ -207,6 +226,13 @@ private fun AsterApp(
         if (openIslandSettings) {
             navigate(AppPage.Settings)
         }
+    }
+
+    LaunchedEffect(islandChatHandoff) {
+        val handoff = islandChatHandoff ?: return@LaunchedEffect
+        vm.startConversationFromStarIsland(handoff.first, handoff.second, handoff.third)
+        navigate(AppPage.Chat)
+        onIslandChatHandoffConsumed()
     }
 
     LaunchedEffect(vm.notice) {
