@@ -318,7 +318,7 @@ class ApiRepository internal constructor(
         val delegatedSearchEnabled = profile.webSearchEnabled && searchBackend != null
         val effectiveSystemPrompt = listOf(
             systemPrompt,
-            WEB_SEARCH_AGENT_INSTRUCTION.takeIf { delegatedSearchEnabled }.orEmpty(),
+            webSearchAgentInstruction().takeIf { delegatedSearchEnabled }.orEmpty(),
             ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
             SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
         ).filter(String::isNotBlank).joinToString("\n\n")
@@ -644,7 +644,7 @@ class ApiRepository internal constructor(
         val messages = JSONArray()
         val effectiveSystemPrompt = listOf(
             systemPrompt,
-            WEB_SEARCH_AGENT_INSTRUCTION.takeIf { delegatedSearchEnabled }.orEmpty(),
+            webSearchAgentInstruction().takeIf { delegatedSearchEnabled }.orEmpty(),
             ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
             SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
         ).filter(String::isNotBlank).joinToString("\n\n")

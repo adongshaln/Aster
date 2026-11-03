@@ -69,20 +69,23 @@ fun ConversationHeader(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (!modelUnavailable && model.isNotBlank()) {
-                        AsterInlineBrandGlyph(
+                        AsterModelCombineLabel(
                             modelId = model,
-                            size = 13.5.dp,
-                            modifier = Modifier.padding(end = 4.dp)
+                            textColor = MutedInk,
+                            fontWeight = FontWeight.Medium,
+                            lockupHeight = 14.dp,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                    } else {
+                        Text(
+                            text = model.ifBlank { "选择模型" },
+                            modifier = Modifier.weight(1f, fill = false),
+                            color = if (modelUnavailable) Danger else MutedInk,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
-                    Text(
-                        text = model.ifBlank { "选择模型" },
-                        modifier = Modifier.weight(1f, fill = false),
-                        color = if (modelUnavailable) Danger else MutedInk,
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                     Spacer(Modifier.width(2.dp))
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,

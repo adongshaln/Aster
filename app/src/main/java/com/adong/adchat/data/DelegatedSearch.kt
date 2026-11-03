@@ -2,6 +2,7 @@ package com.adong.adchat.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 
 const val DELEGATED_WEB_SEARCH_TOOL = "search_web"
 const val FETCH_WEB_TOOL = "fetch_web"
@@ -9,6 +10,9 @@ const val MAX_DELEGATED_SEARCH_CALLS = 6
 
 const val WEB_SEARCH_AGENT_INSTRUCTION =
     "已启用实时联网搜索与网页读取工具（search_web / fetch_web）。遇到需要最新信息、近期事件、版本动态、价格参数、外部网页资料或任何无法百分百确定的事实时，请先主动调用 search_web 自行检索（可通过 queries 参数一次性并发搜索最多 4 个不同维度的精准关键词），必要时调用 fetch_web 读取关键网页全文，再结合检索证据回答。"
+
+internal fun webSearchAgentInstruction(today: LocalDate = LocalDate.now()): String =
+    "当前真实日期：$today。$WEB_SEARCH_AGENT_INSTRUCTION"
 
 data class SearchBackendConfig(
     val profile: ApiProfile,

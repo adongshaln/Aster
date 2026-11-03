@@ -17,7 +17,7 @@ import org.json.JSONObject
  * - DeepSeek：`thinking.type`（enabled / disabled）+ `reasoning_effort`
  *   （low / high / max；Responses 侧为 reasoning.effort，none 表示关闭思考）。
  */
-internal enum class ReasoningFamily { Gpt, Grok, Claude, Glm, KimiEffort, KimiToggle, DeepSeek, Unsupported }
+internal enum class ReasoningFamily { Gpt, Grok, Claude, Gemini, Glm, KimiEffort, KimiToggle, DeepSeek, Unsupported }
 
 /** 一个可选项；[id] 直接存进 ApiProfile.reasoningEffort。 */
 internal data class ReasoningChoice(val id: String, val label: String, val hint: String = "")
@@ -52,6 +52,14 @@ internal object ReasoningPolicy {
         ReasoningChoice("low", "快速", "短思考预算，响应更快"),
         ReasoningChoice("medium", "均衡", "中等思考预算"),
         ReasoningChoice("high", "深入", "长思考预算")
+    )
+
+    private val GEMINI_CHOICES = listOf(
+        ReasoningChoice(DEFAULT, "模型默认", "按 Gemini 官方默认思考档位"),
+        ReasoningChoice("minimal", "极简", "最低思考预算，响应最快"),
+        ReasoningChoice("low", "快速", "轻量思考（1,024 tokens）"),
+        ReasoningChoice("medium", "均衡", "中等思考（8,192 tokens）"),
+        ReasoningChoice("high", "深入", "深度思考（24,576 tokens）")
     )
 
     private val GLM_CHOICES = listOf(
@@ -92,6 +100,7 @@ internal object ReasoningPolicy {
             value.isGptFamily() -> ReasoningFamily.Gpt
             value.isGrokFamily() -> ReasoningFamily.Grok
             value.isClaudeFamily() -> ReasoningFamily.Claude
+            value.isGeminiFamily() -> ReasoningFamily.Gemini
             value.isGlmFamily() -> ReasoningFamily.Glm
             value.isKimiEffortFamily() -> ReasoningFamily.KimiEffort
             value.isKimiToggleFamily() -> ReasoningFamily.KimiToggle
@@ -106,6 +115,7 @@ internal object ReasoningPolicy {
         ReasoningFamily.Gpt -> GPT_CHOICES
         ReasoningFamily.Grok -> GROK_CHOICES
         ReasoningFamily.Claude -> CLAUDE_CHOICES
+        ReasoningFamily.Gemini -> GEMINI_CHOICES
         ReasoningFamily.Glm -> GLM_CHOICES
         ReasoningFamily.KimiEffort -> KIMI_EFFORT_CHOICES
         ReasoningFamily.KimiToggle -> TOGGLE_CHOICES
@@ -129,6 +139,7 @@ internal object ReasoningPolicy {
             ReasoningFamily.Gpt -> "minimal"
             ReasoningFamily.Grok -> "low"
             ReasoningFamily.Claude -> "low"
+            ReasoningFamily.Gemini -> "minimal"
             ReasoningFamily.Glm -> "none"
             ReasoningFamily.KimiEffort -> "low"
             ReasoningFamily.KimiToggle -> "off"
@@ -148,6 +159,7 @@ internal object ReasoningPolicy {
             "thinking.type + thinking.budget_tokens",
             "budget_tokens ≥ 1024 且小于 max_tokens"
         )
+        ReasoningFamily.Gemini -> ReasoningContract("reasoning_effort", "minimal / low / medium / high")
         ReasoningFamily.Glm -> ReasoningContract("thinking.type + reasoning_effort", "enabled / disabled · none…max")
         ReasoningFamily.KimiEffort -> ReasoningContract("reasoning_effort", "low / high / max")
         ReasoningFamily.KimiToggle -> ReasoningContract("thinking.type", "enabled / disabled")
@@ -191,6 +203,11 @@ internal object ReasoningPolicy {
                     outputTokenLimit > 0 -> body.put("thinking", JSONObject().put("type", "disabled"))
                     else -> Unit
                 }
+            }
+
+            ReasoningFamily.Gemini -> {
+                if (value == DEFAULT) return
+                body.put("reasoning_effort", value)
             }
 
             ReasoningFamily.Glm -> {
@@ -245,6 +262,11 @@ internal object ReasoningPolicy {
 
     private fun String.isClaudeFamily(): Boolean =
         startsWith("claude", ignoreCase = true) || contains("claude-", ignoreCase = true)
+
+    private fun String.isGeminiFamily(): Boolean =
+        (startsWith("gemini-3", ignoreCase = true) ||
+            startsWith("gemini-4", ignoreCase = true) ||
+            contains("thinking", ignoreCase = true)) && !contains("image", ignoreCase = true)
 
     private fun String.isGlmFamily(): Boolean = startsWith("glm", ignoreCase = true)
 

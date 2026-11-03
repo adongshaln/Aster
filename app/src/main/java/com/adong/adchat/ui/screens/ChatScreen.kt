@@ -17,10 +17,15 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.horizontalScroll
@@ -39,7 +44,9 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.HelpOutline
+import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
@@ -53,6 +60,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
@@ -150,8 +158,10 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import java.net.URI
 import java.util.Locale
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.math.roundToInt
 
@@ -770,12 +780,14 @@ private fun ChatMessageItem(
                 if (waitingForFirstToken && message.reasoning.isBlank() && message.toolActivities.isEmpty()) {
                     ConversationThinkingIndicator()
                 } else {
-                    RichMessageText(
-                        content = message.content,
-                        streaming = message.isStreaming,
-                        error = message.isError,
-                        onStreamingTextAdvanced = onStreamingTextAdvanced
-                    )
+                    CompositionLocalProvider(LocalMessageCitations provides message.citations) {
+                        RichMessageText(
+                            content = message.content,
+                            streaming = message.isStreaming,
+                            error = message.isError,
+                            onStreamingTextAdvanced = onStreamingTextAdvanced
+                        )
+                    }
                     if (showModelWorkingFoot(
                             message.isStreaming,
                             message.content.isBlank(),
@@ -801,44 +813,37 @@ private fun ChatMessageItem(
                     )
                 }
                 if (message.isInterrupted || message.isStopped) {
-                    Surface(
-                        color = if (message.isStopped) SurfaceInset else AmberSoft,
-                        contentColor = Ink,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(top = 8.dp)
+                    Row(
+                        Modifier.padding(top = 6.dp, start = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (message.isStopped) Icons.Rounded.StopCircle else Icons.Rounded.CloudOff,
-                                null,
-                                Modifier.size(15.dp),
-                                tint = if (message.isStopped) MutedInk else Accent
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                if (message.isStopped) "已停止生成，内容已保留" else "流中断，未确认完整结束；已保留已生成内容",
-                                color = MutedInk,
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
+                        Icon(
+                            if (message.isStopped) Icons.Rounded.StopCircle else Icons.Rounded.CloudOff,
+                            null,
+                            Modifier.size(14.dp),
+                            tint = if (message.isStopped) MutedInk else Accent
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            if (message.isStopped) "已停止生成，内容已保留" else "流中断，未确认完整结束；已保留已生成内容",
+                            color = MutedInk,
+                            style = MaterialTheme.typography.labelMedium
+                        )
                     }
                 }
                 if (message.isError) {
-                    Surface(
-                        color = DangerSoft,
-                        contentColor = Danger,
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.padding(top = 8.dp)
+                    Row(
+                        Modifier.padding(top = 6.dp, start = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(Modifier.padding(horizontal = 10.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(15.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                "未收到有效回复；服务端处理与计费以供应商记录为准",
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+                        Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(14.dp), tint = Danger)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "未收到有效回复；服务端处理与计费以供应商记录为准",
+                            color = Danger,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
                 AnimatedVisibility(!message.isStreaming && message.content.isNotBlank()) {
@@ -935,24 +940,22 @@ private fun StreamRecoveryStatus(
         streaming -> "连接已恢复，继续生成中"
         else -> "已自动续传 $count 次"
     }
-    Surface(
-        color = if (recovering) AccentSoft else SurfaceInset,
-        contentColor = if (recovering) Accent else MutedInk,
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.padding(top = 8.dp)
+    Row(
+        Modifier.padding(top = 6.dp, start = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            if (recovering) {
-                AsterLoadingIndicator(size = 14.dp)
-            } else {
-                Icon(Icons.Rounded.Sync, null, Modifier.size(15.dp))
-            }
-            Spacer(Modifier.width(6.dp))
-            Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium)
+        if (recovering) {
+            AsterLoadingIndicator(size = 13.dp, tint = Accent)
+        } else {
+            Icon(Icons.Rounded.Sync, null, Modifier.size(14.dp), tint = MutedInk)
         }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            label,
+            color = if (recovering) Accent else MutedInk,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
@@ -984,6 +987,12 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
         label = "tool-chevron"
     )
     val interactionSource = remember { MutableInteractionSource() }
+    val iconState = when {
+        waiting -> "waiting"
+        running -> "running"
+        failed -> "failed"
+        else -> "completed"
+    }
 
     // 调用中与完成态完全统一：零外框、零胶囊背景盒，与思考面板同构；展开时以左侧 1.5dp 极细导引线承接。
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
@@ -999,11 +1008,20 @@ private fun ToolActivitySummary(activities: List<ChatToolActivity>) {
                 .padding(vertical = 4.dp, horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            when {
-                waiting -> Icon(Icons.AutoMirrored.Rounded.HelpOutline, null, Modifier.size(15.dp), tint = Sage)
-                running -> AsterLoadingIndicator(size = 14.dp, tint = Accent)
-                failed -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(15.dp), tint = Danger)
-                else -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(15.dp), tint = Sage.copy(alpha = 0.85f))
+            androidx.compose.animation.AnimatedContent(
+                targetState = iconState,
+                transitionSpec = {
+                    (fadeIn(AsterSpring.editorial()) + androidx.compose.animation.scaleIn(AsterSpring.jelly(), initialScale = 0.72f)) togetherWith
+                        (fadeOut(AsterSpring.snappy()) + androidx.compose.animation.scaleOut(AsterSpring.snappy(), targetScale = 0.72f))
+                },
+                label = "tool-status-icon"
+            ) { state ->
+                when (state) {
+                    "waiting" -> Icon(Icons.AutoMirrored.Rounded.HelpOutline, null, Modifier.size(15.dp), tint = Sage)
+                    "running" -> AsterLoadingIndicator(size = 14.dp, tint = Accent)
+                    "failed" -> Icon(Icons.Rounded.ErrorOutline, null, Modifier.size(15.dp), tint = Danger)
+                    else -> Icon(Icons.Rounded.CheckCircle, null, Modifier.size(15.dp), tint = Sage.copy(alpha = 0.85f))
+                }
             }
             Spacer(Modifier.width(6.dp))
             Text(
@@ -1128,22 +1146,67 @@ private fun GeneratedFilesPanel(files: List<ChatFileAttachment>, onSaveFile: (Ch
 private fun CitationPanel(citations: List<ChatCitation>) {
     val uriHandler = LocalUriHandler.current
     Column(Modifier.fillMaxWidth().padding(top = 12.dp)) {
-        Text("来源", style = MaterialTheme.typography.labelMedium, color = MutedInk)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Public, null, Modifier.size(13.dp), tint = MutedInk.copy(alpha = 0.78f))
+            Spacer(Modifier.width(5.dp))
+            Text("参考来源 · ${citations.size}", style = MaterialTheme.typography.labelMedium, color = MutedInk)
+        }
         Spacer(Modifier.height(7.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             citations.forEachIndexed { index, citation ->
+                val interaction = remember(citation.url) { MutableInteractionSource() }
+                val domain = remember(citation.url) {
+                    runCatching { URI(citation.url).host.orEmpty().removePrefix("www.") }.getOrDefault("")
+                }
                 Surface(
                     onClick = { runCatching { uriHandler.openUri(citation.url) } },
-                    color = SurfaceInset,
+                    interactionSource = interaction,
+                    color = Surface,
                     contentColor = Ink,
-                    shape = RoundedCornerShape(13.dp)
+                    border = BorderStroke(0.8.dp, Hairline),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.appleSpringPressable(pressedScale = 0.95f, interactionSource = interaction)
                 ) {
-                    Row(Modifier.widthIn(max = 260.dp).padding(horizontal = 11.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("${index + 1}", color = Accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(7.dp))
-                        Text(citation.title, Modifier.weight(1f, fill = false), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(
+                        Modifier
+                            .widthIn(min = 148.dp, max = 252.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(AccentSoft),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "${index + 1}",
+                                color = Accent,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                citation.title,
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Medium),
+                                color = Ink,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (domain.isNotBlank()) {
+                                Text(
+                                    domain,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                    color = MutedInk.copy(alpha = 0.8f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                         Spacer(Modifier.width(6.dp))
-                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, Modifier.size(15.dp), tint = MutedInk)
+                        Icon(Icons.AutoMirrored.Rounded.OpenInNew, null, Modifier.size(13.5.dp), tint = MutedInk.copy(alpha = 0.72f))
                     }
                 }
             }
@@ -1540,39 +1603,62 @@ internal fun StructuredMessageText(
     htmlScriptsAllowed: Boolean = true
 ) {
     LinkConfirm {
-    val parts = remember(content) { content.split("```") }
-    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        parts.forEachIndexed { index, raw ->
-            if (raw.isBlank() && index != parts.lastIndex) return@forEachIndexed
-            if (index % 2 == 1) {
-                val lines = raw.trim('\n').lines()
-                val language = lines.firstOrNull()?.takeIf { it.matches(Regex("[A-Za-z0-9_+.#-]{1,20}")) }
-                val code = if (language != null) lines.drop(1).joinToString("\n") else raw.trim('\n')
-                if (language?.lowercase() in setOf("html", "htm")) {
-                    HtmlArtifactCard(
-                        code = code,
-                        ready = !streaming && index < parts.lastIndex,
-                        allowScripts = htmlScriptsAllowed
-                    )
-                } else if (language?.lowercase() == "mermaid") {
-                    MermaidArtifactCard(
-                        code = code,
-                        ready = !streaming && index < parts.lastIndex
-                    )
-                } else CodeBlock(
-                    language = language,
-                    code = if (streaming && index == parts.lastIndex) "$code  ▍" else code,
-                    selectable = !streaming
-                )
-            } else {
-                MarkdownTextBlock(
-                    raw = raw,
-                    showCursor = streaming && index == parts.lastIndex,
-                    error = error
-                )
+        val fenceCount = remember(content) {
+            var count = 0
+            var pos = 0
+            while (true) {
+                val found = content.indexOf("```", pos)
+                if (found < 0) break
+                count++
+                pos = found + 3
+            }
+            count
+        }
+        val parts = if (!streaming || fenceCount == 0) {
+            remember(content) { content.split("```") }
+        } else {
+            val lastFence = content.lastIndexOf("```")
+            val frozenPrefix = if (lastFence >= 0) content.substring(0, lastFence) else ""
+            val frozenParts = remember(frozenPrefix) {
+                if (frozenPrefix.isEmpty()) emptyList() else frozenPrefix.split("```")
+            }
+            val liveTail = if (lastFence >= 0) content.substring(lastFence + 3) else content
+            remember(frozenParts, liveTail) { frozenParts + liveTail }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            parts.forEachIndexed { index, raw ->
+                if (raw.isBlank() && index != parts.lastIndex) return@forEachIndexed
+                key(index) {
+                    if (index % 2 == 1) {
+                        val lines = raw.trim('\n').lines()
+                        val language = lines.firstOrNull()?.takeIf { it.matches(Regex("[A-Za-z0-9_+.#-]{1,20}")) }
+                        val code = if (language != null) lines.drop(1).joinToString("\n") else raw.trim('\n')
+                        if (language?.lowercase() in setOf("html", "htm")) {
+                            HtmlArtifactCard(
+                                code = code,
+                                ready = !streaming && index < parts.lastIndex,
+                                allowScripts = htmlScriptsAllowed
+                            )
+                        } else if (language?.lowercase() == "mermaid") {
+                            MermaidArtifactCard(
+                                code = code,
+                                ready = !streaming && index < parts.lastIndex
+                            )
+                        } else CodeBlock(
+                            language = language,
+                            code = if (streaming && index == parts.lastIndex) "$code  ▍" else code,
+                            selectable = !streaming
+                        )
+                    } else {
+                        MarkdownTextBlock(
+                            raw = raw,
+                            showCursor = streaming && index == parts.lastIndex,
+                            error = error
+                        )
+                    }
+                }
             }
         }
-    }
     }
 }
 
@@ -1580,6 +1666,13 @@ internal fun StructuredMessageText(
 private fun CodeBlock(language: String?, code: String, selectable: Boolean) {
     val context = LocalContext.current
     var copied by remember(code) { mutableStateOf(false) }
+    var softWrap by remember { mutableStateOf(false) }
+    val totalLines = remember(code) { code.count { it == '\n' } + 1 }
+    val collapsible = selectable && totalLines > 28
+    var collapsed by remember(collapsible) { mutableStateOf(collapsible) }
+    val displayedCode = remember(code, collapsed) {
+        if (collapsed) code.lineSequence().take(20).joinToString("\n") + "\n…" else code
+    }
     LaunchedEffect(copied) {
         if (copied) {
             kotlinx.coroutines.delay(1800)
@@ -1601,12 +1694,33 @@ private fun CodeBlock(language: String?, code: String, selectable: Boolean) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    language?.uppercase() ?: "CODE",
+                    buildString {
+                        append(language?.uppercase() ?: "CODE")
+                        if (totalLines > 4) append(" · $totalLines 行")
+                    },
                     color = MutedInk,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Medium,
                     modifier = Modifier.weight(1f)
                 )
+                val wrapInteraction = remember { MutableInteractionSource() }
+                Surface(
+                    onClick = { softWrap = !softWrap },
+                    interactionSource = wrapInteraction,
+                    color = Color.Transparent,
+                    contentColor = if (softWrap) Accent else MutedInk,
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.appleSpringPressable(pressedScale = 0.92f, interactionSource = wrapInteraction)
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.AutoMirrored.Rounded.WrapText, "自动换行", Modifier.size(14.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text(if (softWrap) "已换行" else "换行", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
                 val copyInteraction = remember { MutableInteractionSource() }
                 Surface(
                     onClick = {
@@ -1639,17 +1753,36 @@ private fun CodeBlock(language: String?, code: String, selectable: Boolean) {
             }
             val contentBlock: @Composable () -> Unit = {
                 Text(
-                    code,
+                    displayedCode,
                     color = Ink,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
                     lineHeight = 20.sp,
+                    softWrap = softWrap,
                     modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(start = 14.dp, end = 14.dp, bottom = 14.dp, top = 4.dp)
+                        .then(if (softWrap) Modifier.fillMaxWidth() else Modifier.horizontalScroll(rememberScrollState()))
+                        .padding(start = 14.dp, end = 14.dp, bottom = if (collapsible) 6.dp else 14.dp, top = 4.dp)
                 )
             }
             if (selectable) SelectionContainer { contentBlock() } else contentBlock()
+            if (collapsible) {
+                val expandInteraction = remember { MutableInteractionSource() }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(interactionSource = expandInteraction, indication = null) { collapsed = !collapsed }
+                        .appleSpringPressable(pressedScale = 0.97f, interactionSource = expandInteraction)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (collapsed) "展开全部 $totalLines 行代码" else "收起长代码",
+                        color = Accent,
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Medium)
+                    )
+                }
+            }
         }
     }
 }
@@ -1864,6 +1997,17 @@ private fun ChatRemoteImage(url: String, alt: String, lockSlot: Boolean = false)
 private fun ZoomedChatImage(model: ImageRequest, description: String, onDismiss: () -> Unit) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
+    var dismissDragY by remember { mutableFloatStateOf(0f) }
+    val animatedScale by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = scale,
+        animationSpec = AsterSpring.spatial(),
+        label = "zoomed-image-pinch-scale"
+    )
+    val animatedDragY by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = dismissDragY,
+        animationSpec = AsterSpring.spatial(),
+        label = "zoomed-image-drag-y"
+    )
     val transform = rememberTransformableState { zoom, pan, _ ->
         scale = (scale * zoom).coerceIn(1f, 5f)
         offset = if (scale <= 1f) Offset.Zero else offset + pan
@@ -1876,11 +2020,37 @@ private fun ZoomedChatImage(model: ImageRequest, description: String, onDismiss:
         animationSpec = if (motionEnabled) AsterSpring.jelly() else androidx.compose.animation.core.snap(),
         label = "zoomed-image-scale"
     )
+    val backdropAlpha = (0.94f * (1f - (abs(animatedDragY) / 720f).coerceIn(0f, 0.55f)))
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(Night.copy(alpha = .94f))
+                .background(Night.copy(alpha = backdropAlpha))
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            if (scale > 1.05f) {
+                                scale = 1f
+                                offset = Offset.Zero
+                            } else {
+                                scale = 2.4f
+                            }
+                        },
+                        onTap = { if (scale <= 1.02f) onDismiss() }
+                    )
+                }
+                .pointerInput(scale) {
+                    if (scale <= 1.02f) {
+                        detectVerticalDragGestures(
+                            onDragEnd = {
+                                if (abs(dismissDragY) > 160f) onDismiss() else dismissDragY = 0f
+                            },
+                            onDragCancel = { dismissDragY = 0f }
+                        ) { _, dragAmount ->
+                            dismissDragY += dragAmount
+                        }
+                    }
+                }
                 .graphicsLayer {
                     scaleX = if (motionEnabled) entryScale else 1f
                     scaleY = if (motionEnabled) entryScale else 1f
@@ -1892,10 +2062,10 @@ private fun ZoomedChatImage(model: ImageRequest, description: String, onDismiss:
                 contentDescription = description,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxWidth().graphicsLayer {
-                    scaleX = scale
-                    scaleY = scale
+                    scaleX = animatedScale
+                    scaleY = animatedScale
                     translationX = offset.x
-                    translationY = offset.y
+                    translationY = offset.y + animatedDragY
                 }.transformable(transform)
             )
             AsterPillButton(
@@ -2310,6 +2480,8 @@ private fun ModelWorkingFoot(caption: String) {
 }
 
 private val LocalConfirmLink = staticCompositionLocalOf<(String) -> Unit> { {} }
+private val LocalMessageCitations = staticCompositionLocalOf<List<ChatCitation>> { emptyList() }
+private val INLINE_CITATION_REGEX = Regex("^\\[(\\d{1,2})]")
 
 @Composable
 private fun LinkConfirm(content: @Composable () -> Unit) {
@@ -2368,7 +2540,16 @@ private fun inlineMarkdown(text: String): AnnotatedString {
 private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedString {
     var index = 0
     val confirmLink = LocalConfirmLink.current
+    val citations = LocalMessageCitations.current
     val linkStyle = TextLinkStyles(SpanStyle(color = NameInk, textDecoration = TextDecoration.Underline))
+    val citationStyle = TextLinkStyles(
+        SpanStyle(
+            color = Accent,
+            background = AccentSoft.copy(alpha = 0.72f),
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 11.5.sp
+        )
+    )
     val tokens = listOf("**", "__", "~~", "`", "*", "_")
     while (index < text.length) {
         val link = linkAt(text, index)
@@ -2378,6 +2559,18 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
             pop()
             index = link.end
             continue
+        }
+        if (citations.isNotEmpty() && text[index] == '[') {
+            val match = INLINE_CITATION_REGEX.find(text.substring(index))
+            val num = match?.groupValues?.get(1)?.toIntOrNull()
+            if (match != null && num != null && num in 1..citations.size) {
+                val targetCitation = citations[num - 1]
+                pushLink(LinkAnnotation.Clickable(targetCitation.url, citationStyle) { _ -> confirmLink(targetCitation.url) })
+                append(" [$num] ")
+                pop()
+                index += match.value.length
+                continue
+            }
         }
         val token = tokens.firstOrNull { text.startsWith(it, index) }
         if (token != null) {
