@@ -1028,7 +1028,7 @@ class ApiRepository internal constructor(
             while (inlineTagBuffer.isNotEmpty()) {
                 if (!inInlineThinking) {
                     inlineTagBuffer = inlineTagBuffer.replace(
-                        Regex("""^(?:\s|<interleaving>|\{[^{}\n]{0,80}\})+(?=<think(?:ing)?>)""", RegexOption.IGNORE_CASE),
+                        Regex("^(?:\\s|<interleaving>|\\{[^{}\\n]{0,80}\\})+(?=<think(?:ing)?>)", RegexOption.IGNORE_CASE),
                         ""
                     )
                     val thinkMatch = Regex("""<think(?:ing)?>""", RegexOption.IGNORE_CASE).find(inlineTagBuffer)

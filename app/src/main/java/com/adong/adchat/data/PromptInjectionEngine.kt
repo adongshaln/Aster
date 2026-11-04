@@ -265,14 +265,29 @@ object PromptInjectionRuntime {
 
     private val sessionHeaderCache = ConcurrentHashMap<String, Pair<String, String>>()
 
-    private val STRUCTURE_OBFUSCATION_REGEX = Regex(
-        """\b(rap)(e[ds]?|ing|ists?)\b|\b(und)(er\s*18|erage[ds]?)\b|\b(min)(ors?)\b|\b(te)(ens?|enagers?)\b|\b(ag)(e[d]?)(?=\s*\d)|\b(ye)(ars?[\s-]*olds?)\b|\b(chi)(ld|ldren|ldlike)\b|\b(in)(cest(?:uous)?)\b|\b(lo)(lis?)\b|\b(sh)(otas?)\b|\b((?:school\s?)?gi)(rls?)\b|\b(b)(oys?|e[as]?stiality|asstiality)\b|\b(asa)(nagi)\b|\b(fatal)(pulse)\b|\b(ns)(fw)\b|\b(hen)(tai)\b|(朝)(凪)|(本)(子)|(未|小|初|高)(成年|学生|中生)|(未|萝|羅|ロ|正|幼|乱|强|轮|调|凌|母)(满|莉|リ|太|女|伦|奸|教|辱|畜)|(初|高)(中)|((?<!\d)18)(\s*[-\u2013])|(1)([0-7])(?=\s*岁|\s*-?\s*years?\b)|(?<=\b(?:aged?|turned)\s|\bshe\s+is\s|\bhe\s+is\s)(1)([0-7])\b""",
-        RegexOption.IGNORE_CASE
-    )
+    private fun safeRegex(pattern: String, ignoreCase: Boolean = true): Regex =
+        if (ignoreCase) Regex(pattern, RegexOption.IGNORE_CASE) else Regex(pattern)
 
-    private val STRIP_THINKING_REGEX = Regex(
-        """■|<details>\s*<summary>(英文版|日本語版)</summary>\s*[\s\S]*?</details>|<thinking>[\s\S]*?</thinking>"""
-    )
+    private val STRUCTURE_OBFUSCATION_REGEX: Regex? = runCatching {
+        safeRegex(
+            """\b(rap)(e[ds]?|ing|ists?)\b|\b(und)(er\s*18|erage[ds]?)\b|\b(min)(ors?)\b|\b(te)(ens?|enagers?)\b|\b(ag)(e[d]?)(?=\s*\d)|\b(ye)(ars?[\s-]*olds?)\b|\b(chi)(ld|ldren|ldlike)\b|\b(in)(cest(?:uous)?)\b|\b(lo)(lis?)\b|\b(sh)(otas?)\b|\b((?:school\s?)?gi)(rls?)\b|\b(b)(oys?|e[as]?stiality|asstiality)\b|\b(asa)(nagi)\b|\b(fatal)(pulse)\b|\b(ns)(fw)\b|\b(hen)(tai)\b|(朝)(凪)|(本)(子)|(未|小|初|高)(成年|学生|中生)|(未|萝|羅|ロ|正|幼|乱|强|轮|调|凌|母)(满|莉|リ|太|女|伦|奸|教|辱|畜)|(初|高)(中)|((?<!\d)18)(\s*[-\u2013])|(1)([0-7])(?=\s*岁|\s*-?\s*years?\b)|(\b(?:aged?|turned|she\s+is|he\s+is)\s+1)([0-7])\b"""
+        )
+    }.getOrNull()
+
+    private val STRIP_THINKING_REGEX =
+        Regex("■|<details>\\s*<summary>(英文版|日本語版)</summary>[\\s\\S]*?</details>|<thinking>[\\s\\S]*?</thinking>")
+
+    private val MACRO_COMMENT_REGEX = Regex("\\{\\{//[\\s\\S]*?\\}\\}")
+    private val MACRO_TRIM_REGEX = safeRegex("\\{\\{trim\\}\\}")
+    private val MACRO_DATE_REGEX = safeRegex("\\{\\{date\\}\\}")
+    private val MACRO_TIME_REGEX = safeRegex("\\{\\{time\\}\\}")
+    private val MACRO_USER_REGEX = safeRegex("\\{\\{user\\}\\}")
+    private val MACRO_CHAR_REGEX = safeRegex("\\{\\{char\\}\\}")
+    private val MACRO_LAST_USER_REGEX = safeRegex("\\{\\{lastUserMessage\\}\\}")
+    private val MACRO_LAST_CHAR_REGEX = safeRegex("\\{\\{lastCharMessage\\}\\}")
+    private val MACRO_LAST_MSG_REGEX = safeRegex("\\{\\{lastMessage\\}\\}")
+    private val CODE_FENCE_REGEX = Regex("```[\\s\\S]*?```")
+    private val WHITESPACE_REGEX = Regex("\\s+")
 
     private val REFUSAL_PREFIX_REGEX = Regex(
         """^(?:I cannot fulfill|I'm sorry, but I cannot|I can't fulfill|I am unable to fulfill|Sorry, I can't|抱歉，我无法|对不起，我不能|根据我的安全准则|您的请求涉及)""",
@@ -295,7 +310,8 @@ object PromptInjectionRuntime {
     fun applyFilter(raw: String, zeroWidth: Boolean): String {
         var cleaned = STRIP_THINKING_REGEX.replace(raw, "")
         if (!zeroWidth) return cleaned
-        cleaned = STRUCTURE_OBFUSCATION_REGEX.replace(cleaned) { matchResult ->
+        val obfRegex = STRUCTURE_OBFUSCATION_REGEX ?: return cleaned
+        cleaned = obfRegex.replace(cleaned) { matchResult ->
             val groups = matchResult.groupValues.drop(1).filter { it.isNotEmpty() }
             val joined = if (groups.isNotEmpty()) groups.joinToString("\u2060") else matchResult.value
             joined + "\u200d\u200b\u200c\u200b\u200b\u200c\u200c\u200c\u200b\u200b\u200c\u200c\u200c\u200c\u200b\u200b\u200c\u200d"
@@ -311,15 +327,15 @@ object PromptInjectionRuntime {
         val lastAssistant = history.lastOrNull { it.role == "assistant" }?.content.orEmpty()
         val lastMsg = history.lastOrNull()?.content.orEmpty()
         val expanded = raw
-            .replace(Regex("""\{\{//[\s\S]*?\}\}"""), "")
-            .replace(Regex("""\{\{trim\}\}""", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("""\{\{date\}\}""", RegexOption.IGNORE_CASE), dateStr)
-            .replace(Regex("""\{\{time\}\}""", RegexOption.IGNORE_CASE), timeStr)
-            .replace(Regex("""\{\{user\}\}""", RegexOption.IGNORE_CASE), "User")
-            .replace(Regex("""\{\{char\}\}""", RegexOption.IGNORE_CASE), "Assistant")
-            .replace(Regex("""\{\{lastUserMessage\}\}""", RegexOption.IGNORE_CASE), lastUser)
-            .replace(Regex("""\{\{lastCharMessage\}\}""", RegexOption.IGNORE_CASE), lastAssistant)
-            .replace(Regex("""\{\{lastMessage\}\}""", RegexOption.IGNORE_CASE), lastMsg)
+            .replace(MACRO_COMMENT_REGEX, "")
+            .replace(MACRO_TRIM_REGEX, "")
+            .replace(MACRO_DATE_REGEX, dateStr)
+            .replace(MACRO_TIME_REGEX, timeStr)
+            .replace(MACRO_USER_REGEX, "User")
+            .replace(MACRO_CHAR_REGEX, "Assistant")
+            .replace(MACRO_LAST_USER_REGEX, lastUser)
+            .replace(MACRO_LAST_CHAR_REGEX, lastAssistant)
+            .replace(MACRO_LAST_MSG_REGEX, lastMsg)
             .trim()
         return applyFilter(expanded, zeroWidth)
     }
@@ -331,8 +347,8 @@ object PromptInjectionRuntime {
         val summaryLines = older.mapIndexed { idx, m ->
             val label = if (m.role == "user") "User" else "Assistant"
             val clean = m.content
-                .replace(Regex("""```[\s\S]*?```"""), "[代码块已折叠]")
-                .replace(Regex("""\s+"""), " ")
+                .replace(CODE_FENCE_REGEX, "[代码块已折叠]")
+                .replace(WHITESPACE_REGEX, " ")
                 .trim()
             val snippet = if (clean.length > 260) "${clean.take(260)}…" else clean
             "${idx + 1}. [$label]: $snippet"
