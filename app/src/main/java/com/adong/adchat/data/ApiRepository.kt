@@ -93,6 +93,7 @@ class ApiRepository internal constructor(
         skillsAllowed: Boolean = true,
         generationOptions: ChatGenerationOptions = ChatGenerationOptions(),
         searchBackend: SearchBackendConfig? = null,
+        injectionPreset: PromptInjectionPreset? = null,
         onContextTrim: suspend (Int) -> Unit = {},
         onRecovery: suspend (StreamRecoveryEvent) -> Unit = {},
         onToolActivity: suspend (ChatToolActivity) -> Unit = {},
@@ -179,7 +180,18 @@ class ApiRepository internal constructor(
             deltaSink: suspend (String) -> Unit
         ): ChatCompletionResult {
             val prepared = ModelContextPolicy.prepare(systemPrompt, attemptHistory, profile.contextLimits(model), trimHistory = false)
-            return if (profile.usesAnthropicMessages(model)) {
+            val activeInjection = injectionPreset?.takeIf { it.enabledCount > 0 }
+            return if (activeInjection != null && activeInjection.pureMode && !profile.usesAnthropicMessages(model) && !profile.usesResponses(model)) {
+                streamChatCompletionsTunnel(
+                    profile = profile,
+                    model = model,
+                    history = prepared.history,
+                    cacheKey = cacheKey,
+                    preset = activeInjection,
+                    onReasoning = onReasoning,
+                    onDelta = deltaSink
+                )
+            } else if (profile.usesAnthropicMessages(model)) {
                 streamAnthropicMessages(
                     profile, model, systemPrompt, prepared.history, cacheKey,
                     skillSelectors = if (skillLoadingEnabled) requestedSkillSelectors else emptyList(),
@@ -215,6 +227,7 @@ class ApiRepository internal constructor(
                     generationOptions = requestGenerationOptions,
                     askUserEnabled = askUserEnabled,
                     allowReasoningContinuation = allowReasoningContinuation,
+                    injectionPreset = activeInjection,
                     onToolActivity = onToolActivity,
                     onReasoning = onReasoning,
                     onAskUser = onAskUser,
@@ -634,6 +647,7 @@ class ApiRepository internal constructor(
         generationOptions: ChatGenerationOptions,
         askUserEnabled: Boolean,
         allowReasoningContinuation: Boolean,
+        injectionPreset: PromptInjectionPreset? = null,
         onToolActivity: suspend (ChatToolActivity) -> Unit,
         onReasoning: suspend (String) -> Unit,
         onAskUser: suspend (AskUserPrompt) -> String,
@@ -648,18 +662,29 @@ class ApiRepository internal constructor(
             ASK_USER_INSTRUCTION.takeIf { askUserEnabled }.orEmpty(),
             SKILL_RUNTIME_INSTRUCTION.takeIf { skillLoadingEnabled }.orEmpty()
         ).filter(String::isNotBlank).joinToString("\n\n")
-        if (effectiveSystemPrompt.isNotBlank()) {
-            messages.put(JSONObject().put("role", "system").put("content", effectiveSystemPrompt))
-        }
-        val catalog = skillCatalog(requestSkillLoader.listInstalled())
-        if (catalog.isNotBlank()) messages.put(JSONObject().put("role", "user").put("content", catalog))
         val stableHistory = history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }
-        stableHistory.forEachIndexed { index, message ->
-            val content: Any = chatCompletionContent(
-                message = message,
-                explicitCacheBreakpoint = explicitCache && index == stableHistory.lastIndex
+        if (injectionPreset != null && injectionPreset.enabledCount > 0) {
+            val injectedPairs = PromptInjectionRuntime.buildInjectedMessagesList(
+                systemPrompt = effectiveSystemPrompt,
+                history = stableHistory,
+                preset = injectionPreset
             )
-            messages.put(JSONObject().put("role", message.role).put("content", content))
+            injectedPairs.forEach { (role, text) ->
+                messages.put(JSONObject().put("role", role).put("content", text))
+            }
+        } else {
+            if (effectiveSystemPrompt.isNotBlank()) {
+                messages.put(JSONObject().put("role", "system").put("content", effectiveSystemPrompt))
+            }
+            val catalog = skillCatalog(requestSkillLoader.listInstalled())
+            if (catalog.isNotBlank()) messages.put(JSONObject().put("role", "user").put("content", catalog))
+            stableHistory.forEachIndexed { index, message ->
+                val content: Any = chatCompletionContent(
+                    message = message,
+                    explicitCacheBreakpoint = explicitCache && index == stableHistory.lastIndex
+                )
+                messages.put(JSONObject().put("role", message.role).put("content", content))
+            }
         }
         val started = System.nanoTime()
         var firstDeltaAt: Long? = null
@@ -953,6 +978,253 @@ class ApiRepository internal constructor(
             citations = citations.values.toList(),
             generatedFiles = generatedFiles,
             toolActivities = activities.values.toList(),
+            outputComplete = outputComplete
+        )
+    }
+
+    /**
+     * Executes the `dispatch_stream_payload_34d98628087f3798` tool serialization tunnel for
+     * `PromptInjectionPreset` with `pureMode = true`, including incremental `display_stream`
+     * JSON string decoding, inline `<thinking>` splitting, and `_0x30b` refusal detection + auto-retry.
+     */
+    private suspend fun streamChatCompletionsTunnel(
+        profile: ApiProfile,
+        model: String,
+        history: List<ChatMessage>,
+        cacheKey: String,
+        preset: PromptInjectionPreset,
+        onReasoning: suspend (String) -> Unit,
+        onDelta: suspend (String) -> Unit
+    ): ChatCompletionResult {
+        val stableHistory = history.filterNot { it.isError || it.isStreaming || it.isInterrupted || it.isStopped }
+        val started = System.nanoTime()
+        var firstDeltaAt: Long? = null
+        var usage = TokenUsage()
+        val full = StringBuilder()
+        val reasoningTotal = StringBuilder()
+        var outputComplete = false
+
+        var inInlineThinking = false
+        var inlineTagBuffer = ""
+
+        suspend fun rawEmitText(text: String) {
+            val cleaned = text.replace("■", "")
+            if (cleaned.isEmpty()) return
+            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+            full.append(cleaned)
+            onDelta(cleaned)
+        }
+
+        suspend fun emitReasoning(text: String) {
+            if (text.isBlank()) return
+            if (firstDeltaAt == null) firstDeltaAt = System.nanoTime()
+            reasoningTotal.append(text)
+            onReasoning(text)
+        }
+
+        suspend fun emitStreamPiece(chunk: String) {
+            if (chunk.isEmpty()) return
+            inlineTagBuffer += PromptInjectionRuntime.normalizeCtrlThinkingTokens(chunk)
+            while (inlineTagBuffer.isNotEmpty()) {
+                if (!inInlineThinking) {
+                    inlineTagBuffer = inlineTagBuffer.replace(
+                        Regex("""^(?:\s|<interleaving>|\{[^{}\n]{0,80}\})+(?=<think(?:ing)?>)""", RegexOption.IGNORE_CASE),
+                        ""
+                    )
+                    val thinkMatch = Regex("""<think(?:ing)?>""", RegexOption.IGNORE_CASE).find(inlineTagBuffer)
+                    if (thinkMatch != null) {
+                        if (thinkMatch.range.first > 0) {
+                            rawEmitText(inlineTagBuffer.substring(0, thinkMatch.range.first))
+                        }
+                        inlineTagBuffer = inlineTagBuffer.substring(thinkMatch.range.last + 1)
+                        inInlineThinking = true
+                        continue
+                    }
+                    val partialMatch = Regex(
+                        """<(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?|i(?:n(?:t(?:e(?:r(?:l(?:e(?:a(?:v(?:i(?:n(?:g)?)?)?)?)?)?)?)?)?)?)?)?$""",
+                        RegexOption.IGNORE_CASE
+                    ).find(inlineTagBuffer)
+                    if (partialMatch != null && partialMatch.range.first > 0) {
+                        rawEmitText(inlineTagBuffer.substring(0, partialMatch.range.first))
+                        inlineTagBuffer = inlineTagBuffer.substring(partialMatch.range.first)
+                        break
+                    } else if (partialMatch != null && partialMatch.range.first == 0 && inlineTagBuffer.length < 15) {
+                        break
+                    }
+                    rawEmitText(inlineTagBuffer)
+                    inlineTagBuffer = ""
+                } else {
+                    val endMatch = Regex("""</think(?:ing)?>""", RegexOption.IGNORE_CASE).find(inlineTagBuffer)
+                    if (endMatch != null) {
+                        if (endMatch.range.first > 0) {
+                            emitReasoning(inlineTagBuffer.substring(0, endMatch.range.first))
+                        }
+                        inlineTagBuffer = inlineTagBuffer
+                            .substring(endMatch.range.last + 1)
+                            .replace(Regex("""^(?:\s*</interleaving>|\s*\*\*\*)+""", RegexOption.IGNORE_CASE), "")
+                        inInlineThinking = false
+                        continue
+                    }
+                    val partialEnd = Regex(
+                        """<(?:\s*/(?:t(?:h(?:i(?:n(?:k(?:i(?:n(?:g)?)?)?)?)?)?)?)?)?$""",
+                        RegexOption.IGNORE_CASE
+                    ).find(inlineTagBuffer)
+                    if (partialEnd != null && partialEnd.range.first > 0) {
+                        emitReasoning(inlineTagBuffer.substring(0, partialEnd.range.first))
+                        inlineTagBuffer = inlineTagBuffer.substring(partialEnd.range.first)
+                        break
+                    } else if (partialEnd != null && partialEnd.range.first == 0 && inlineTagBuffer.length < 12) {
+                        break
+                    }
+                    emitReasoning(inlineTagBuffer)
+                    inlineTagBuffer = ""
+                }
+            }
+        }
+
+        for (attempt in 0..1) {
+            val body = PromptInjectionRuntime.buildTunnelChatBody(
+                model = model,
+                history = stableHistory,
+                preset = preset,
+                cacheKey = cacheKey,
+                retryAttempt = attempt
+            )
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close")
+                .postModelRequest(body.toString().toRequestBody(jsonMedia))
+                .build()
+
+            val call = streamingClient.newCall(request)
+            val decoder = NyDisplayStreamDecoder()
+            var sawTunnelCall = false
+            val bufferedPlain = StringBuilder()
+            var roundUsage = TokenUsage()
+
+            call.withCancellableResponse { response ->
+                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                val contentType = response.header("Content-Type").orEmpty()
+                if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                    val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
+                    readSsePayloads(source) { payload ->
+                        if (payload.trim() == "[DONE]") {
+                            outputComplete = true
+                            return@readSsePayloads false
+                        }
+                        val root = parseSseObject(payload)
+                        ensureNoProviderError(root)
+                        if (root.has("usage") && !root.isNull("usage")) {
+                            roundUsage = parseUsage(root)
+                        }
+                        val choice = root.optJSONArray("choices")?.optJSONObject(0)
+                        val delta = choice?.optJSONObject("delta")
+                        if (delta != null) {
+                            val reasoning = parseReasoningDelta(root)
+                            if (reasoning.isNotBlank()) emitReasoning(reasoning)
+
+                            val toolCalls = delta.optJSONArray("tool_calls")
+                            if (toolCalls != null && toolCalls.length() > 0) {
+                                for (idx in 0 until toolCalls.length()) {
+                                    val tc = toolCalls.optJSONObject(idx) ?: continue
+                                    val fn = tc.optJSONObject("function") ?: continue
+                                    val argsChunk = fn.optString("arguments")
+                                    if (argsChunk.isNotEmpty()) {
+                                        sawTunnelCall = true
+                                        bufferedPlain.clear()
+                                        val decoded = decoder.feed(argsChunk)
+                                        if (decoded.isNotEmpty()) emitStreamPiece(decoded)
+                                    }
+                                }
+                            } else {
+                                val plain = parseStreamDelta(root)
+                                if (plain.isNotEmpty()) {
+                                    if (sawTunnelCall) {
+                                        emitStreamPiece(plain)
+                                    } else {
+                                        bufferedPlain.append(plain)
+                                        if (bufferedPlain.length > 260 && !PromptInjectionRuntime.isPlainRefusal(bufferedPlain.toString())) {
+                                            val flushed = bufferedPlain.toString()
+                                            bufferedPlain.clear()
+                                            emitStreamPiece(flushed)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
+                            if (sawTunnelCall) {
+                                val tail = decoder.finish()
+                                if (tail.isNotEmpty()) emitStreamPiece(tail)
+                            }
+                            outputComplete = true
+                        }
+                        true
+                    }
+                } else {
+                    val text = response.body?.string().orEmpty()
+                    if (text.isBlank()) throw IllegalStateException("Server returned an empty response")
+                    val root = JSONObject(text)
+                    ensureNoProviderError(root)
+                    roundUsage = parseUsage(root)
+                    val choice = root.optJSONArray("choices")?.optJSONObject(0)
+                    val message = choice?.optJSONObject("message")
+                    val toolCalls = message?.optJSONArray("tool_calls")
+                    if (toolCalls != null && toolCalls.length() > 0) {
+                        for (idx in 0 until toolCalls.length()) {
+                            val fn = toolCalls.optJSONObject(idx)?.optJSONObject("function") ?: continue
+                            val argsStr = fn.optString("arguments")
+                            if (argsStr.isNotEmpty()) {
+                                sawTunnelCall = true
+                                val decoded = decoder.feed(argsStr) + decoder.finish()
+                                if (decoded.isNotEmpty()) emitStreamPiece(decoded)
+                            }
+                        }
+                    } else {
+                        val plain = runCatching { parseMessageContent(root) }.getOrDefault("")
+                        if (plain.isNotEmpty()) bufferedPlain.append(plain)
+                    }
+                    outputComplete = true
+                }
+            }
+
+            usage = usage + roundUsage
+            if (!sawTunnelCall && attempt == 0 && (PromptInjectionRuntime.isPlainRefusal(bufferedPlain.toString()) || (full.isEmpty() && bufferedPlain.isEmpty()))) {
+                inInlineThinking = false
+                inlineTagBuffer = ""
+                continue
+            }
+            if (bufferedPlain.isNotEmpty()) {
+                emitStreamPiece(bufferedPlain.toString())
+                bufferedPlain.clear()
+            }
+            break
+        }
+
+        if (inlineTagBuffer.isNotEmpty()) {
+            if (inInlineThinking) emitReasoning(inlineTagBuffer) else rawEmitText(inlineTagBuffer)
+            inlineTagBuffer = ""
+        }
+
+        val duration = elapsedMs(started)
+        val finalUsage = usage.copy(
+            timeToFirstTokenMs = firstDeltaAt?.let { TimeUnit.NANOSECONDS.toMillis(it - started) },
+            durationMs = duration,
+            cacheRequested = false,
+            cacheKey = cacheKey.take(64)
+        )
+        val resultText = full.toString().ifBlank {
+            throw IllegalStateException("Streaming response contained no text")
+        }
+        return ChatCompletionResult(
+            text = resultText,
+            reasoning = reasoningTotal.toString(),
+            usage = finalUsage,
+            citations = emptyList(),
+            generatedFiles = emptyList(),
+            toolActivities = emptyList(),
             outputComplete = outputComplete
         )
     }

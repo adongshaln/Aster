@@ -70,6 +70,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val conversationStore = ConversationStore(application)
     private val chatSessionStore = ChatSessionStore(application)
     private val artworkStore = ArtworkStore(application)
+    private val promptInjectionStore = PromptInjectionStore(application)
+    var promptInjectionEnabled by mutableStateOf(promptInjectionStore.isEnabled())
+        private set
+    var promptInjectionPreset by mutableStateOf(promptInjectionStore.loadPreset())
+        private set
     private val conversationSaveMutex = Mutex()
     private val artworkSaveMutex = Mutex()
     private var conversationSaveRevision = 0L
@@ -828,6 +833,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         imported.size
     }
+    fun setChatPromptInjectionEnabled(enabled: Boolean) {
+        promptInjectionStore.setEnabled(enabled)
+        promptInjectionEnabled = enabled
+    }
+
+    fun togglePromptInjectionEntry(entryId: String) {
+        promptInjectionPreset = promptInjectionStore.toggleEntry(entryId)
+        if (!promptInjectionEnabled) {
+            promptInjectionStore.setEnabled(true)
+            promptInjectionEnabled = true
+        }
+    }
+
+    fun updatePromptInjectionEntry(entryId: String, name: String, role: String, position: String, content: String) {
+        promptInjectionPreset = promptInjectionStore.updateEntryContent(entryId, name, role, position, content)
+        notice = "已保存注入条目"
+    }
+
+    fun addPromptInjectionEntry(name: String, role: String, position: String, content: String) {
+        promptInjectionPreset = promptInjectionStore.addEntry(name, role, position, content)
+        notice = "已添加注入条目"
+    }
+
+    fun deletePromptInjectionEntry(entryId: String) {
+        promptInjectionPreset = promptInjectionStore.deleteEntry(entryId)
+        notice = "已删除注入条目"
+    }
+
+    fun setPromptInjectionOptions(pureMode: Boolean, zeroWidthObfuscation: Boolean) {
+        promptInjectionPreset = promptInjectionStore.setOptions(pureMode, zeroWidthObfuscation)
+    }
+
+    fun resetPromptInjectionPreset() {
+        promptInjectionPreset = promptInjectionStore.resetToDefault()
+        notice = "已重置 Ny-Gemini 越狱演示预设为默认状态"
+    }
+
     fun updateChatInput(value: String) {
         chatInput = value
         // 建议只服务于空输入框：一旦用户动手改输入内容，预测即作废（含在途请求）。
@@ -980,6 +1022,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             var summarizeTitle = false
             try {
                 val requestHistory = withContext(Dispatchers.IO) { prepareChatHistory(history) }
+                val activeInjection = if (promptInjectionEnabled) promptInjectionPreset else null
                 val result = repository.streamChat(
                     profile = profile,
                     model = model,
@@ -987,6 +1030,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     history = requestHistory,
                     cacheKey = requestCacheKey,
                     searchBackend = searchBackend,
+                    injectionPreset = activeInjection,
                     onContextTrim = { count -> withContext(Dispatchers.Main) { notice = "本次已省略最早的 $count 轮对话以适配模型上下文；本地记录仍保留。" } },
                     onRecovery = { event ->
                         automaticRecoveryCount = maxOf(automaticRecoveryCount, event.attempt)

@@ -519,10 +519,19 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     apiMode = if (vm.chatProfile.usesResponses()) "responses" else "chat",
                     webSearchEnabled = vm.chatProfile.webSearchEnabled,
                     fileCreationEnabled = vm.chatProfile.fileCreationEnabled,
+                    promptInjectionEnabled = vm.promptInjectionEnabled,
+                    promptInjectionPreset = vm.promptInjectionPreset,
                     onModelClick = { showSwitcher = true },
                     onReasoningEffortChange = vm::setChatReasoningEffort,
                     onWebSearchToggle = vm::setChatWebSearchEnabled,
                     onFileCreationToggle = vm::setChatFileCreationEnabled,
+                    onPromptInjectionToggle = vm::setChatPromptInjectionEnabled,
+                    onToggleInjectionEntry = vm::togglePromptInjectionEntry,
+                    onUpdateInjectionEntry = vm::updatePromptInjectionEntry,
+                    onAddInjectionEntry = vm::addPromptInjectionEntry,
+                    onDeleteInjectionEntry = vm::deletePromptInjectionEntry,
+                    onInjectionOptionsChange = vm::setPromptInjectionOptions,
+                    onResetInjectionPreset = vm::resetPromptInjectionPreset,
                     contextUsage = contextUsage,
                     onSelectContextWindow = { window ->
                         vm.setModelContextWindow(vm.chatProfile.id, contextModel, window)
@@ -2723,10 +2732,19 @@ private fun ChatComposer(
     apiMode: String,
     webSearchEnabled: Boolean,
     fileCreationEnabled: Boolean,
+    promptInjectionEnabled: Boolean,
+    promptInjectionPreset: com.adong.adchat.data.PromptInjectionPreset,
     onModelClick: () -> Unit,
     onReasoningEffortChange: (String) -> Unit,
     onWebSearchToggle: (Boolean) -> Unit,
     onFileCreationToggle: (Boolean) -> Unit,
+    onPromptInjectionToggle: (Boolean) -> Unit,
+    onToggleInjectionEntry: (String) -> Unit,
+    onUpdateInjectionEntry: (id: String, name: String, role: String, position: String, content: String) -> Unit,
+    onAddInjectionEntry: (name: String, role: String, position: String, content: String) -> Unit,
+    onDeleteInjectionEntry: (String) -> Unit,
+    onInjectionOptionsChange: (pureMode: Boolean, zeroWidth: Boolean) -> Unit,
+    onResetInjectionPreset: () -> Unit,
     onValueChange: (String) -> Unit,
     onPickImages: () -> Unit,
     onPickDocument: () -> Unit,
@@ -2744,6 +2762,7 @@ private fun ChatComposer(
     val focus = LocalFocusManager.current
     val scope = rememberCoroutineScope()
     var showToolsSheet by remember { mutableStateOf(false) }
+    var showInjectionSheet by remember { mutableStateOf(false) }
     var showContextSheet by remember { mutableStateOf(false) }
     var showReasoning by remember(model) { mutableStateOf(false) }
     var composerExpanded by remember { mutableStateOf(false) }
@@ -2799,6 +2818,8 @@ private fun ChatComposer(
             apiMode = apiMode,
             webSearchEnabled = webSearchEnabled,
             fileCreationEnabled = fileCreationEnabled,
+            promptInjectionEnabled = promptInjectionEnabled,
+            promptInjectionCount = promptInjectionPreset.enabledCount,
             canPickImages = !loading && !attachmentLoading && attachments.size < 4,
             canPickDocuments = !loading && !attachmentLoading,
             onPickImages = { showToolsSheet = false; onPickImages() },
@@ -2811,8 +2832,27 @@ private fun ChatComposer(
             },
             onWebSearchToggle = onWebSearchToggle,
             onFileCreationToggle = onFileCreationToggle,
+            onPromptInjectionToggle = onPromptInjectionToggle,
+            onOpenPromptInjection = {
+                showToolsSheet = false
+                showInjectionSheet = true
+            },
             reasoningSupported = effortChoices.isNotEmpty(),
             onDismiss = { showToolsSheet = false }
+        )
+    }
+    if (showInjectionSheet) {
+        com.adong.adchat.ui.components.PromptInjectionSheet(
+            enabled = promptInjectionEnabled,
+            preset = promptInjectionPreset,
+            onEnabledChange = onPromptInjectionToggle,
+            onToggleEntry = onToggleInjectionEntry,
+            onUpdateEntry = onUpdateInjectionEntry,
+            onAddEntry = onAddInjectionEntry,
+            onDeleteEntry = onDeleteInjectionEntry,
+            onOptionsChange = onInjectionOptionsChange,
+            onResetPreset = onResetInjectionPreset,
+            onDismiss = { showInjectionSheet = false }
         )
     }
     if (showContextSheet) {
@@ -2854,6 +2894,8 @@ private fun ChatToolsSheet(
     apiMode: String,
     webSearchEnabled: Boolean,
     fileCreationEnabled: Boolean,
+    promptInjectionEnabled: Boolean,
+    promptInjectionCount: Int,
     canPickImages: Boolean,
     canPickDocuments: Boolean,
     onPickImages: () -> Unit,
@@ -2862,6 +2904,8 @@ private fun ChatToolsSheet(
     onReasoningClick: () -> Unit,
     onWebSearchToggle: (Boolean) -> Unit,
     onFileCreationToggle: (Boolean) -> Unit,
+    onPromptInjectionToggle: (Boolean) -> Unit,
+    onOpenPromptInjection: () -> Unit,
     onDismiss: () -> Unit,
     reasoningSupported: Boolean = true
 ) {
@@ -2887,7 +2931,46 @@ private fun ChatToolsSheet(
         }
         SkillPickerEntry(skillScope, enabled = canPickDocuments)
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("工具", style = MaterialTheme.typography.labelLarge, color = MutedInk)
+            Text("工具与提示词注入", style = MaterialTheme.typography.labelLarge, color = MutedInk)
+            Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier
+                        .clickable { onOpenPromptInjection() }
+                        .padding(horizontal = 13.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(11.dp))
+                            .background(if (promptInjectionEnabled) AccentSoft else SurfaceInset),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Rounded.AutoAwesome,
+                            null,
+                            Modifier.size(19.dp),
+                            tint = if (promptInjectionEnabled) Accent else MutedInk
+                        )
+                    }
+                    Spacer(Modifier.width(11.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (promptInjectionEnabled) "提示词注入 · $promptInjectionCount 项生效" else "提示词按需注入 (Ny-Gemini 越狱)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Ink,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "点击配置按需注入条目、Tool 序列化隧道与零宽防审查",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MutedInk,
+                            lineHeight = 16.sp
+                        )
+                    }
+                    Switch(checked = promptInjectionEnabled, onCheckedChange = onPromptInjectionToggle)
+                }
+            }
             ComposerToolToggle(Icons.Rounded.TravelExplore, "联网搜索", "回答时参考网页信息",
                 webSearchEnabled, onWebSearchToggle)
             ComposerToolToggle(Icons.Rounded.NoteAdd, "创建文件", "将内容整理为可下载的文档",
