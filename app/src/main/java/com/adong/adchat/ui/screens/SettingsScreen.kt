@@ -32,6 +32,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.outlined.List
@@ -49,9 +51,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
@@ -62,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -183,6 +188,7 @@ private fun SettingsHome(
     var storyUsageError by remember { mutableStateOf(false) }
     val pageStates = rememberSaveableStateHolder()
     val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
     val context = LocalContext.current
     LaunchedEffect(openIslandSettings, isActive) {
         if (openIslandSettings && isActive) {
@@ -216,6 +222,7 @@ private fun SettingsHome(
         )
     } else emptyList()
     fun navigate(target: SettingsDestination) {
+        focusManager.clearFocus()
         keyboard?.hide()
         if (target == SettingsDestination.Skills) showSkills = true else destination = target
     }
@@ -230,6 +237,27 @@ private fun SettingsHome(
                 Text(destination.title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, color = Ink)
             }
         }
+        if (destination == SettingsDestination.Home) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)
+                    .testTag("settings-search"),
+                placeholder = { Text("搜索模型、外观或其他设置", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                leadingIcon = { Icon(Icons.Rounded.Search, null, Modifier.size(20.dp)) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
+                        Icon(Icons.Rounded.Close, "清除搜索")
+                    }
+                },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus(); keyboard?.hide() }),
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp),
+                colors = editorFieldColors()
+            )
+        }
         AnimatedContent(
             targetState = destination,
             modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -241,21 +269,22 @@ private fun SettingsHome(
             label = "settings-destination"
         ) { target ->
             pageStates.SaveableStateProvider(target.name) {
+                val listState = rememberLazyListState()
+                var appliedQuery by rememberSaveable { mutableStateOf(query) }
+                LaunchedEffect(query) {
+                    if (target == SettingsDestination.Home && appliedQuery != query) {
+                        listState.scrollToItem(0)
+                        appliedQuery = query
+                    }
+                }
                 LazyColumn(
-                    Modifier.fillMaxSize().imePadding(),
-                    state = rememberLazyListState(),
+                    Modifier.fillMaxSize().imePadding().testTag("settings-list"),
+                    state = listState,
                     contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     when (target) {
                         SettingsDestination.Home -> {
-                            item(key = "search") {
-                                OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(),
-                                    placeholder = { Text("搜索设置，如模型、外观、星岛") },
-                                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
-                                    trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) { Icon(Icons.Rounded.Close, "清除搜索") } },
-                                    singleLine = true, shape = RoundedCornerShape(20.dp), colors = editorFieldColors())
-                            }
                             val matches = SettingsDestination.entries.filter { it != SettingsDestination.Home && it.matches(query) }
                             if (query.isNotBlank()) {
                                 if (matches.isEmpty()) item { Text("没有匹配的设置，试试“模型”或“主题”。", color = MutedInk, modifier = Modifier.padding(12.dp)) }
@@ -264,18 +293,30 @@ private fun SettingsHome(
                                 }
                             } else {
                                 item { SettingsGroupLabel("模型与连接") }
-                                item { SettingsNavigationRow(SettingsDestination.Connections, settingsSummary(SettingsDestination.Connections, vm)) { navigate(SettingsDestination.Connections) } }
-                                item { SettingsNavigationRow(SettingsDestination.Models, settingsSummary(SettingsDestination.Models, vm)) { navigate(SettingsDestination.Models) } }
+                                item {
+                                    SettingsNavigationGroup(listOf(
+                                        SettingsDestination.Connections to settingsSummary(SettingsDestination.Connections, vm),
+                                        SettingsDestination.Models to settingsSummary(SettingsDestination.Models, vm)
+                                    ), ::navigate)
+                                }
                                 item { SettingsGroupLabel("使用体验") }
-                                item { SettingsNavigationRow(SettingsDestination.Appearance, settingsSummary(SettingsDestination.Appearance, vm)) { navigate(SettingsDestination.Appearance) } }
-                                item { SettingsNavigationRow(SettingsDestination.Assistant, "称呼、角色与回答风格") { navigate(SettingsDestination.Assistant) } }
-                                item { SettingsNavigationRow(SettingsDestination.Island, "文字处理、网页阅读与媒体下载") { navigate(SettingsDestination.Island) } }
-                                item { SettingsNavigationRow(SettingsDestination.Skills, "安装与管理助手技能") { navigate(SettingsDestination.Skills) } }
+                                item {
+                                    SettingsNavigationGroup(listOf(
+                                        SettingsDestination.Appearance to settingsSummary(SettingsDestination.Appearance, vm),
+                                        SettingsDestination.Assistant to "称呼、角色与回答风格",
+                                        SettingsDestination.Island to "文字处理、网页阅读与媒体下载",
+                                        SettingsDestination.Skills to "安装与管理助手技能"
+                                    ), ::navigate)
+                                }
                                 item { SettingsGroupLabel("整理与用量") }
                                 item { SettingsNavigationRow(SettingsDestination.Usage, settingsSummary(SettingsDestination.Usage, vm)) { navigate(SettingsDestination.Usage) } }
                                 item { SettingsGroupLabel("应用管理") }
-                                item { SettingsNavigationRow(SettingsDestination.Transfer, "导入、导出服务配置") { navigate(SettingsDestination.Transfer) } }
-                                item { SettingsNavigationRow(SettingsDestination.Security, settingsSummary(SettingsDestination.Security, vm)) { navigate(SettingsDestination.Security) } }
+                                item {
+                                    SettingsNavigationGroup(listOf(
+                                        SettingsDestination.Transfer to "导入、导出服务配置",
+                                        SettingsDestination.Security to settingsSummary(SettingsDestination.Security, vm)
+                                    ), ::navigate)
+                                }
                                 item { Text("Aster ${BuildConfig.VERSION_NAME}", Modifier.fillMaxWidth().padding(top = 12.dp),
                                     color = MutedInk, style = MaterialTheme.typography.labelMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
                             }
@@ -908,21 +949,38 @@ private fun SettingsGroupLabel(text: String) {
 
 @Composable
 private fun SettingsNavigationRow(destination: SettingsDestination, summary: String, onClick: () -> Unit) =
-    SettingsActionRow(destination.title, summary, settingsIcon(destination), onClick)
+    SettingsActionRow(destination.title, summary, settingsIcon(destination), onClick = onClick)
 
 @Composable
-private fun SettingsActionRow(title: String, summary: String, icon: ImageVector, onClick: () -> Unit) {
+private fun SettingsNavigationGroup(rows: List<Pair<SettingsDestination, String>>, onNavigate: (SettingsDestination) -> Unit) {
     Surface(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f),
+        modifier = Modifier.fillMaxWidth(),
         color = Surface,
-        contentColor = Ink,
         shape = RoundedCornerShape(22.dp),
         border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
     ) {
-        Row(Modifier.heightIn(min = 76.dp).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(AccentSoft), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(20.dp), tint = OnAccentSoft)
+        Column {
+            rows.forEachIndexed { index, (destination, summary) ->
+                if (index > 0) HorizontalDivider(Modifier.padding(start = 64.dp, end = 16.dp), color = Hairline.copy(alpha = 0.7f))
+                SettingsActionRow(destination.title, summary, settingsIcon(destination), grouped = true) { onNavigate(destination) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsActionRow(title: String, summary: String, icon: ImageVector, grouped: Boolean = false, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().then(if (grouped) Modifier else Modifier.appleSpringPressable(pressedScale = 0.985f)),
+        color = Surface,
+        contentColor = Ink,
+        shape = RoundedCornerShape(if (grouped) 0.dp else 22.dp),
+        border = if (grouped) null else BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
+    ) {
+        Row(Modifier.heightIn(min = 72.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (grouped) SurfaceInset else AccentSoft), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(19.dp), tint = if (grouped) MutedInk else OnAccentSoft)
             }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
                 Text(title, style = MaterialTheme.typography.titleSmall)

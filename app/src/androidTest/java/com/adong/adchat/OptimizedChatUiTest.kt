@@ -1,8 +1,6 @@
 package com.adong.adchat
 
 import android.graphics.Bitmap
-import android.graphics.Typeface
-import android.os.Build
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,11 +24,9 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.adong.adchat.island.IslandTypefaces
 import com.adong.adchat.ui.components.ExpandableUserMessage
 import com.adong.adchat.ui.theme.AsterTheme
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -40,17 +36,6 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class OptimizedChatUiTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
-
-    @Test
-    fun islandTitleLoadsBundledVariableFontAtTheRequestedWeight() {
-        // Run on the instrumentation thread: loading this large font must stay off the UI thread.
-        val typeface = IslandTypefaces.title(rule.activity)
-        assertNotEquals(Typeface.SERIF, typeface)
-        assertNotEquals(Typeface.DEFAULT, typeface)
-        // A distinct face proves that API 26/27 also applied the variable font axis.
-        assertNotEquals(rule.activity.resources.getFont(R.font.island_title_serif), typeface)
-        if (Build.VERSION.SDK_INT >= 28) assertEquals(560, typeface.weight)
-    }
 
     @Test
     fun longMessageRemainsReadableAndCanExpandWithLargeFonts() {

@@ -1,6 +1,5 @@
 package com.adong.adchat.ui.components
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -10,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,28 +40,24 @@ fun ConversationHeader(
             onClick = onOpenDrawer
         )
 
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(start = 8.dp)
+        val modelInteraction = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        Surface(
+            onClick = onModelClick,
+            interactionSource = modelInteraction,
+            color = Color.Transparent,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.weight(1f)
+                .testTag("conversation-model-selector")
+                .appleSpringPressable(pressedScale = 0.985f, interactionSource = modelInteraction)
         ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge,
-                color = Ink,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            val modelInteraction = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-            Surface(
-                onClick = onModelClick,
-                interactionSource = modelInteraction,
-                color = Color.Transparent,
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier
-                    .animateContentSize(animationSpec = AsterSpring.spatial())
-                    .appleSpringPressable(pressedScale = 0.93f, interactionSource = modelInteraction)
-            ) {
+            Column(Modifier.heightIn(min = 56.dp).padding(start = 8.dp, end = 6.dp), verticalArrangement = Arrangement.Center) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
                 Row(
                     modifier = Modifier
                         .heightIn(min = 28.dp)

@@ -11,11 +11,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -30,6 +33,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -48,6 +52,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -187,11 +192,13 @@ private fun AsterApp(
     val storyVm: StoryViewModel = viewModel()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
     val snackbarHostState = remember { SnackbarHostState() }
     var showStoryCreator by rememberSaveable { mutableStateOf(false) }
     var storyTitle by rememberSaveable { mutableStateOf("") }
-    val openDrawer = { scope.launch { drawerState.open() }; Unit }
+    val openDrawer = { focusManager.clearFocus(); scope.launch { drawerState.open() }; Unit }
     fun navigate(target: AppPage) {
+        focusManager.clearFocus()
         page = target
         scope.launch { drawerState.close() }
     }
@@ -269,15 +276,14 @@ private fun AsterApp(
                 onNewStory = ::requestStoryCreation,
                 onConversation = { vm.selectConversation(it); navigate(AppPage.Chat) },
                 onNavigate = ::navigate,
-                onClose = { scope.launch { drawerState.close() } }
+                onClose = { focusManager.clearFocus(); scope.launch { drawerState.close() } }
             )
         }
     ) {
         Scaffold(containerColor = Canvas) { padding ->
             val edgeToEdgePage = page == AppPage.Chat || page == AppPage.Story
             val pageBottomPadding = if (edgeToEdgePage) 0.dp else padding.calculateBottomPadding()
-            val drawerScope = scope
-            val drawerOpen: () -> Unit = { drawerScope.launch { drawerState.open() } }
+            val drawerOpen: () -> Unit = openDrawer
             Box(
                 Modifier.fillMaxSize().padding(bottom = pageBottomPadding)
                     .consumeWindowInsets(PaddingValues(bottom = pageBottomPadding))
@@ -457,19 +463,25 @@ internal fun AppDrawer(
     var renameText by remember { mutableStateOf("") }
     var showNewActions by remember { mutableStateOf(false) }
     var conversationFilter by rememberSaveable { mutableStateOf("all") }
+    val focusManager = LocalFocusManager.current
+    val historyState = rememberLazyListState()
+    val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val motionEnabled = LocalAsterMotionEnabled.current
     val normalizedQuery = query.trim()
-    val matchedConversations = vm.conversations.filter { conversation ->
-        normalizedQuery.isBlank() || conversation.title.contains(normalizedQuery, ignoreCase = true) ||
-            conversation.tags.any { it.contains(normalizedQuery, ignoreCase = true) } ||
-            conversation.messages.any { it.content.contains(normalizedQuery, ignoreCase = true) }
+    val conversationSnapshot = vm.conversations.toList()
+    val visibleConversations = remember(conversationSnapshot, normalizedQuery, conversationFilter) {
+        conversationSnapshot.filter { conversation ->
+            val matches = normalizedQuery.isBlank() || conversation.title.contains(normalizedQuery, ignoreCase = true) ||
+                conversation.tags.any { it.contains(normalizedQuery, ignoreCase = true) } ||
+                conversation.messages.any { it.content.contains(normalizedQuery, ignoreCase = true) }
+            matches && when (conversationFilter) {
+                "favorites" -> conversation.favorite && !conversation.archived
+                "archived" -> conversation.archived
+                else -> !conversation.archived
+            }
+        }.sortedByDescending { it.updatedAt }
     }
-    val visibleConversations = matchedConversations.filter { conversation ->
-        when (conversationFilter) {
-            "favorites" -> conversation.favorite && !conversation.archived
-            "archived" -> conversation.archived
-            else -> !conversation.archived
-        }
-    }.sortedByDescending { it.updatedAt }
+    LaunchedEffect(normalizedQuery, conversationFilter) { historyState.scrollToItem(0) }
     val pinnedConversations = visibleConversations.filter { it.pinned && conversationFilter != "archived" }
     val unpinnedConversations = if (conversationFilter == "archived") visibleConversations
         else visibleConversations.filterNot { it.pinned }
@@ -518,58 +530,64 @@ internal fun AppDrawer(
                     unfocusedBorderColor = Color.Transparent
                 )
             )
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            AnimatedVisibility(
+                visible = normalizedQuery.isBlank() && !keyboardVisible,
+                enter = if (motionEnabled) fadeIn(tween(140)) + expandVertically(AsterSpring.spatial()) else EnterTransition.None,
+                exit = if (motionEnabled) fadeOut(tween(100)) + shrinkVertically(AsterSpring.snappy()) else ExitTransition.None
             ) {
-                listOf(AppPage.Chat, AppPage.Draw, AppPage.Media).forEach { item ->
-                    val selected = currentPage == item
-                    val interactionSource = remember(item) { MutableInteractionSource() }
-                    val selectionBg by animateColorAsState(
-                        if (selected) AccentSoft else Color.Transparent,
-                        AsterSpring.editorial(), label = "nav-bg"
-                    )
-                    val selectionInk by animateColorAsState(
-                        if (selected) OnAccentSoft else MutedInk,
-                        AsterSpring.editorial(), label = "nav-ink"
-                    )
-                    Surface(
-                        onClick = { onNavigate(item) },
-                        modifier = Modifier.weight(1f).semantics { this.selected = selected },
-                        interactionSource = interactionSource,
-                        color = selectionBg,
-                        contentColor = selectionInk,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            Modifier
-                                .heightIn(min = 42.dp)
-                                .appleSpringPressable(pressedScale = 0.96f, interactionSource = interactionSource)
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    listOf(AppPage.Chat, AppPage.Draw, AppPage.Media).forEach { item ->
+                        val selected = currentPage == item
+                        val interactionSource = remember(item) { MutableInteractionSource() }
+                        val selectionBg by animateColorAsState(
+                            if (selected) AccentSoft else Color.Transparent,
+                            AsterSpring.editorial(), label = "nav-bg"
+                        )
+                        val selectionInk by animateColorAsState(
+                            if (selected) OnAccentSoft else MutedInk,
+                            AsterSpring.editorial(), label = "nav-ink"
+                        )
+                        Surface(
+                            onClick = { onNavigate(item) },
+                            modifier = Modifier.weight(1f).semantics { this.selected = selected },
+                            interactionSource = interactionSource,
+                            color = selectionBg,
+                            contentColor = selectionInk,
+                            shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(item.icon, null, Modifier.size(17.dp))
-                            Text(
-                                item.label,
-                                Modifier.padding(start = 7.dp),
-                                style = MaterialTheme.typography.labelLarge,
-                                maxLines = 1
-                            )
+                            Column(
+                                Modifier
+                                    .heightIn(min = 64.dp)
+                                    .appleSpringPressable(pressedScale = 0.96f, interactionSource = interactionSource)
+                                    .padding(horizontal = 8.dp, vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterVertically)
+                            ) {
+                                Icon(item.icon, null, Modifier.size(20.dp))
+                                Text(
+                                    item.label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
             }
-            HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = 10.dp), color = Hairline)
+            HorizontalDivider(Modifier.padding(horizontal = 20.dp, vertical = if (keyboardVisible) 4.dp else 10.dp), color = Hairline)
             Row(
                 Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 2.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     when {
+                        normalizedQuery.isNotBlank() -> "搜索结果"
                         conversationFilter == "archived" -> "已归档"
                         conversationFilter == "favorites" -> "收藏"
-                        normalizedQuery.isNotBlank() -> "搜索结果"
                         else -> "对话记录"
                     },
                     color = Ink,
@@ -577,47 +595,28 @@ internal fun AppDrawer(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text("${visibleConversations.size}", color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                Spacer(Modifier.weight(1f))
-                Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-                    listOf("all" to "全部", "favorites" to "收藏", "archived" to "归档").forEach { (filter, label) ->
-                        val active = conversationFilter == filter
-                        val filterInteraction = remember(filter) { MutableInteractionSource() }
-                        val filterBg by animateColorAsState(
-                            if (active) SurfaceInset else Color.Transparent,
-                            AsterSpring.editorial(),
-                            label = "drawer-filter-bg"
-                        )
-                        val filterInk by animateColorAsState(
-                            if (active) Ink else MutedInk,
-                            AsterSpring.editorial(),
-                            label = "drawer-filter-ink"
-                        )
-                        Surface(
-                            onClick = { conversationFilter = filter },
-                            interactionSource = filterInteraction,
-                            color = filterBg,
-                            contentColor = filterInk,
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier.appleSpringPressable(pressedScale = 0.95f, interactionSource = filterInteraction)
-                        ) {
-                            Text(
-                                label,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal
-                            )
-                        }
-                    }
-                }
             }
+            val filters = listOf("all", "favorites", "archived")
+            AsterSegmentedControl(
+                labels = listOf("全部", "收藏", "归档"),
+                selectedIndex = filters.indexOf(conversationFilter).coerceAtLeast(0),
+                onSelect = { conversationFilter = filters[it] },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
             LazyColumn(
                 modifier = Modifier.weight(1f),
+                state = historyState,
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 if (visibleConversations.isEmpty()) {
                     item {
-                        AsterEmptyState(
+                        if (normalizedQuery.isNotBlank()) {
+                            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("没有找到对话", color = Ink, style = MaterialTheme.typography.titleSmall)
+                                Text("试试其他关键词或标签", color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                            }
+                        } else AsterEmptyState(
                             Icons.Rounded.ChatBubbleOutline,
                             when {
                                 normalizedQuery.isNotBlank() -> "没有找到对话"
@@ -632,6 +631,17 @@ internal fun AppDrawer(
                                 else -> "你的想法，会在这里留下记录"
                             }
                         )
+                        if (normalizedQuery.isNotBlank() || conversationFilter != "all") {
+                            TextButton(
+                                onClick = {
+                                    if (conversationFilter != "all") conversationFilter = "all"
+                                    else { query = ""; focusManager.clearFocus() }
+                                },
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            ) {
+                                Text(if (conversationFilter != "all") "查看全部对话" else "清除搜索", color = Ink)
+                            }
+                        }
                     }
                 }
                 if (pinnedConversations.isNotEmpty()) {
@@ -674,27 +684,29 @@ internal fun AppDrawer(
                     }
                 }
             }
-            HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = Hairline)
-            val settingsSelected = currentPage == AppPage.Settings
-            val settingsInteraction = remember { MutableInteractionSource() }
-            val settingsFill by animateColorAsState(
-                if (settingsSelected) AccentSoft else Color.Transparent,
-                AsterSpring.editorial(), label = "settings-nav-color"
-            )
-            Surface(
-                onClick = { onNavigate(AppPage.Settings) },
-                interactionSource = settingsInteraction,
-                color = settingsFill,
-                contentColor = if (settingsSelected) OnAccentSoft else Ink,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.padding(12.dp).semantics { selected = settingsSelected }
-            ) {
-                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    .appleSpringPressable(pressedScale = 0.96f, interactionSource = settingsInteraction)
-                    .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.Tune, null, Modifier.size(21.dp))
-                    Text("设置", Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.labelLarge)
-                    Text("Aster ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+            if (!keyboardVisible) {
+                HorizontalDivider(Modifier.padding(horizontal = 20.dp), color = Hairline)
+                val settingsSelected = currentPage == AppPage.Settings
+                val settingsInteraction = remember { MutableInteractionSource() }
+                val settingsFill by animateColorAsState(
+                    if (settingsSelected) AccentSoft else Color.Transparent,
+                    AsterSpring.editorial(), label = "settings-nav-color"
+                )
+                Surface(
+                    onClick = { onNavigate(AppPage.Settings) },
+                    interactionSource = settingsInteraction,
+                    color = settingsFill,
+                    contentColor = if (settingsSelected) OnAccentSoft else Ink,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.padding(12.dp).semantics { selected = settingsSelected }
+                ) {
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .appleSpringPressable(pressedScale = 0.96f, interactionSource = settingsInteraction)
+                        .padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Rounded.Tune, null, Modifier.size(21.dp))
+                        Text("设置", Modifier.weight(1f).padding(start = 12.dp), style = MaterialTheme.typography.labelLarge)
+                        Text("Aster ${BuildConfig.VERSION_NAME}", color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                    }
                 }
             }
         }

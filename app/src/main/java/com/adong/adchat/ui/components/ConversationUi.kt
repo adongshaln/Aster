@@ -266,7 +266,7 @@ fun ConversationComposer(
                                             text = if (summarizeDraft) fieldValue.text.replace('\n', ' ')
                                                 else sendSuggestion ?: placeholder,
                                             modifier = if (summarizeDraft) Modifier.clearAndSetSemantics {} else Modifier,
-                                            color = if (summarizeDraft) Ink else MutedInk.copy(alpha = 0.68f),
+                                            color = if (summarizeDraft) Ink else MutedInk,
                                             style = MaterialTheme.typography.bodyLarge,
                                             maxLines = if (expanded && sendSuggestion != null) 3 else 1,
                                             overflow = TextOverflow.Ellipsis
