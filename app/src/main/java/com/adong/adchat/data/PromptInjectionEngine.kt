@@ -216,7 +216,7 @@ class PromptInjectionStore(context: Context) {
         })
 
     private fun decodePreset(obj: JSONObject): PromptInjectionPreset {
-        val arr = obj.optJSONArray("entries") ?: JSONArray()
+        val arr = obj.getJSONArray("entries")
         val entries = buildList {
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i) ?: continue
@@ -236,7 +236,6 @@ class PromptInjectionStore(context: Context) {
                 )
             }
         }
-        if (entries.isEmpty()) return PromptInjectionDefaults.builtInNyGeminiPreset
         return PromptInjectionPreset(
             id = obj.optString("id").ifBlank { PromptInjectionDefaults.NY_GEMINI_DEMO_ID },
             name = obj.optString("name").ifBlank { PromptInjectionDefaults.builtInNyGeminiPreset.name },

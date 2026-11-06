@@ -188,6 +188,10 @@ class ApiRepository internal constructor(
                     history = prepared.history,
                     cacheKey = cacheKey,
                     preset = activeInjection,
+                    outputTokenLimit = listOfNotNull(
+                        profile.contextLimits(model)?.outputTokens,
+                        requestGenerationOptions.maxOutputTokens
+                    ).minOrNull(),
                     onReasoning = onReasoning,
                     onDelta = deltaSink
                 )
@@ -993,6 +997,7 @@ class ApiRepository internal constructor(
         history: List<ChatMessage>,
         cacheKey: String,
         preset: PromptInjectionPreset,
+        outputTokenLimit: Int?,
         onReasoning: suspend (String) -> Unit,
         onDelta: suspend (String) -> Unit
     ): ChatCompletionResult {
@@ -1006,6 +1011,13 @@ class ApiRepository internal constructor(
 
         var inInlineThinking = false
         var inlineTagBuffer = ""
+
+        fun completedChoice(choice: JSONObject?, hasToolCall: Boolean): Boolean =
+            when (choice?.optString("finish_reason")) {
+                "stop" -> true
+                "tool_calls" -> hasToolCall
+                else -> false
+            }
 
         suspend fun rawEmitText(text: String) {
             val cleaned = text.replace("■", "")
@@ -1083,6 +1095,7 @@ class ApiRepository internal constructor(
         }
 
         for (attempt in 0..1) {
+            outputComplete = false
             val body = PromptInjectionRuntime.buildTunnelChatBody(
                 model = model,
                 history = stableHistory,
@@ -1090,6 +1103,10 @@ class ApiRepository internal constructor(
                 cacheKey = cacheKey,
                 retryAttempt = attempt
             )
+            // Explicit user limits may tighten, but never raise, the existing output ceiling.
+            if (outputTokenLimit != null) {
+                body.put("max_tokens", minOf(body.getInt("max_tokens"), outputTokenLimit))
+            }
             val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
                 .header("Accept", "text/event-stream")
                 .header("Cache-Control", "no-cache")
@@ -1111,7 +1128,6 @@ class ApiRepository internal constructor(
                     val source = response.body?.source() ?: throw IllegalStateException("Server returned an empty response")
                     readSsePayloads(source) { payload ->
                         if (payload.trim() == "[DONE]") {
-                            outputComplete = true
                             return@readSsePayloads false
                         }
                         val root = parseSseObject(payload)
@@ -1159,7 +1175,7 @@ class ApiRepository internal constructor(
                                 val tail = decoder.finish()
                                 if (tail.isNotEmpty()) emitStreamPiece(tail)
                             }
-                            outputComplete = true
+                            outputComplete = completedChoice(choice, sawTunnelCall)
                         }
                         true
                     }
@@ -1186,7 +1202,7 @@ class ApiRepository internal constructor(
                         val plain = runCatching { parseMessageContent(root) }.getOrDefault("")
                         if (plain.isNotEmpty()) bufferedPlain.append(plain)
                     }
-                    outputComplete = true
+                    outputComplete = completedChoice(choice, sawTunnelCall)
                 }
             }
 
