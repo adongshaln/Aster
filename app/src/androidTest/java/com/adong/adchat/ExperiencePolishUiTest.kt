@@ -2,11 +2,12 @@ package com.adong.adchat
 
 import android.graphics.Bitmap
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -30,6 +31,7 @@ import com.adong.adchat.ui.screens.SettingsScreen
 import com.adong.adchat.ui.screens.StructuredMessageText
 import com.adong.adchat.ui.theme.AsterTheme
 import com.adong.adchat.ui.theme.Canvas
+import com.adong.adchat.ui.theme.Ink
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -43,11 +45,16 @@ class ExperiencePolishUiTest {
 
     private fun content(dark: Boolean = false, fontScale: Float = 1f, block: @Composable () -> Unit) {
         rule.runOnUiThread {
+            val barStyle = if (dark) SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                else SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+            rule.activity.enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
             rule.activity.setContent {
                 AsterTheme(themeMode = if (dark) THEME_MODE_DARK else THEME_MODE_ASTER) {
                     val density = LocalDensity.current.density
                     CompositionLocalProvider(LocalDensity provides Density(density, fontScale)) {
-                        Box(Modifier.fillMaxSize().background(Canvas)) { block() }
+                        Surface(Modifier.fillMaxSize(), color = Canvas, contentColor = Ink) {
+                            Box(Modifier.fillMaxSize()) { block() }
+                        }
                     }
                 }
             }
@@ -56,6 +63,7 @@ class ExperiencePolishUiTest {
 
     private fun model(): MainViewModel = rule.runOnIdle {
         ViewModelProvider(rule.activity)[MainViewModel::class.java].also { vm ->
+            vm.setThemeMode(THEME_MODE_ASTER)
             vm.conversations.clear()
             vm.conversations.addAll(listOf(
                 Conversation(id = "walk", title = "周末散步计划", favorite = true,
@@ -119,6 +127,7 @@ class ExperiencePolishUiTest {
 
     @Test fun groupedSettingsRemainReadableInDarkModeAndLargeText() {
         val vm = model()
+        rule.runOnIdle { vm.setThemeMode(THEME_MODE_DARK) }
         content(dark = true, fontScale = 1.4f) { SettingsScreen(vm, {}) }
         rule.onNodeWithText("服务与连接").assertIsDisplayed()
         rule.onNodeWithTag("settings-search").assertIsDisplayed()
