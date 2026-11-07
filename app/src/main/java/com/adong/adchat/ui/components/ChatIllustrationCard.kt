@@ -27,6 +27,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatIllustration
 import com.adong.adchat.data.IllustrationStatus
+import com.adong.adchat.data.illustrationErrorMessage
 import com.adong.adchat.ui.theme.*
 
 @Composable
@@ -90,7 +91,7 @@ fun ChatIllustrationCard(
                     )
                     if (!image.isRunning) TextButton(onClick = onRetry) { Text("重试", color = Accent) }
                 }
-                if (image.error.isNotBlank()) Text(image.error, style = MaterialTheme.typography.bodySmall, color = MutedInk,
+                if (image.error.isNotBlank()) Text(illustrationErrorMessage(image.error), style = MaterialTheme.typography.bodySmall, color = MutedInk,
                     modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp))
                 else Spacer(Modifier.height(8.dp))
             }

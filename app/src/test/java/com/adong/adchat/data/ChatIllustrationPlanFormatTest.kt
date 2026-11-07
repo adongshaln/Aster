@@ -22,6 +22,14 @@ class ChatIllustrationPlanFormatTest {
         val credential = "sk-abcdefghijklmnop"
         val redacted = runCatching { ChatIllustrationPlanner.parse("Service explanation. Bearer $credential") }.exceptionOrNull()!!
         assertFalse(redacted.message.orEmpty().contains(credential))
+        val blocked = "The prompt could not be submitted. Generative AI Prohibited Use policy."
+        val rejection = runCatching { ChatIllustrationPlanner.parse(blocked) }.exceptionOrNull()!!
+        assertTrue(rejection.message.orEmpty().contains("上游 Google 服务拒绝"))
+        assertTrue(rejection.message.orEmpty().contains("尚未调用 NAI"))
+        val oldCard = "画面提示词提炼失败（服务 · 模型）：提炼模型未返回有效画面数据。\n服务返回：$blocked"
+        assertTrue(illustrationErrorMessage(oldCard).contains("上游 Google 服务拒绝"))
+        val validPlan = JSONObject(json.toString()).put("prompt", "A person reading a notice: $blocked")
+        assertEquals(validPlan.getString("prompt"), ChatIllustrationPlanner.parse(validPlan.toString()).prompt)
     }
 
     @Test fun thoughtExamplesAndTruncatedObjectsCannotBecomeAnImagePrompt() {
