@@ -2,6 +2,7 @@ package com.adong.adchat.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -69,8 +70,15 @@ Return only a JSON object with three string fields: "title" (short Chinese capti
     }
 
     fun parse(raw: String): IllustrationPlan {
-        val text = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-        val json = runCatching { JSONObject(text) }.getOrElse { error("未能提炼有效画面，请重试") }
+        var text = raw.trim().removePrefix("\uFEFF")
+        // Do not turn a JSON example inside a thought block into an illustration.
+        text = text.replace(Regex("""(?is)<(think|thinking|analysis)\b[^>]*>.*?(?:</\1\s*>|$)"""), "").trim()
+        if (text.startsWith('"')) {
+            text = (runCatching { JSONTokener(text).nextValue() }.getOrNull() as? String) ?: text
+        }
+        val json = findPlanObject(text) ?: error(
+            "提炼模型未返回有效画面数据。\n服务返回：${responsePreview(text)}"
+        )
         val prompt = (json.opt("prompt") as? String).orEmpty().trim()
         require(prompt.length in 12..2_800) { "画面提示词为空或过长，请重试" }
         return IllustrationPlan(
@@ -79,6 +87,43 @@ Return only a JSON object with three string fields: "title" (short Chinese capti
             prompt = prompt
         )
     }
+
+    /** Accept ordinary prose/code-fence wrappers while respecting quotes and escaped braces. */
+    private fun findPlanObject(text: String): JSONObject? {
+        var start = -1
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        var candidates = 0
+        text.forEachIndexed { index, char ->
+            if (depth == 0) {
+                if (char == '{') { start = index; depth = 1 }
+                return@forEachIndexed
+            }
+            if (quoted) {
+                if (escaped) escaped = false
+                else if (char == '\\') escaped = true
+                else if (char == '"') quoted = false
+            } else when (char) {
+                '"' -> quoted = true
+                '{' -> depth++
+                '}' -> {
+                    depth--
+                    if (depth == 0) {
+                        val json = runCatching { JSONObject(text.substring(start, index + 1)) }.getOrNull()
+                        if (json?.has("prompt") == true) return json
+                        if (++candidates >= 8) return null
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun responsePreview(text: String): String = text
+        .replace(Regex("(?i)Bearer\\s+\\S+"), "Bearer [hidden]")
+        .replace(Regex("\\b(?:sk-|pst-)[A-Za-z0-9_-]{12,}"), "[hidden]")
+        .take(800).ifBlank { "未提供正文（或只有思考内容）" }
 }
 
 internal fun ChatIllustration.toJson(): JSONObject = JSONObject()
