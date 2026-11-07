@@ -36,11 +36,13 @@ class ChatIllustrationFlowTest {
     private val stores = mutableListOf<ViewModelStore>()
     private val requests = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
     private val requestPaths = java.util.concurrent.CopyOnWriteArrayList<String>()
+    private val requestKeys = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val plans = AtomicInteger()
     private val drawings = AtomicInteger()
     private val replies = AtomicInteger()
     private var releasePlan = CountDownLatch(0)
     private var failFirstDrawing = false
+    private var failFirstPlan = false
     private var finishReason = "stop"
 
     @Before fun setUp() {
@@ -51,9 +53,9 @@ class ChatIllustrationFlowTest {
         }
         server = MockWebServer().apply { start() }
         val profiles = listOf("original", "other", "drawing").map { id ->
-            ApiProfile(id = id, name = id, baseUrl = server.url("/").toString(), apiKey = "fixture-key",
+            ApiProfile(id = id, name = id, baseUrl = server.url("/").toString(), apiKey = "fixture-$id",
                 chatModel = "$id-model", imageModel = "another-image-model", autoResumeStream = false,
-                imagePath = "/$id/images/generations")
+                imagePath = "/$id/images/generations", chatPath = "/$id/chat/completions")
         }
         ConfigStore(app).save(AppConfig(profiles = profiles, activeChatProfileId = "original", activeImageProfileId = "drawing",
             systemPrompt = "The knight has silver hair and wears a blue cloak."))
@@ -69,6 +71,7 @@ class ChatIllustrationFlowTest {
                 val body = JSONObject(request.body.readUtf8())
                 requests += body
                 requestPaths += request.path.orEmpty()
+                requestKeys += request.getHeader("Authorization").orEmpty()
                 if (request.path?.endsWith("/images/generations") == true) {
                     val count = drawings.incrementAndGet()
                     if (failFirstDrawing && count == 1) return MockResponse().setResponseCode(400)
@@ -76,11 +79,17 @@ class ChatIllustrationFlowTest {
                     return MockResponse().setHeader("Content-Type", "application/json")
                         .setBody(JSONObject().put("data", JSONArray().put(JSONObject().put("b64_json", PNG))).toString())
                 }
-                if (body.optBoolean("stream")) {
+                val messages = body.optJSONArray("messages") ?: JSONArray()
+                val isPlanner = (0 until messages.length()).any {
+                    messages.optJSONObject(it)?.optString("content") == ChatIllustrationPlanner.INSTRUCTION
+                }
+                if (!isPlanner) {
                     replies.incrementAndGet()
                     return completion("The silver-haired knight raises her lantern beneath the rain.", finishReason)
                 }
-                plans.incrementAndGet()
+                val planCount = plans.incrementAndGet()
+                if (failFirstPlan && planCount == 1) return MockResponse().setHeader("Content-Type", "application/json")
+                    .setBody("""{"choices":[{"message":{"content":null},"finish_reason":"stop"}]}""")
                 releasePlan.await(6, TimeUnit.SECONDS)
                 return completion(JSONObject().put("title", "雨中的灯火").put("focus", "骑士在雨中举起灯笼")
                     .put("prompt", "A silver-haired knight in a blue cloak raises a lantern in the rain, intimate portrait, warm light.").toString())
@@ -119,10 +128,15 @@ class ChatIllustrationFlowTest {
         assertEquals("other", illustration.imageProfileId)
         assertTrue(requestPaths.contains("/other/images/generations"))
         assertFalse(requestPaths.contains("/original/images/generations"))
+        val planIndex = requests.indices.single { requests[it].optJSONArray("messages")?.optJSONObject(0)
+            ?.optString("content") == ChatIllustrationPlanner.INSTRUCTION }
+        assertEquals("Bearer fixture-original", requestKeys[planIndex])
+        assertEquals("/original/chat/completions", requestPaths[planIndex])
+        assertEquals("Bearer fixture-other", requestKeys[requestPaths.indexOf("/other/images/generations")])
         assertTrue(File(illustration.source.removePrefix("file://")).isFile)
         assertEquals(1, plans.get())
         assertEquals(1, drawings.get())
-        val planRequest = requests.single { !it.has("stream") && it.has("messages") }
+        val planRequest = requests[planIndex]
         assertEquals("original-model", planRequest.getString("model"))
         assertFalse(planRequest.has("tools"))
         assertFalse(planRequest.toString().contains("Use vivid descriptions."))
@@ -158,6 +172,33 @@ class ChatIllustrationFlowTest {
         assertFalse(next.contains("intimate portrait"))
         assertFalse(next.contains("illustration"))
         assertEquals(1, plans.get())
+    }
+
+    @Test fun promptRetryUsesTheCurrentConversationServiceKeyAndModel() {
+        failFirstPlan = true
+        val vm = createVm()
+        vm.setChatIllustrationsEnabled(true)
+        send(vm)
+        await { vm.messages.lastOrNull()?.illustration?.status == IllustrationStatus.Failed }
+        val messageId = vm.messages.last().id
+        assertEquals("original", vm.messages.last().illustration!!.textProfileId)
+        vm.selectChatModel("other", "gemini-4-argon-high")
+        vm.retryChatIllustration(messageId)
+        await { vm.messages.last().illustration?.status == IllustrationStatus.Complete }
+        val image = vm.messages.last().illustration!!
+        assertEquals("other", image.textProfileId)
+        assertEquals("gemini-4-argon-high", image.textModel)
+        assertEquals("drawing", image.imageProfileId)
+        val planIndices = requests.indices.filter { requests[it].optJSONArray("messages")?.optJSONObject(0)
+            ?.optString("content") == ChatIllustrationPlanner.INSTRUCTION }
+        assertEquals(2, planIndices.size)
+        val retried = planIndices.last()
+        assertEquals("Bearer fixture-other", requestKeys[retried])
+        assertEquals("/other/chat/completions", requestPaths[retried])
+        assertEquals("gemini-4-argon-high", requests[retried].getString("model"))
+        assertEquals("Bearer fixture-drawing", requestKeys[requestPaths.indexOf("/drawing/images/generations")])
+        assertFalse(image.toJson().toString().contains("fixture-"))
+        assertEquals(1, drawings.get())
     }
 
     @Test fun editingTheSourceWhilePlanningPreventsStaleDrawingAndRegenerationCanIllustrate() {

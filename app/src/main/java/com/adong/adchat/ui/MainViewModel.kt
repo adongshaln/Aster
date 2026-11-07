@@ -1424,7 +1424,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val sourceIndex = snapshot.indexOfFirst { it.id == messageId }
         if (sourceIndex < 0) return
         val history = snapshot.take(sourceIndex + 1)
-        var image = retry?.copy(id = UUID.randomUUID().toString(), error = "", status = IllustrationStatus.Queued)
+        var image = retry?.copy(
+            id = UUID.randomUUID().toString(), error = "", status = IllustrationStatus.Queued,
+            textProfileId = if (retry.prompt.isBlank()) textProfile.id else retry.textProfileId,
+            textModel = if (retry.prompt.isBlank()) textProfile.chatModel else retry.textModel
+        )
             ?: ChatIllustration(
                 sourceRevision = ChatIllustrationPlanner.revision(message),
                 textProfileId = textProfile.id, textModel = textProfile.chatModel,
@@ -1468,7 +1472,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 throw cancelled
             } catch (error: Exception) {
                 val detail = when {
-                    image.status == IllustrationStatus.Planning -> "画面提示词提炼失败：${friendlyError(error)}"
+                    image.status == IllustrationStatus.Planning ->
+                        "画面提示词提炼失败（${textProfile.name} · ${image.textModel}）：${friendlyError(error)}"
                     image.status == IllustrationStatus.Generating && imageDeliveryMayBeUncertain(error) ->
                         "图片响应未确认；服务端可能仍在处理，请稍后确认再重试"
                     image.status == IllustrationStatus.Generating -> "绘图失败：${friendlyError(error)}"
@@ -1499,14 +1504,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val id = activeConversationId ?: return
         val image = illustrationMessage(id, messageId)?.illustration ?: return
         if (image.isRunning || image.status == IllustrationStatus.Complete) return
-        val textProfile = profiles.firstOrNull { it.id == image.textProfileId }
+        // A manual retry is a new request: use the route and credentials of the conversation
+        // being retried, rather than reviving an old card's chat service or model.
+        val textProfile = chatProfile
         val drawingProfile = profiles.firstOrNull { it.id == image.imageProfileId }
-        if ((image.prompt.isBlank() && textProfile == null) || drawingProfile == null) {
+        if (drawingProfile == null) {
             notice = "原生成渠道已删除，请先恢复对应配置"
             return
         }
-        startChatIllustration(id, messageId,
-            (textProfile ?: drawingProfile).copy(chatModel = image.textModel), drawingProfile, image.creativeContext, image)
+        startChatIllustration(id, messageId, textProfile, drawingProfile, image.creativeContext, image)
     }
 
     fun saveChatIllustration(messageId: Long) {

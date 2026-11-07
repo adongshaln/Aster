@@ -1604,17 +1604,18 @@ class ApiRepository internal constructor(
 
     suspend fun completePlain(
         profile: ApiProfile, model: String, instruction: String, user: String, maxOutputTokens: Int = 4096,
-        requireComplete: Boolean = false
+        requireComplete: Boolean = false, stream: Boolean = false, reasoningEffort: String? = null
     ): String =
         withContext(Dispatchers.IO) {
             validateProfile(profile)
             require(model.isNotBlank()) { "Model is required" }
             require(maxOutputTokens in 1..65_536)
-            val quietEffort = ReasoningPolicy.choices(model).firstOrNull { it.id == "low" || it.id == "none" || it.id == "off" }?.id
-                ?: ReasoningPolicy.DEFAULT
+            val quietEffort = reasoningEffort ?: ReasoningPolicy.choices(model)
+                .firstOrNull { it.id == "low" || it.id == "none" || it.id == "off" }?.id ?: ReasoningPolicy.DEFAULT
             val quietProfile = profile.copy(reasoningEffort = quietEffort)
             val responsesApi = quietProfile.usesResponses(model)
             val anthropicApi = quietProfile.usesAnthropicMessages(model)
+            val chatStream = stream && !anthropicApi && !responsesApi
             val body = when {
                 anthropicApi -> JSONObject().put("model", model).put("max_tokens", maxOutputTokens)
                     .put("system", instruction)
@@ -1623,6 +1624,7 @@ class ApiRepository internal constructor(
                 else -> JSONObject().put("model", model).put("max_tokens", maxOutputTokens).put("messages", JSONArray()
                     .put(JSONObject().put("role", "system").put("content", instruction))
                     .put(JSONObject().put("role", "user").put("content", user)))
+                    .apply { if (chatStream) put("stream", true) }
             }
             applyReasoningPolicy(body, quietProfile, model, responsesApi)
             val path = when {
@@ -1631,9 +1633,21 @@ class ApiRepository internal constructor(
                 else -> quietProfile.chatPath
             }
             val request = requestBuilder(quietProfile, resolveUrl(quietProfile.baseUrl, path), anthropicApi)
+                .apply {
+                    if (chatStream) {
+                        header("Accept", "text/event-stream")
+                        header("Cache-Control", "no-cache")
+                        header("Accept-Encoding", "identity")
+                        header("Connection", "close")
+                    }
+                }
                 .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
-            val raw = executeTextCall(client.newCall(request))
-            val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("设定接口返回的不是有效 JSON") }
+            val root = if (chatStream) {
+                executePlainChatCompletion(streamingClient.newCall(request))
+            } else {
+                val raw = executeTextCall(client.newCall(request))
+                runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("设定接口返回的不是有效 JSON") }
+            }
             if (requireComplete) validateIllustrationCompletion(root, model, maxOutputTokens, anthropicApi, responsesApi)
             val text = try {
                 when {
@@ -1643,7 +1657,12 @@ class ApiRepository internal constructor(
                 }
             } catch (error: IllegalStateException) {
                 if (!requireComplete) throw error
-                throw IllegalStateException("提炼服务未返回画面提示词正文（$model）；请检查该聊天服务的响应，或稍后重试", error)
+                val reasoningOnly = root.optBoolean("saw_reasoning") || parseReasoningDelta(root).isNotBlank() ||
+                    parseUsage(root).reasoningTokens > 0
+                val finish = root.optJSONArray("choices")?.optJSONObject(0)?.optString("finish_reason")
+                    ?.takeIf { it.isNotBlank() && it != "null" } ?: "未提供"
+                val detail = if (reasoningOnly) "仅返回思考内容，没有画面提示词正文" else "未返回画面提示词正文"
+                throw IllegalStateException("提炼服务$detail（结束原因：$finish）", error)
             }
             if (requireComplete) require(text.isNotBlank()) { "提炼服务未返回画面提示词正文（$model），请稍后重试" }
             text
@@ -1663,8 +1682,54 @@ class ApiRepository internal constructor(
         return ChatIllustrationPlanner.parse(completePlain(
             profile = profile, model = model, instruction = ChatIllustrationPlanner.INSTRUCTION,
             user = ChatIllustrationPlanner.input(history, creativeContext), maxOutputTokens = budget,
-            requireComplete = true
+            requireComplete = true, stream = true, reasoningEffort = profile.reasoningEffort
         ))
+    }
+
+    /** One ordinary text request with the same Chat transport as the conversation, without tools
+     * or continuation requests. Some gateways return a JSON completion even for stream=true. */
+    private suspend fun executePlainChatCompletion(call: Call): JSONObject = call.withCancellableResponse { response ->
+        if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+        val body = response.body ?: throw IllegalStateException("提炼服务返回空响应")
+        if (!response.header("Content-Type").orEmpty().contains("text/event-stream", ignoreCase = true)) {
+            return@withCancellableResponse runCatching { JSONObject(body.string()) }
+                .getOrElse { throw IllegalStateException("提炼服务返回的不是有效 JSON") }
+        }
+        val text = StringBuilder()
+        val refusal = StringBuilder()
+        var finish: String? = null
+        var completed = false
+        var sawReasoning = false
+        var usage: JSONObject? = null
+        readSsePayloads(body.source()) { payload ->
+            if (payload.trim() == "[DONE]") {
+                completed = true
+                return@readSsePayloads false
+            }
+            val event = runCatching { JSONObject(payload) }.getOrElse { throw IllegalStateException("提炼服务返回无效的流式数据") }
+            ensureNoProviderError(event)
+            val choice = event.optJSONArray("choices")?.optJSONObject(0)
+            val delta = parseStreamDelta(event)
+            if (delta.isNotEmpty()) text.append(delta)
+            else if (text.isEmpty() && choice?.optJSONObject("message") != null) {
+                text.append(runCatching { parseMessageContent(event) }.getOrDefault(""))
+            }
+            sawReasoning = sawReasoning || parseReasoningDelta(event).isNotBlank()
+            (choice?.optJSONObject("delta")?.opt("refusal") as? String)?.let(refusal::append)
+            (choice?.optJSONObject("message")?.opt("refusal") as? String)?.let(refusal::append)
+            if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
+                finish = choice.optString("finish_reason").takeIf(String::isNotBlank)
+                if (finish != null) completed = true
+            }
+            event.optJSONObject("usage")?.let { usage = it }
+            true
+        }
+        if (!completed) throw IOException("画面提示词流式响应未完整结束，请手动重试")
+        JSONObject().put("choices", JSONArray().put(JSONObject()
+            .put("message", JSONObject().put("content", text.toString()).apply {
+                if (refusal.isNotEmpty()) put("refusal", refusal.toString())
+            }).put("finish_reason", finish ?: JSONObject.NULL)))
+            .put("saw_reasoning", sawReasoning).apply { usage?.let { put("usage", it) } }
     }
 
     private fun validateIllustrationCompletion(
