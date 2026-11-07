@@ -26,6 +26,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -70,6 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val conversationStore = ConversationStore(application)
     private val chatSessionStore = ChatSessionStore(application)
     private val artworkStore = ArtworkStore(application)
+    private val chatIllustrationStore = ArtworkStore(application, "chat-illustrations")
     private val promptInjectionStore = PromptInjectionStore(application)
     var promptInjectionEnabled by mutableStateOf(promptInjectionStore.isEnabled())
         private set
@@ -92,6 +94,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val conversations = mutableStateListOf<Conversation>()
     var activeConversationId by mutableStateOf<String?>(null)
         private set
+    private var newConversationIllustrationsEnabled by mutableStateOf(false)
+    val chatIllustrationsEnabled: Boolean
+        get() = activeConversationId?.let { id -> conversations.firstOrNull { it.id == id }?.illustrationsEnabled }
+            ?: newConversationIllustrationsEnabled
 
     var appConfig by mutableStateOf(store.load())
         private set
@@ -134,6 +140,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         conversations.addAll(routedConversations)
         if (routedConversations != storedConversations) scheduleConversationSave(routedConversations)
         val session = chatSessionStore.load()
+        newConversationIllustrationsEnabled = session.newConversationIllustrationsEnabled
         chatDrafts.putAll(session.drafts)
         val restoredConversation = session.lastActiveKey
             .takeUnless { it == ChatSessionStore.NEW_CONVERSATION_KEY }
@@ -151,6 +158,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastActiveChatKey = activeConversationId ?: ChatSessionStore.NEW_CONVERSATION_KEY
         chatInput = chatDrafts[lastActiveChatKey].orEmpty()
         images.addAll(artworkStore.load())
+        val retainedChatImages = conversations.flatMap { it.messages }.mapNotNull { it.illustration?.source }.toSet()
+        viewModelScope.launch(Dispatchers.IO) { chatIllustrationStore.pruneCache(retainedChatImages) }
         val undecryptableKeys = store.profilesWithUndecryptableKeys()
         if (undecryptableKeys.isNotEmpty()) {
             keyReentryWarning = "检测到 ${undecryptableKeys.size} 个 API 配置的密钥无法解密（重装应用或签名变化导致），请在设置中重新填写 API Key"
@@ -187,6 +196,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private data class InputSuggestionSource(val conversationKey: String, val messageId: Long, val profile: ApiProfile)
     private var inputSuggestionSource: InputSuggestionSource? = null
     private val titleSummaryJobs = mutableMapOf<String, Job>()
+    private data class IllustrationTask(val conversationId: String, val messageId: Long, val job: Job)
+    private val illustrationJobs = mutableStateMapOf<String, IllustrationTask>()
     private var chatStopRequested = false
     private val imageTaskStates = mutableStateMapOf<String, ImageTaskUiState>()
     private val imageTaskJobs = linkedMapOf<String, Job>()
@@ -200,7 +211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isImageLoading: Boolean get() = imageTaskStates.isNotEmpty()
     val activeImageTaskCount: Int get() = imageTaskStates.size
     val activeImageCount: Int
-        get() = imageTaskStates.values.sumOf { state -> remainingActiveImages(state.imageCount, state.completed) }
+        get() = imageTaskStates.values.sumOf { state -> remainingActiveImages(state.imageCount, state.completed) } + illustrationJobs.size
     val maxConcurrentImageCount: Int get() = MAX_CONCURRENT_IMAGE_COUNT
     val canStartImageTask: Boolean get() = activeImageCount < MAX_CONCURRENT_IMAGE_COUNT
     val imageGenerationPhase: ImageGenerationPhase get() = latestImageTask?.phase ?: ImageGenerationPhase.Idle
@@ -980,6 +991,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             isContinuation = systemNote
         )
         persistCurrentConversation()
+        val illustrationConversationId = activeConversationId!!
+        val illustrateReply = chatIllustrationsEnabled
+        val illustrationImageProfile = imageProfile
+        val illustrationCreativeContext = appConfig.systemPrompt.take(6_000)
         val history = messages.toList()
         val assistantId = System.nanoTime()
         val streamingMessage = ChatMessage(
@@ -1228,6 +1243,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 persistCurrentConversation(clearRecoveryMessageId = assistantId)
                 // 只在流式请求自然跑完时预测下一句；出错、停止、取消的收尾不触发。
                 if (summarizeTitle) {
+                    if (illustrateReply && conversations.firstOrNull { it.id == illustrationConversationId }?.illustrationsEnabled == true) {
+                        startChatIllustration(illustrationConversationId, assistantId, profile, illustrationImageProfile, illustrationCreativeContext)
+                    }
                     scheduleInputSuggestion()
                     scheduleTitleSummary()
                 }
@@ -1329,6 +1347,167 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         chatJob?.cancel(CancellationException("User stopped generation"))
     }
 
+    fun setChatIllustrationsEnabled(enabled: Boolean) {
+        if (enabled && (!imageProfile.hasValidBaseUrl() || imageProfile.apiKey.isBlank())) {
+            notice = "请先在设置中配置支持 $CHAT_ILLUSTRATION_MODEL 的绘图渠道与密钥"
+            return
+        }
+        val id = activeConversationId
+        if (id == null) {
+            newConversationIllustrationsEnabled = enabled
+            scheduleSessionSave(immediate = true)
+        } else {
+            val index = conversations.indexOfFirst { it.id == id }
+            if (index < 0) return
+            conversations[index] = conversations[index].copy(illustrationsEnabled = enabled)
+            if (!enabled) {
+                messages.filter { it.illustration?.isRunning == true }.forEach { cancelChatIllustration(it.id) }
+            }
+            scheduleConversationSave(conversations.toList())
+        }
+    }
+
+    private fun illustrationMessage(conversationId: String, messageId: Long): ChatMessage? =
+        if (activeConversationId == conversationId) messages.firstOrNull { it.id == messageId }
+        else conversations.firstOrNull { it.id == conversationId }?.messages?.firstOrNull { it.id == messageId }
+
+    private fun setChatIllustration(
+        conversationId: String, messageId: Long, image: ChatIllustration, expectedId: String? = image.id
+    ): Boolean {
+        val message = illustrationMessage(conversationId, messageId) ?: return false
+        if (!ChatIllustrationPlanner.eligible(message) || ChatIllustrationPlanner.revision(message) != image.sourceRevision ||
+            message.illustration?.id != expectedId) return false
+        val index = conversations.indexOfFirst { it.id == conversationId }
+        if (index < 0) return false
+        if (activeConversationId == conversationId) replaceMessage(messageId) { it.copy(illustration = image) }
+        val conversation = conversations[index]
+        conversations[index] = conversation.copy(messages = conversation.messages.map {
+            if (it.id == messageId) it.copy(illustration = image) else it
+        })
+        scheduleConversationSave(conversations.toList())
+        return true
+    }
+
+    private fun startChatIllustration(
+        conversationId: String, messageId: Long, textProfile: ApiProfile, drawingProfile: ApiProfile,
+        creativeContext: String, retry: ChatIllustration? = null
+    ) {
+        val message = illustrationMessage(conversationId, messageId) ?: return
+        if (!ChatIllustrationPlanner.eligible(message) || message.illustration?.isRunning == true) return
+        if (retry == null && message.illustration != null) return
+        if (retry != null && (retry.status == IllustrationStatus.Complete ||
+                retry.sourceRevision != ChatIllustrationPlanner.revision(message))) return
+        val snapshot = if (activeConversationId == conversationId) messages.toList()
+            else conversations.firstOrNull { it.id == conversationId }?.messages ?: return
+        val sourceIndex = snapshot.indexOfFirst { it.id == messageId }
+        if (sourceIndex < 0) return
+        val history = snapshot.take(sourceIndex + 1)
+        var image = retry?.copy(id = UUID.randomUUID().toString(), error = "", status = IllustrationStatus.Queued)
+            ?: ChatIllustration(
+                sourceRevision = ChatIllustrationPlanner.revision(message),
+                textProfileId = textProfile.id, textModel = textProfile.chatModel,
+                imageProfileId = drawingProfile.id, creativeContext = creativeContext
+            )
+        if (!setChatIllustration(conversationId, messageId, image, expectedId = retry?.id)) return
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+            var cachedSource: String? = null
+            var delivered = false
+            fun update(next: ChatIllustration) {
+                coroutineContext.ensureActive()
+                if (!setChatIllustration(conversationId, messageId, next)) throw CancellationException("Illustration source changed")
+                image = next
+            }
+            try {
+                require(drawingProfile.hasValidBaseUrl() && drawingProfile.apiKey.isNotBlank()) { "请配置原绘图渠道与密钥后重试" }
+                if (image.prompt.isBlank()) {
+                    update(image.copy(status = IllustrationStatus.Planning))
+                    val plan = repository.planChatIllustration(textProfile, image.textModel, history, image.creativeContext)
+                    update(image.copy(title = plan.title, focus = plan.focus, prompt = plan.prompt, status = IllustrationStatus.Queued))
+                }
+                imageRequestSlots.withPermit {
+                    update(image.copy(status = IllustrationStatus.Generating))
+                    val sources = repository.generateImage(
+                        profile = drawingProfile.copy(imageApiMode = IMAGE_API_MODE_OPENAI),
+                        model = CHAT_ILLUSTRATION_MODEL, prompt = image.prompt, size = "1024x1024",
+                        requestKey = "aster-chat-illustration-${image.id}"
+                    )
+                    update(image.copy(status = IllustrationStatus.Saving))
+                    // A completed chat image must be local: temporary provider URLs can expire.
+                    // NonCancellable hands the path back even if cancellation occurs during disk IO,
+                    // allowing the finally block to remove an undelivered file.
+                    cachedSource = withContext(Dispatchers.IO + NonCancellable) {
+                        chatIllustrationStore.cacheSource(sources.first())
+                    }
+                    update(image.copy(status = IllustrationStatus.Complete, source = cachedSource!!))
+                    delivered = true
+                }
+            } catch (cancelled: CancellationException) {
+                setChatIllustration(conversationId, messageId, image.copy(status = IllustrationStatus.Cancelled))
+                throw cancelled
+            } catch (error: Exception) {
+                val detail = if (image.status == IllustrationStatus.Generating && imageDeliveryMayBeUncertain(error)) {
+                    "图片响应未确认；服务端可能仍在处理，请稍后确认再重试"
+                } else friendlyError(error)
+                setChatIllustration(conversationId, messageId, image.copy(status = IllustrationStatus.Failed, error = detail))
+            } finally {
+                if (!delivered) cachedSource?.let { source ->
+                    withContext(Dispatchers.IO + NonCancellable) {
+                        chatIllustrationStore.delete(GeneratedImage(prompt = "", source = source))
+                    }
+                }
+                if (illustrationJobs[image.id]?.job === coroutineContext[Job]) illustrationJobs.remove(image.id)
+            }
+        }
+        illustrationJobs[image.id] = IllustrationTask(conversationId, messageId, job)
+        job.start()
+    }
+
+    fun cancelChatIllustration(messageId: Long) {
+        val id = activeConversationId ?: return
+        val image = illustrationMessage(id, messageId)?.illustration?.takeIf { it.isRunning } ?: return
+        setChatIllustration(id, messageId, image.copy(status = IllustrationStatus.Cancelled))
+        illustrationJobs.remove(image.id)?.job?.cancel()
+    }
+
+    fun retryChatIllustration(messageId: Long) {
+        val id = activeConversationId ?: return
+        val image = illustrationMessage(id, messageId)?.illustration ?: return
+        if (image.isRunning || image.status == IllustrationStatus.Complete) return
+        val textProfile = profiles.firstOrNull { it.id == image.textProfileId }
+        val drawingProfile = profiles.firstOrNull { it.id == image.imageProfileId }
+        if ((image.prompt.isBlank() && textProfile == null) || drawingProfile == null) {
+            notice = "原生成渠道已删除，请先恢复对应配置"
+            return
+        }
+        startChatIllustration(id, messageId,
+            (textProfile ?: drawingProfile).copy(chatModel = image.textModel), drawingProfile, image.creativeContext, image)
+    }
+
+    fun saveChatIllustration(messageId: Long) {
+        val image = messages.firstOrNull { it.id == messageId }?.illustration
+            ?.takeIf { it.status == IllustrationStatus.Complete } ?: return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    chatIllustrationStore.saveToGallery(GeneratedImage(prompt = image.prompt, source = image.source))
+                }
+                notice = "插图已保存到相册"
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                notice = "保存失败：${friendlyError(error)}"
+            }
+        }
+    }
+
+    private fun discardChatIllustrations(discarded: List<ChatMessage>) {
+        discarded.mapNotNull { it.illustration }.forEach { image ->
+            illustrationJobs.remove(image.id)?.job?.cancel()
+            if (image.source.isNotBlank()) viewModelScope.launch(Dispatchers.IO) {
+                chatIllustrationStore.delete(GeneratedImage(prompt = image.prompt, source = image.source))
+            }
+        }
+    }
+
     fun updateQuestionDraft(value: String) { questionDraft = value }
 
     fun chooseQuestionOption(option: String) {
@@ -1376,6 +1555,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val user = messages[userIndex]
         // 旧回复整体带进新消息，详情里可回看，避免「重试更差」时无从比较。
         val stash = assistant.copy(previousContent = assistant.content, previousReasoning = assistant.reasoning)
+        discardChatIllustrations(listOf(assistant))
         messages.removeAt(assistantIndex)
         messages.removeAt(userIndex)
         persistCurrentConversation()
@@ -1394,6 +1574,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val images = messages[index].attachments
         stashCurrentDraft()
         clearInputSuggestion()
+        discardChatIllustrations(messages.drop(index))
         messages.removeRange(index, messages.size)
         updateChatInput(content)
         // 编辑历史消息时恢复该消息的附件，避免混入当前未发送草稿的图片。
@@ -1565,6 +1746,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val index = conversations.indexOfFirst { it.id == id }
         if (index < 0) return
         titleSummaryJobs.remove(id)?.cancel()
+        // Keep completed files available for Undo, but stop paid work on a deleted conversation.
+        conversations[index] = conversations[index].copy(messages = conversations[index].messages.map { message ->
+            val image = message.illustration
+            if (image?.isRunning == true) {
+                illustrationJobs.remove(image.id)?.job?.cancel()
+                message.copy(illustration = image.copy(status = IllustrationStatus.Cancelled))
+            } else message
+        })
         recentlyDeletedDraft = chatDrafts[id].orEmpty()
         recentlyDeletedConversation = conversations.removeAt(index) to index
         chatDrafts.remove(id)
@@ -2324,24 +2513,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (wasNewConversation) {
             lastActiveChatKey = id
             chatDrafts.remove(ChatSessionStore.NEW_CONVERSATION_KEY)
-            scheduleSessionSave(immediate = true)
         }
         val index = conversations.indexOfFirst { it.id == id }
         val existing = conversations.getOrNull(index)
         val title = automaticConversationTitle(stableMessages)
         val createdAt = existing?.createdAt ?: now
         val selectedProfile = chatProfile
-        val conversation = Conversation(
+        val conversation = (existing ?: Conversation(
             id = id,
-            title = existing?.title ?: title,
-            messages = stableMessages,
+            title = title,
+            messages = emptyList(),
             createdAt = createdAt,
+            illustrationsEnabled = newConversationIllustrationsEnabled
+        )).copy(
+            messages = stableMessages,
             updatedAt = now,
             profileId = selectedProfile.id,
-            model = selectedProfile.chatModel,
-            titleSummarized = existing?.titleSummarized ?: false
+            model = selectedProfile.chatModel
         )
         if (index >= 0) conversations[index] = conversation else conversations.add(conversation)
+        if (wasNewConversation) {
+            newConversationIllustrationsEnabled = false
+            scheduleSessionSave(immediate = true)
+        }
         sortAndSaveConversations(clearRecoveryMessageId)
     }
 
@@ -2450,15 +2644,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         sessionSaveJob?.cancel()
         val draftsSnapshot = chatDrafts.toMap()
         val activeKeySnapshot = lastActiveChatKey
+        val illustrationsSnapshot = newConversationIllustrationsEnabled
         sessionSaveJob = viewModelScope.launch(Dispatchers.IO) {
             if (!immediate) delay(220)
-            chatSessionStore.save(draftsSnapshot, activeKeySnapshot)
+            chatSessionStore.save(draftsSnapshot, activeKeySnapshot, illustrationsSnapshot)
         }
     }
 
     override fun onCleared() {
         stashCurrentDraft()
-        chatSessionStore.save(chatDrafts.toMap(), currentChatKey())
+        chatSessionStore.save(chatDrafts.toMap(), currentChatKey(), newConversationIllustrationsEnabled)
         super.onCleared()
     }
 

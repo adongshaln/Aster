@@ -431,6 +431,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             customBillingRows = customBillingRows,
                             onRetry = { vm.retryMessage(message.id) },
                             onRegenerate = { vm.regenerateMessage(message.id) },
+                            onCancelIllustration = { vm.cancelChatIllustration(message.id) },
+                            onRetryIllustration = { vm.retryChatIllustration(message.id) },
+                            onSaveIllustration = { vm.saveChatIllustration(message.id) },
                             onEditResend = {
                                 val index = vm.messages.indexOfFirst { it.id == message.id }
                                 val removedAfter = (vm.messages.size - index - 1).coerceAtLeast(0)
@@ -521,6 +524,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     fileCreationEnabled = vm.chatProfile.fileCreationEnabled,
                     promptInjectionEnabled = vm.promptInjectionEnabled,
                     promptInjectionPreset = vm.promptInjectionPreset,
+                    illustrationsEnabled = vm.chatIllustrationsEnabled,
+                    illustrationChannel = vm.imageProfile.name,
+                    onIllustrationsToggle = vm::setChatIllustrationsEnabled,
                     onModelClick = { showSwitcher = true },
                     onReasoningEffortChange = vm::setChatReasoningEffort,
                     onWebSearchToggle = vm::setChatWebSearchEnabled,
@@ -767,6 +773,9 @@ private fun ChatMessageItem(
     onEditResend: () -> Unit = {},
     onConfigureContext: () -> Unit = {},
     onQuoteReply: () -> Unit = {},
+    onCancelIllustration: () -> Unit = {},
+    onRetryIllustration: () -> Unit = {},
+    onSaveIllustration: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val user = message.role == "user"
@@ -852,6 +861,10 @@ private fun ChatMessageItem(
                     ) {
                         ModelWorkingFoot(modelWorkingCaption(message.toolActivities, message.isRecovering))
                     }
+                }
+                message.illustration?.let { image ->
+                    ChatIllustrationCard(image, onCancelIllustration, onRetryIllustration, onSaveIllustration,
+                        onLayoutChanged = onStreamingTextAdvanced)
                 }
                 if (message.generatedFiles.isNotEmpty()) {
                     GeneratedFilesPanel(message.generatedFiles, onSaveFile)
@@ -2734,6 +2747,9 @@ private fun ChatComposer(
     fileCreationEnabled: Boolean,
     promptInjectionEnabled: Boolean,
     promptInjectionPreset: com.adong.adchat.data.PromptInjectionPreset,
+    illustrationsEnabled: Boolean,
+    illustrationChannel: String,
+    onIllustrationsToggle: (Boolean) -> Unit,
     onModelClick: () -> Unit,
     onReasoningEffortChange: (String) -> Unit,
     onWebSearchToggle: (Boolean) -> Unit,
@@ -2820,6 +2836,9 @@ private fun ChatComposer(
             fileCreationEnabled = fileCreationEnabled,
             promptInjectionEnabled = promptInjectionEnabled,
             promptInjectionCount = promptInjectionPreset.enabledCount,
+            illustrationsEnabled = illustrationsEnabled,
+            illustrationChannel = illustrationChannel,
+            onIllustrationsToggle = onIllustrationsToggle,
             canPickImages = !loading && !attachmentLoading && attachments.size < 4,
             canPickDocuments = !loading && !attachmentLoading,
             onPickImages = { showToolsSheet = false; onPickImages() },
@@ -2896,6 +2915,9 @@ private fun ChatToolsSheet(
     fileCreationEnabled: Boolean,
     promptInjectionEnabled: Boolean,
     promptInjectionCount: Int,
+    illustrationsEnabled: Boolean,
+    illustrationChannel: String,
+    onIllustrationsToggle: (Boolean) -> Unit,
     canPickImages: Boolean,
     canPickDocuments: Boolean,
     onPickImages: () -> Unit,
@@ -2930,6 +2952,10 @@ private fun ChatToolsSheet(
             )
         }
         SkillPickerEntry(skillScope, enabled = canPickDocuments)
+        ComposerToolToggle(
+            Icons.Rounded.Image, "剧情插图 · 实验", "仅此会话 · 每轮额外提炼一次并绘图一张\n$illustrationChannel · nai-diffusion-5-full",
+            illustrationsEnabled, onIllustrationsToggle
+        )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("工具与提示词注入", style = MaterialTheme.typography.labelLarge, color = MutedInk)
             Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {

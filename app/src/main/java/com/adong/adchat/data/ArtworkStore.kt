@@ -14,9 +14,9 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-class ArtworkStore(private val context: Context) {
-    private val prefs = context.getSharedPreferences("adchat_artworks", Context.MODE_PRIVATE)
-    private val imageDir = File(context.filesDir, "artworks").apply { mkdirs() }
+class ArtworkStore(private val context: Context, collection: String = "artworks") {
+    private val prefs = context.getSharedPreferences("adchat_$collection", Context.MODE_PRIVATE)
+    private val imageDir = File(context.filesDir, collection).apply { mkdirs() }
     private val downloadClient = OkHttpClient.Builder()
         .protocols(listOf(Protocol.HTTP_1_1))
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -89,6 +89,14 @@ class ArtworkStore(private val context: Context) {
 
     fun delete(image: GeneratedImage) {
         if (image.source.startsWith("file://")) runCatching { File(image.source.removePrefix("file://")).delete() }
+    }
+
+    fun pruneCache(retainedSources: Set<String>) {
+        val retained = retainedSources.map { it.removePrefix("file://") }.toSet()
+        // Leave recent files alone: a just-finished background job may not have persisted its reference yet.
+        val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(1)
+        imageDir.listFiles()?.filter { it.isFile && it.lastModified() < cutoff && it.absolutePath !in retained }
+            ?.forEach { runCatching { it.delete() } }
     }
 
     fun saveToGallery(image: GeneratedImage): String {

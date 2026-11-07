@@ -23,12 +23,17 @@ class ConversationStore(context: Context) {
             val index = stored.indexOfFirst { it.id == recovery.id }
             val existing = stored.getOrNull(index)
             val restored = recovery.copy(
+                messages = recovery.messages.map { message ->
+                    val stable = existing?.messages?.firstOrNull { it.id == message.id && it.content == message.content }
+                    if (stable?.illustration != null) message.copy(illustration = stable.illustration) else message
+                },
                 title = existing?.title ?: recovery.title,
                 createdAt = existing?.createdAt ?: recovery.createdAt,
                 pinned = existing?.pinned ?: recovery.pinned,
                 archived = existing?.archived ?: recovery.archived,
                 favorite = existing?.favorite ?: recovery.favorite,
-                tags = existing?.tags ?: recovery.tags
+                tags = existing?.tags ?: recovery.tags,
+                illustrationsEnabled = existing?.illustrationsEnabled ?: recovery.illustrationsEnabled
             )
             var recoveryMerged = false
             if (existing == null) {
@@ -123,7 +128,8 @@ class ConversationStore(context: Context) {
                     usage = message.optJSONObject("usage")?.let(::decodeUsage),
                     citations = decodeCitations(message.optJSONArray("citations")),
                     generatedFiles = decodeGeneratedFiles(message.optJSONArray("generatedFiles")),
-                    toolActivities = decodeToolActivities(message.optJSONArray("toolActivities"))
+                    toolActivities = decodeToolActivities(message.optJSONArray("toolActivities")),
+                    illustration = decodeChatIllustration(message.optJSONObject("illustration"))
                 ))
             }
         }
@@ -139,6 +145,7 @@ class ConversationStore(context: Context) {
             pinned = item.optBoolean("pinned"),
             archived = item.optBoolean("archived"),
             favorite = item.optBoolean("favorite"),
+            illustrationsEnabled = item.optBoolean("illustrationsEnabled"),
             tags = item.optJSONArray("tags")?.let { tags ->
                 buildList {
                     for (index in 0 until tags.length()) {
@@ -170,6 +177,7 @@ class ConversationStore(context: Context) {
         .put("pinned", conversation.pinned)
         .put("archived", conversation.archived)
         .put("favorite", conversation.favorite)
+        .put("illustrationsEnabled", conversation.illustrationsEnabled)
         .put("tags", JSONArray(conversation.tags.map { it.take(MAX_TAG_LENGTH) }.take(MAX_TAGS)))
         .put("messages", JSONArray().apply {
             conversation.messages.filter { includeStreaming || !it.isStreaming }.forEach { message ->
@@ -198,7 +206,8 @@ class ConversationStore(context: Context) {
                     .put("usage", message.usage?.let(::encodeUsage))
                     .put("citations", encodeCitations(message.citations))
                     .put("generatedFiles", encodeGeneratedFiles(message.generatedFiles))
-                    .put("toolActivities", encodeToolActivities(message.toolActivities)))
+                    .put("toolActivities", encodeToolActivities(message.toolActivities))
+                    .put("illustration", message.illustration?.toJson()))
             }
         })
 

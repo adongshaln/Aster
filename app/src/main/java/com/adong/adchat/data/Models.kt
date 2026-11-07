@@ -465,7 +465,9 @@ data class ChatMessage(
     val delegatedSearchModel: String = "",
     val xSearchEnabled: Boolean? = null,
     /** 「继续生成」这类由应用代发的指令：会进上下文，但不该显示成用户打过的话。 */
-    val isContinuation: Boolean = false
+    val isContinuation: Boolean = false,
+    /** Display-only output: never serialized into the model's conversation history. */
+    val illustration: ChatIllustration? = null
 )
 
 data class GeneratedFileDraft(
@@ -553,7 +555,8 @@ data class Conversation(
     val pinned: Boolean = false,
     val archived: Boolean = false,
     val favorite: Boolean = false,
-    val tags: List<String> = emptyList()
+    val tags: List<String> = emptyList(),
+    val illustrationsEnabled: Boolean = false
 )
 
 data class ReferenceImageInput(

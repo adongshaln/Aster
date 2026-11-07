@@ -1602,21 +1602,24 @@ class ApiRepository internal constructor(
             sanitizeConversationTitle(text).ifBlank { throw IllegalStateException("标题为空") }
         }
 
-    suspend fun completePlain(profile: ApiProfile, model: String, instruction: String, user: String): String =
+    suspend fun completePlain(
+        profile: ApiProfile, model: String, instruction: String, user: String, maxOutputTokens: Int = 4096
+    ): String =
         withContext(Dispatchers.IO) {
             validateProfile(profile)
             require(model.isNotBlank()) { "Model is required" }
+            require(maxOutputTokens in 1..4096)
             val quietEffort = ReasoningPolicy.choices(model).firstOrNull { it.id == "low" || it.id == "none" || it.id == "off" }?.id
                 ?: ReasoningPolicy.DEFAULT
             val quietProfile = profile.copy(reasoningEffort = quietEffort)
             val responsesApi = quietProfile.usesResponses(model)
             val anthropicApi = quietProfile.usesAnthropicMessages(model)
             val body = when {
-                anthropicApi -> JSONObject().put("model", model).put("max_tokens", 4096)
+                anthropicApi -> JSONObject().put("model", model).put("max_tokens", maxOutputTokens)
                     .put("system", instruction)
                     .put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", user)))
-                responsesApi -> JSONObject().put("model", model).put("instructions", instruction).put("input", user).put("max_output_tokens", 4096)
-                else -> JSONObject().put("model", model).put("max_tokens", 4096).put("messages", JSONArray()
+                responsesApi -> JSONObject().put("model", model).put("instructions", instruction).put("input", user).put("max_output_tokens", maxOutputTokens)
+                else -> JSONObject().put("model", model).put("max_tokens", maxOutputTokens).put("messages", JSONArray()
                     .put(JSONObject().put("role", "system").put("content", instruction))
                     .put(JSONObject().put("role", "user").put("content", user)))
             }
@@ -1636,6 +1639,13 @@ class ApiRepository internal constructor(
                 else -> parseMessageContent(root)
             }
         }
+
+    suspend fun planChatIllustration(
+        profile: ApiProfile, model: String, history: List<ChatMessage>, creativeContext: String
+    ): IllustrationPlan = ChatIllustrationPlanner.parse(completePlain(
+        profile = profile, model = model, instruction = ChatIllustrationPlanner.INSTRUCTION,
+        user = ChatIllustrationPlanner.input(history, creativeContext), maxOutputTokens = 1200
+    ))
 
     /**
      * 输入建议：短输出预算，思考强度取该模型家族支持的最低档。失败由调用方静默处理。

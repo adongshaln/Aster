@@ -17,11 +17,12 @@ class ChatSessionStore(context: Context) {
         ChatSessionState(
             drafts = drafts,
             lastActiveKey = prefs.getString(KEY_LAST_ACTIVE, NEW_CONVERSATION_KEY) ?: NEW_CONVERSATION_KEY,
-            hasSavedSession = prefs.contains(KEY_LAST_ACTIVE)
+            hasSavedSession = prefs.contains(KEY_LAST_ACTIVE),
+            newConversationIllustrationsEnabled = prefs.getBoolean("newIllustrationsEnabled", false)
         )
     }.getOrDefault(ChatSessionState())
 
-    fun save(drafts: Map<String, String>, lastActiveKey: String) {
+    fun save(drafts: Map<String, String>, lastActiveKey: String, newConversationIllustrationsEnabled: Boolean = false) {
         val root = JSONObject()
         drafts.asSequence()
             .filter { it.value.isNotBlank() }
@@ -30,6 +31,7 @@ class ChatSessionStore(context: Context) {
         prefs.edit()
             .putString(KEY_DRAFTS, root.toString())
             .putString(KEY_LAST_ACTIVE, lastActiveKey)
+            .putBoolean("newIllustrationsEnabled", newConversationIllustrationsEnabled)
             .apply()
     }
 
@@ -45,5 +47,6 @@ class ChatSessionStore(context: Context) {
 data class ChatSessionState(
     val drafts: Map<String, String> = emptyMap(),
     val lastActiveKey: String = ChatSessionStore.NEW_CONVERSATION_KEY,
-    val hasSavedSession: Boolean = false
+    val hasSavedSession: Boolean = false,
+    val newConversationIllustrationsEnabled: Boolean = false
 )
