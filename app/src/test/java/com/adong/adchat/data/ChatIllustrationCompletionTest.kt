@@ -85,6 +85,30 @@ class ChatIllustrationCompletionTest {
         } finally { server.shutdown() }
     }
 
+    @Test fun blockedOrdinaryPlannerAutomaticallyFallsBackToSerializationTunnel() = runBlocking {
+        val server = MockWebServer().apply { start() }
+        try {
+            val profile = ApiProfile(baseUrl = server.url("/").toString(), apiKey = "fixture")
+            // First attempt (ordinary completePlain) is blocked by Google upstream content filter
+            server.enqueue(response(JSONObject().put("content",
+                "The prompt could not be submitted because it violated the Generative AI Prohibited Use policy."), "stop"))
+            // Second attempt automatically enters the dispatch_stream_payload serialization tunnel
+            val toolCall = JSONObject().put("id", "call_1").put("type", "function").put("function",
+                JSONObject().put("name", PromptInjectionDefaults.NY_TUNNEL_TOOL_NAME)
+                    .put("arguments", JSONObject().put(PromptInjectionDefaults.NY_TUNNEL_PARAM_NAME, plan.toString()).toString()))
+            server.enqueue(response(JSONObject().put("tool_calls", JSONArray().put(toolCall)), "tool_calls"))
+
+            val result = ApiRepository().planChatIllustration(profile, model, history, "")
+            assertEquals(plan.getString("prompt"), result.prompt)
+            assertEquals(2, server.requestCount)
+            val firstReq = JSONObject(server.takeRequest().body.readUtf8())
+            assertFalse(firstReq.has("tools"))
+            val secondReq = JSONObject(server.takeRequest().body.readUtf8())
+            assertTrue(secondReq.has("tools"))
+            assertEquals("required", secondReq.getString("tool_choice"))
+        } finally { server.shutdown() }
+    }
+
     private fun response(message: JSONObject, finish: String) = MockResponse().setHeader("Content-Type", "application/json")
         .setBody(JSONObject().put("choices", JSONArray().put(JSONObject().put("message", message).put("finish_reason", finish))).toString())
 }

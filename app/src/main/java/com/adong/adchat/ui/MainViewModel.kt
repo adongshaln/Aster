@@ -1447,7 +1447,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 require(drawingProfile.hasValidBaseUrl() && drawingProfile.apiKey.isNotBlank()) { "请配置原绘图渠道与密钥后重试" }
                 if (image.prompt.isBlank()) {
                     update(image.copy(status = IllustrationStatus.Planning))
-                    val plan = repository.planChatIllustration(textProfile, image.textModel, history, image.creativeContext)
+                    val activeInjection = if (promptInjectionEnabled) promptInjectionPreset else null
+                    val plan = repository.planChatIllustration(
+                        profile = textProfile,
+                        model = image.textModel,
+                        history = history,
+                        creativeContext = image.creativeContext,
+                        injectionPreset = activeInjection
+                    )
                     update(image.copy(title = plan.title, focus = plan.focus, prompt = plan.prompt, status = IllustrationStatus.Queued))
                 }
                 imageRequestSlots.withPermit {

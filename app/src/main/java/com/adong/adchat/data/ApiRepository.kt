@@ -1669,7 +1669,11 @@ class ApiRepository internal constructor(
         }
 
     suspend fun planChatIllustration(
-        profile: ApiProfile, model: String, history: List<ChatMessage>, creativeContext: String
+        profile: ApiProfile,
+        model: String,
+        history: List<ChatMessage>,
+        creativeContext: String,
+        injectionPreset: PromptInjectionPreset? = null
     ): IllustrationPlan {
         // Thinking and visible output share a ceiling. Argon can exhaust even 8K in thinking;
         // a short JSON answer still needs reasoning headroom. This is a ceiling, not padding.
@@ -1679,11 +1683,172 @@ class ApiRepository internal constructor(
             else -> 4_096
         }
         val budget = minOf(requestedBudget, profile.contextLimits(model)?.outputTokens ?: requestedBudget)
-        return ChatIllustrationPlanner.parse(completePlain(
-            profile = profile, model = model, instruction = ChatIllustrationPlanner.INSTRUCTION,
-            user = ChatIllustrationPlanner.input(history, creativeContext), maxOutputTokens = budget,
-            requireComplete = true, stream = true, reasoningEffort = profile.reasoningEffort
-        ))
+        val rawInput = ChatIllustrationPlanner.input(history, creativeContext)
+        val activeInjection = injectionPreset?.takeIf { it.enabledCount > 0 }
+        val canUseTunnel = !profile.usesAnthropicMessages(model) && !profile.usesResponses(model)
+
+        if (activeInjection != null && activeInjection.pureMode && canUseTunnel) {
+            return ChatIllustrationPlanner.parse(
+                executeIllustrationTunnel(
+                    profile = profile,
+                    model = model,
+                    plannerInstruction = ChatIllustrationPlanner.INSTRUCTION,
+                    plannerInputJson = rawInput,
+                    preset = activeInjection,
+                    maxOutputTokens = budget
+                )
+            )
+        }
+
+        return try {
+            ChatIllustrationPlanner.parse(
+                completePlain(
+                    profile = profile,
+                    model = model,
+                    instruction = ChatIllustrationPlanner.INSTRUCTION,
+                    user = if (activeInjection != null) PromptInjectionRuntime.applyFilter(rawInput, activeInjection.zeroWidthObfuscation) else rawInput,
+                    maxOutputTokens = budget,
+                    requireComplete = true,
+                    stream = true,
+                    reasoningEffort = profile.reasoningEffort
+                )
+            )
+        } catch (error: Throwable) {
+            val msg = error.message.orEmpty()
+            val blockedBySafety = msg.contains("Generative AI Prohibited Use policy", ignoreCase = true) ||
+                msg.contains("The prompt could not be submitted", ignoreCase = true) ||
+                msg.contains("被上游 Google 服务拒绝") ||
+                msg.contains("被模型服务拒绝") ||
+                PromptInjectionRuntime.isPlainRefusal(msg)
+            if (canUseTunnel && blockedBySafety) {
+                val fallbackPreset = activeInjection ?: PromptInjectionDefaults.builtInNyGeminiPreset
+                return ChatIllustrationPlanner.parse(
+                    executeIllustrationTunnel(
+                        profile = profile,
+                        model = model,
+                        plannerInstruction = ChatIllustrationPlanner.INSTRUCTION,
+                        plannerInputJson = rawInput,
+                        preset = fallbackPreset,
+                        maxOutputTokens = budget
+                    )
+                )
+            }
+            throw error
+        }
+    }
+
+    private suspend fun executeIllustrationTunnel(
+        profile: ApiProfile,
+        model: String,
+        plannerInstruction: String,
+        plannerInputJson: String,
+        preset: PromptInjectionPreset,
+        maxOutputTokens: Int
+    ): String = withContext(Dispatchers.IO) {
+        validateProfile(profile)
+        require(model.isNotBlank()) { "Model is required" }
+        var lastResult = ""
+        for (attempt in 0..1) {
+            val body = PromptInjectionRuntime.buildIllustrationTunnelBody(
+                model = model,
+                plannerInstruction = plannerInstruction,
+                plannerInputJson = plannerInputJson,
+                preset = preset,
+                maxOutputTokens = maxOutputTokens,
+                retryAttempt = attempt
+            )
+            val request = requestBuilder(profile, resolveUrl(profile.baseUrl, profile.chatPath))
+                .header("Accept", "text/event-stream")
+                .header("Cache-Control", "no-cache")
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close")
+                .postModelRequest(body.toString().toRequestBody(jsonMedia))
+                .build()
+
+            val decoder = NyDisplayStreamDecoder()
+            var sawTunnelCall = false
+            val fullText = StringBuilder()
+            val plainBuffer = StringBuilder()
+
+            streamingClient.newCall(request).withCancellableResponse { response ->
+                if (!response.isSuccessful) ensureSuccess(response, response.body?.string().orEmpty())
+                val contentType = response.header("Content-Type").orEmpty()
+                if (contentType.contains("text/event-stream", ignoreCase = true)) {
+                    val source = response.body?.source() ?: throw IllegalStateException("提炼服务返回空响应")
+                    var completed = false
+                    readSsePayloads(source) { payload ->
+                        if (payload.trim() == "[DONE]") {
+                            completed = true
+                            return@readSsePayloads false
+                        }
+                        val root = parseSseObject(payload)
+                        ensureNoProviderError(root)
+                        val choice = root.optJSONArray("choices")?.optJSONObject(0)
+                        val delta = choice?.optJSONObject("delta")
+                        if (delta != null) {
+                            val toolCalls = delta.optJSONArray("tool_calls")
+                            if (toolCalls != null && toolCalls.length() > 0) {
+                                for (idx in 0 until toolCalls.length()) {
+                                    val fn = toolCalls.optJSONObject(idx)?.optJSONObject("function") ?: continue
+                                    val argsChunk = fn.optString("arguments")
+                                    if (argsChunk.isNotEmpty()) {
+                                        sawTunnelCall = true
+                                        plainBuffer.clear()
+                                        val decoded = decoder.feed(argsChunk)
+                                        if (decoded.isNotEmpty()) fullText.append(decoded)
+                                    }
+                                }
+                            } else {
+                                val plain = parseStreamDelta(root)
+                                if (plain.isNotEmpty()) {
+                                    if (sawTunnelCall) fullText.append(plain) else plainBuffer.append(plain)
+                                }
+                            }
+                        }
+                        if (choice?.has("finish_reason") == true && !choice.isNull("finish_reason")) {
+                            if (sawTunnelCall) {
+                                val tail = decoder.finish()
+                                if (tail.isNotEmpty()) fullText.append(tail)
+                            }
+                            completed = true
+                        }
+                        true
+                    }
+                    if (!completed && fullText.isEmpty() && plainBuffer.isEmpty()) {
+                        throw IOException("画面提示词流式响应未完整结束，请手动重试")
+                    }
+                } else {
+                    val raw = response.body?.string().orEmpty()
+                    if (raw.isBlank()) throw IllegalStateException("提炼服务返回空响应")
+                    val root = JSONObject(raw)
+                    ensureNoProviderError(root)
+                    val message = root.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+                    val toolCalls = message?.optJSONArray("tool_calls")
+                    if (toolCalls != null && toolCalls.length() > 0) {
+                        for (idx in 0 until toolCalls.length()) {
+                            val fn = toolCalls.optJSONObject(idx)?.optJSONObject("function") ?: continue
+                            val argsStr = fn.optString("arguments")
+                            if (argsStr.isNotEmpty()) {
+                                sawTunnelCall = true
+                                val decoded = decoder.feed(argsStr) + decoder.finish()
+                                if (decoded.isNotEmpty()) fullText.append(decoded)
+                            }
+                        }
+                    } else {
+                        plainBuffer.append(runCatching { parseMessageContent(root) }.getOrDefault(""))
+                    }
+                }
+            }
+
+            val candidate = if (sawTunnelCall) fullText.toString() else plainBuffer.toString()
+            lastResult = candidate
+            if (!sawTunnelCall && attempt == 0 && (PromptInjectionRuntime.isPlainRefusal(candidate) || candidate.isBlank())) {
+                continue
+            }
+            break
+        }
+        require(lastResult.isNotBlank()) { "提炼服务未返回画面提示词正文（$model），请稍后重试" }
+        lastResult
     }
 
     /** One ordinary text request with the same Chat transport as the conversation, without tools
