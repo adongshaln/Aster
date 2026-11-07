@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/adongshaln/Aster/releases/latest"><img src="https://img.shields.io/badge/Release-4.3.0%20(build%2085)-D97757?style=flat-square&labelColor=262624" alt="Release 4.3.0" /></a>
+  <a href="https://github.com/adongshaln/Aster/releases/latest"><img src="https://img.shields.io/badge/Release-4.3.4%20(build%2089)-D97757?style=flat-square&labelColor=262624" alt="Release 4.3.4" /></a>
   <img src="https://img.shields.io/badge/Platform-Android%208.0%2B%20(SDK%2036)-FAF9F5?style=flat-square&labelColor=262624&color=E3E0D6" alt="Android SDK 36" />
   <img src="https://img.shields.io/badge/UI-100%25%20Kotlin%20%26%20Compose-FAF9F5?style=flat-square&labelColor=262624&color=E3E0D6" alt="Kotlin & Compose" />
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-History-FAF9F5?style=flat-square&labelColor=262624&color=E3E0D6" alt="Changelog" /></a>
