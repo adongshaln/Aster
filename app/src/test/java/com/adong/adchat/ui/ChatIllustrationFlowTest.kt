@@ -35,6 +35,7 @@ class ChatIllustrationFlowTest {
     private lateinit var server: MockWebServer
     private val stores = mutableListOf<ViewModelStore>()
     private val requests = java.util.concurrent.CopyOnWriteArrayList<JSONObject>()
+    private val requestPaths = java.util.concurrent.CopyOnWriteArrayList<String>()
     private val plans = AtomicInteger()
     private val drawings = AtomicInteger()
     private val replies = AtomicInteger()
@@ -51,7 +52,8 @@ class ChatIllustrationFlowTest {
         server = MockWebServer().apply { start() }
         val profiles = listOf("original", "other", "drawing").map { id ->
             ApiProfile(id = id, name = id, baseUrl = server.url("/").toString(), apiKey = "fixture-key",
-                chatModel = "$id-model", imageModel = "another-image-model", autoResumeStream = false)
+                chatModel = "$id-model", imageModel = "another-image-model", autoResumeStream = false,
+                imagePath = "/$id/images/generations")
         }
         ConfigStore(app).save(AppConfig(profiles = profiles, activeChatProfileId = "original", activeImageProfileId = "drawing",
             systemPrompt = "The knight has silver hair and wears a blue cloak."))
@@ -66,7 +68,8 @@ class ChatIllustrationFlowTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 val body = JSONObject(request.body.readUtf8())
                 requests += body
-                if (request.path == "/v1/images/generations") {
+                requestPaths += request.path.orEmpty()
+                if (request.path?.endsWith("/images/generations") == true) {
                     val count = drawings.incrementAndGet()
                     if (failFirstDrawing && count == 1) return MockResponse().setResponseCode(400)
                         .setBody("""{"error":{"message":"fixture image failure"}}""")
@@ -95,11 +98,14 @@ class ChatIllustrationFlowTest {
     @Test fun originalModelAndConversationAreRetainedAfterSwitchingWhilePlannerRuns() {
         releasePlan = CountDownLatch(1)
         val vm = createVm()
+        vm.selectChatIllustrationProfile("other")
+        vm.selectImageProfile("original")
         vm.setChatIllustrationsEnabled(true)
         send(vm)
         await { !vm.isChatLoading && plans.get() == 1 }
         val originalId = vm.activeConversationId!!
         val sourceMessageId = vm.messages.last().id
+        vm.selectChatIllustrationProfile("drawing")
         vm.selectChatModel("other", "different-model")
         vm.newConversation()
         assertFalse(vm.chatIllustrationsEnabled)
@@ -110,6 +116,9 @@ class ChatIllustrationFlowTest {
         val illustration = vm.conversations.first { it.id == originalId }.messages.last().illustration!!
         assertEquals("original-model", illustration.textModel)
         assertEquals("original", illustration.textProfileId)
+        assertEquals("other", illustration.imageProfileId)
+        assertTrue(requestPaths.contains("/other/images/generations"))
+        assertFalse(requestPaths.contains("/original/images/generations"))
         assertTrue(File(illustration.source.removePrefix("file://")).isFile)
         assertEquals(1, plans.get())
         assertEquals(1, drawings.get())
@@ -196,6 +205,43 @@ class ChatIllustrationFlowTest {
         assertTrue(vm.chatIllustrationsEnabled)
         assertEquals(IllustrationStatus.Failed, vm.messages.single().illustration!!.status)
         assertEquals(image.prompt, vm.messages.single().illustration!!.prompt)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test fun olderConfigurationMigratesOnceAndKeepsIllustrationServiceIndependentAfterRestart() {
+        val prefs = app.getSharedPreferences("adchat_api_config", Context.MODE_PRIVATE)
+        val old = JSONObject(prefs.getString("appConfigV2", "{}")!!).apply { remove("activeChatIllustrationProfileId") }
+        prefs.edit().putString("appConfigV2", old.toString()).commit()
+        val vm = createVm()
+        assertEquals("drawing", vm.chatIllustrationProfile!!.id)
+        vm.selectImageProfile("other")
+        assertEquals("drawing", vm.chatIllustrationProfile!!.id)
+        vm.selectChatIllustrationProfile("original")
+        val restored = createVm()
+        assertEquals("other", restored.imageProfile.id)
+        assertEquals("original", restored.chatIllustrationProfile!!.id)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test fun dedicatedServiceCanBeCreatedAndDeletingItRequiresExplicitReconfiguration() {
+        val vm = createVm()
+        val ordinaryImageId = vm.imageProfile.id
+        val chatId = vm.chatProfile.id
+        vm.requestIllustrationServiceEditor(createNew = true)
+        val draft = vm.pendingIllustrationServiceEdit!!
+        assertEquals(CHAT_ILLUSTRATION_MODEL, draft.imageModel)
+        assertTrue(vm.profiles.none { it.id == draft.id })
+        vm.saveProfile(draft.copy(baseUrl = server.url("/").toString(), apiKey = "new-fixture-key"))
+        vm.selectChatIllustrationProfile(draft.id)
+        vm.consumeIllustrationServiceEditor()
+        assertEquals(ordinaryImageId, vm.imageProfile.id)
+        assertEquals(chatId, vm.chatProfile.id)
+        assertEquals(draft.id, ConfigStore(app).load().chatIllustrationProfile()!!.id)
+        vm.deleteProfile(draft.id)
+        assertNull(vm.chatIllustrationProfile)
+        assertNull(createVm().chatIllustrationProfile)
+        vm.setChatIllustrationsEnabled(true)
+        assertFalse(vm.chatIllustrationsEnabled)
         assertEquals(0, server.requestCount)
     }
 

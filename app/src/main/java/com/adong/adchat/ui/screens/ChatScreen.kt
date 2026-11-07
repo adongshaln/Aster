@@ -204,6 +204,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         )
     }
     var showSwitcher by remember { mutableStateOf(false) }
+    var showIllustrationService by remember { mutableStateOf(false) }
     var showContextDialog by remember { mutableStateOf(false) }
     var pendingEditResend by remember { mutableStateOf<com.adong.adchat.data.ChatMessage?>(null) }
     val hostContext = LocalContext.current
@@ -525,8 +526,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     promptInjectionEnabled = vm.promptInjectionEnabled,
                     promptInjectionPreset = vm.promptInjectionPreset,
                     illustrationsEnabled = vm.chatIllustrationsEnabled,
-                    illustrationChannel = vm.imageProfile.name,
+                    illustrationChannel = vm.chatIllustrationProfile?.name ?: "未配置服务",
                     onIllustrationsToggle = vm::setChatIllustrationsEnabled,
+                    onConfigureIllustrationService = { showIllustrationService = true },
                     onModelClick = { showSwitcher = true },
                     onReasoningEffortChange = vm::setChatReasoningEffort,
                     onWebSearchToggle = vm::setChatWebSearchEnabled,
@@ -615,6 +617,24 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     if (showSwitcher) {
         QuickModelSwitcher(kind = RouteKind.Chat, vm = vm, onDismiss = { showSwitcher = false }, onManageApis = onOpenSettings)
+    }
+    if (showIllustrationService) {
+        AsterOptionsSheet("剧情插图设置", "每轮额外提炼一次画面，并生成一张插图", { showIllustrationService = false }) {
+            ChatIllustrationServiceCard(
+                profile = vm.chatIllustrationProfile, profiles = vm.profiles,
+                onSelect = vm::selectChatIllustrationProfile,
+                onEdit = {
+                    showIllustrationService = false
+                    vm.requestIllustrationServiceEditor()
+                    onOpenSettings()
+                },
+                onCreate = {
+                    showIllustrationService = false
+                    vm.requestIllustrationServiceEditor(createNew = true)
+                    onOpenSettings()
+                }
+            )
+        }
     }
     if (showContextDialog) {
         val limits = vm.chatProfile.modelContexts[contextModel.trim()]
@@ -2750,6 +2770,7 @@ private fun ChatComposer(
     illustrationsEnabled: Boolean,
     illustrationChannel: String,
     onIllustrationsToggle: (Boolean) -> Unit,
+    onConfigureIllustrationService: () -> Unit,
     onModelClick: () -> Unit,
     onReasoningEffortChange: (String) -> Unit,
     onWebSearchToggle: (Boolean) -> Unit,
@@ -2839,6 +2860,7 @@ private fun ChatComposer(
             illustrationsEnabled = illustrationsEnabled,
             illustrationChannel = illustrationChannel,
             onIllustrationsToggle = onIllustrationsToggle,
+            onConfigureIllustrationService = { showToolsSheet = false; onConfigureIllustrationService() },
             canPickImages = !loading && !attachmentLoading && attachments.size < 4,
             canPickDocuments = !loading && !attachmentLoading,
             onPickImages = { showToolsSheet = false; onPickImages() },
@@ -2918,6 +2940,7 @@ private fun ChatToolsSheet(
     illustrationsEnabled: Boolean,
     illustrationChannel: String,
     onIllustrationsToggle: (Boolean) -> Unit,
+    onConfigureIllustrationService: () -> Unit,
     canPickImages: Boolean,
     canPickDocuments: Boolean,
     onPickImages: () -> Unit,
@@ -2956,6 +2979,11 @@ private fun ChatToolsSheet(
             Icons.Rounded.Image, "剧情插图 · 实验", "仅此会话 · 每轮额外提炼一次并绘图一张\n$illustrationChannel · nai-diffusion-5-full",
             illustrationsEnabled, onIllustrationsToggle
         )
+        TextButton(onClick = onConfigureIllustrationService, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(7.dp))
+            Text("配置剧情插图服务")
+        }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("工具与提示词注入", style = MaterialTheme.typography.labelLarge, color = MutedInk)
             Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {

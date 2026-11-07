@@ -239,6 +239,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return if (route.model == profile.chatModel) profile else profile.copy(chatModel = route.model)
         }
     val imageProfile: ApiProfile get() = appConfig.imageProfile()
+    val chatIllustrationProfile: ApiProfile? get() = appConfig.chatIllustrationProfile()
+    var pendingIllustrationServiceEdit by mutableStateOf<ApiProfile?>(null)
+        private set
     val searchProfile: ApiProfile get() = appConfig.searchProfile()
     val suggestionProfile: ApiProfile get() = appConfig.suggestionProfile()
     val allowXSearch: Boolean get() = appConfig.allowXSearch
@@ -374,6 +377,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             profiles = remaining,
             activeChatProfileId = if (appConfig.activeChatProfileId == profileId) fallbackProfile.id else appConfig.activeChatProfileId,
             activeImageProfileId = if (appConfig.activeImageProfileId == profileId) fallbackProfile.id else appConfig.activeImageProfileId,
+            activeChatIllustrationProfileId = if (appConfig.activeChatIllustrationProfileId == profileId) "" else appConfig.activeChatIllustrationProfileId,
             activeMangaAnalysisProfileId = if (appConfig.activeMangaAnalysisProfileId == profileId) fallbackProfile.id else appConfig.activeMangaAnalysisProfileId,
             activeSearchProfileId = if (appConfig.activeSearchProfileId == profileId) fallbackProfile.id else appConfig.activeSearchProfileId
         )
@@ -428,6 +432,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         appConfig = appConfig.copy(activeImageProfileId = profileId)
         persist(); notice = "绘图已切换到 ${imageProfile.name}"
     }
+
+    fun selectChatIllustrationProfile(profileId: String) {
+        val profile = profiles.firstOrNull { it.id == profileId } ?: return
+        appConfig = appConfig.copy(activeChatIllustrationProfileId = profile.id)
+        persist()
+        notice = "剧情插图服务已切换到 ${profile.name}"
+    }
+
+    fun requestIllustrationServiceEditor(createNew: Boolean = false) {
+        val existing = if (createNew) null else chatIllustrationProfile
+        pendingIllustrationServiceEdit = existing
+            ?: createBlankProfile().copy(name = "剧情插图服务", imageModel = CHAT_ILLUSTRATION_MODEL)
+    }
+
+    fun consumeIllustrationServiceEditor() { pendingIllustrationServiceEdit = null }
 
     fun selectSearchProfile(profileId: String) {
         val profile = profiles.firstOrNull { it.id == profileId } ?: return
@@ -993,7 +1012,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         persistCurrentConversation()
         val illustrationConversationId = activeConversationId!!
         val illustrateReply = chatIllustrationsEnabled
-        val illustrationImageProfile = imageProfile
+        val illustrationImageProfile = chatIllustrationProfile
         val illustrationCreativeContext = appConfig.systemPrompt.take(6_000)
         val history = messages.toList()
         val assistantId = System.nanoTime()
@@ -1244,7 +1263,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // 只在流式请求自然跑完时预测下一句；出错、停止、取消的收尾不触发。
                 if (summarizeTitle) {
                     if (illustrateReply && conversations.firstOrNull { it.id == illustrationConversationId }?.illustrationsEnabled == true) {
-                        startChatIllustration(illustrationConversationId, assistantId, profile, illustrationImageProfile, illustrationCreativeContext)
+                        if (illustrationImageProfile != null) {
+                            startChatIllustration(illustrationConversationId, assistantId, profile, illustrationImageProfile, illustrationCreativeContext)
+                        } else notice = "请在剧情插图设置中单独配置绘图服务"
                     }
                     scheduleInputSuggestion()
                     scheduleTitleSummary()
@@ -1348,8 +1369,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setChatIllustrationsEnabled(enabled: Boolean) {
-        if (enabled && (!imageProfile.hasValidBaseUrl() || imageProfile.apiKey.isBlank())) {
-            notice = "请先在设置中配置支持 $CHAT_ILLUSTRATION_MODEL 的绘图渠道与密钥"
+        val profile = chatIllustrationProfile
+        if (enabled && (profile == null || !profile.hasValidBaseUrl() || profile.apiKey.isBlank())) {
+            notice = "请先配置剧情插图服务的地址与密钥，模型固定为 $CHAT_ILLUSTRATION_MODEL"
             return
         }
         val id = activeConversationId

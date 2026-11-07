@@ -113,10 +113,13 @@ data class AppConfig(
     /** 计费币种：CNY（人民币 ¥）、USD（美元 $）或 OFF（关闭费用估算）。 */
     val billingCurrency: String = BILLING_CURRENCY_CNY,
     /** 自定义计费表条目：`model|input|cacheRead|output`（每百万 token 单价）。 */
-    val customBillingRows: List<String> = emptyList()
+    val customBillingRows: List<String> = emptyList(),
+    /** A separate route, initialized once from the drawing route for older installations. */
+    val activeChatIllustrationProfileId: String = activeImageProfileId
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
+    fun chatIllustrationProfile(): ApiProfile? = profiles.firstOrNull { it.id == activeChatIllustrationProfileId }
     fun mangaAnalysisProfile(): ApiProfile = profiles.firstOrNull { it.id == activeMangaAnalysisProfileId } ?: chatProfile()
     fun searchProfile(): ApiProfile = profiles.firstOrNull { it.id == activeSearchProfileId } ?: chatProfile()
     fun suggestionProfile(): ApiProfile = profiles.firstOrNull { it.id == activeSuggestionProfileId } ?: chatProfile()
@@ -132,7 +135,8 @@ class ConfigStore(context: Context) {
                 val config = decode(root)
                 val migrated = config.copy(systemPrompt = migrateSystemPrompt(config.systemPrompt))
                 recordUndecryptableKeys(root, migrated)
-                if (migrated != config || (config.profiles.any { it.apiKey.isNotBlank() } && !json.contains("enc:v1:"))) {
+                if (migrated != config || !root.has("activeChatIllustrationProfileId") ||
+                    (config.profiles.any { it.apiKey.isNotBlank() } && !json.contains("enc:v1:"))) {
                     save(migrated)
                 }
                 return migrated
@@ -205,6 +209,7 @@ class ConfigStore(context: Context) {
     private fun encode(config: AppConfig): JSONObject = JSONObject()
         .put("activeChatProfileId", config.activeChatProfileId)
         .put("activeImageProfileId", config.activeImageProfileId)
+        .put("activeChatIllustrationProfileId", config.activeChatIllustrationProfileId)
         .put("activeMangaAnalysisProfileId", config.activeMangaAnalysisProfileId)
         .put("activeSearchProfileId", config.activeSearchProfileId)
         .put("activeSuggestionProfileId", config.activeSuggestionProfileId)
@@ -295,6 +300,11 @@ class ConfigStore(context: Context) {
             profiles = profiles,
             activeChatProfileId = root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id,
             activeImageProfileId = root.optString("activeImageProfileId").takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id,
+            activeChatIllustrationProfileId = if (root.has("activeChatIllustrationProfileId")) {
+                root.optString("activeChatIllustrationProfileId").takeIf { id -> profiles.any { it.id == id } }.orEmpty()
+            } else {
+                root.optString("activeImageProfileId").takeIf { id -> profiles.any { it.id == id } } ?: profiles.first().id
+            },
             activeMangaAnalysisProfileId = root.optString("activeMangaAnalysisProfileId")
                 .takeIf { id -> profiles.any { it.id == id } }
                 ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }

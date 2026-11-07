@@ -131,7 +131,16 @@ fun SettingsScreen(
 ) {
     var editing by remember { mutableStateOf<ApiProfile?>(null) }
     var editingIsNew by remember { mutableStateOf(false) }
+    var editingIllustrationService by remember { mutableStateOf(false) }
     val homeState = rememberSaveableStateHolder()
+    LaunchedEffect(vm.pendingIllustrationServiceEdit) {
+        vm.pendingIllustrationServiceEdit?.let { profile ->
+            editingIsNew = vm.profiles.none { it.id == profile.id }
+            editingIllustrationService = true
+            editing = profile
+            vm.consumeIllustrationServiceEditor()
+        }
+    }
     LaunchedEffect(openIslandSettings) { if (openIslandSettings) editing = null }
     AnimatedContent(
         targetState = editing,
@@ -153,16 +162,22 @@ fun SettingsScreen(
                 state = vm.connectionFor(profile.id),
                 searchBackendConfigured = vm.searchProfile.searchModel.isNotBlank(),
                 keyNeedsReentry = profile.id in vm.profilesWithUndecryptableKeys,
-                onBack = { vm.discardProfileDraft(profile.id); editing = null },
+                illustrationOnly = editingIllustrationService,
+                onBack = { vm.discardProfileDraft(profile.id); editing = null; editingIllustrationService = false },
                 onTest = { draft, onUpdated -> vm.testProfile(draft, onUpdated) },
-                onSave = { vm.saveProfile(it); editing = null }
+                onSave = {
+                    vm.saveProfile(it)
+                    if (editingIllustrationService) vm.selectChatIllustrationProfile(it.id)
+                    editing = null
+                    editingIllustrationService = false
+                }
             )
         } else {
             homeState.SaveableStateProvider("settings-home") {
                 SettingsHome(vm = vm, isActive = editing == null, onOpenDrawer = onOpenDrawer,
                     openIslandSettings = openIslandSettings, onIslandSettingsConsumed = onIslandSettingsConsumed,
-                    onEdit = { editingIsNew = false; editing = it },
-                    onCreate = { editingIsNew = true; editing = it })
+                    onEdit = { editingIsNew = false; editingIllustrationService = false; editing = it },
+                    onCreate = { editingIsNew = true; editingIllustrationService = false; editing = it })
             }
         }
     }
@@ -324,6 +339,12 @@ private fun SettingsHome(
                         SettingsDestination.Connections -> {
                             item { SettingsNavigationRow(SettingsDestination.Search, settingsSummary(SettingsDestination.Search, vm)) { navigate(SettingsDestination.Search) } }
                             item { SettingsNavigationRow(SettingsDestination.Suggestions, settingsSummary(SettingsDestination.Suggestions, vm)) { navigate(SettingsDestination.Suggestions) } }
+                            item { ChatIllustrationServiceCard(
+                                profile = vm.chatIllustrationProfile, profiles = vm.profiles,
+                                onSelect = vm::selectChatIllustrationProfile,
+                                onEdit = { vm.requestIllustrationServiceEditor() },
+                                onCreate = { vm.requestIllustrationServiceEditor(createNew = true) }
+                            ) }
                             item {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("我的服务", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, color = Ink)
@@ -479,7 +500,7 @@ private fun SettingsHome(
 
 private enum class SettingsDestination(val title: String, val keywords: String = "", val depth: Int = 1) {
     Home("设置", depth = 0),
-    Connections("服务与连接", "API 地址 URL Key 密钥 添加 编辑 连接 服务"),
+    Connections("服务与连接", "API 地址 URL Key 密钥 添加 编辑 连接 服务 剧情 插图"),
     Models("默认模型", "默认 对话 绘图 图像 选择 模型"),
     Search("联网搜索", "联网 搜索 网页 X Search 后端", 2),
     Suggestions("输入建议", "输入 建议 补全 预测", 2),
@@ -1595,7 +1616,8 @@ private fun ProfileEditor(
     keyNeedsReentry: Boolean,
     onBack: () -> Unit,
     onTest: (ApiProfile, (ApiProfile) -> Unit) -> Unit,
-    onSave: (ApiProfile) -> Unit
+    onSave: (ApiProfile) -> Unit,
+    illustrationOnly: Boolean = false
 ) {
     var draft by remember { mutableStateOf(initial) }
     LaunchedEffect(initial) { draft = initial }
@@ -1629,8 +1651,8 @@ private fun ProfileEditor(
         Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             AsterIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "返回", { if (draft != initial) confirmDiscard = true else onBack() })
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                Text(if (isNew) "添加 API" else "编辑 API", style = MaterialTheme.typography.titleLarge)
-                Text("连接服务，选择默认模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                Text(if (illustrationOnly) "剧情插图服务" else if (isNew) "添加 API" else "编辑 API", style = MaterialTheme.typography.titleLarge)
+                Text(if (illustrationOnly) "配置绘图地址与密钥" else "连接服务，选择默认模型", color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
             AnimatedVisibility(draft != initial) {
                 StatusBadge("未保存", AccentSoft, OnAccentSoft)
@@ -1652,7 +1674,7 @@ private fun ProfileEditor(
         ) {
             item {
                 EditorSection("连接信息", "填写服务商提供的地址和密钥") {
-                    EditorField("配置名称", draft.name, { draft = draft.copy(name = it) }, "例如：主对话 API", Icons.Outlined.Badge)
+                    EditorField("配置名称", draft.name, { draft = draft.copy(name = it) }, if (illustrationOnly) "例如：剧情插图服务" else "例如：主对话 API", Icons.Outlined.Badge)
                     EditorField("Base URL", draft.baseUrl, { draft = draft.copy(baseUrl = it, cachedModels = emptyList(), lastLatencyMs = null) }, "https://api.example.com", Icons.Outlined.Language,
                         supporting = if (validBaseUrl) "保存时会自动移除末尾 /" else "必须是包含完整主机的 http:// 或 https:// 地址")
                     Column {
@@ -1662,7 +1684,7 @@ private fun ProfileEditor(
                             value = draft.apiKey,
                             onValueChange = { draft = draft.copy(apiKey = it, cachedModels = emptyList(), lastLatencyMs = null) },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(if (keyNeedsReentry) "密钥已丢失，请重新填写" else "可留空用于本地服务") },
+                            placeholder = { Text(if (keyNeedsReentry) "密钥已丢失，请重新填写" else if (illustrationOnly) "填写绘图服务的密钥" else "可留空用于本地服务") },
                             leadingIcon = { Icon(Icons.Outlined.Key, null) },
                             trailingIcon = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1684,23 +1706,25 @@ private fun ProfileEditor(
                             )
                         }
                     }
-                    Text("接口格式", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ImageProtocolOption("OpenAI", draft.apiFormat != API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
-                            draft = draft.copy(apiFormat = API_FORMAT_OPENAI, cachedModels = emptyList(), lastLatencyMs = null)
+                    if (!illustrationOnly) {
+                        Text("接口格式", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ImageProtocolOption("OpenAI", draft.apiFormat != API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
+                                draft = draft.copy(apiFormat = API_FORMAT_OPENAI, cachedModels = emptyList(), lastLatencyMs = null)
+                            }
+                            ImageProtocolOption("Anthropic", draft.apiFormat == API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
+                                draft = draft.copy(apiFormat = API_FORMAT_ANTHROPIC, cachedModels = emptyList(), lastLatencyMs = null)
+                            }
                         }
-                        ImageProtocolOption("Anthropic", draft.apiFormat == API_FORMAT_ANTHROPIC, Modifier.weight(1f)) {
-                            draft = draft.copy(apiFormat = API_FORMAT_ANTHROPIC, cachedModels = emptyList(), lastLatencyMs = null)
-                        }
-                    }
-                    Text(
-                        if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
-                            "非 GPT/Grok 模型使用 Messages；GPT/Grok 仍使用 Responses。"
-                        } else {
-                            "GPT/Grok 使用 Responses，其他模型使用 Chat Completions。"
-                        },
-                        color = MutedInk, style = MaterialTheme.typography.bodySmall
-                    )
+                        Text(
+                            if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
+                                "非 GPT/Grok 模型使用 Messages；GPT/Grok 仍使用 Responses。"
+                            } else {
+                                "GPT/Grok 使用 Responses，其他模型使用 Chat Completions。"
+                            },
+                            color = MutedInk, style = MaterialTheme.typography.bodySmall
+                        )
+                    } else Text("使用支持 NAI 模型的 OpenAI Images 兼容服务。", color = MutedInk, style = MaterialTheme.typography.bodySmall)
                 }
             }
             item {
@@ -1726,119 +1750,132 @@ private fun ProfileEditor(
                 )
             }
             item {
-                EditorSection("默认模型", "切换到此 API 时，会恢复这里保存的模型。") {
-                    Text(
-                        when {
-                            draft.usesResponses() -> "GPT / Grok · Responses"
-                            draft.usesAnthropicMessages() -> "Claude 等 · Anthropic Messages"
-                            else -> "其他模型 · Chat Completions"
-                        },
-                        color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                    EditorModelField("对话模型", draft.chatModel, availableModels.filterNot { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
-                    val limits = draft.modelContexts[draft.chatModel.trim()]
-                    AsterPillButton(
-                        text = limits?.let { "上下文 ${it.windowTokens} · 输出 ${it.outputTokens} Token" } ?: "设置此模型的上下文长度",
-                        icon = Icons.Outlined.Tune,
-                        enabled = draft.chatModel.isNotBlank(),
-                        onClick = { contextEditor = true },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text("按模型独立保存，普通对话与故事共用。切换上方模型可编辑其他模型。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
-                    EditorModelField("绘图模型（可选）", draft.imageModel, availableModels.filter { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
-                }
-            }
-            item {
-                SettingsDisclosure("连接与恢复", "断线续传与缓存兼容", Icons.Rounded.NetworkCheck) {
-                    SettingSwitch(
-                        title = "流式安全续传",
-                        subtitle = "中途断线时最多自动续传一次；基于已生成内容继续，不会从头重跑",
-                        checked = draft.autoResumeStream,
-                        onCheckedChange = { draft = draft.copy(autoResumeStream = it) }
-                    )
-                    SettingSwitch("缓存兼容参数", "发送缓存标识；不兼容的网关可关闭，命中由服务端决定",
-                        draft.promptCacheEnabled) { draft = draft.copy(promptCacheEnabled = it) }
-                    Text(
-                        "仅对连接重置、提前断流和瞬时网络错误生效。认证失败、额度不足及用户主动停止不会自动重试。",
-                        color = MutedInk,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-            item {
-                SettingsDisclosure("工具默认值", "联网搜索、创建文件；聊天中也可随时调整", Icons.Rounded.Build) {
-                    val dedicatedOnly = !draft.usesResponses() && draft.chatModel.isDedicatedChatSearchModel() && !searchBackendConfigured
-                    SettingSwitch(
-                        title = "联网搜索",
-                        subtitle = if (draft.usesResponses()) {
-                            "使用 Responses API 的 web_search 工具"
-                        } else {
-                            "模型自主调用并发搜索工具（支持与 Skill / 创建文件同时开启）"
-                        },
-                        checked = draft.webSearchEnabled,
-                        onCheckedChange = { enabled ->
-                            draft = draft.copy(
-                                webSearchEnabled = enabled,
-                                fileCreationEnabled = if (enabled && dedicatedOnly) false else draft.fileCreationEnabled
-                            )
-                        }
-                    )
-                    SettingSwitch(
-                        title = "创建文件",
-                        subtitle = "允许模型创建 PDF、Word、Excel、PowerPoint、HTML 和文本文件",
-                        checked = draft.fileCreationEnabled,
-                        onCheckedChange = { enabled ->
-                            draft = draft.copy(
-                                fileCreationEnabled = enabled,
-                                webSearchEnabled = if (enabled && dedicatedOnly) false else draft.webSearchEnabled
-                            )
-                        }
-                    )
-                    if (!draft.usesResponses()) {
+                if (illustrationOnly) {
+                    EditorSection("绘图模型", "画面提炼始终使用该轮原对话模型。") {
+                        Text(com.adong.adchat.data.CHAT_ILLUSTRATION_MODEL, color = Ink, style = MaterialTheme.typography.bodyMedium)
+                        if (!isNew) Text("编辑共享服务也会影响使用它的其他功能；需要独立地址与密钥时，可新建专用服务。",
+                            color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    EditorSection("默认模型", "切换到此 API 时，会恢复这里保存的模型。") {
                         Text(
-                            "Gemini、DeepSeek 等模型开启联网搜索后，将由模型自主生成多组搜索词并并发检索实时网页，可与 Skill 及创建文件同时使用。",
+                            when {
+                                draft.usesResponses() -> "GPT / Grok · Responses"
+                                draft.usesAnthropicMessages() -> "Claude 等 · Anthropic Messages"
+                                else -> "其他模型 · Chat Completions"
+                            },
+                            color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                        EditorModelField("对话模型", draft.chatModel, availableModels.filterNot { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(chatModel = it) }, Icons.Outlined.Forum)
+                        val limits = draft.modelContexts[draft.chatModel.trim()]
+                        AsterPillButton(
+                            text = limits?.let { "上下文 ${it.windowTokens} · 输出 ${it.outputTokens} Token" } ?: "设置此模型的上下文长度",
+                            icon = Icons.Outlined.Tune,
+                            enabled = draft.chatModel.isNotBlank(),
+                            onClick = { contextEditor = true },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text("按模型独立保存，普通对话与故事共用。切换上方模型可编辑其他模型。", color = MutedInk, style = MaterialTheme.typography.labelMedium)
+                        EditorModelField("绘图模型（可选）", draft.imageModel, availableModels.filter { it.id.isImageLike() }.ifEmpty { availableModels }, { draft = draft.copy(imageModel = it) }, Icons.Outlined.Palette)
+                    }
+                }
+            }
+            if (!illustrationOnly) {
+                item {
+                    SettingsDisclosure("连接与恢复", "断线续传与缓存兼容", Icons.Rounded.NetworkCheck) {
+                        SettingSwitch(
+                            title = "流式安全续传",
+                            subtitle = "中途断线时最多自动续传一次；基于已生成内容继续，不会从头重跑",
+                            checked = draft.autoResumeStream,
+                            onCheckedChange = { draft = draft.copy(autoResumeStream = it) }
+                        )
+                        SettingSwitch("缓存兼容参数", "发送缓存标识；不兼容的网关可关闭，命中由服务端决定",
+                            draft.promptCacheEnabled) { draft = draft.copy(promptCacheEnabled = it) }
+                        Text(
+                            "仅对连接重置、提前断流和瞬时网络错误生效。认证失败、额度不足及用户主动停止不会自动重试。",
                             color = MutedInk,
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
                 }
+                item {
+                    SettingsDisclosure("工具默认值", "联网搜索、创建文件；聊天中也可随时调整", Icons.Rounded.Build) {
+                        val dedicatedOnly = !draft.usesResponses() && draft.chatModel.isDedicatedChatSearchModel() && !searchBackendConfigured
+                        SettingSwitch(
+                            title = "联网搜索",
+                            subtitle = if (draft.usesResponses()) {
+                                "使用 Responses API 的 web_search 工具"
+                            } else {
+                                "模型自主调用并发搜索工具（支持与 Skill / 创建文件同时开启）"
+                            },
+                            checked = draft.webSearchEnabled,
+                            onCheckedChange = { enabled ->
+                                draft = draft.copy(
+                                    webSearchEnabled = enabled,
+                                    fileCreationEnabled = if (enabled && dedicatedOnly) false else draft.fileCreationEnabled
+                                )
+                            }
+                        )
+                        SettingSwitch(
+                            title = "创建文件",
+                            subtitle = "允许模型创建 PDF、Word、Excel、PowerPoint、HTML 和文本文件",
+                            checked = draft.fileCreationEnabled,
+                            onCheckedChange = { enabled ->
+                                draft = draft.copy(
+                                    fileCreationEnabled = enabled,
+                                    webSearchEnabled = if (enabled && dedicatedOnly) false else draft.webSearchEnabled
+                                )
+                            }
+                        )
+                        if (!draft.usesResponses()) {
+                            Text(
+                                "Gemini、DeepSeek 等模型开启联网搜索后，将由模型自主生成多组搜索词并并发检索实时网页，可与 Skill 及创建文件同时使用。",
+                                color = MutedInk,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
             }
             item {
-                SettingsDisclosure("高级设置", "绘图协议、接口路径与请求头", Icons.Rounded.Code) {
-                    Text("GPT 与 Grok 模型固定使用 Responses API，其他模型使用 Chat Completions；对话框右上角可查看当前请求使用的协议。",
-                        color = MutedInk, style = MaterialTheme.typography.bodySmall)
-                    Column {
-                        Text("绘图协议", style = MaterialTheme.typography.labelLarge)
-                        Spacer(Modifier.height(7.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ImageProtocolOption("自动识别", draft.imageApiMode == IMAGE_API_MODE_AUTO, Modifier.weight(1f)) {
-                                draft = draft.copy(imageApiMode = IMAGE_API_MODE_AUTO)
+                SettingsDisclosure("高级设置", if (illustrationOnly) "绘图接口路径与请求头" else "绘图协议、接口路径与请求头", Icons.Rounded.Code) {
+                    if (!illustrationOnly) {
+                        Text("GPT 与 Grok 模型固定使用 Responses API，其他模型使用 Chat Completions；对话框右上角可查看当前请求使用的协议。",
+                            color = MutedInk, style = MaterialTheme.typography.bodySmall)
+                        Column {
+                            Text("绘图协议", style = MaterialTheme.typography.labelLarge)
+                            Spacer(Modifier.height(7.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                ImageProtocolOption("自动识别", draft.imageApiMode == IMAGE_API_MODE_AUTO, Modifier.weight(1f)) {
+                                    draft = draft.copy(imageApiMode = IMAGE_API_MODE_AUTO)
+                                }
+                                ImageProtocolOption("OpenAI Images", draft.imageApiMode == IMAGE_API_MODE_OPENAI, Modifier.weight(1f)) {
+                                    draft = draft.copy(imageApiMode = IMAGE_API_MODE_OPENAI)
+                                }
+                                ImageProtocolOption("Gemini", draft.imageApiMode == IMAGE_API_MODE_GEMINI, Modifier.weight(1f)) {
+                                    draft = draft.copy(imageApiMode = IMAGE_API_MODE_GEMINI)
+                                }
                             }
-                            ImageProtocolOption("OpenAI Images", draft.imageApiMode == IMAGE_API_MODE_OPENAI, Modifier.weight(1f)) {
-                                draft = draft.copy(imageApiMode = IMAGE_API_MODE_OPENAI)
-                            }
-                            ImageProtocolOption("Gemini", draft.imageApiMode == IMAGE_API_MODE_GEMINI, Modifier.weight(1f)) {
-                                draft = draft.copy(imageApiMode = IMAGE_API_MODE_GEMINI)
-                            }
+                            Text(
+                                if (draft.imageApiMode == IMAGE_API_MODE_GEMINI) {
+                                    "通过 Chat Completions 的多模态 image 输出绘图，支持参考图。"
+                                } else {
+                                    "自动识别 Gemini 图片模型；NAI Diffusion 等模型使用 OpenAI Images 兼容协议。"
+                                },
+                                color = MutedInk,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
                         }
-                        Text(
-                            if (draft.imageApiMode == IMAGE_API_MODE_GEMINI) {
-                                "通过 Chat Completions 的多模态 image 输出绘图，支持参考图。"
-                            } else {
-                                "自动识别 Gemini 图片模型；NAI Diffusion 等模型使用 OpenAI Images 兼容协议。"
-                            },
-                            color = MutedInk,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
-                    EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
-                    EditorField("Chat / Gemini 路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
-                    EditorField("Responses 路径", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)
-                    if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
-                        EditorField("Messages 路径", draft.messagesPath, { draft = draft.copy(messagesPath = it) }, "/v1/messages", Icons.Outlined.Forum)
-                    }
+                        EditorField("模型列表路径", draft.modelsPath, { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
+                        EditorField("Chat / Gemini 路径", draft.chatPath, { draft = draft.copy(chatPath = it) }, "/v1/chat/completions", Icons.AutoMirrored.Outlined.Chat)
+                        EditorField("Responses 路径", draft.responsesPath, { draft = draft.copy(responsesPath = it) }, "/v1/responses", Icons.Outlined.Bolt)
+                        if (draft.apiFormat == API_FORMAT_ANTHROPIC) {
+                            EditorField("Messages 路径", draft.messagesPath, { draft = draft.copy(messagesPath = it) }, "/v1/messages", Icons.Outlined.Forum)
+                        }
+                    } else EditorField("模型列表路径", draft.modelsPath,
+                        { draft = draft.copy(modelsPath = it, cachedModels = emptyList(), lastLatencyMs = null) }, "/v1/models", Icons.AutoMirrored.Outlined.List)
                     EditorField("绘图接口路径", draft.imagePath, { draft = draft.copy(imagePath = it) }, "/v1/images/generations", Icons.Outlined.Image)
-                    EditorField("\u53c2\u8003\u56fe\u7f16\u8f91\u8def\u5f84", draft.imageEditPath, { draft = draft.copy(imageEditPath = it) }, "/v1/images/edits", Icons.Outlined.AutoFixHigh, supporting = "multipart image edit endpoint")
+                    if (!illustrationOnly) EditorField("\u53c2\u8003\u56fe\u7f16\u8f91\u8def\u5f84", draft.imageEditPath, { draft = draft.copy(imageEditPath = it) }, "/v1/images/edits", Icons.Outlined.AutoFixHigh, supporting = "multipart image edit endpoint")
                     EditorField(
                         "额外请求头",
                         draft.extraHeaders,
