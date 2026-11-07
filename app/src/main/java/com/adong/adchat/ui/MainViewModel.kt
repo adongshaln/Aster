@@ -1467,9 +1467,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 setChatIllustration(conversationId, messageId, image.copy(status = IllustrationStatus.Cancelled))
                 throw cancelled
             } catch (error: Exception) {
-                val detail = if (image.status == IllustrationStatus.Generating && imageDeliveryMayBeUncertain(error)) {
-                    "图片响应未确认；服务端可能仍在处理，请稍后确认再重试"
-                } else friendlyError(error)
+                val detail = when {
+                    image.status == IllustrationStatus.Planning -> "画面提示词提炼失败：${friendlyError(error)}"
+                    image.status == IllustrationStatus.Generating && imageDeliveryMayBeUncertain(error) ->
+                        "图片响应未确认；服务端可能仍在处理，请稍后确认再重试"
+                    image.status == IllustrationStatus.Generating -> "绘图失败：${friendlyError(error)}"
+                    else -> friendlyError(error)
+                }
                 setChatIllustration(conversationId, messageId, image.copy(status = IllustrationStatus.Failed, error = detail))
             } finally {
                 if (!delivered) cachedSource?.let { source ->

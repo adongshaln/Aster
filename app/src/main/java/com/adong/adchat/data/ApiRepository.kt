@@ -1603,12 +1603,13 @@ class ApiRepository internal constructor(
         }
 
     suspend fun completePlain(
-        profile: ApiProfile, model: String, instruction: String, user: String, maxOutputTokens: Int = 4096
+        profile: ApiProfile, model: String, instruction: String, user: String, maxOutputTokens: Int = 4096,
+        requireComplete: Boolean = false
     ): String =
         withContext(Dispatchers.IO) {
             validateProfile(profile)
             require(model.isNotBlank()) { "Model is required" }
-            require(maxOutputTokens in 1..4096)
+            require(maxOutputTokens in 1..65_536)
             val quietEffort = ReasoningPolicy.choices(model).firstOrNull { it.id == "low" || it.id == "none" || it.id == "off" }?.id
                 ?: ReasoningPolicy.DEFAULT
             val quietProfile = profile.copy(reasoningEffort = quietEffort)
@@ -1633,19 +1634,61 @@ class ApiRepository internal constructor(
                 .postModelRequest(body.toString().toRequestBody(jsonMedia)).build()
             val raw = executeTextCall(client.newCall(request))
             val root = runCatching { JSONObject(raw) }.getOrElse { throw IllegalStateException("设定接口返回的不是有效 JSON") }
-            when {
-                anthropicApi -> AnthropicMessages.parseContent(root).first
-                responsesApi -> parseResponsesText(root)
-                else -> parseMessageContent(root)
+            if (requireComplete) validateIllustrationCompletion(root, model, maxOutputTokens, anthropicApi, responsesApi)
+            val text = try {
+                when {
+                    anthropicApi -> AnthropicMessages.parseContent(root).first
+                    responsesApi -> parseResponsesText(root)
+                    else -> parseMessageContent(root)
+                }
+            } catch (error: IllegalStateException) {
+                if (!requireComplete) throw error
+                throw IllegalStateException("提炼服务未返回画面提示词正文（$model）；请检查该聊天服务的响应，或稍后重试", error)
             }
+            if (requireComplete) require(text.isNotBlank()) { "提炼服务未返回画面提示词正文（$model），请稍后重试" }
+            text
         }
 
     suspend fun planChatIllustration(
         profile: ApiProfile, model: String, history: List<ChatMessage>, creativeContext: String
-    ): IllustrationPlan = ChatIllustrationPlanner.parse(completePlain(
-        profile = profile, model = model, instruction = ChatIllustrationPlanner.INSTRUCTION,
-        user = ChatIllustrationPlanner.input(history, creativeContext), maxOutputTokens = 1200
-    ))
+    ): IllustrationPlan {
+        // Thinking and visible output share a ceiling. Argon can exhaust even 8K in thinking;
+        // a short JSON answer still needs reasoning headroom. This is a ceiling, not padding.
+        val requestedBudget = when {
+            model.substringAfterLast('/').startsWith("gemini-4", ignoreCase = true) -> 32_768
+            ReasoningPolicy.isSupported(model) -> 8_192
+            else -> 4_096
+        }
+        val budget = minOf(requestedBudget, profile.contextLimits(model)?.outputTokens ?: requestedBudget)
+        return ChatIllustrationPlanner.parse(completePlain(
+            profile = profile, model = model, instruction = ChatIllustrationPlanner.INSTRUCTION,
+            user = ChatIllustrationPlanner.input(history, creativeContext), maxOutputTokens = budget,
+            requireComplete = true
+        ))
+    }
+
+    private fun validateIllustrationCompletion(
+        root: JSONObject, model: String, budget: Int, anthropicApi: Boolean, responsesApi: Boolean
+    ) {
+        ensureNoProviderError(root)
+        val choice = root.optJSONArray("choices")?.optJSONObject(0)
+        val response = root.optJSONObject("response") ?: root
+        val finish = when {
+            anthropicApi -> root.optString("stop_reason")
+            responsesApi -> response.optJSONObject("incomplete_details")?.optString("reason").orEmpty()
+            else -> choice?.optString("finish_reason").orEmpty()
+        }
+        if (finish.lowercase() in setOf("length", "max_tokens", "max_output_tokens", "model_length")) {
+            throw IllegalStateException("提炼画面提示词时已耗尽输出预算（$model · $budget Token，包含思考）；未产出完整提示词，请检查输出设置后手动重试")
+        }
+        if (finish.lowercase() in setOf("content_filter", "refusal") ||
+            (choice?.optJSONObject("message")?.opt("refusal") as? String)?.isNotBlank() == true) {
+            throw IllegalStateException("提炼服务未提供画面提示词：本次请求被模型服务拒绝")
+        }
+        if (responsesApi && response.optString("status") in setOf("failed", "incomplete", "cancelled")) {
+            throw IllegalStateException("画面提示词未完整生成（$model），请稍后重试")
+        }
+    }
 
     /**
      * 输入建议：短输出预算，思考强度取该模型家族支持的最低档。失败由调用方静默处理。
