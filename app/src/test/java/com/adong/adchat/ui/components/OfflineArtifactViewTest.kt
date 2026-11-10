@@ -164,6 +164,30 @@ class OfflineArtifactViewTest {
     }
 
     @Test
+    fun unauthorizedCardsOnlyExposeHeightAndDropOldMeasurementsOnModeChange() {
+        val engine = checkNotNull(view.engine)
+        val heights = mutableListOf<Int>()
+        var actions = 0
+        render("<details>safe</details>", action = { actions++ }, scripts = false, height = { heights += it })
+        assertTrue(engine.settings.javaScriptEnabled)
+        val heightBridge = shadowOf(engine).getJavascriptInterface("Aster") as OfflineHeightBridge
+        val exposed = heightBridge.javaClass.methods.filter { it.isAnnotationPresent(android.webkit.JavascriptInterface::class.java) }
+        assertEquals(listOf("onHeight"), exposed.map { it.name })
+        heightBridge.onHeight(120)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(120), heights)
+        heightBridge.onHeight(800)
+        view.render("<p>static</p>", false, null, null, null, null, owner.lifecycle) { fail() }
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(64))
+        heightBridge.onHeight(900)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(120), heights)
+        assertEquals(0, actions)
+        assertFalse(engine.settings.javaScriptEnabled)
+        assertNull(shadowOf(engine).getJavascriptInterface("Aster"))
+    }
+
+    @Test
     fun heightBurstsDeliverOnlyLatestDistinctSizeAndDropInvalidatedWork() {
         val bridge = OfflinePanelActionBridge()
         val received = mutableListOf<Int>()

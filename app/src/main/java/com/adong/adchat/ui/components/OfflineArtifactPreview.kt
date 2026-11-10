@@ -204,6 +204,12 @@ internal class OfflinePanelActionBridge {
     }
 }
 
+/** Measurement documents never receive the action/RPC surface of the full bridge. */
+internal class OfflineHeightBridge(private val target: OfflinePanelActionBridge) {
+    @JavascriptInterface
+    fun onHeight(height: Int) = target.onHeight(height)
+}
+
 /** Owns a single WebView for its AndroidView lifetime, including updates and teardown. */
 @SuppressLint("SetJavaScriptEnabled")
 internal class OfflineArtifactView(context: Context) : FrameLayout(context) {
@@ -317,24 +323,26 @@ internal class OfflineArtifactView(context: Context) : FrameLayout(context) {
             lifecycle.addObserver(observer)
             syncLifecycle()
         }
-        val bridgeEnabled = allowScripts && (panelActions != null || onHeight != null || helper != null)
-        val document = Document(html, allowScripts, baseUrl, bridgeEnabled, onHeight != null, helper != null, remoteMedia)
+        val activeHelper = helper.takeIf { allowScripts }
+        val fullBridge = allowScripts && (panelActions != null || onHeight != null || activeHelper != null)
+        val bridgeEnabled = fullBridge || onHeight != null
+        val document = Document(html, allowScripts, baseUrl, bridgeEnabled, onHeight != null, activeHelper != null, remoteMedia)
         val evaluate: (String) -> Unit = { js ->
             if (!released) {
                 if (pageReady) engine?.evaluateJavascript(js, null)
                 else if (pendingJs.size < 256) pendingJs += js
             }
         }
-        if (this.helper !== helper) {
+        if (this.helper !== activeHelper) {
             emitterToken?.let { this.helper?.removeEmitter(it) }
             emitterToken = null
-            this.helper = helper
-            if (helper != null) emitterToken = helper.addEmitter { js -> post { evaluate(js) } }
+            this.helper = activeHelper
+            if (activeHelper != null) emitterToken = activeHelper.addEmitter { js -> post { evaluate(js) } }
         }
         if (loaded == document) {
-            bridge.onAction = panelActions.takeIf { bridgeEnabled }
+            bridge.onAction = panelActions.takeIf { fullBridge }
             bridge.onHeight = onHeight
-            bridge.helper = helper
+            bridge.helper = activeHelper
             bridge.evaluate = evaluate
             if (visualReady && onReady != null) {
                 val readyRevision = revision
@@ -344,9 +352,9 @@ internal class OfflineArtifactView(context: Context) : FrameLayout(context) {
         }
         bridge.invalidate()
         bridge = OfflinePanelActionBridge().apply {
-            onAction = panelActions.takeIf { bridgeEnabled }
+            onAction = panelActions.takeIf { fullBridge }
             this.onHeight = onHeight
-            this.helper = helper
+            this.helper = activeHelper
             this.evaluate = evaluate
         }
         loaded = document
@@ -356,8 +364,9 @@ internal class OfflineArtifactView(context: Context) : FrameLayout(context) {
         pendingJs.clear()
         val currentRevision = ++revision
         view.stopLoading()
-        view.settings.javaScriptEnabled = allowScripts
-        if (bridgeEnabled) view.addJavascriptInterface(bridge, "Aster") else view.removeJavascriptInterface("Aster")
+        view.settings.javaScriptEnabled = allowScripts || onHeight != null
+        if (bridgeEnabled) view.addJavascriptInterface(if (allowScripts) bridge else OfflineHeightBridge(bridge), "Aster")
+        else view.removeJavascriptInterface("Aster")
         // Preserve the dialog's first Compose frame before starting Chromium drawing.
         view.postOnAnimation {
             view.post {

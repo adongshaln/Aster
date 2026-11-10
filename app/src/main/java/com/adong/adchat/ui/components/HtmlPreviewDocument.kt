@@ -4,6 +4,8 @@ import com.adong.adchat.data.rp.RpHelperScript
 
 /** A script-capable, opaque-origin iframe. No native bridge, network, forms or top navigation. */
 internal object HtmlPreviewDocument {
+    private val random = java.security.SecureRandom()
+    private val declaredBackground = Regex("(?:background(?:-(?:color|image))?\\s*:|\\bbgcolor\\s*=)", RegexOption.IGNORE_CASE)
     const val MAX_PREVIEW_CHARS = 1_000_000
     const val PANEL_CAPTURE_MARKER = "data-aster-panel"
     const val PANEL_BRIDGE_MARKER = "data-aster-bridge"
@@ -31,29 +33,57 @@ internal object HtmlPreviewDocument {
         /** Card surfaces may show remote https images; ordinary previews stay fully offline. */
         remoteMedia: Boolean = false,
         /** Part of the document so a bump reloads the page (floor variables changed). */
-        revision: Int = 0
+        revision: Int = 0,
+        dark: Boolean? = null,
+        /** Fixed only by tests; production generates one nonce per prepared measurement document. */
+        nonce: String? = null
     ): String {
         require(source.length <= MAX_PREVIEW_CHARS)
-        val helper = helperBundle != null
-        val trailing = (if (panelBridge) PANEL_CAPTURE_SCRIPT else "") + (if (reportHeight) HEIGHT_REPORT_SCRIPT else "")
+        val helper = allowScripts && helperBundle != null
+        val measurementOnly = !allowScripts && reportHeight
+        val measurementNonce = if (measurementOnly) nonce ?: java.util.Base64.getEncoder()
+            .encodeToString(ByteArray(16).also(random::nextBytes)) else null
+        require(measurementNonce == null || measurementNonce.matches(Regex("[A-Za-z0-9+/_-]+=*")))
+        fun trusted(script: String): String = if (measurementNonce == null) script
+            else script.replaceFirst("<script", "<script nonce=\"$measurementNonce\"")
+        val trailing = (if (panelBridge && allowScripts) PANEL_CAPTURE_SCRIPT else "") +
+            (if (reportHeight) trusted(HEIGHT_REPORT_SCRIPT) else "")
+        // Zero-specificity defaults let the card's own selectors and inline styles take precedence.
+        // A card that paints its own background keeps the browser's original default color pair.
+        // Only unpainted fragments inherit the app's dark fallback; authored colors always win.
+        val darkFallback = dark == true && !declaredBackground.containsMatchIn(source)
+        val defaults = if (dark == null && !measurementOnly) "" else
+            "<style>:where(html){color:${if (darkFallback) "#F0EFEA" else "#141413"};color-scheme:${if (darkFallback) "dark" else "light"}}:where(body){margin:0}</style>"
         val body = if (helper) {
             val name = if (messageId != null) "TH-message--$messageId--0" else "TH-preview"
             val head = "<script>window.name=${quote(name)};" +
                 (if (messageId != null) "window.__TH_MESSAGE_ID=$messageId;" else "") +
-                "</script>" + baseStyles(viewportHeightPx) + helperBundle
+                "</script>" + defaults + baseStyles(viewportHeightPx) + helperBundle
             injectHead(replaceVh(source), head, trailing)
-        } else (helperBundle ?: "") + source + trailing
+        } else if (defaults.isNotEmpty() || measurementOnly) {
+            val prepared = injectHead(source, defaults, trailing)
+            // Standards mode keeps the body measurement independent of the iframe viewport floor.
+            if (doctype.containsMatchIn(prepared)) prepared else "<!doctype html>$prepared"
+        } else source + trailing
         val escaped = escapeAttr(body)
-        val scriptPolicy = if (allowScripts) "script-src 'unsafe-inline' 'unsafe-eval';" else "script-src 'none';"
+        val scriptPolicy = when {
+            allowScripts -> "script-src 'unsafe-inline' 'unsafe-eval';"
+            measurementOnly -> "script-src 'nonce-$measurementNonce';"
+            else -> "script-src 'none';"
+        }
         // allow-same-origin only lets scripts reach OUR wrapper page, whose native surface is the
         // bounded Aster bridge; the WebView client blocks every request outside the asset allowlist.
         val sandboxPolicy = if (allowScripts) {
             if (helper) "allow-scripts allow-same-origin" else "allow-scripts"
-        } else ""
+        } else if (measurementOnly) "allow-scripts" else ""
         val media = if (remoteMedia) "https: data: blob:" else "data: blob:"
         val csp = if (helper) HELPER_CSP else
             "default-src 'none'; $scriptPolicy style-src 'unsafe-inline'; img-src $media; media-src $media; font-src data:; connect-src 'none'; frame-src about:; object-src 'none'; base-uri 'none'; form-action 'none'"
-        val parentListener = (if (panelBridge || reportHeight) PANEL_LISTENER_SCRIPT else "") + (if (helper) FRAME_FORWARDER_SCRIPT else "")
+        val parentListener = when {
+            measurementOnly -> trusted(HEIGHT_LISTENER_SCRIPT)
+            allowScripts && (panelBridge || reportHeight) -> PANEL_LISTENER_SCRIPT
+            else -> ""
+        } + (if (helper) FRAME_FORWARDER_SCRIPT else "")
         return """<!doctype html><html><head><meta charset="utf-8">
             <meta name="viewport" content="width=device-width,initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="$csp">
@@ -168,6 +198,13 @@ try{var a=window.Aster;if(!a)return;
 if(typeof e.data==='string'&&e.data.length>0&&e.data.length<=200){if(a.onPanelAction)a.onPanelAction(e.data);}
 else if(e.data&&typeof e.data.asterHeight==='number'){var h=Math.round(e.data.asterHeight);if(h>0&&h<=20000&&a.onHeight)a.onHeight(h);}
 }catch(err){}
+});</script>"""
+
+    private const val HEIGHT_LISTENER_SCRIPT =
+        """<script $PANEL_BRIDGE_MARKER="1">/*$PANEL_TOKEN*/window.addEventListener('message',function(e){
+var frame=document.querySelector('iframe');if(!frame||e.source!==frame.contentWindow)return;
+var h=e.data&&e.data.asterHeight;if(typeof h!=='number'||!isFinite(h))return;
+h=Math.round(h);if(h>0&&h<=20000&&window.Aster)window.Aster.onHeight(h);
 });</script>"""
 
     // Shell page: native evaluates JS here; forward each payload into the card frame's shim.

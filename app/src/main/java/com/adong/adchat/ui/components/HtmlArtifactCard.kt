@@ -171,7 +171,7 @@ internal fun HtmlArtifactCard(
     }
 }
 
-private data class HtmlPreviewInput(val source: String, val scripts: Boolean, val panelBridge: Boolean, val reportHeight: Boolean, val helper: Boolean, val messageId: Int?, val revision: Int, val remoteMedia: Boolean)
+private data class HtmlPreviewInput(val source: String, val scripts: Boolean, val panelBridge: Boolean, val reportHeight: Boolean, val helper: Boolean, val messageId: Int?, val revision: Int, val remoteMedia: Boolean, val dark: Boolean)
 
 /**
  * Provided by scrolling conversations: while true, previews that are not yet mounted wait instead
@@ -212,8 +212,9 @@ private fun HtmlPreview(
     }
     val panelBridge = panelActions != null
     val reportHeight = onHeight != null
-    val input = remember(source, allowScripts, panelBridge, reportHeight, helper != null, messageId, revision, remoteMedia) {
-        HtmlPreviewInput(source, allowScripts, panelBridge, reportHeight, helper != null, messageId, revision, remoteMedia)
+    val dark = LocalThemeDark.current
+    val input = remember(source, allowScripts, panelBridge, reportHeight, helper != null, messageId, revision, remoteMedia, dark) {
+        HtmlPreviewInput(source, allowScripts, panelBridge, reportHeight, allowScripts && helper != null, messageId, revision, remoteMedia, dark)
     }
     val document by produceState<PreparedHtmlPreview?>(null, input) {
         val html = withContext(Dispatchers.Default) {
@@ -227,7 +228,8 @@ private fun HtmlPreview(
                 messageId = input.messageId,
                 viewportHeightPx = viewportPx,
                 remoteMedia = input.remoteMedia,
-                revision = input.revision
+                revision = input.revision,
+                dark = input.dark
             )
         }
         value = PreparedHtmlPreview(input, html)
