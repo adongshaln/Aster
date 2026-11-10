@@ -19,7 +19,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -47,7 +46,6 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -78,6 +76,8 @@ import com.adong.adchat.ui.screens.MediaDownloadScreen
 import com.adong.adchat.ui.screens.SettingsScreen
 import com.adong.adchat.ui.screens.StoryScreen
 import com.adong.adchat.ui.media.MediaDownloadViewModel
+import com.adong.adchat.ui.rp.RpScreen
+import com.adong.adchat.ui.rp.RpViewModel
 import com.adong.adchat.ui.story.StoryViewModel
 import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.launch
@@ -164,6 +164,7 @@ class MainActivity : ComponentActivity() {
 
 internal enum class AppPage(val label: String, val icon: ImageVector) {
     Chat("对话", Icons.Rounded.Forum),
+    Rp("剧情", Icons.Rounded.TheaterComedy),
     Story("故事", Icons.Rounded.AutoStories),
     Draw("创作", Icons.Rounded.AutoAwesome),
     Media("下载", Icons.Rounded.DownloadForOffline),
@@ -192,6 +193,7 @@ private fun AsterApp(
     val pageStates = rememberSaveableStateHolder()
     val mediaVm: MediaDownloadViewModel = viewModel()
     val storyVm: StoryViewModel = viewModel()
+    val rpVm: RpViewModel = viewModel()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -278,12 +280,15 @@ private fun AsterApp(
                 onNewStory = ::requestStoryCreation,
                 onConversation = { vm.selectConversation(it); navigate(AppPage.Chat) },
                 onNavigate = ::navigate,
-                onClose = { focusManager.clearFocus(); scope.launch { drawerState.close() } }
+                onClose = { focusManager.clearFocus(); scope.launch { drawerState.close() } },
+                history = if (page == AppPage.Rp) DrawerHistory.rp(rpVm, onSelected = {
+                    scope.launch { drawerState.close() }
+                }) else DrawerHistory.chat(vm)
             )
         }
     ) {
         Scaffold(containerColor = Canvas) { padding ->
-            val edgeToEdgePage = page == AppPage.Chat || page == AppPage.Story
+            val edgeToEdgePage = page == AppPage.Chat || page == AppPage.Story || page == AppPage.Rp
             val pageBottomPadding = if (edgeToEdgePage) 0.dp else padding.calculateBottomPadding()
             val drawerOpen: () -> Unit = openDrawer
             Box(
@@ -294,29 +299,25 @@ private fun AsterApp(
                 contentAlignment = Alignment.TopCenter
             ) {
                 val motionEnabled = LocalAsterMotionEnabled.current
-                val pageTravelPx = with(LocalDensity.current) { 28.dp.roundToPx() }
+                val pageTravelPx = with(LocalDensity.current) { 18.dp.roundToPx() }
                 AnimatedContent(
                     targetState = page,
                     modifier = Modifier.widthIn(max = 900.dp).fillMaxSize(),
                     transitionSpec = {
                         val direction = if (targetState.ordinal > initialState.ordinal) 1 else -1
                         val enter = if (motionEnabled) {
-                            fadeIn(tween(180, easing = AsterEase)) +
-                                slideInHorizontally(AsterSpring.spatial()) { width ->
+                            fadeIn(tween(220, delayMillis = 40, easing = AsterEase)) +
+                                slideInHorizontally(tween(260, easing = AsterEase)) { width ->
                                     minOf(width / 14, pageTravelPx) * direction
-                                } +
-                                scaleIn(
-                                    AsterSpring.settle(), initialScale = 0.986f,
-                                    transformOrigin = TransformOrigin(0.5f, 0.35f)
-                                )
+                                }
                         } else EnterTransition.None
                         val exit = if (motionEnabled) {
-                            fadeOut(tween(120, easing = AsterEase)) +
-                                slideOutHorizontally(tween(180, easing = AsterEase)) { width ->
+                            fadeOut(tween(100, easing = AsterEase)) +
+                                slideOutHorizontally(tween(140, easing = AsterEase)) { width ->
                                     -minOf(width / 32, pageTravelPx / 2) * direction
                                 }
                         } else ExitTransition.None
-                        // Only navigation changes this transition; streaming text never resizes it.
+                        // Short translation + fade keeps long text and WebViews at their native scale.
                         (enter togetherWith exit).using(null)
                     },
                     label = "page-transition"
@@ -324,6 +325,7 @@ private fun AsterApp(
                     pageStates.SaveableStateProvider(target.name) {
                         when (target) {
                             AppPage.Chat -> ChatScreen(vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
+                            AppPage.Rp -> RpScreen(rpVm, vm, onOpenDrawer = openDrawer, onOpenSettings = { navigate(AppPage.Settings) })
                             AppPage.Story -> StoryScreen(
                                 mainVm = vm,
                                 storyVm = storyVm,
@@ -456,7 +458,8 @@ internal fun AppDrawer(
     onNewStory: () -> Unit,
     onConversation: (String) -> Unit,
     onNavigate: (AppPage) -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    history: DrawerHistory = DrawerHistory.chat(vm)
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var deleteCandidate by remember { mutableStateOf<Conversation?>(null) }
@@ -470,7 +473,7 @@ internal fun AppDrawer(
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     val motionEnabled = LocalAsterMotionEnabled.current
     val normalizedQuery = query.trim()
-    val conversationSnapshot = vm.conversations.toList()
+    val conversationSnapshot = history.items()
     val visibleConversations = remember(conversationSnapshot, normalizedQuery, conversationFilter) {
         conversationSnapshot.filter { conversation ->
             val matches = normalizedQuery.isBlank() || conversation.title.contains(normalizedQuery, ignoreCase = true) ||
@@ -512,7 +515,7 @@ internal fun AppDrawer(
                 Spacer(Modifier.width(4.dp))
                 AsterWordmark(size = 24)
                 Spacer(Modifier.weight(1f))
-                AsterIconButton(Icons.Rounded.EditNote, "新建对话", onNewChat, enabled = !vm.isChatLoading)
+                AsterIconButton(Icons.Rounded.EditNote, history.newLabel, history.onNew ?: onNewChat, enabled = !history.busy())
                 AsterIconButton(Icons.Rounded.Close, "关闭侧栏", onClose)
             }
             OutlinedTextField(
@@ -523,7 +526,7 @@ internal fun AppDrawer(
                 textStyle = MaterialTheme.typography.bodyMedium,
                 leadingIcon = { Icon(Icons.Rounded.Search, null, Modifier.size(19.dp)) },
                 trailingIcon = { if (query.isNotEmpty()) AsterIconButton(Icons.Rounded.Close, "清空搜索", { query = "" }) },
-                placeholder = { Text("搜索对话或标签", style = MaterialTheme.typography.bodyMedium) },
+                placeholder = { Text(history.searchHint, style = MaterialTheme.typography.bodyMedium) },
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedContainerColor = Surface,
@@ -541,7 +544,7 @@ internal fun AppDrawer(
                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf(AppPage.Chat, AppPage.Draw, AppPage.Media).forEach { item ->
+                    listOf(AppPage.Chat, AppPage.Rp, AppPage.Draw, AppPage.Media).forEach { item ->
                         val selected = currentPage == item
                         val interactionSource = remember(item) { MutableInteractionSource() }
                         val selectionBg by animateColorAsState(
@@ -590,7 +593,7 @@ internal fun AppDrawer(
                         normalizedQuery.isNotBlank() -> "搜索结果"
                         conversationFilter == "archived" -> "已归档"
                         conversationFilter == "favorites" -> "收藏"
-                        else -> "对话记录"
+                        else -> history.title
                     },
                     color = Ink,
                     style = MaterialTheme.typography.labelLarge
@@ -624,12 +627,14 @@ internal fun AppDrawer(
                                 normalizedQuery.isNotBlank() -> "没有找到对话"
                                 conversationFilter == "favorites" -> "还没有收藏的对话"
                                 conversationFilter == "archived" -> "这里还没有归档内容"
+                                history.page == AppPage.Rp -> "还没有剧情存档"
                                 else -> "从一段对话开始"
                             },
                             when {
                                 normalizedQuery.isNotBlank() -> "试试其他关键词或标签"
                                 conversationFilter == "favorites" -> "在对话菜单中点按“收藏”"
                                 conversationFilter == "archived" -> "归档的对话会收纳在这里"
+                                history.page == AppPage.Rp -> "点右上角新建一段剧情"
                                 else -> "你的想法，会在这里留下记录"
                             }
                         )
@@ -654,14 +659,14 @@ internal fun AppDrawer(
                     items(pinnedConversations, key = { it.id }) { conversation ->
                         ConversationRow(
                             conversation = conversation,
-                            selected = currentPage == AppPage.Chat && vm.activeConversationId == conversation.id,
-                            generating = vm.isChatLoading && vm.activeConversationId == conversation.id,
-                            onClick = { onConversation(conversation.id) },
+                            selected = currentPage == history.page && history.activeId() == conversation.id,
+                            generating = history.busy() && history.activeId() == conversation.id,
+                            onClick = { (history.onSelect ?: onConversation)(conversation.id) },
                             onRename = { renameCandidate = conversation; renameText = conversation.title },
                             onDelete = { deleteCandidate = conversation },
-                            onTogglePin = { vm.setConversationPinned(conversation.id, !conversation.pinned) },
-                            onToggleFavorite = { vm.setConversationFavorite(conversation.id, !conversation.favorite) },
-                            onToggleArchive = { vm.setConversationArchived(conversation.id, !conversation.archived) },
+                            onTogglePin = { history.setPinned(conversation.id, !conversation.pinned) },
+                            onToggleFavorite = { history.setFavorite(conversation.id, !conversation.favorite) },
+                            onToggleArchive = { history.setArchived(conversation.id, !conversation.archived) },
                             onEditTags = { tagsCandidate = conversation }
                         )
                     }
@@ -673,14 +678,14 @@ internal fun AppDrawer(
                     items(conversations, key = { it.id }) { conversation ->
                         ConversationRow(
                             conversation,
-                            selected = currentPage == AppPage.Chat && vm.activeConversationId == conversation.id,
-                            generating = vm.isChatLoading && vm.activeConversationId == conversation.id,
-                            onClick = { onConversation(conversation.id) },
+                            selected = currentPage == history.page && history.activeId() == conversation.id,
+                            generating = history.busy() && history.activeId() == conversation.id,
+                            onClick = { (history.onSelect ?: onConversation)(conversation.id) },
                             onRename = { renameCandidate = conversation; renameText = conversation.title },
                             onDelete = { deleteCandidate = conversation },
-                            onTogglePin = { vm.setConversationPinned(conversation.id, !conversation.pinned) },
-                            onToggleFavorite = { vm.setConversationFavorite(conversation.id, !conversation.favorite) },
-                            onToggleArchive = { vm.setConversationArchived(conversation.id, !conversation.archived) },
+                            onTogglePin = { history.setPinned(conversation.id, !conversation.pinned) },
+                            onToggleFavorite = { history.setFavorite(conversation.id, !conversation.favorite) },
+                            onToggleArchive = { history.setArchived(conversation.id, !conversation.archived) },
                             onEditTags = { tagsCandidate = conversation }
                         )
                     }
@@ -720,11 +725,16 @@ internal fun AppDrawer(
             subtitle = "选择接下来要开始的工作方式",
             actions = listOf(
                 AdActionOption("chat", "普通对话", "像现在一样开始一段新的 AI 对话", Icons.Rounded.Forum),
+                AdActionOption("rp", "剧情 RP", "角色卡或纯文本，统一单会话角色扮演", Icons.Rounded.TheaterComedy),
                 AdActionOption("story", "故事创作", "讨论设定与正式正文分开保存", Icons.Rounded.AutoStories)
             ),
             onAction = { action ->
                 showNewActions = false
-                if (action.id == "story") onNewStory() else onNewChat()
+                when (action.id) {
+                    "story" -> onNewStory()
+                    "rp" -> onNavigate(AppPage.Rp)
+                    else -> onNewChat()
+                }
             },
             onDismiss = { showNewActions = false },
             headerIcon = Icons.Rounded.Add
@@ -740,7 +750,7 @@ internal fun AppDrawer(
             dismissLabel = "取消",
             icon = Icons.Rounded.DeleteOutline,
             destructive = true,
-            onConfirm = { vm.deleteConversation(conversation.id); deleteCandidate = null },
+            onConfirm = { history.delete(conversation.id); deleteCandidate = null },
             onDismiss = { deleteCandidate = null }
         )
     }
@@ -778,7 +788,7 @@ internal fun AppDrawer(
                     text = "保存",
                     primary = true,
                     enabled = renameText.isNotBlank(),
-                    onClick = { vm.renameConversation(conversation.id, renameText); renameCandidate = null },
+                    onClick = { history.rename(conversation.id, renameText); renameCandidate = null },
                     modifier = Modifier.weight(1f).height(48.dp)
                 )
             }
@@ -823,7 +833,7 @@ internal fun AppDrawer(
                             .filter(String::isNotBlank)
                             .distinctBy { it.lowercase() }
                             .take(5)
-                        vm.setConversationTags(conversation.id, tags)
+                        history.setTags(conversation.id, tags)
                         tagsCandidate = null
                     },
                     modifier = Modifier.weight(1f).height(48.dp)
@@ -941,6 +951,49 @@ private fun ConversationRow(
             },
             onDismiss = { showActions = false },
             headerIcon = Icons.Rounded.ChatBubbleOutline
+        )
+    }
+}
+
+/**
+ * Which save list the drawer shows: chat conversations normally, RP save files on the 剧情 page.
+ * Rows share the chat row UI (pin / favorite / archive / tags / rename / delete).
+ */
+internal class DrawerHistory(
+    val page: AppPage,
+    val title: String,
+    val searchHint: String,
+    val newLabel: String,
+    val items: () -> List<Conversation>,
+    val activeId: () -> String?,
+    val busy: () -> Boolean,
+    val setPinned: (String, Boolean) -> Unit,
+    val setFavorite: (String, Boolean) -> Unit,
+    val setArchived: (String, Boolean) -> Unit,
+    val setTags: (String, List<String>) -> Unit,
+    val rename: (String, String) -> Unit,
+    val delete: (String) -> Unit,
+    /** Null = use the drawer's default callbacks. */
+    val onSelect: ((String) -> Unit)? = null,
+    val onNew: (() -> Unit)? = null
+) {
+    companion object {
+        fun chat(vm: MainViewModel) = DrawerHistory(
+            page = AppPage.Chat, title = "对话记录", searchHint = "搜索对话或标签", newLabel = "新建对话",
+            items = { vm.conversations.toList() }, activeId = { vm.activeConversationId }, busy = { vm.isChatLoading },
+            setPinned = vm::setConversationPinned, setFavorite = vm::setConversationFavorite,
+            setArchived = vm::setConversationArchived, setTags = vm::setConversationTags,
+            rename = vm::renameConversation, delete = vm::deleteConversation
+        )
+
+        fun rp(vm: com.adong.adchat.ui.rp.RpViewModel, onSelected: () -> Unit) = DrawerHistory(
+            page = AppPage.Rp, title = "剧情存档", searchHint = "搜索剧情或标签", newLabel = "新建剧情",
+            items = { vm.drawerConversations() }, activeId = { vm.activeSessionId }, busy = { vm.generating },
+            setPinned = vm::setSessionPinned, setFavorite = vm::setSessionFavorite,
+            setArchived = vm::setSessionArchived, setTags = vm::setSessionTags,
+            rename = vm::renameSession, delete = vm::deleteSession,
+            onSelect = { vm.selectSession(it); vm.draft = ""; onSelected() },
+            onNew = { vm.requestNewSession(); onSelected() }
         )
     }
 }

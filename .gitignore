@@ -34,3 +34,4 @@ problem*.jpg
 *.py[cod]
 
 /.kotlin/
+.DS_Store

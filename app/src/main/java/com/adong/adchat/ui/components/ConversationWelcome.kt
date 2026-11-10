@@ -191,7 +191,7 @@ fun ConversationWelcome(
 }
 
 @Composable
-fun ConversationAuthor(error: Boolean = false) {
+fun ConversationAuthor(error: Boolean = false, name: String = "Aster", badge: String? = null) {
     Row(
         modifier = Modifier.padding(bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -209,10 +209,18 @@ fun ConversationAuthor(error: Boolean = false) {
             )
         }
         Text(
-            text = "Aster",
+            text = name,
             modifier = Modifier.padding(start = 8.dp),
             style = MaterialTheme.typography.titleSmall.copy(fontFamily = FontFamily.Serif),
-            color = if (error) Danger else Ink.copy(alpha = 0.88f)
+            color = if (error) Danger else Ink.copy(alpha = 0.88f),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+        )
+        if (badge != null) Text(
+            text = badge,
+            modifier = Modifier.padding(start = 8.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MutedInk
         )
     }
 }

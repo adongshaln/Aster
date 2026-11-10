@@ -29,7 +29,12 @@ data class TavernPrompt(
     val enabled: Boolean,
     val marker: Boolean,
     val injectionPosition: Int?,
-    val injectionDepth: Int?
+    val injectionDepth: Int?,
+    val injectionOrder: Int = 100,
+    /** Generation types this prompt applies to (ST injection_trigger); empty = all. */
+    val injectionTrigger: List<String> = emptyList(),
+    val forbidOverrides: Boolean = false,
+    val systemPrompt: Boolean = false
 )
 
 data class TavernPromptOrderEntry(val identifier: String, val enabled: Boolean)
@@ -59,12 +64,31 @@ data class TavernPreset(
     val regexScripts: List<TavernRegexScript>,
     val generationOptions: ChatGenerationOptions,
     val assistantPrefill: String,
-    val helperScriptCount: Int
+    val helperScriptCount: Int,
+    /** prompt_order picked the SillyTavern Chat Completion way (100001, then 100000, then [0]). RP only. */
+    val promptOrderRp: List<TavernPromptOrderEntry> = emptyList(),
+    val newChatPrompt: String = "[Start a new Chat]",
+    val newExampleChatPrompt: String = "[Example Chat]",
+    val continueNudgePrompt: String = "[Continue your last message without repeating its original content.]",
+    val impersonationPrompt: String = DEFAULT_IMPERSONATION_PROMPT,
+    val continuePrefill: Boolean = false,
+    val continuePostfix: String = " ",
+    val assistantImpersonation: String = "",
+    /** character_names_behavior: -1 none, 0 default, 1 completion (name field), 2 content prefix. */
+    val namesBehavior: Int = 0,
+    val squashSystemMessages: Boolean = false,
+    val wiFormat: String = "{0}",
+    val scenarioFormat: String = "{{scenario}}",
+    val personalityFormat: String = "{{personality}}",
+    val sendIfEmpty: String = ""
 ) {
     val enabledPromptCount: Int
         get() = if (promptOrder.isNotEmpty()) promptOrder.count { it.enabled } else prompts.count { it.enabled }
     val enabledRegexCount: Int get() = regexScripts.count { !it.disabled }
 }
+
+const val DEFAULT_IMPERSONATION_PROMPT =
+    "[Write your next reply from the point of view of {{user}}, using the chat history so far as a guideline for the writing style of {{user}}. Don't write as {{char}} or system. Don't describe actions of {{char}}.]"
 
 data class TavernPresetSummary(
     val id: String,
@@ -146,7 +170,11 @@ internal object TavernPresetParser {
                         enabled = item.optBoolean("enabled", true),
                         marker = item.optBoolean("marker", false),
                         injectionPosition = item.nullableInt("injection_position"),
-                        injectionDepth = item.nullableInt("injection_depth")
+                        injectionDepth = item.nullableInt("injection_depth"),
+                        injectionOrder = item.nullableInt("injection_order") ?: 100,
+                        injectionTrigger = item.optJSONArray("injection_trigger").stringList(),
+                        forbidOverrides = item.optBoolean("forbid_overrides", false),
+                        systemPrompt = item.optBoolean("system_prompt", false)
                     )
                 )
             }
@@ -158,11 +186,58 @@ internal object TavernPresetParser {
             ?.optJSONArray("order")
             .toPromptOrder()
 
-        val regexArray = root.optJSONObject("extensions")?.optJSONArray("regex_scripts") ?: JSONArray()
-        require(regexArray.length() <= MAX_REGEX_SCRIPTS) { "酒馆预设包含过多正则脚本" }
-        val regexScripts = buildList {
-            for (index in 0 until regexArray.length()) {
-                val item = regexArray.optJSONObject(index) ?: continue
+        val rpOrder = root.optJSONArray("prompt_order").let { orders ->
+            val items = (0 until (orders?.length() ?: 0)).mapNotNull { orders?.optJSONObject(it) }
+            (items.firstOrNull { it.opt("character_id")?.toString() == "100001" }
+                ?: items.firstOrNull { it.opt("character_id")?.toString() == "100000" }
+                ?: items.firstOrNull())?.optJSONArray("order").toPromptOrder()
+        }
+        val regexScripts = parseRegexScripts(root.optJSONObject("extensions")?.optJSONArray("regex_scripts"))
+        val helperCount = parseHelperCount(root.optJSONObject("extensions"))
+        val declaredName = sequenceOf("name", "preset_name", "presetName")
+            .map { root.optString(it).trim() }
+            .firstOrNull(String::isNotBlank)
+        return TavernPreset(
+            id = id,
+            name = declaredName ?: fallbackName.substringBeforeLast('.').ifBlank { "未命名酒馆预设" },
+            builtIn = builtIn,
+            prompts = prompts,
+            promptOrder = order,
+            regexScripts = regexScripts,
+            generationOptions = ChatGenerationOptions(
+                temperature = root.finiteDouble("temperature"),
+                topP = root.finiteDouble("top_p"),
+                frequencyPenalty = root.finiteDouble("frequency_penalty"),
+                presencePenalty = root.finiteDouble("presence_penalty"),
+                seed = root.nullableInt("seed"),
+                maxOutputTokens = root.nullableInt("openai_max_tokens")
+            ).normalized(),
+            assistantPrefill = root.optString("assistant_prefill"),
+            helperScriptCount = helperCount,
+            promptOrderRp = rpOrder,
+            newChatPrompt = root.optString("new_chat_prompt", "[Start a new Chat]"),
+            newExampleChatPrompt = root.optString("new_example_chat_prompt", "[Example Chat]"),
+            continueNudgePrompt = root.optString("continue_nudge_prompt", "[Continue your last message without repeating its original content.]"),
+            impersonationPrompt = root.optString("impersonation_prompt", DEFAULT_IMPERSONATION_PROMPT),
+            continuePrefill = root.optBoolean("continue_prefill", false),
+            continuePostfix = root.optString("continue_postfix", " "),
+            assistantImpersonation = root.optString("assistant_impersonation"),
+            namesBehavior = root.optInt("names_behavior", 0),
+            squashSystemMessages = root.optBoolean("squash_system_messages", false),
+            wiFormat = root.optString("wi_format", "{0}"),
+            scenarioFormat = root.optString("scenario_format", "{{scenario}}"),
+            personalityFormat = root.optString("personality_format", "{{personality}}"),
+            sendIfEmpty = root.optString("send_if_empty")
+        )
+    }
+
+    /** Parses SillyTavern regex_scripts (preset- or card-scoped). Shared by presets and character cards. */
+    fun parseRegexScripts(regexArray: JSONArray?): List<TavernRegexScript> {
+        val array = regexArray ?: JSONArray()
+        require(array.length() <= MAX_REGEX_SCRIPTS) { "正则脚本数量过多" }
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
                 val find = item.optString("findRegex")
                 val replace = item.optString("replaceString")
                 require(find.length <= MAX_REGEX_FIELD_CHARS && replace.length <= MAX_REGEX_FIELD_CHARS) {
@@ -188,32 +263,11 @@ internal object TavernPresetParser {
                 )
             }
         }
-        val helperCount = root.optJSONObject("extensions")
-            ?.optJSONObject("tavern_helper")
-            ?.optJSONArray("scripts")
-            ?.length() ?: 0
-        val declaredName = sequenceOf("name", "preset_name", "presetName")
-            .map { root.optString(it).trim() }
-            .firstOrNull(String::isNotBlank)
-        return TavernPreset(
-            id = id,
-            name = declaredName ?: fallbackName.substringBeforeLast('.').ifBlank { "未命名酒馆预设" },
-            builtIn = builtIn,
-            prompts = prompts,
-            promptOrder = order,
-            regexScripts = regexScripts,
-            generationOptions = ChatGenerationOptions(
-                temperature = root.finiteDouble("temperature"),
-                topP = root.finiteDouble("top_p"),
-                frequencyPenalty = root.finiteDouble("frequency_penalty"),
-                presencePenalty = root.finiteDouble("presence_penalty"),
-                seed = root.nullableInt("seed"),
-                maxOutputTokens = root.nullableInt("openai_max_tokens")
-            ).normalized(),
-            assistantPrefill = root.optString("assistant_prefill"),
-            helperScriptCount = helperCount
-        )
     }
+
+    /** Counts tavern_helper JS scripts (preserved with the file but never executed natively). */
+    fun parseHelperCount(extensions: JSONObject?): Int =
+        extensions?.optJSONObject("tavern_helper")?.optJSONArray("scripts")?.length() ?: 0
 
     private fun JSONArray?.toPromptOrder(): List<TavernPromptOrderEntry> = buildList {
         val source = this@toPromptOrder ?: return@buildList
@@ -445,7 +499,10 @@ class TavernPresetStore(context: Context) {
         val regex = preset.regexScripts.mapIndexed { index, script ->
             configuration.regexEnabled[index]?.let { script.copy(disabled = !it) } ?: script
         }
-        return preset.copy(name = configuration.name ?: preset.name, prompts = prompts, promptOrder = order, regexScripts = regex)
+        val rpOrder = preset.promptOrderRp.map { entry ->
+            configuration.promptEnabled[entry.identifier]?.let { entry.copy(enabled = it) } ?: entry
+        }
+        return preset.copy(name = configuration.name ?: preset.name, prompts = prompts, promptOrder = order, regexScripts = regex, promptOrderRp = rpOrder)
     }
 
     @Synchronized
@@ -572,13 +629,15 @@ internal object TavernRegexEngine {
         role: String,
         depth: Int,
         surface: TavernRegexSurface,
-        macroValues: Map<String, String> = emptyMap()
+        macroValues: Map<String, String> = emptyMap(),
+        extraScripts: List<TavernRegexScript> = emptyList()
     ): TavernRegexOutput {
         if (text.isEmpty()) return TavernRegexOutput(text, 0, emptyList())
+        val scripts = preset.regexScripts + extraScripts
         var result = text
         var applied = 0
         val skipped = mutableListOf<String>()
-        for (script in preset.regexScripts) {
+        for (script in scripts) {
             if (!script.appliesTo(role, depth, surface)) continue
             val find = substituteFindMacros(script.findRegex, script.substituteRegex, macroValues)
             val compiledResult = cache.getOrPut(find) { runCatching { compile(find) } }
@@ -593,7 +652,7 @@ internal object TavernRegexEngine {
             result = replaced
         }
         if (surface == TavernRegexSurface.Display) {
-            for (script in preset.regexScripts) {
+            for (script in scripts) {
                 if (!isDisplayRepairer(script)) continue
                 val placementId = when (role) { "user" -> 1; "assistant" -> 2; else -> null }
                 if (placementId == null || placementId !in script.placement) continue
@@ -761,6 +820,7 @@ data class TavernCharacterContext(
     val personality: String = "",
     val scenario: String = "",
     val persona: String = "",
+    val userName: String = "",
     val mesExample: String = "",
     val wiBefore: String = "",
     val wiAfter: String = ""
@@ -793,11 +853,12 @@ object TavernPresetRuntime {
         history: List<ChatMessage>,
         regexEnabled: Boolean = true,
         random: Random = Random.Default,
-        cast: TavernCharacterContext = TavernCharacterContext()
+        cast: TavernCharacterContext = TavernCharacterContext(),
+        cardScripts: List<TavernRegexScript> = emptyList()
     ): TavernPreparedRequest {
         val charName = cast.name.ifBlank { preset.name }
         val depths = history.indices.associateWith { history.lastIndex - it }
-        val promptHistory = history.mapIndexed { index, message ->
+        val regexHistory = history.mapIndexed { index, message ->
             if (!regexEnabled) message else message.copy(
                 content = TavernRegexEngine.apply(
                     preset = preset,
@@ -805,13 +866,16 @@ object TavernPresetRuntime {
                     role = message.role,
                     depth = depths.getValue(index),
                     surface = TavernRegexSurface.Prompt,
-                    macroValues = castMacros(charName, cast)
+                    macroValues = castMacros(charName, cast),
+                    extraScripts = cardScripts
                 ).text
             )
         }
-        val lastUser = promptHistory.lastOrNull { it.role == "user" }?.content.orEmpty()
-        val lastAssistant = promptHistory.lastOrNull { it.role == "assistant" }?.content.orEmpty()
-        val macros = TavernMacroProcessor(charName, lastUser, lastAssistant, random, cast)
+        val lastUser = regexHistory.lastOrNull { it.role == "user" }?.content.orEmpty()
+        val lastAssistant = regexHistory.lastOrNull { it.role == "assistant" }?.content.orEmpty()
+        val macros = TavernMacroProcessor(charName, lastUser, lastAssistant, random, cast, baseSystemPrompt.trim())
+        // SillyTavern substitutes {{user}}/{{char}}/… inside chat messages when building the prompt.
+        val promptHistory = expandHistoryMacros(regexHistory, cast.copy(name = charName), baseSystemPrompt, random)
         val byId = preset.prompts.associateBy(TavernPrompt::identifier)
         val ordered = if (preset.promptOrder.isNotEmpty()) preset.promptOrder else preset.prompts.map {
             TavernPromptOrderEntry(it.identifier, it.enabled)
@@ -867,18 +931,44 @@ object TavernPresetRuntime {
         role: String,
         depth: Int,
         regexEnabled: Boolean,
-        cast: TavernCharacterContext = TavernCharacterContext()
-    ): TavernRegexOutput = if (!regexEnabled) TavernRegexOutput(content, 0, emptyList()) else TavernRegexEngine.apply(
-        preset = preset,
-        text = content,
-        role = role,
-        depth = depth,
-        surface = TavernRegexSurface.Display,
-        macroValues = castMacros(cast.name.ifBlank { preset.name }, cast)
-    )
+        cast: TavernCharacterContext = TavernCharacterContext(),
+        cardScripts: List<TavernRegexScript> = emptyList()
+    ): TavernRegexOutput {
+        val output = if (!regexEnabled) TavernRegexOutput(content, 0, emptyList()) else TavernRegexEngine.apply(
+            preset = preset,
+            text = content,
+            role = role,
+            depth = depth,
+            surface = TavernRegexSurface.Display,
+            macroValues = castMacros(cast.name.ifBlank { preset.name }, cast),
+            extraScripts = cardScripts
+        )
+        return output.copy(text = expandMessageMacros(output.text, cast.copy(name = cast.name.ifBlank { preset.name })))
+    }
+
+    /** Macro substitution inside one displayed message ({{user}}, {{char}}, …), independent of regex. */
+    fun expandMessageMacros(text: String, cast: TavernCharacterContext, random: Random = Random.Default): String =
+        TavernMacroProcessor(cast.name, "", "", random, cast).expand(text)
+
+    /** Macro substitution across chat history at prompt-build time, in message order. */
+    fun expandHistoryMacros(
+        history: List<ChatMessage>,
+        cast: TavernCharacterContext,
+        baseSystemPrompt: String = "",
+        random: Random = Random.Default
+    ): List<ChatMessage> {
+        if (history.isEmpty()) return history
+        val macros = TavernMacroProcessor(
+            cast.name,
+            history.lastOrNull { it.role == "user" }?.content.orEmpty(),
+            history.lastOrNull { it.role == "assistant" }?.content.orEmpty(),
+            random, cast, baseSystemPrompt.trim()
+        )
+        return history.map { it.copy(content = macros.expand(it.content)) }
+    }
 
     private fun castMacros(charName: String, cast: TavernCharacterContext): Map<String, String> = mapOf(
-        "user" to "用户",
+        "user" to cast.userName.ifBlank { "用户" },
         "char" to charName,
         "description" to cast.description,
         "personality" to cast.personality,
@@ -894,7 +984,8 @@ private class TavernMacroProcessor(
     private val lastUserMessage: String,
     private val lastAssistantMessage: String,
     private val random: Random,
-    private val cast: TavernCharacterContext = TavernCharacterContext()
+    private val cast: TavernCharacterContext = TavernCharacterContext(),
+    private val originalPrompt: String = ""
 ) {
     private val variables = linkedMapOf<String, String>()
 
@@ -937,7 +1028,7 @@ private class TavernMacroProcessor(
             return (1..count).sumOf { random.nextInt(1, sides + 1) }.toString()
         }
         return when (trimmed.lowercase()) {
-            "user" -> "用户"
+            "user" -> cast.userName.ifBlank { "用户" }
             "char" -> characterName
             "description", "chardescription" -> cast.description
             "personality", "charpersonality" -> cast.personality
@@ -945,6 +1036,7 @@ private class TavernMacroProcessor(
             "persona", "personadescription" -> cast.persona
             "lastusermessage" -> lastUserMessage
             "lastcharmessage", "lastassistantmessage" -> lastAssistantMessage
+            "original" -> originalPrompt
             "time" -> DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
             "date" -> DateFormat.getDateInstance(DateFormat.SHORT).format(Date())
             "trim" -> ""

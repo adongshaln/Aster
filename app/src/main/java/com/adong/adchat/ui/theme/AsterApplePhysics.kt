@@ -14,6 +14,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -171,39 +172,28 @@ fun Modifier.appleSpringPressable(
 /** Short, bounded entrance for a small collection; content changes do not restart it. */
 fun Modifier.appleStaggeredEntrance(
     index: Int,
-    stepDelayMillis: Long = 50L,
-    initialOffsetY: Dp = 18.dp
+    stepDelayMillis: Long = 32L,
+    initialOffsetY: Dp = 12.dp
 ): Modifier = composed {
     val motionEnabled = LocalAsterMotionEnabled.current
     var triggered by remember { mutableStateOf(!motionEnabled) }
     LaunchedEffect(motionEnabled) {
         if (!triggered && motionEnabled) {
-            delay((index.coerceAtLeast(0).toLong() * stepDelayMillis.coerceIn(0L, 60L)).coerceAtMost(200L))
+            delay((index.coerceAtLeast(0).toLong() * stepDelayMillis.coerceIn(0L, 60L)).coerceAtMost(120L))
         }
         triggered = true
     }
     val initialPx = with(LocalDensity.current) { initialOffsetY.coerceIn(0.dp, 20.dp).toPx() }
-    val alpha by animateFloatAsState(
+    val progress by animateFloatAsState(
         targetValue = if (triggered) 1f else 0f,
-        animationSpec = AsterSpring.editorial(), label = "entrance-alpha"
-    )
-    val translationY by animateFloatAsState(
-        targetValue = if (triggered) 0f else initialPx,
-        animationSpec = AsterSpring.spatial(), label = "entrance-y"
-    )
-    val scaleX by animateFloatAsState(
-        targetValue = if (triggered) 1f else 0.985f,
-        animationSpec = AsterSpring.releaseHorizontal(), label = "entrance-width"
-    )
-    val scaleY by animateFloatAsState(
-        targetValue = if (triggered) 1f else 0.96f,
-        animationSpec = AsterSpring.releaseVertical(), label = "entrance-height"
+        animationSpec = if (motionEnabled) tween(260, easing = AsterEase) else snap(),
+        label = "entrance-progress"
     )
     this.graphicsLayer {
-        this.alpha = if (motionEnabled) alpha else 1f
-        this.translationY = if (motionEnabled) translationY else 0f
-        this.scaleX = if (motionEnabled) scaleX else 1f
-        this.scaleY = if (motionEnabled) scaleY else 1f
+        this.alpha = if (motionEnabled) progress else 1f
+        this.translationY = if (motionEnabled) (1f - progress) * initialPx else 0f
+        this.scaleX = if (motionEnabled) 0.99f + 0.01f * progress else 1f
+        this.scaleY = scaleX
         transformOrigin = TransformOrigin(0.5f, 0.85f)
     }
 }
@@ -261,13 +251,15 @@ fun AsterStageDepthContainer(
         targetValue = targetCorner,
         animationSpec = AsterSpring.spatial(), label = "stage-corner"
     )
-    val clampedCorner = if (motionEnabled) corner.coerceAtLeast(0.dp) else 0.dp
     Box(
         modifier = modifier.fillMaxSize().graphicsLayer {
             scaleX = if (motionEnabled) scale else 1f
             scaleY = if (motionEnabled) scale else 1f
-            shape = RoundedCornerShape(clampedCorner)
-            clip = motionEnabled && clampedCorner > 0.dp
+            // Read animated geometry in the layer, not composition: the page underneath a drawer
+            // must not recompose for every radius tick.
+            val radius = if (motionEnabled) corner.coerceAtLeast(0.dp) else 0.dp
+            shape = RoundedCornerShape(radius)
+            clip = motionEnabled && radius > 0.dp
         }
     ) { content() }
 }

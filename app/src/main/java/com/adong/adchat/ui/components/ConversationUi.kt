@@ -842,6 +842,29 @@ fun ConversationJumpToBottom(
 }
 
 @Composable
+fun ComposerToolToggle(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.clickable { onCheckedChange(!checked) }.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(if (checked) AccentSoft else SurfaceInset), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(19.dp), tint = if (checked) Accent else MutedInk)
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium, color = Ink, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MutedInk, lineHeight = 16.sp)
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
+}
+
+@Composable
 fun ConversationCopyAction(content: String) {
     val context = LocalContext.current
     var copied by remember(content) { mutableStateOf(false) }

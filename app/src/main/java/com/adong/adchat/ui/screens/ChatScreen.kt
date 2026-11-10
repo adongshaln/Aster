@@ -301,6 +301,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     }
     val composerHeight = with(density) { composerHeightPx.toDp() }.coerceAtLeast(72.dp)
     val composerClearance = composerHeight + 18.dp
+    val htmlPreviewScrolling = remember(listState) { derivedStateOf { listState.isScrollInProgress } }
     LaunchedEffect(vm.activeConversationId) {
         autoFollow = true
         if (vm.messages.isNotEmpty()) listState.scrollToItem(vm.messages.size)
@@ -423,7 +424,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             key = { it.id },
                             contentType = { it.role }
                         ) { message ->
-                        CompositionLocalProvider(LocalImageFrames provides imageFrames) {
+                        CompositionLocalProvider(
+                            LocalImageFrames provides imageFrames,
+                            com.adong.adchat.ui.components.LocalHtmlPreviewDeferral provides htmlPreviewScrolling
+                        ) {
                         ChatMessageItem(
                             message = message,
                             canRegenerate = message.id == regeneratableMessageId,
@@ -1313,7 +1317,7 @@ private fun formatFileSize(bytes: Int): String = when {
 }
 
 @Composable
-private fun TokenUsagePanel(
+internal fun TokenUsagePanel(
     usage: com.adong.adchat.data.TokenUsage,
     model: String = "",
     billingCurrency: String = com.adong.adchat.data.BILLING_CURRENCY_CNY,
@@ -1437,7 +1441,7 @@ private fun TokenUsagePanel(
 }
 
 @Composable
-private fun RequestTransparencyPanel(message: ChatMessage) {
+internal fun RequestTransparencyPanel(message: ChatMessage) {
     val (icon, tint, status) = when {
         message.isError -> Triple(Icons.Rounded.ErrorOutline, Danger, "请求未成功")
         message.isStopped -> Triple(Icons.Rounded.StopCircle, MutedInk, "已停止 · 已保留已生成内容")
@@ -2552,7 +2556,7 @@ private fun AsterWritingCursorLine(error: Boolean) {
 }
 
 @Composable
-private fun ModelWorkingFoot(caption: String) {
+internal fun ModelWorkingFoot(caption: String) {
     val density = LocalDensity.current
     val transition = rememberInfiniteTransition(label = "model-working")
     val beat by transition.animateFloat(
@@ -3031,29 +3035,6 @@ private fun ChatToolsSheet(
                 fileCreationEnabled, onFileCreationToggle)
             if (apiMode != "responses") Text("当前 Chat 服务的联网搜索不能与创建文件或技能同时使用。",
                 style = MaterialTheme.typography.labelSmall, color = MutedInk)
-        }
-    }
-}
-
-@Composable
-private fun ComposerToolToggle(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.clickable { onCheckedChange(!checked) }.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(if (checked) AccentSoft else SurfaceInset), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(19.dp), tint = if (checked) Accent else MutedInk)
-            }
-            Spacer(Modifier.width(11.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.bodyMedium, color = Ink, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MutedInk, lineHeight = 16.sp)
-            }
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
     }
 }

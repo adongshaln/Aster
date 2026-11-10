@@ -673,8 +673,14 @@ class ApiRepository internal constructor(
                 history = stableHistory,
                 preset = injectionPreset
             )
-            injectedPairs.forEach { (role, text) ->
-                messages.put(JSONObject().put("role", role).put("content", text))
+            injectedPairs.forEach { injected ->
+                val source = injected.source
+                val content: Any = if (source != null && source.attachments.isNotEmpty()) {
+                    chatCompletionContent(source.copy(content = injected.text), explicitCacheBreakpoint = false)
+                } else {
+                    injected.text
+                }
+                messages.put(JSONObject().put("role", injected.role).put("content", content))
             }
         } else {
             if (effectiveSystemPrompt.isNotBlank()) {

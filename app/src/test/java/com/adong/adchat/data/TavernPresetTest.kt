@@ -177,6 +177,22 @@ class TavernPresetTest {
     }
 
     @Test
+    fun userAndCharMacrosUseCastNamesInPromptsAndHistory() {
+        val root = JSONObject(samplePreset())
+        root.getJSONArray("prompts").put(prompt("who", "who", "system", "{{user}} meets {{char}}", enabled = true))
+        root.getJSONArray("prompt_order").getJSONObject(0).getJSONArray("order")
+            .put(JSONObject().put("identifier", "who").put("enabled", true))
+        val prepared = TavernPresetRuntime.prepare(
+            TavernPresetParser.parse(root.toString(), "test", "Sample.json", false),
+            "ASTER BASE",
+            listOf(ChatMessage(role = "user", content = "{{user}} waves at {{char}}")),
+            cast = TavernCharacterContext(name = "朝凪", userName = "阿东")
+        )
+        assertTrue(prepared.history.any { it.content == "阿东 meets 朝凪" })
+        assertTrue(prepared.history.any { it.role == "user" && it.content == "阿东 waves at 朝凪" })
+    }
+
+    @Test
     fun promptAndRegexChoicesUseFileDefaultsPersistAndReset() {
         val context = RuntimeEnvironment.getApplication()
         val store = TavernPresetStore(context)

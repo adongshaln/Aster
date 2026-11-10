@@ -5,8 +5,8 @@ import android.content.ClipboardManager
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -15,9 +15,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -26,6 +26,9 @@ import com.adong.adchat.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Used by fenced HTML in both workspaces and by create_file attachments. */
 @Composable
@@ -35,7 +38,16 @@ internal fun HtmlArtifactCard(
     ready: Boolean = true,
     allowScripts: Boolean = true,
     actions: Boolean = true,
-    panelActions: ((String) -> Unit)? = null
+    panelActions: ((String) -> Unit)? = null,
+    adaptiveHeight: Boolean = false,
+    helper: HelperHost? = null,
+    messageId: Int? = null,
+    /** Bump to rebuild the document (e.g. the floor's variables changed). */
+    revision: Int = 0,
+    /** Stable key for remembering the measured height across recycling (e.g. "messageId:block"). */
+    heightKey: String? = null,
+    /** Card surfaces may load remote https images/media; other previews stay offline. */
+    remoteMedia: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -54,10 +66,30 @@ internal fun HtmlArtifactCard(
         }
     }
     val canPreview = ready && code.length <= HtmlPreviewDocument.MAX_PREVIEW_CHARS
+    var contentHeightDp by remember(heightKey ?: code) {
+        mutableStateOf(heightKey?.let(HtmlHeightCache::get) ?: if (adaptiveHeight) HtmlPreviewDocument.initialHeightDp(code) else 340)
+    }
     Column(Modifier.fillMaxWidth()) {
         if (canPreview && !fullscreen) {
-            HtmlPreview(code, Modifier.fillMaxWidth().height(340.dp), allowScripts, panelActions)
-        } else if (!fullscreen) {
+            HtmlPreview(
+                code,
+                Modifier.fillMaxWidth().height((if (adaptiveHeight) contentHeightDp else 340).dp),
+                allowScripts,
+                panelActions,
+                onHeight = if (adaptiveHeight) { { h ->
+                    contentHeightDp = h.coerceIn(48, 20000)
+                    heightKey?.let { HtmlHeightCache.put(it, contentHeightDp) }
+                } } else null,
+                helper = helper,
+                messageId = messageId,
+                revision = revision,
+                remoteMedia = remoteMedia
+            )
+        } else if (fullscreen) {
+            // Retain the card's footprint while its engine is owned by the dialog. Keeping a second
+            // scripted WebView alive here would run the same helper actions twice.
+            Spacer(Modifier.fillMaxWidth().height((if (adaptiveHeight) contentHeightDp else 340).dp))
+        } else {
             // 只在真的看不到预览时才占位：能预览时那一行本来就只是重复信息。
             Box(Modifier.fillMaxWidth().height(240.dp), contentAlignment = Alignment.Center) {
                 Text(
@@ -88,89 +120,140 @@ internal fun HtmlArtifactCard(
             )
         }
     }
-    if (fullscreen && canPreview) Dialog(onDismissRequest = { fullscreen = false },
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    if (fullscreen && canPreview) {
         val motionEnabled = LocalAsterMotionEnabled.current
-        var entered by remember { mutableStateOf(!motionEnabled) }
-        LaunchedEffect(Unit) { entered = true }
-        val scaleX by animateFloatAsState(
-            targetValue = if (entered) 1f else 0.92f,
-            animationSpec = if (motionEnabled) AsterSpring.releaseHorizontal() else snap(),
-            label = "html-fullscreen-scale-x"
-        )
-        val scaleY by animateFloatAsState(
-            targetValue = if (entered) 1f else 0.85f,
-            animationSpec = if (motionEnabled) AsterSpring.releaseVertical() else snap(),
-            label = "html-fullscreen-scale-y"
-        )
-        val alpha by animateFloatAsState(
-            targetValue = if (entered) 1f else 0f,
-            animationSpec = if (motionEnabled) AsterSpring.editorial() else snap(),
-            label = "html-fullscreen-alpha"
-        )
-        Surface(
-            color = Canvas,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    this.alpha = if (motionEnabled) alpha.coerceIn(0f, 1f) else 1f
-                    this.scaleX = if (motionEnabled) scaleX else 1f
-                    this.scaleY = if (motionEnabled) scaleY else 1f
-                    transformOrigin = TransformOrigin.Center
+        var closing by remember { mutableStateOf(false) }
+        val progress = remember { Animatable(if (motionEnabled) 0f else 1f) }
+        val travelPx = with(LocalDensity.current) { 18.dp.toPx() }
+        LaunchedEffect(closing, motionEnabled) {
+            val target = if (closing) 0f else 1f
+            if (motionEnabled) {
+                if (!closing) withFrameNanos { }
+                progress.animateTo(target, tween(if (closing) 140 else 240, easing = AsterEase))
+            } else progress.snapTo(target)
+            if (closing) fullscreen = false
+        }
+        Dialog(onDismissRequest = { closing = true },
+            properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+            Surface(
+                color = Canvas,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        alpha = progress.value
+                        translationY = (1f - progress.value) * travelPx
+                    }
+            ) {
+                Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AsterIconButton(Icons.Rounded.Close, "关闭 HTML 预览", { closing = true })
+                        Text(
+                            filename,
+                            Modifier.weight(1f).padding(start = 6.dp),
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        AsterPillButton(
+                            text = "收起",
+                            compact = true,
+                            onClick = { closing = true }
+                        )
+                    }
+                    HorizontalDivider(color = Hairline)
+                    HtmlPreview(code, Modifier.fillMaxWidth().weight(1f), allowScripts, panelActions, helper = helper, messageId = messageId, revision = revision, remoteMedia = remoteMedia)
                 }
-        ) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AsterIconButton(Icons.Rounded.Close, "关闭 HTML 预览", { fullscreen = false })
-                    Text(
-                        filename,
-                        Modifier.weight(1f).padding(start = 6.dp),
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    AsterPillButton(
-                        text = "收起",
-                        compact = true,
-                        onClick = { fullscreen = false }
-                    )
-                }
-                HorizontalDivider(color = Hairline)
-                HtmlPreview(code, Modifier.fillMaxWidth().weight(1f), allowScripts, panelActions)
             }
         }
     }
 }
 
-private data class HtmlPreviewInput(val source: String, val scripts: Boolean, val panelBridge: Boolean)
+private data class HtmlPreviewInput(val source: String, val scripts: Boolean, val panelBridge: Boolean, val reportHeight: Boolean, val helper: Boolean, val messageId: Int?, val revision: Int, val remoteMedia: Boolean)
+
+/**
+ * Provided by scrolling conversations: while true, previews that are not yet mounted wait instead
+ * of creating a WebView. Other surfaces only wait for a free frame in the mount queue.
+ */
+internal val LocalHtmlPreviewDeferral = androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.runtime.State<Boolean>?> { null }
+
+/** Last measured card heights (dp), so recycled list items start at their real size. */
+internal object HtmlHeightCache {
+    private val values = object : LinkedHashMap<String, Int>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?) = size > 512
+    }
+    @Synchronized fun get(key: String): Int? = values[key]
+    @Synchronized fun put(key: String, value: Int) { values[key] = value }
+}
 private data class PreparedHtmlPreview(val input: HtmlPreviewInput, val html: String)
+
+// Never initialize several Chromium views on the same frame after a fling. Waiting requests are
+// cancelled with their list item, and a new drag postpones any work that has not mounted yet.
+private val htmlMountMutex = Mutex()
 
 @Composable
 private fun HtmlPreview(
     source: String,
     modifier: Modifier,
     allowScripts: Boolean,
-    panelActions: ((String) -> Unit)? = null
+    panelActions: ((String) -> Unit)? = null,
+    onHeight: ((Int) -> Unit)? = null,
+    helper: HelperHost? = null,
+    messageId: Int? = null,
+    /** Bump to rebuild the document (e.g. the floor's variables changed). */
+    revision: Int = 0,
+    remoteMedia: Boolean = false
 ) {
+    val context = LocalContext.current
+    val viewportPx = with(androidx.compose.ui.platform.LocalDensity.current) {
+        androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx().toInt()
+    }
     val panelBridge = panelActions != null
-    val input = remember(source, allowScripts, panelBridge) { HtmlPreviewInput(source, allowScripts, panelBridge) }
+    val reportHeight = onHeight != null
+    val input = remember(source, allowScripts, panelBridge, reportHeight, helper != null, messageId, revision, remoteMedia) {
+        HtmlPreviewInput(source, allowScripts, panelBridge, reportHeight, helper != null, messageId, revision, remoteMedia)
+    }
     val document by produceState<PreparedHtmlPreview?>(null, input) {
         val html = withContext(Dispatchers.Default) {
-            HtmlPreviewDocument.wrap(input.source, input.scripts, input.panelBridge)
+            HtmlPreviewDocument.wrap(
+                input.source, input.scripts,
+                // With the helper runtime scripts perform their own actions; text scraping would
+                // double-fire (phantom user messages) on every scripted button.
+                input.panelBridge && !input.helper,
+                input.reportHeight,
+                helperBundle = if (input.helper) TavernHelperAssets.bundle(context) else null,
+                messageId = input.messageId,
+                viewportHeightPx = viewportPx,
+                remoteMedia = input.remoteMedia,
+                revision = input.revision
+            )
         }
         value = PreparedHtmlPreview(input, html)
     }
     val prepared = document
-    if (prepared == null) Box(modifier, contentAlignment = Alignment.Center) {
-        AsterLoadingIndicator(size = 24.dp)
-    } else OfflineArtifactPreview(prepared.html, modifier, allowScripts, panelActions = panelActions?.let { action ->
+    // Inside a scrolling list, creating a WebView per card mid-fling is what stutters; show the sized
+    // placeholder until the list settles, then mount once (and keep it while the item stays composed).
+    val scrolling = LocalHtmlPreviewDeferral.current
+    var mounted by remember { mutableStateOf(false) }
+    if (!mounted && prepared != null) LaunchedEffect(scrolling) {
+        while (!mounted) {
+            snapshotFlow { scrolling?.value ?: false }.first { !it }
+            htmlMountMutex.withLock {
+                withFrameNanos { }
+                if (scrolling?.value != true) mounted = true
+            }
+        }
+    }
+    if (prepared == null || !mounted) HtmlPreviewPlaceholder(modifier, showProgress = scrolling?.value != true)
+    else OfflineArtifactPreview(prepared.html, modifier, allowScripts, baseUrl = "https://aster.local/", panelActions = panelActions?.let { action ->
         { text ->
             // produceState retains the old document while preparing the new source.
             // Its still-visible buttons must not invoke the new document's callback.
             if (prepared.input == input) action(text)
         }
-    })
+    }, onHeight = onHeight?.let { height ->
+        { h -> if (prepared.input == input) height(h) }
+    }, helper = helper, remoteMedia = remoteMedia)
 }

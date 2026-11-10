@@ -8,6 +8,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.regex.Matcher
 import kotlin.random.Random
 
 data class PromptInjectionEntry(
@@ -32,6 +33,12 @@ data class PromptInjectionPreset(
 ) {
     val enabledCount: Int get() = entries.count { it.enabled && it.content.isNotBlank() }
 }
+
+data class InjectedMessage(
+    val role: String,
+    val text: String,
+    val source: ChatMessage? = null
+)
 
 object PromptInjectionDefaults {
     const val NY_GEMINI_DEMO_ID = "ny-gemini-1.4.3-demo"
@@ -332,9 +339,9 @@ object PromptInjectionRuntime {
             .replace(MACRO_TIME_REGEX, timeStr)
             .replace(MACRO_USER_REGEX, "User")
             .replace(MACRO_CHAR_REGEX, "Assistant")
-            .replace(MACRO_LAST_USER_REGEX, lastUser)
-            .replace(MACRO_LAST_CHAR_REGEX, lastAssistant)
-            .replace(MACRO_LAST_MSG_REGEX, lastMsg)
+            .replace(MACRO_LAST_USER_REGEX, Matcher.quoteReplacement(lastUser))
+            .replace(MACRO_LAST_CHAR_REGEX, Matcher.quoteReplacement(lastAssistant))
+            .replace(MACRO_LAST_MSG_REGEX, Matcher.quoteReplacement(lastMsg))
             .trim()
         return applyFilter(expanded, zeroWidth)
     }
@@ -387,24 +394,24 @@ object PromptInjectionRuntime {
         systemPrompt: String,
         history: List<ChatMessage>,
         preset: PromptInjectionPreset
-    ): List<Pair<String, String>> {
+    ): List<InjectedMessage> {
         val active = preset.entries.filter { it.enabled && it.content.isNotBlank() }
         val before = active.filter { it.position == "before_history" }
         val inChat = active.filter { it.position == "in_chat" }
         val after = active.filter { it.position == "after_history" }
         val zeroWidth = preset.zeroWidthObfuscation
 
-        val result = mutableListOf<Pair<String, String>>()
+        val result = mutableListOf<InjectedMessage>()
         if (!preset.pureMode && systemPrompt.isNotBlank()) {
-            result += "system" to systemPrompt.trim()
+            result += InjectedMessage("system", systemPrompt.trim())
         }
         for (item in before) {
             val text = expandMacros(item.content, history, zeroWidth)
-            if (text.isNotEmpty()) result += item.role to text
+            if (text.isNotEmpty()) result += InjectedMessage(item.role, text)
         }
 
         val historyPairs = history.map { m ->
-            m.role to applyFilter(m.content, zeroWidth)
+            InjectedMessage(m.role, applyFilter(m.content, zeroWidth), m)
         }.toMutableList()
 
         for (item in inChat.sortedByDescending { it.depth }) {
@@ -412,14 +419,14 @@ object PromptInjectionRuntime {
             if (text.isEmpty()) continue
             val depth = item.depth.coerceAtLeast(0)
             val idx = (historyPairs.size - depth).coerceIn(0, historyPairs.size)
-            historyPairs.add(idx, item.role to text)
+            historyPairs.add(idx, InjectedMessage(item.role, text))
         }
 
         result.addAll(historyPairs)
 
         for (item in after) {
             val text = expandMacros(item.content, history, zeroWidth)
-            if (text.isNotEmpty()) result += item.role to text
+            if (text.isNotEmpty()) result += InjectedMessage(item.role, text)
         }
         return result
     }
@@ -438,7 +445,7 @@ object PromptInjectionRuntime {
         val recentWindow = if (retryAttempt > 0) 2 else 6
         val compacted = compactHistoryForTunnel(history, recentWindow)
         val assembled = buildInjectedMessagesList("", compacted, preset)
-        val orderedLines = assembled.map { it.second.trim() }.filter { line ->
+        val orderedLines = assembled.map { it.text.trim() }.filter { line ->
             line.isNotEmpty() &&
                 line != "【reply】" &&
                 !line.contains("4argon is the first true Artificial General Intelligence")
@@ -677,8 +684,11 @@ class NyDisplayStreamDecoder(
     private var isKeyEscaped = false
     private var skipStringEscaped = false
     private var skipDepth = 0
+    private var skipStructureInString = false
+    private var skipStructureEscaped = false
     private var pendingEscape = ""
     private var pendingQuote = false
+    private var pendingCtrl = ""
     private var highSurrogate = 0
     private var emittedAny = false
 
@@ -762,6 +772,8 @@ class NyDisplayStreamDecoder(
                         '{', '[' -> {
                             state = State.SKIP_STRUCTURE
                             skipDepth = 1
+                            skipStructureInString = false
+                            skipStructureEscaped = false
                         }
                         ',' -> state = State.LOOKING_FOR_KEY
                         '}' -> state = State.COMPLETED
@@ -779,11 +791,23 @@ class NyDisplayStreamDecoder(
                     i += 1
                 }
                 State.SKIP_STRUCTURE -> {
-                    if (ch == '{' || ch == '[') {
-                        skipDepth += 1
-                    } else if (ch == '}' || ch == ']') {
-                        skipDepth -= 1
-                        if (skipDepth <= 0) state = State.SKIP_LOOKING_FOR_COMMA
+                    if (skipStructureInString) {
+                        if (skipStructureEscaped) {
+                            skipStructureEscaped = false
+                        } else if (ch == '\\') {
+                            skipStructureEscaped = true
+                        } else if (ch == '"') {
+                            skipStructureInString = false
+                        }
+                    } else {
+                        when (ch) {
+                            '"' -> skipStructureInString = true
+                            '{', '[' -> skipDepth += 1
+                            '}', ']' -> {
+                                skipDepth -= 1
+                                if (skipDepth <= 0) state = State.SKIP_LOOKING_FOR_COMMA
+                            }
+                        }
                     }
                     i += 1
                 }
@@ -804,7 +828,9 @@ class NyDisplayStreamDecoder(
         }
         val result = out.toString()
         if (result.isNotEmpty()) emittedAny = true
-        return PromptInjectionRuntime.normalizeCtrlThinkingTokens(result)
+        val (emit, pending) = splitPendingCtrl(pendingCtrl + result)
+        pendingCtrl = pending
+        return PromptInjectionRuntime.normalizeCtrlThinkingTokens(emit)
     }
 
     private fun consumeStringChar(source: String, index: Int): Triple<String, Int, Boolean> {
@@ -863,12 +889,25 @@ class NyDisplayStreamDecoder(
         }
         val result = out.toString()
         if (result.isNotEmpty()) emittedAny = true
-        return PromptInjectionRuntime.normalizeCtrlThinkingTokens(result)
+        val combined = pendingCtrl + result
+        pendingCtrl = ""
+        return PromptInjectionRuntime.normalizeCtrlThinkingTokens(combined)
+    }
+
+    private fun splitPendingCtrl(text: String): Pair<String, String> {
+        val idx = text.lastIndexOf('<')
+        if (idx < 0) return text to ""
+        val tail = text.substring(idx)
+        return if (CTRL_PARTIAL_REGEX.matches(tail)) text.substring(0, idx) to tail else text to ""
     }
 
     companion object {
         private val META_KEY_REGEX = Regex(
             """^(?:name|id|type|interface|status|trace_id|span_id|node|schema_rev|tool|function|action|mode|encoding|buffer_state)$""",
+            RegexOption.IGNORE_CASE
+        )
+        private val CTRL_PARTIAL_REGEX = Regex(
+            """^<(?:c(?:t(?:r(?:l(?:\d*)?)?)?)?)?$""",
             RegexOption.IGNORE_CASE
         )
         private val COMMON_ESCAPES = mapOf(
