@@ -8,6 +8,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.adong.adchat.data.Conversation
 import com.adong.adchat.data.ChatMessage
 import com.adong.adchat.data.THEME_MODE_ASTER
 import com.adong.adchat.data.THEME_MODE_DARK
@@ -86,15 +87,23 @@ class DesignReviewShots {
             vm.skipUserNamePrompt()
             vm.newConversation()
             vm.selectChatModel(vm.chatProfile.id, "gpt-5.6")
+            vm.dismissNotice()
         }
         stop("01-chat-home") {}
         stop("02-composer-open") {
+            // A non-empty focused draft keeps Clawd's compose clip alive. Do not ask Espresso
+            // to fast-forward an intentionally continuous animation until it becomes idle.
+            rule.mainClock.autoAdvance = false
             rule.onNodeWithTag("chat-input").performClick()
-            rule.waitForIdle(); Thread.sleep(900)
+            rule.onNodeWithTag("chat-input").performTextInput("我有一个想法，想和你一起展开。")
+            rule.mainClock.advanceTimeBy(900)
+            Thread.sleep(900)
         }
         back()
+        rule.runOnUiThread { vm.updateChatInput("") }
+        rule.mainClock.advanceTimeBy(700)
+        rule.mainClock.autoAdvance = true
         rule.runOnIdle {
-            vm.updateChatInput("")
             vm.messages.addAll(listOf(
                 ChatMessage(role = "user", content = "怎样开始一个小而美的个人项目？我总是想得太大，最后什么也没做完。"),
                 ChatMessage(
@@ -106,12 +115,20 @@ class DesignReviewShots {
         }
         stop("03-chat-reading-end") {}
         stop("04-chat-reading-top") {
-            rule.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+            rule.onNodeWithTag("chat-messages").performScrollToIndex(0)
         }
         stop("05-model-sheet") { rule.onNodeWithTag("conversation-model-selector").performClick() }
         back()
         stop("06-chat-tools") { rule.onNodeWithContentDescription("输入选项").performClick() }
         back()
+        rule.runOnIdle {
+            vm.conversations.removeAll { it.id.startsWith("design-fixture-") }
+            listOf("写给未来的一封信", "把想法整理成一个小项目", "周末的阅读清单").forEachIndexed { index, title ->
+                vm.conversations.add(Conversation(id = "design-fixture-$index", title = title,
+                    messages = listOf(ChatMessage(role = "user", content = "从日常的一点灵感开始。")),
+                    profileId = vm.chatProfile.id, model = "gpt-5.6", pinned = index == 0))
+            }
+        }
         stop("07-drawer") { rule.onNodeWithContentDescription("打开侧栏").performClick() }
         stop("08-rp-empty") { rule.onNodeWithText("剧情").performClick() }
         rule.runOnIdle {
@@ -126,7 +143,7 @@ class DesignReviewShots {
                 vm.chatProfile.id, "gpt-5.6"
             )
         }
-        stop("09-rp-reading") { Thread.sleep(1500) }
+        stop("09-rp-reading") { settlePreview() }
         stop("10-rp-tools") { rule.onNodeWithContentDescription("输入选项").performClick() }
         back()
         stop("11-rp-drawer") { rule.onNodeWithContentDescription("打开侧栏").performClick() }
@@ -142,7 +159,7 @@ class DesignReviewShots {
         rule.runOnIdle { vm.setThemeMode(THEME_MODE_DARK) }
         stop("15-dark-settings") { Thread.sleep(600) }
         stop("16-dark-drawer") { rule.onNodeWithContentDescription("打开侧栏").performClick() }
-        stop("17-dark-rp") { rule.onNodeWithText("剧情").performClick(); Thread.sleep(1500) }
+        stop("17-dark-rp") { rule.onNodeWithText("剧情").performClick(); settlePreview() }
         back()
         stop("18-dark-chat") { Thread.sleep(400) }
         stop("19-dark-model-sheet") { rule.onNodeWithTag("conversation-model-selector").performClick() }
@@ -156,6 +173,12 @@ class DesignReviewShots {
             InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
             rule.waitForIdle(); Thread.sleep(350)
         }
+    }
+
+    private fun settlePreview() {
+        // HTML preparation and Chromium run on real threads, while the Compose mount queue and
+        // reveal use the test frame clock. Pump both instead of only sleeping on the test thread.
+        repeat(6) { rule.mainClock.advanceTimeBy(160); Thread.sleep(200) }
     }
 
     private fun stop(name: String, reach: () -> Unit) {

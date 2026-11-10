@@ -54,6 +54,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -450,6 +451,25 @@ private fun Modifier.drawerEdgeSwipe(onOpen: () -> Unit): Modifier = composed {
     }
 }
 
+/** Each selection animates in its own scope; history search and grouping stay out of the frames. */
+@Composable
+private fun DrawerWorkspaceEntry(page: AppPage, selected: Boolean, onNavigate: (AppPage) -> Unit, modifier: Modifier) {
+    val interaction = remember(page) { MutableInteractionSource() }
+    val fill by animateColorAsState(if (selected) Ink else Surface,
+        AsterSpring.editorial(), label = "workspace-fill")
+    Surface(onClick = rememberAsterClick({ onNavigate(page) }), interactionSource = interaction,
+        color = fill, contentColor = contrastingContent(fill), shape = AsterShape.control,
+        modifier = modifier.semantics { this.selected = selected }
+            .appleSpringPressable(pressedScale = 0.98f, enableHaptics = false, interactionSource = interaction)) {
+        Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(page.icon, null, Modifier.size(18.dp))
+            Text(page.label, style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
 @Composable
 internal fun AppDrawer(
     vm: MainViewModel,
@@ -504,18 +524,20 @@ internal fun AppDrawer(
     ModalDrawerSheet(
         drawerContainerColor = Canvas,
         drawerContentColor = Ink,
-        drawerShape = RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp),
+        drawerShape = RoundedCornerShape(topEnd = 32.dp, bottomEnd = 32.dp),
         windowInsets = WindowInsets(0, 0, 0, 0),
         modifier = Modifier.fillMaxWidth(.90f).widthIn(max = 360.dp).fillMaxHeight()
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                AsterMark(Modifier.size(32.dp))
-                Spacer(Modifier.width(4.dp))
-                AsterWordmark(size = 24)
+                AsterMark(Modifier.size(26.dp))
+                Spacer(Modifier.width(8.dp))
+                AsterWordmark(size = 26)
                 Spacer(Modifier.weight(1f))
-                AsterIconButton(Icons.Rounded.EditNote, history.newLabel, history.onNew ?: onNewChat, enabled = !history.busy())
+                AsterPillButton("新建", history.onNew ?: onNewChat, compact = true,
+                    icon = Icons.Rounded.Add, enabled = !history.busy(),
+                    modifier = Modifier.semantics { contentDescription = history.newLabel })
                 AsterIconButton(Icons.Rounded.Close, "关闭侧栏", onClose)
             }
             OutlinedTextField(
@@ -540,44 +562,12 @@ internal fun AppDrawer(
                 enter = if (motionEnabled) fadeIn(tween(140)) + expandVertically(AsterSpring.spatial()) else EnterTransition.None,
                 exit = if (motionEnabled) fadeOut(tween(100)) + shrinkVertically(AsterSpring.snappy()) else ExitTransition.None
             ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    listOf(AppPage.Chat, AppPage.Rp, AppPage.Draw, AppPage.Media).forEach { item ->
-                        val selected = currentPage == item
-                        val interactionSource = remember(item) { MutableInteractionSource() }
-                        val selectionBg by animateColorAsState(
-                            if (selected) AccentSoft else Color.Transparent,
-                            AsterSpring.editorial(), label = "nav-bg"
-                        )
-                        val selectionInk by animateColorAsState(
-                            if (selected) OnAccentSoft else MutedInk,
-                            AsterSpring.editorial(), label = "nav-ink"
-                        )
-                        Surface(
-                            onClick = { onNavigate(item) },
-                            modifier = Modifier.weight(1f).semantics { this.selected = selected },
-                            interactionSource = interactionSource,
-                            color = selectionBg,
-                            contentColor = selectionInk,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Column(
-                                Modifier
-                                    .heightIn(min = 64.dp)
-                                    .appleSpringPressable(pressedScale = 0.96f, interactionSource = interactionSource)
-                                    .padding(horizontal = 8.dp, vertical = 10.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(5.dp, Alignment.CenterVertically)
-                            ) {
-                                Icon(item.icon, null, Modifier.size(20.dp))
-                                Text(
-                                    item.label,
-                                    style = MaterialTheme.typography.labelLarge,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(AppPage.Chat, AppPage.Rp, AppPage.Draw, AppPage.Media).chunked(2).forEach { pages ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            pages.forEach { item ->
+                                DrawerWorkspaceEntry(item, currentPage == item, onNavigate, Modifier.weight(1f))
                             }
                         }
                     }
@@ -868,14 +858,14 @@ private fun ConversationRow(
     }
     Surface(onClick = onClick, color = fill, interactionSource = interactionSource,
         shape = RoundedCornerShape(14.dp),
-        border = if (selected) BorderStroke(1.dp, Hairline) else null,
+        border = null,
         modifier = Modifier.fillMaxWidth().semantics { this.selected = selected }) {
         Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
             .appleSpringPressable(pressedScale = 0.975f, interactionSource = interactionSource)
             .padding(start = 10.dp, end = 2.dp, top = 9.dp, bottom = 9.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(3.dp).height(26.dp).clip(RoundedCornerShape(2.dp))
-                .background(if (selected) Accent else Color.Transparent))
+                .background(if (selected) AccentInk else Color.Transparent))
             Column(Modifier.weight(1f).padding(start = 10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (conversation.pinned) Icon(Icons.Rounded.PushPin, "已置顶", Modifier.size(14.dp), tint = Accent)

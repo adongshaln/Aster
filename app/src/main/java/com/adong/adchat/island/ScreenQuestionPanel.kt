@@ -57,7 +57,7 @@ internal class ScreenQuestionPanel(
     private var renderedAnswerBody = ""
     private var titleTypeface: Typeface = Typeface.SERIF
 
-    private val title = label("问问这里", 17f)
+    private val title = label("问问这里", 19f)
     private val modeBadge = label("极速模式", 11f).apply {
         typeface = IslandTypefaces.regular
         gravity = Gravity.CENTER
@@ -148,14 +148,14 @@ internal class ScreenQuestionPanel(
     private val send = pillButton("发送", primary = true) { submit() }
     private val input = EditText(context).apply {
         hint = "想了解这里的什么？可点上方快捷指令或直接提问…"
-        textSize = 14f
+        textSize = 15f
         typeface = IslandTypefaces.regular
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         minLines = 1
         maxLines = 3
         filters = arrayOf(InputFilter.LengthFilter(2_000))
-        setPadding(dp(14), dp(10), dp(14), dp(10))
+        setPadding(dp(16), dp(12), dp(16), dp(12))
         setOnFocusChangeListener { _, focused -> if (focused) onInputFocus() }
         setOnEditorActionListener { _, action, _ ->
             if (action == EditorInfo.IME_ACTION_SEND) {
@@ -178,7 +178,7 @@ internal class ScreenQuestionPanel(
     init {
         orientation = VERTICAL
         layoutTransition = smoothLayoutTransition()
-        setPadding(dp(18), dp(46), dp(18), dp(16))
+        setPadding(dp(18), dp(46), dp(18), dp(10))
 
         val header = LinearLayout(context).apply { gravity = Gravity.CENTER_VERTICAL }
         title.typeface = Typeface.SERIF
@@ -192,8 +192,8 @@ internal class ScreenQuestionPanel(
             })
         }
         header.addView(titleWrap, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(collapse, LayoutParams(LayoutParams.WRAP_CONTENT, dp(34)))
-        header.addView(close, LayoutParams(LayoutParams.WRAP_CONTENT, dp(34)).apply { marginStart = dp(8) })
+        header.addView(collapse, LayoutParams(LayoutParams.WRAP_CONTENT, dp(48)))
+        header.addView(close, LayoutParams(LayoutParams.WRAP_CONTENT, dp(48)).apply { marginStart = dp(8) })
         addView(header, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
 
         val previewTexts = LinearLayout(context).apply {
@@ -245,7 +245,7 @@ internal class ScreenQuestionPanel(
 
         val composer = LinearLayout(context).apply { gravity = Gravity.BOTTOM }
         composer.addView(input, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        composer.addView(send, LayoutParams(dp(64), dp(42)).apply { marginStart = dp(8) })
+        composer.addView(send, LayoutParams(dp(64), dp(48)).apply { marginStart = dp(8) })
         addView(composer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(10)
         })
@@ -279,7 +279,7 @@ internal class ScreenQuestionPanel(
         setPadding(padH, 0, padH, 0)
         setOnTouchListener { view, event ->
             val target = when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> 0.94f
+                MotionEvent.ACTION_DOWN -> 0.97f
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> 1f
                 else -> return@setOnTouchListener false
             }
@@ -365,8 +365,8 @@ internal class ScreenQuestionPanel(
         input.setHintTextColor(next.muted)
         input.background = pillDrawable(next.well, next.edge, radiusDp = 21)
         scroll.background = pillDrawable(next.well, next.edge, radiusDp = 18)
-        send.setTextColor(next.onClay)
-        send.background = pillDrawable(next.clay, strokeColor = 0, radiusDp = 21)
+        send.setTextColor(next.paper)
+        send.background = pillDrawable(next.ink, strokeColor = 0, radiusDp = 24)
         renderedHistory?.let { rebuildHistoryViews(it) }
     }
 
@@ -380,7 +380,7 @@ internal class ScreenQuestionPanel(
         isCompact = compact
         previewRow.visibility = if (compact && hasConversation) GONE else VISIBLE
         quickChipsScroll.visibility = if (hasConversation || compact) GONE else VISIBLE
-        setPadding(dp(18), dp(if (compact) 34 else 46), dp(18), dp(if (compact) 12 else 16))
+        setPadding(dp(18), dp(if (compact) 34 else 46), dp(18), dp(if (compact) 12 else 10))
     }
 
     private fun rebuildHistoryViews(messages: List<com.adong.adchat.data.ChatMessage>) {

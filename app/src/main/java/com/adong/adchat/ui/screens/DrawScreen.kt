@@ -323,9 +323,9 @@ private fun DrawGenerateBar(vm: MainViewModel, onGenerate: () -> Unit) {
 @Composable
 private fun DrawHeader(profileName: String, model: String, onSwitch: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Text("把灵感，变成画面。", style = MaterialTheme.typography.headlineMedium)
+        Text("你的画布", style = MaterialTheme.typography.displaySmall)
         Spacer(Modifier.height(6.dp))
-        Text("描绘想象，也为故事赋予新的语言。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Text("从一句描述，到一幅画面。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(22.dp))
         AsterModelRow("绘图模型 · $profileName", model, onSwitch, icon = Icons.Rounded.Palette)
     }
@@ -396,21 +396,20 @@ private fun PromptStudio(
     Surface(
         color = Surface,
         contentColor = Ink,
-        shape = RoundedCornerShape(28.dp),
-        border = BorderStroke(1.dp, Hairline),
+        shape = AsterShape.editor,
         shadowElevation = 0.dp
     ) {
         Column(Modifier.padding(18.dp)) {
             if (!mangaTranslation) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        Modifier.size(34.dp).clip(RoundedCornerShape(11.dp)).background(AccentSoft),
+                        Modifier.size(28.dp).clip(RoundedCornerShape(9.dp)).background(SurfaceInset),
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.Rounded.AutoAwesome, null, tint = Accent, modifier = Modifier.size(18.dp))
+                        Icon(Icons.Rounded.AutoAwesome, null, tint = AccentInk, modifier = Modifier.size(16.dp))
                     }
                     Spacer(Modifier.width(9.dp))
-                    Text("你想看见什么？", style = MaterialTheme.typography.titleMedium)
+                    Text("描述画面", style = MaterialTheme.typography.labelLarge)
                     Spacer(Modifier.weight(1f))
                     if (prompt.isNotBlank()) {
                         Text("${prompt.length} 字", color = MutedInk, style = MaterialTheme.typography.labelMedium)
@@ -420,7 +419,7 @@ private fun PromptStudio(
                 OutlinedTextField(
                     value = prompt,
                     onValueChange = onPrompt,
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 126.dp, max = 230.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 144.dp, max = 230.dp),
                     placeholder = { Text("一座海边小屋，午后的风吹起白色窗帘…", color = MutedInk) },
                     minLines = 4,
                     maxLines = 10,
@@ -428,9 +427,9 @@ private fun PromptStudio(
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Ink,
                         unfocusedTextColor = Ink,
-                        focusedContainerColor = Canvas,
-                        unfocusedContainerColor = Canvas,
-                        focusedBorderColor = Accent,
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = Hairline,
                         unfocusedBorderColor = Color.Transparent
                     )
                 )

@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -43,6 +44,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 /** Small controls may overshoot; large surfaces and colors settle more firmly. */
 object AsterSpring {
@@ -84,6 +87,22 @@ object AsterSpring {
 
 /** Provided once at the app root; Compose still applies the system duration scale. */
 val LocalAsterMotionEnabled = staticCompositionLocalOf { true }
+
+/** Haptics belong to an accepted action, so a cancelled scroll never feels like a click. */
+@Composable
+fun rememberAsterClick(onClick: () -> Unit, enabled: Boolean = true): () -> Unit {
+    val view = LocalView.current
+    val latestAction by rememberUpdatedState(onClick)
+    val latestEnabled by rememberUpdatedState(enabled)
+    return remember(view) {
+        {
+            if (latestEnabled) {
+                view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                latestAction()
+            }
+        }
+    }
+}
 
 @Composable
 fun rememberAsterMotionEnabled(): Boolean {
@@ -141,22 +160,29 @@ fun Modifier.appleSpringPressable(
         label = "press-height"
     )
     LaunchedEffect(isPressed, enableHaptics) {
-        if (isPressed && enableHaptics) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        if (isPressed && enableHaptics && interactionSource != null) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
     }
     val observePress = if (enabled && interactionSource == null) {
         Modifier.pointerInput(Unit) {
-            try {
-                awaitEachGesture {
-                    awaitFirstDown(requireUnconsumed = false)
-                    pointerPressed = true
-                    try {
-                        waitForUpOrCancellation()
-                    } finally {
-                        pointerPressed = false
+            coroutineScope {
+                val pressScope = this
+                try {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        val reveal = pressScope.launch {
+                            delay(android.view.ViewConfiguration.getTapTimeout().toLong())
+                            pointerPressed = true
+                        }
+                        try {
+                            waitForUpOrCancellation()
+                        } finally {
+                            reveal.cancel()
+                            pointerPressed = false
+                        }
                     }
+                } finally {
+                    pointerPressed = false
                 }
-            } finally {
-                pointerPressed = false
             }
         }
     } else Modifier

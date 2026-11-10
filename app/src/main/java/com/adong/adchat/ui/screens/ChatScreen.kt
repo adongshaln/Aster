@@ -74,6 +74,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -401,6 +402,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     EmptyChat(
                         model = vm.chatProfile.chatModel,
                         onConfigure = onOpenSettings,
+                        onStart = { vm.updateChatInput(it); composerFocusRequester.requestFocus() },
+                        compact = composerFocused,
                         modifier = Modifier.fillMaxSize().padding(bottom = composerClearance)
                     )
                 } else {
@@ -410,7 +413,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     val billingCurrency = vm.appConfig.billingCurrency
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().testTag("chat-messages"),
                         contentPadding = PaddingValues(
                             start = 22.dp,
                             end = 22.dp,
@@ -704,7 +707,7 @@ private fun ChatHeader(
 }
 
 @Composable
-internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifier = Modifier) {
+internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifier = Modifier, onStart: (String) -> Unit = {}, compact: Boolean = false) {
     // 星标 + 一句开场白；未配置模型时保留连接入口。
     // 进入空态或跨时段时抽一句，重组不闪句；时段只影响候选池，不强制寒暄或称呼。
     fun nowHour() = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY)
@@ -737,13 +740,15 @@ internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifie
             }
         }
     }
-    Box(modifier, contentAlignment = Alignment.TopCenter) {
+    val topInset by androidx.compose.animation.core.animateDpAsState(
+        if (compact) 24.dp else 64.dp, AsterSpring.editorial(), label = "welcome-inset")
+    Box(modifier, contentAlignment = Alignment.TopStart) {
         Column(
-            modifier = Modifier.padding(top = 88.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            modifier = Modifier.fillMaxWidth().padding(start = 28.dp, end = 28.dp, top = topInset),
+            horizontalAlignment = Alignment.Start
         ) {
             Box(
-                Modifier.size(88.dp)
+                Modifier.size(if (compact) 36.dp else 56.dp)
                     .claudeBreathingFloat(amplitudeDp = 2.dp, durationMillis = 3200)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
@@ -761,13 +766,27 @@ internal fun EmptyChat(model: String, onConfigure: () -> Unit, modifier: Modifie
                     Modifier.fillMaxSize().graphicsLayer { rotationZ = angle }
                 )
             }
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(28.dp))
             Text(
                 text = emptyChatGreeting(hourOfDay, roll),
-                style = MaterialTheme.typography.headlineSmall,
+                style = if (compact) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.headlineMedium,
                 color = Ink,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Start
             )
+            if (!compact) {
+                Spacer(Modifier.height(12.dp))
+                Text("写作、思考，或开启一段对话。", color = MutedInk,
+                    style = MaterialTheme.typography.bodyMedium)
+                if (model.isNotBlank()) {
+                    Spacer(Modifier.height(28.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        AsterPillButton("一起想想", { onStart("帮我梳理一下这个想法：") }, compact = true,
+                            icon = Icons.Rounded.Lightbulb)
+                        AsterPillButton("写点什么", { onStart("我想写一段文字，帮我从这里开始：") }, compact = true,
+                            icon = Icons.Rounded.EditNote)
+                    }
+                }
+            }
             if (model.isBlank()) {
                 Spacer(Modifier.height(20.dp))
                 AsterPillButton(
@@ -2289,41 +2308,20 @@ private fun MarkdownTableBlock(table: MarkdownTable, selectable: Boolean, error:
         Surface(
             color = Surface,
             contentColor = if (error) Danger else Ink,
-            shape = RoundedCornerShape(17.dp),
-            border = BorderStroke(1.dp, if (error) Danger.copy(alpha = .24f) else Hairline),
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(0.6.dp, if (error) Danger.copy(alpha = .24f) else Hairline),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column {
                 Row(
-                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 5.dp, top = 7.dp, bottom = 7.dp),
+                    Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box(
-                        Modifier.size(30.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (error) DangerSoft else AccentSoft),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Rounded.TableChart,
-                            contentDescription = null,
-                            tint = if (error) Danger else Accent,
-                            modifier = Modifier.size(17.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(9.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("数据表格", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            buildString {
-                                append("${table.columnCount} 列 · ${table.rows.size} 行")
-                                if (horizontallyScrollable) append(" · 左右滑动查看")
-                            },
-                            color = MutedInk,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        if (horizontallyScrollable) "左右滑动查看" else "${table.rows.size} 行 · ${table.columnCount} 列",
+                        modifier = Modifier.weight(1f), color = MutedInk,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                     if (horizontallyScrollable) {
                         Icon(
                             Icons.Rounded.SwapHoriz,
@@ -2623,7 +2621,7 @@ private fun inlineMarkdown(text: String): AnnotatedString {
             val end = source.indexOf('』', start + 1)
             if (end < 0) break
             addStyle(
-                SpanStyle(color = Accent),
+                SpanStyle(color = AccentInk),
                 start = start,
                 end = end + 1
             )
@@ -2677,7 +2675,7 @@ private fun basicInlineMarkdown(text: String): AnnotatedString = buildAnnotatedS
                 val style = when (token) {
                     "**", "__" -> SpanStyle(fontWeight = FontWeight.Bold)
                     "~~" -> SpanStyle(textDecoration = TextDecoration.LineThrough)
-                    "`" -> SpanStyle(fontFamily = FontFamily.Monospace, color = Accent)
+                    "`" -> SpanStyle(fontFamily = FontFamily.Monospace, color = AccentInk)
                     else -> SpanStyle(fontStyle = FontStyle.Italic)
                 }
                 pushStyle(style)
@@ -2963,22 +2961,20 @@ private fun ChatToolsSheet(
         subtitle = "$profileName · ${model.ifBlank { "未选择模型" }}",
         onDismiss = onDismiss
     ) {
+        com.adong.adchat.ui.components.AsterSectionLabel("添加内容")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ConversationSheetAction(Icons.Rounded.AddPhotoAlternate, "图片", canPickImages, onPickImages, Modifier.weight(1f), "最多 4 张")
-            ConversationSheetAction(Icons.Rounded.AttachFile, "文件", canPickDocuments, onPickDocument, Modifier.weight(1f), "文本 / DOCX / PDF")
+            ConversationSheetAction(Icons.Rounded.AttachFile, "文件", canPickDocuments, onPickDocument, Modifier.weight(1f), "文本与文档")
         }
+        com.adong.adchat.ui.components.AsterSectionLabel("本轮调整")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ConversationSheetAction(Icons.Rounded.Hub, "模型", true, onModelClick, Modifier.weight(1f), "切换本轮使用的模型")
-            ConversationSheetAction(
-                icon = Icons.Rounded.Psychology,
-                label = "思考",
-                enabled = reasoningSupported,
-                onClick = onReasoningClick,
-                modifier = Modifier.weight(1f),
-                detail = if (reasoningSupported) "调整回答的思考强度" else "当前模型不支持"
-            )
+            ConversationSheetAction(Icons.Rounded.Hub, "模型", true, onModelClick,
+                Modifier.weight(1f), model.ifBlank { "选择模型" })
+            ConversationSheetAction(Icons.Rounded.Psychology, "思考强度", reasoningSupported, onReasoningClick,
+                Modifier.weight(1f), if (reasoningSupported) "调整思考深度" else "当前模型不支持")
         }
         SkillPickerEntry(skillScope, enabled = canPickDocuments)
+        com.adong.adchat.ui.components.AsterSectionLabel("会话能力")
         ComposerToolToggle(
             Icons.Rounded.Image, "剧情插图 · 实验", "仅此会话 · 每轮额外提炼一次并绘图一张\n$illustrationChannel · nai-diffusion-5-full",
             illustrationsEnabled, onIllustrationsToggle
@@ -2989,7 +2985,6 @@ private fun ChatToolsSheet(
             Text("配置剧情插图服务")
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("工具与提示词注入", style = MaterialTheme.typography.labelLarge, color = MutedInk)
             Surface(color = Surface, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                 Row(
                     Modifier
