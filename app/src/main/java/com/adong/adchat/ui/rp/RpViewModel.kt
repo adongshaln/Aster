@@ -133,23 +133,6 @@ class RpViewModel(application: Application) : AndroidViewModel(application) {
     val activeSession: RpSession?
         get() = sessions.firstOrNull { it.id == activeSessionId }
 
-    init {
-        viewModelScope.launch {
-            val fallback = withContext(Dispatchers.IO) { configStore.load().userName }
-            fallbackUserName = fallback
-            val loaded = store.load().map { session ->
-                withContext(Dispatchers.IO) { personaStore.migrateLegacy(session, fallback) }.also { migrated ->
-                    if (migrated !== session) store.save(migrated)
-                }
-            }
-            sessions.addAll(0, loaded.filter { stored -> sessions.none { it.id == stored.id } })
-            if (activeSessionId == null) activeSessionId = sessions.firstOrNull()?.id
-            refreshPresets()
-            personas = withContext(Dispatchers.IO) { personaStore.list() }
-            refreshLorebooks()
-        }
-    }
-
     private suspend fun refreshPresets() {
         val list = withContext(Dispatchers.IO) { runCatching { tavernPresetStore.list() }.getOrDefault(emptyList()) }
         tavernPresets.clear()
@@ -1176,6 +1159,26 @@ class RpViewModel(application: Application) : AndroidViewModel(application) {
         val index = sessions.indexOfFirst { it.id == updated.id }
         if (index >= 0) sessions[index] = updated else sessions.add(updated)
         store.save(updated)
+    }
+
+    // Keep this block below every property. withContext(IO) returns without suspending when the IO
+    // work finishes first, so the coroutine can run on inside the constructor; a state declared
+    // further down (fallbackUserName was) is still null at that point and the app dies on launch.
+    init {
+        viewModelScope.launch {
+            val fallback = withContext(Dispatchers.IO) { configStore.load().userName }
+            fallbackUserName = fallback
+            val loaded = store.load().map { session ->
+                withContext(Dispatchers.IO) { personaStore.migrateLegacy(session, fallback) }.also { migrated ->
+                    if (migrated !== session) store.save(migrated)
+                }
+            }
+            sessions.addAll(0, loaded.filter { stored -> sessions.none { it.id == stored.id } })
+            if (activeSessionId == null) activeSessionId = sessions.firstOrNull()?.id
+            refreshPresets()
+            personas = withContext(Dispatchers.IO) { personaStore.list() }
+            refreshLorebooks()
+        }
     }
 
     override fun onCleared() {
