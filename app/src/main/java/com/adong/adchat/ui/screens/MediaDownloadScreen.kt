@@ -274,9 +274,9 @@ fun MediaDownloadScreen(vm: MediaDownloadViewModel, onOpenDrawer: () -> Unit) {
 @Composable
 private fun MediaHeader() {
     Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-        Text("把喜欢的，留在身边。", style = MaterialTheme.typography.headlineMedium)
+        Text("收集喜欢的片刻", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(6.dp))
-        Text("保存此刻，留给下一次重温。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+        Text("粘贴分享链接，保存到你的收藏。", color = MutedInk, style = MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -293,11 +293,11 @@ private fun LinkInputCard(
     val clipboard = LocalClipboardManager.current
     val focusManager = LocalFocusManager.current
     val haptics = LocalHapticFeedback.current
-    Surface(color = Surface, shape = RoundedCornerShape(24.dp), border = BorderStroke(1.dp, Hairline)) {
+    Surface(color = Surface, shape = RoundedCornerShape(24.dp)) {
         Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Link, null, Modifier.size(21.dp), tint = Accent)
-                Text("视频链接", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Rounded.Link, null, Modifier.size(21.dp), tint = AccentInk)
+                Text("分享链接", Modifier.weight(1f).padding(start = 10.dp), style = MaterialTheme.typography.labelLarge)
                 AsterPillButton(
                     text = "粘贴",
                     icon = Icons.Rounded.ContentPaste,
@@ -311,16 +311,16 @@ private fun LinkInputCard(
             }
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(value = value, onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 4,
+                modifier = Modifier.fillMaxWidth(), minLines = 3, maxLines = 4,
                 placeholder = { Text("粘贴链接或完整的分享文字…", style = MaterialTheme.typography.bodyMedium) },
                 enabled = !busy, textStyle = MaterialTheme.typography.bodyMedium,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = {
                     if (value.isNotBlank() && !busy) { focusManager.clearFocus(); onResolve() }
                 }), shape = RoundedCornerShape(16.dp),
-                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Canvas,
-                    unfocusedContainerColor = Canvas, disabledContainerColor = Canvas,
-                    focusedBorderColor = Accent, unfocusedBorderColor = Color.Transparent))
+                colors = OutlinedTextFieldDefaults.colors(focusedContainerColor = Color.Transparent,
+                    unfocusedContainerColor = Color.Transparent, disabledContainerColor = Color.Transparent,
+                    focusedBorderColor = Hairline, unfocusedBorderColor = Color.Transparent))
             Spacer(Modifier.height(14.dp))
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -846,7 +846,7 @@ private fun PlatformMiniLabel(platform: MediaPlatform, selected: Boolean) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         PlatformIcon(platform, Modifier.size(12.dp), color); Spacer(Modifier.width(3.dp))
-        Text(platform.displayName, color = color, fontSize = 10.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
+        Text(platform.displayName, color = color, fontSize = 11.5.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium)
     }
 }
 
@@ -872,18 +872,18 @@ private fun PlatformIcon(platform: MediaPlatform?, modifier: Modifier, tint: Col
 
 @Composable
 private fun platformColor(platform: MediaPlatform?): Color = when (platform) {
-    MediaPlatform.Douyin -> Color(0xFF2F6F62)
-    MediaPlatform.Twitter -> Color(0xFF3D586E)
-    MediaPlatform.Bilibili -> Color(0xFFD45C78)
-    MediaPlatform.Direct -> Accent
+    MediaPlatform.Douyin -> if (LocalThemeDark.current) Color(0xFF87C6AF) else Color(0xFF2F6F62)
+    MediaPlatform.Twitter -> if (LocalThemeDark.current) Color(0xFFA9C1D5) else Color(0xFF3D586E)
+    MediaPlatform.Bilibili -> if (LocalThemeDark.current) Color(0xFFF0A1B4) else Color(0xFFAC3D5A)
+    MediaPlatform.Direct -> AccentInk
     null -> MutedInk
 }
 
 @Composable
 private fun platformSoftColor(platform: MediaPlatform?): Color = when (platform) {
-    MediaPlatform.Douyin -> Color(0xFFE4F1EC)
-    MediaPlatform.Twitter -> Color(0xFFE8EEF3)
-    MediaPlatform.Bilibili -> Color(0xFFF9E8ED)
+    MediaPlatform.Douyin -> if (LocalThemeDark.current) Color(0xFF20392F) else Color(0xFFE4F1EC)
+    MediaPlatform.Twitter -> if (LocalThemeDark.current) Color(0xFF28343D) else Color(0xFFE8EEF3)
+    MediaPlatform.Bilibili -> if (LocalThemeDark.current) Color(0xFF402830) else Color(0xFFF9E8ED)
     MediaPlatform.Direct -> AccentSoft
     null -> SurfaceInset
 }

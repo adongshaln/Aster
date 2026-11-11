@@ -38,6 +38,7 @@ data class AsterPalette(
     val mutedInk: Color,
     val hairline: Color,
     val accent: Color,
+    val accentInk: Color,
     val accentSoft: Color,
     val sage: Color,
     val sageSoft: Color,
@@ -54,16 +55,17 @@ data class AsterPalette(
 
 /** Claude 浅色主题：Pampas 暖羊皮纸 + 纯净象牙卡片 + Terracotta 陶土赤褐 */
 val AsterPaletteLight = AsterPalette(
-    canvas = Color(0xFFF4F3EE),
-    surface = Color(0xFFFAF9F5),
+    canvas = Color(0xFFF5F3EF),
+    surface = Color(0xFFFFFDFA),
     ink = Color(0xFF141413),
     mutedInk = Color(0xFF6B6860),
     hairline = Color(0xFFE4E1D8),
     accent = Color(0xFFD97757),
+    accentInk = Color(0xFFA34B35),
     accentSoft = Color(0xFFFAEDE7),
     sage = Color(0xFF2E6F4E),
     sageSoft = Color(0xFFE5F1EB),
-    surfaceInset = Color(0xFFEAE7DF),
+    surfaceInset = Color(0xFFEDEAE4),
     warmWhite = Color(0xFFFCFBF8),
     danger = Color(0xFFC94A4A),
     dangerSoft = Color(0xFFFCE8E6),
@@ -76,12 +78,13 @@ val AsterPaletteLight = AsterPalette(
 
 /** Claude 深色主题：Obsidian 暖曜石黑 + 悬浮炭灰卡片 + 柔光赤陶 */
 val AsterPaletteDark = AsterPalette(
-    canvas = Color(0xFF141413),
-    surface = Color(0xFF1E1E1C),
+    canvas = Color(0xFF171715),
+    surface = Color(0xFF232320),
     ink = Color(0xFFF0EFEA),
     mutedInk = Color(0xFF9A9890),
     hairline = Color(0xFF2E2D2A),
     accent = Color(0xFFE28769),
+    accentInk = Color(0xFFEBA88E),
     accentSoft = Color(0xFF38241E),
     sage = Color(0xFF52B788),
     sageSoft = Color(0xFF1D3328),
@@ -118,6 +121,7 @@ val Ink @Composable get() = LocalAsterPalette.current.ink
 val MutedInk @Composable get() = LocalAsterPalette.current.mutedInk
 val Hairline @Composable get() = LocalAsterPalette.current.hairline
 val Accent @Composable get() = LocalAsterPalette.current.accent
+val AccentInk @Composable get() = LocalAsterPalette.current.accentInk
 val AccentSoft @Composable get() = LocalAsterPalette.current.accentSoft
 val Sage @Composable get() = LocalAsterPalette.current.sage
 val SageSoft @Composable get() = LocalAsterPalette.current.sageSoft
@@ -147,7 +151,7 @@ private val LightControlInk = Color(0xFFFFFFFF)
 private val DarkControlInk = Color(0xFF141413)
 
 /** Choose the readable side of a changing fill, including during a light/dark transition. */
-private fun contrastingContent(
+internal fun contrastingContent(
     background: Color,
     dark: Color = DarkControlInk,
     light: Color = LightControlInk
@@ -228,14 +232,14 @@ private val ClaudeEditorialTypography = Typography(
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Medium,
-        fontSize = 20.sp,
-        lineHeight = 27.sp,
+        fontWeight = FontWeight.Normal,
+        fontSize = 22.sp,
+        lineHeight = 30.sp,
         letterSpacing = (-0.15).sp
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.SemiBold,
+        fontWeight = FontWeight.Medium,
         fontSize = 16.sp,
         lineHeight = 22.sp,
         letterSpacing = (-0.1).sp
@@ -274,8 +278,8 @@ private val ClaudeEditorialTypography = Typography(
     labelLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
-        fontSize = 13.5.sp,
-        lineHeight = 18.sp
+        fontSize = 14.sp,
+        lineHeight = 20.sp
     ),
     labelMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -327,6 +331,7 @@ fun AsterTheme(
             mutedInk = androidx.compose.ui.graphics.lerp(AsterPaletteLight.mutedInk, AsterPaletteDark.mutedInk, blend),
             hairline = androidx.compose.ui.graphics.lerp(AsterPaletteLight.hairline, AsterPaletteDark.hairline, blend),
             accent = androidx.compose.ui.graphics.lerp(AsterPaletteLight.accent, AsterPaletteDark.accent, blend),
+            accentInk = androidx.compose.ui.graphics.lerp(AsterPaletteLight.accentInk, AsterPaletteDark.accentInk, blend),
             accentSoft = androidx.compose.ui.graphics.lerp(AsterPaletteLight.accentSoft, AsterPaletteDark.accentSoft, blend),
             sage = androidx.compose.ui.graphics.lerp(AsterPaletteLight.sage, AsterPaletteDark.sage, blend),
             sageSoft = androidx.compose.ui.graphics.lerp(AsterPaletteLight.sageSoft, AsterPaletteDark.sageSoft, blend),

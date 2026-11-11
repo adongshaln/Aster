@@ -1,6 +1,14 @@
 package com.adong.adchat.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -23,7 +31,15 @@ import com.adong.adchat.ui.theme.*
 internal fun StoryProseContent(
     presentation: StoryProsePresentation,
     streaming: Boolean,
-    onPanelAction: (String) -> Unit = {}
+    onPanelAction: (String) -> Unit = {},
+    helper: HelperHost? = null,
+    messageId: Int? = null,
+    revision: Int = 0,
+    /** Stable message identity for card height caching. */
+    heightKey: String? = null,
+    /** RP card surfaces: scripts only after consent, remote images allowed. */
+    allowScripts: Boolean = true,
+    remoteMedia: Boolean = false
 ) {
     val bodyStarted = presentation.blocks.any { it.text.isNotBlank() || it.html != null }
     val thoughtsInitiallyExpanded = streaming && !bodyStarted
@@ -55,13 +71,19 @@ internal fun StoryProseContent(
                 val streamingLast = streaming && index == presentation.blocks.lastIndex
                 when {
                     block.html != null && streamingLast -> Text(
-                        block.html, color = MutedInk, style = MaterialTheme.typography.bodyMedium
+                        "界面生成中…", color = MutedInk, style = MaterialTheme.typography.labelMedium
                     )
                     block.html != null -> HtmlArtifactCard(
                         code = block.html,
-                        allowScripts = true,
+                        allowScripts = allowScripts,
                         actions = false,
-                        panelActions = onPanelAction
+                        panelActions = onPanelAction,
+                        adaptiveHeight = true,
+                        helper = helper,
+                        messageId = messageId,
+                        revision = revision,
+                        heightKey = heightKey?.let { "$it:$index" },
+                        remoteMedia = remoteMedia
                     )
                     block.title != null -> StoryProseSection(block.title, block.text)
                     else -> StructuredMessageText(block.text, streamingLast, false, false)
@@ -84,6 +106,7 @@ private fun StoryProseSection(
     collapseWhen: Boolean = false
 ) {
     var expanded by rememberSaveable { mutableStateOf(initiallyExpanded) }
+    val motionEnabled = LocalAsterMotionEnabled.current
     LaunchedEffect(collapseWhen) {
         if (collapseWhen) expanded = false
     }
@@ -96,10 +119,16 @@ private fun StoryProseSection(
                 Icon(if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
                     if (expanded) "收起$title" else "展开$title", tint = MutedInk)
             }
-            if (expanded) Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (note != null) Text(note, color = MutedInk, style = MaterialTheme.typography.labelSmall)
-                SelectionContainer { Text(text, color = Ink, style = MaterialTheme.typography.bodyLarge) }
+            AnimatedVisibility(
+                visible = expanded,
+                enter = if (motionEnabled) expandVertically(tween(220, easing = AsterEase)) + fadeIn(tween(160)) else EnterTransition.None,
+                exit = if (motionEnabled) shrinkVertically(tween(160, easing = AsterEase)) + fadeOut(tween(100)) else ExitTransition.None
+            ) {
+                Column(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (note != null) Text(note, color = MutedInk, style = MaterialTheme.typography.labelSmall)
+                    SelectionContainer { Text(text, color = Ink, style = MaterialTheme.typography.bodyLarge) }
+                }
             }
         }
     }

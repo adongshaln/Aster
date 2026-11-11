@@ -194,14 +194,15 @@ internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (icon != null) {
             Box(
-                Modifier.size(46.dp).clip(RoundedCornerShape(15.dp)).background(AccentSoft),
+                Modifier.size(36.dp).clip(CircleShape).background(SurfaceInset),
                 contentAlignment = Alignment.Center
-            ) { Icon(icon, null, Modifier.size(22.dp), tint = OnAccentSoft) }
+            ) { Icon(icon, null, Modifier.size(19.dp), tint = AccentInk) }
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge)
-            Text(subtitle, color = MutedInk, style = MaterialTheme.typography.bodyMedium)
+            Text(title, style = MaterialTheme.typography.headlineMedium)
+            if (subtitle.isNotBlank()) Text(subtitle, color = MutedInk, style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 4.dp))
         }
         Surface(
             onClick = onDismiss,
@@ -209,10 +210,9 @@ internal fun AsterSheetHeader(title: String, subtitle: String, icon: ImageVector
             color = Surface,
             contentColor = MutedInk,
             shape = CircleShape,
-            border = BorderStroke(1.dp, Hairline),
             modifier = Modifier
-                .size(38.dp)
-                .appleSpringPressable(pressedScale = 0.90f, interactionSource = closeInteraction)
+                .size(48.dp)
+                .appleSpringPressable(pressedScale = 0.96f, interactionSource = closeInteraction)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(Icons.Rounded.Close, "关闭", Modifier.size(18.dp))

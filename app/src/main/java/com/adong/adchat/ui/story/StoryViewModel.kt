@@ -144,7 +144,21 @@ class StoryViewModel(application: Application) : AndroidViewModel(application) {
                 stories.addAll(loaded)
                 loaded.firstOrNull()?.let { selectStory(it.id) }
             }
-            loaded.filter(Story::automaticMemoryEnabled).forEach { story ->
+        }
+    }
+
+    private var memoryMaintenanceStarted = false
+
+    /**
+     * Resumes automatic memory/summary jobs only once the story page is actually opened. Kept out of
+     * [init] so merely launching the app (or sitting on another page) never spends API requests on
+     * background story maintenance. Idempotent; recovery of interrupted DB jobs still happens in init.
+     */
+    fun resumeMemoryMaintenance() {
+        if (memoryMaintenanceStarted) return
+        memoryMaintenanceStarted = true
+        viewModelScope.launch(Dispatchers.IO) {
+            store.listStories().filter(Story::automaticMemoryEnabled).forEach { story ->
                 scheduleMemoryMaintenance(story.id, story.currentTimelineId)
             }
         }

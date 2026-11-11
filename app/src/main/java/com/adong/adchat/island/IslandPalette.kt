@@ -1,6 +1,10 @@
 package com.adong.adchat.island
 
 import android.content.res.Configuration
+import androidx.compose.ui.graphics.toArgb
+import com.adong.adchat.ui.theme.AsterPalette
+import com.adong.adchat.ui.theme.AsterPaletteLight
+import com.adong.adchat.ui.theme.AsterPaletteDark
 
 /** Claude light / Claude dark tokens for the ink ring and the paper tag; follows the system theme. */
 internal data class IslandPalette(
@@ -17,26 +21,14 @@ internal data class IslandPalette(
     val glyph: Int get() = (ink and 0x00FFFFFF) or (0xDB shl 24)
 
     companion object {
-        val Light = IslandPalette(
-            paper = 0xFFFAF9F5.toInt(),
-            edge = 0xFFE3E0D6.toInt(),
-            ink = 0xFF141413.toInt(),
-            muted = 0xFF6B6860.toInt(),
-            well = 0xFFF0EEE6.toInt(),
-            clay = 0xFFD97757.toInt(),
-            onClay = 0xFF141413.toInt(),
-            shadow = 0x29141413
+        private fun fromPalette(palette: AsterPalette, shadow: Int) = IslandPalette(
+            paper = palette.surface.toArgb(), edge = palette.hairline.toArgb(),
+            ink = palette.ink.toArgb(), muted = palette.mutedInk.toArgb(),
+            well = palette.surfaceInset.toArgb(), clay = palette.accent.toArgb(),
+            onClay = 0xFF141413.toInt(), shadow = shadow
         )
-        val Dark = IslandPalette(
-            paper = 0xFF262624.toInt(),
-            edge = 0xFF3A3936.toInt(),
-            ink = 0xFFF5F4EE.toInt(),
-            muted = 0xFFA6A39A.toInt(),
-            well = 0xFF30302E.toInt(),
-            clay = 0xFFE28769.toInt(),
-            onClay = 0xFF141413.toInt(),
-            shadow = 0x80000000.toInt()
-        )
+        val Light = fromPalette(AsterPaletteLight, 0x29141413)
+        val Dark = fromPalette(AsterPaletteDark, 0x80000000.toInt())
 
         fun forNightMode(night: Boolean): IslandPalette = if (night) Dark else Light
 

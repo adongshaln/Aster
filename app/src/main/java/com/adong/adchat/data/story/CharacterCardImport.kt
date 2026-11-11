@@ -7,7 +7,13 @@ import java.util.zip.ZipInputStream
 
 data class ImportedCharacterCard(
     val card: StoryCharacterCard,
-    val opening: String
+    val opening: String,
+    val greetings: List<String> = emptyList(),
+    /**
+     * The card exactly as written: no macro expansion, no prose cleaning, `<START>`/HTML/YAML kept and
+     * world entries raw. RP mode builds prompts from this; [card] stays the Story-mode cleaned view.
+     */
+    val rawCard: StoryCharacterCard = card
 )
 
 object CharacterCardFile {
@@ -65,86 +71,203 @@ object CharacterCardFile {
     internal fun parseJson(raw: String): ImportedCharacterCard {
         val root = JSONObject(extractJsonObject(raw))
         val data = root.optJSONObject("data") ?: root
-        val name = data.optString("name").trim().ifBlank { data.optString("nickname").trim() }
+        val nickname = data.optString("nickname").trim()
+        val name = data.optString("name").trim().ifBlank { nickname }
         require(name.isNotBlank()) { "角色卡没有名字" }
-        val description = prose(data.optString("description"), name)
-        val personality = prose(data.optString("personality"), name)
-        val scenario = prose(data.optString("scenario"), name)
-        val example = prose(data.optString("mes_example"), name)
-        val systemPrompt = prose(data.optString("system_prompt"), name)
-        val postHistory = prose(data.optString("post_history_instructions"), name)
-        val openingSource = data.optString("first_mes").ifBlank {
-            data.optJSONArray("alternate_greetings")?.optString(0).orEmpty()
-        }
-        val opening = prose(openingSource, name)
-        val importedBook = data.optJSONObject("character_book")?.let { parseWorldBook(it, name) } ?: StoryWorldBook()
+        val macroName = nickname.ifBlank { name }
+        val extensions = data.optJSONObject("extensions")
+        val description = prose(data.optString("description"), macroName)
+        val personality = prose(data.optString("personality"), macroName)
+        val scenario = prose(data.optString("scenario"), macroName)
+        val example = prose(data.optString("mes_example"), macroName)
+        val systemPrompt = prose(data.optString("system_prompt"), macroName)
+        val postHistory = prose(data.optString("post_history_instructions"), macroName)
+        // Greetings keep their raw HTML for sandbox frontend rendering; only macros are expanded.
+        val firstMes = expandCardMacros(data.optString("first_mes"), macroName)
+        val alternates = data.optJSONArray("alternate_greetings").rawGreetings(macroName)
+        val groupOnly = data.optJSONArray("group_only_greetings").rawGreetings(macroName)
+        val greetings = (listOf(firstMes) + alternates).filter { it.isNotBlank() }
+        val opening = greetings.firstOrNull().orEmpty()
+        val importedBook = data.optJSONObject("character_book")?.let { parseWorldBook(it, macroName) } ?: StoryWorldBook()
         require(description.isNotBlank() || personality.isNotBlank() || scenario.isNotBlank() || opening.isNotBlank() || importedBook.entries.isNotEmpty()) {
             "角色卡里没有可用的正文"
         }
-        return ImportedCharacterCard(
-            card = StoryCharacterCard(
-                name = name,
-                description = description,
-                personality = personality,
-                scenario = scenario,
-                mesExample = example,
-                systemPrompt = systemPrompt,
-                postHistory = postHistory,
-                imported = true,
-                worldBook = importedBook
-            ),
-            opening = opening
+        val cleaned = StoryCharacterCard(
+            name = name,
+            description = description,
+            personality = personality,
+            scenario = scenario,
+            mesExample = example,
+            systemPrompt = systemPrompt,
+            postHistory = postHistory,
+            imported = true,
+            worldBook = importedBook,
+            nickname = nickname,
+            creatorNotes = creatorNotes(data),
+            tags = data.optJSONArray("tags").stringList(),
+            creator = data.optString("creator").trim(),
+            characterVersion = data.optString("character_version").trim(),
+            source = data.optJSONArray("source").stringList(),
+            creationDate = data.optLong("creation_date").takeIf { it > 0 },
+            modificationDate = data.optLong("modification_date").takeIf { it > 0 },
+            firstMes = firstMes,
+            alternateGreetings = alternates,
+            groupOnlyGreetings = groupOnly,
+            depthPrompt = extensions?.optJSONObject("depth_prompt")?.let {
+                StoryDepthPrompt(
+                    depth = it.optInt("depth", 4),
+                    prompt = expandCardMacros(it.optString("prompt"), macroName),
+                    role = it.optString("role").trim().lowercase().ifBlank { "system" }
+                )
+            },
+            talkativeness = extensions?.optDouble("talkativeness", Double.NaN)?.takeIf { it.isFinite() },
+            extensionsRaw = extensions?.toString() ?: "{}"
         )
+        val rawBook = data.optJSONObject("character_book")?.let { parseWorldBook(it, macroName, raw = true) } ?: StoryWorldBook()
+        val rawCard = cleaned.copy(
+            description = data.optString("description"),
+            personality = data.optString("personality"),
+            scenario = data.optString("scenario"),
+            mesExample = data.optString("mes_example"),
+            systemPrompt = data.optString("system_prompt"),
+            postHistory = data.optString("post_history_instructions"),
+            worldBook = rawBook,
+            creatorNotes = data.optString("creator_notes").ifEmpty { cleaned.creatorNotes },
+            firstMes = data.optString("first_mes"),
+            alternateGreetings = data.optJSONArray("alternate_greetings").rawStrings(),
+            groupOnlyGreetings = data.optJSONArray("group_only_greetings").rawStrings(),
+            depthPrompt = extensions?.optJSONObject("depth_prompt")?.let {
+                StoryDepthPrompt(
+                    depth = it.optInt("depth", 4),
+                    prompt = it.optString("prompt"),
+                    role = it.optString("role").trim().lowercase().ifBlank { "system" }
+                )
+            }
+        )
+        return ImportedCharacterCard(card = cleaned, opening = opening, greetings = greetings, rawCard = rawCard)
     }
 
-    private fun parseWorldBook(book: JSONObject, charName: String): StoryWorldBook {
+    private fun org.json.JSONArray?.rawStrings(): List<String> =
+        this?.let { array -> (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) } }.orEmpty()
+
+    private fun creatorNotes(data: JSONObject): String {
+        val multilingual = data.optJSONObject("creator_notes_multilingual")
+        if (multilingual != null) {
+            for (key in listOf("zh", "zh-CN", "zh-Hans", "en")) {
+                val value = multilingual.optString(key).trim()
+                if (value.isNotEmpty()) return value
+            }
+        }
+        return data.optString("creator_notes").trim()
+    }
+
+    private fun org.json.JSONArray?.rawGreetings(macroName: String): List<String> =
+        this?.let { array ->
+            (0 until array.length()).mapNotNull { index ->
+                expandCardMacros(array.optString(index), macroName).takeIf(String::isNotBlank)
+            }
+        }.orEmpty()
+
+    private fun parseWorldBook(book: JSONObject, charName: String, raw: Boolean = false): StoryWorldBook {
         val entryArray = book.optJSONArray("entries") ?: book.optJSONObject("entries")?.let { map ->
             org.json.JSONArray().apply { map.keys().forEach { key -> map.optJSONObject(key)?.let(::put) } }
         }
         val entries = entryArray?.let { array ->
             (0 until array.length()).mapNotNull { index ->
-                (array.opt(index) as? JSONObject)?.let { parseWorldEntry(it, charName) }
+                (array.opt(index) as? JSONObject)?.let { parseWorldEntry(it, charName, index, raw) }
             }
         }.orEmpty()
-        val budget = book.optInt("token_budget", 0).let { if (it > 0) (it * 4).coerceAtMost(20_000) else 20_000 }
+        val tokenBudget = book.optInt("token_budget", 0).takeIf { it > 0 }
+        val budget = tokenBudget?.let { (it * 4).coerceAtMost(20_000) } ?: 20_000
         return StoryWorldBook(
             entries = entries,
             scanDepth = book.optInt("scan_depth", 4).let { if (it > 0) it else 4 },
             charBudget = budget,
-            recursive = book.optBoolean("recursive_scanning", true)
+            recursive = book.optBoolean("recursive_scanning", true),
+            name = book.optString("name"),
+            tokenBudget = tokenBudget,
+            bookScanDepth = if (book.has("scan_depth") && !book.isNull("scan_depth")) book.optInt("scan_depth", 2).coerceIn(0, 1000) else null,
+            recursiveScanning = if (book.has("recursive_scanning") && !book.isNull("recursive_scanning")) book.optBoolean("recursive_scanning") else null
         )
     }
 
-    private fun parseWorldEntry(item: JSONObject, charName: String): StoryWorldBookEntry {
+    /** Mirrors SillyTavern convertCharacterBook: ST-only fields live in entry.extensions (snake_case). */
+    private fun parseWorldEntry(item: JSONObject, charName: String, index: Int, raw: Boolean): StoryWorldBookEntry {
+        val ext = item.optJSONObject("extensions") ?: JSONObject()
         val keys = item.optJSONArray("key")?.stringList().orEmpty() + item.optJSONArray("keys")?.stringList().orEmpty()
         val secondary = item.optJSONArray("secondary_keys")?.stringList().orEmpty()
-        val logic = when (item.opt("selective_logic")) {
-            0 -> WorldLogic.AND_ANY
-            1 -> WorldLogic.NOT_ANY
-            2 -> WorldLogic.AND_ALL
-            3 -> WorldLogic.NOT_ALL
-            else -> WorldLogic.AND_ANY
+        val stLogic = ext.intOrNull("selectiveLogic") ?: ext.intOrNull("selective_logic") ?: item.intOrNull("selective_logic") ?: 0
+        val logic = WorldLogic.fromSt(stLogic)
+        val position = ext.intOrNull("position") ?: when (val p = item.opt("position")) {
+            "before_char" -> 0
+            is Number -> if (p.toInt() == 0) 0 else 1
+            else -> 1
         }
-        val beforeChar = when (val position = item.opt("position")) {
-            "before_char" -> true
-            "after_char" -> false
-            0 -> true
-            else -> false
-        }
+        val content = item.optString("content").orEmpty()
         return StoryWorldBookEntry(
             keys = keys,
-            secondaryKeys = if (item.optBoolean("selective", true)) secondary else emptyList(),
+            secondaryKeys = if (raw || item.optBoolean("selective", true)) secondary else emptyList(),
             logic = logic,
-            content = prose(item.optString("content").orEmpty(), charName),
+            content = if (raw) content else prose(content, charName),
             enabled = item.optBoolean("enabled", true),
             constant = item.optBoolean("constant", false),
             insertionOrder = item.optInt("insertion_order", 100),
-            beforeChar = beforeChar
+            beforeChar = position == 0,
+            caseSensitive = ext.boolOrNull("case_sensitive") ?: item.optBoolean("case_sensitive", false),
+            priority = item.optInt("priority", 0),
+            comment = item.optString("comment"),
+            entryName = item.optString("name"),
+            extensionsRaw = item.opt("extensions")?.toString() ?: "{}",
+            uid = item.intOrNull("id") ?: index,
+            position = position,
+            depth = ext.intOrNull("depth") ?: 4,
+            role = ext.intOrNull("role") ?: 0,
+            probability = ext.intOrNull("probability") ?: 100,
+            useProbability = ext.boolOrNull("useProbability") ?: ext.boolOrNull("use_probability") ?: true,
+            group = ext.optString("group"),
+            groupOverride = ext.boolOrNull("group_override") ?: false,
+            groupWeight = ext.intOrNull("group_weight") ?: 100,
+            useGroupScoring = ext.boolOrNull("use_group_scoring"),
+            sticky = ext.intOrNull("sticky"),
+            cooldown = ext.intOrNull("cooldown"),
+            delay = ext.intOrNull("delay"),
+            scanDepth = ext.intOrNull("scan_depth"),
+            matchWholeWords = ext.boolOrNull("match_whole_words"),
+            caseSensitiveOverride = ext.boolOrNull("case_sensitive") ?: item.boolOrNull("case_sensitive"),
+            excludeRecursion = ext.boolOrNull("exclude_recursion") ?: false,
+            preventRecursion = ext.boolOrNull("prevent_recursion") ?: false,
+            delayUntilRecursion = when (val d = ext.opt("delay_until_recursion")) {
+                true -> 1
+                is Number -> d.toInt().coerceAtLeast(0)
+                else -> 0
+            },
+            ignoreBudget = ext.boolOrNull("ignore_budget") ?: false,
+            matchPersonaDescription = ext.boolOrNull("match_persona_description") ?: false,
+            matchCharacterDescription = ext.boolOrNull("match_character_description") ?: false,
+            matchCharacterPersonality = ext.boolOrNull("match_character_personality") ?: false,
+            matchCharacterDepthPrompt = ext.boolOrNull("match_character_depth_prompt") ?: false,
+            matchScenario = ext.boolOrNull("match_scenario") ?: false,
+            matchCreatorNotes = ext.boolOrNull("match_creator_notes") ?: false,
+            outletName = ext.optString("outlet_name"),
+            triggers = ext.optJSONArray("triggers")?.stringList().orEmpty(),
+            selective = item.optBoolean("selective", false),
+            selectiveLogic = stLogic,
+            automationId = ext.optString("automation_id")
         )
     }
 
-    private fun org.json.JSONArray.stringList(): List<String> =
-        (0 until length()).mapNotNull { index -> optString(index).takeIf(String::isNotEmpty) }
+    private fun JSONObject.intOrNull(key: String): Int? =
+        if (!has(key) || isNull(key)) null else (opt(key) as? Number)?.toInt() ?: optString(key).trim().toIntOrNull()
+
+    private fun JSONObject.boolOrNull(key: String): Boolean? =
+        if (!has(key) || isNull(key)) null else when (val v = opt(key)) {
+            is Boolean -> v
+            is String -> v.toBooleanStrictOrNull()
+            else -> null
+        }
+
+    private fun org.json.JSONArray?.stringList(): List<String> =
+        this?.let { array -> (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf(String::isNotEmpty) } }.orEmpty()
 }
 
 private fun prose(raw: String, charName: String): String = cardProse(expandCardMacros(raw, charName))

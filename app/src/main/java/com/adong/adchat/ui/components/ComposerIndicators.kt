@@ -9,6 +9,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.DataUsage
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -38,6 +40,7 @@ fun ComposerContextRing(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val interaction = remember { MutableInteractionSource() }
     val targetTint = when {
         !configured -> MutedInk
         overflow -> OnDangerSoft
@@ -59,25 +62,26 @@ fun ComposerContextRing(
         label = "context-ring"
     )
     IconButton(
-        onClick = onClick,
+        onClick = rememberAsterClick(onClick),
+        interactionSource = interaction,
         modifier = modifier
-            .size(44.dp)
-            .appleSpringPressable(pressedScale = 0.88f)
+            .size(48.dp)
+            .appleSpringPressable(pressedScale = 0.96f, enableHaptics = false, interactionSource = interaction)
     ) {
         Box(Modifier.size(34.dp), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(
+            if (configured) CircularProgressIndicator(
                 progress = { progress },
-                modifier = Modifier.size(30.dp),
+                modifier = Modifier.size(28.dp),
                 color = tint,
                 trackColor = SurfaceInset,
-                strokeWidth = 2.8.dp
+                strokeWidth = 2.dp
             )
-            Text(
-                if (configured) "$percent%" else "--",
+            if (configured) Text(
+                "$percent%",
                 color = tint,
                 fontSize = 10.5.sp,
                 fontWeight = FontWeight.SemiBold
-            )
+            ) else Icon(Icons.Rounded.DataUsage, "上下文设置", Modifier.size(20.dp), tint = MutedInk)
         }
     }
 }

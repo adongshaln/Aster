@@ -78,6 +78,7 @@ fun StoryScreen(
     onCreateStory: () -> Unit,
     onOpenSettings: () -> Unit
 ) {
+    LaunchedEffect(Unit) { storyVm.resumeMemoryMaintenance() }
     val story = storyVm.activeStory
     if (story == null) {
         StoryEmptyState(onOpenDrawer, onCreateStory)

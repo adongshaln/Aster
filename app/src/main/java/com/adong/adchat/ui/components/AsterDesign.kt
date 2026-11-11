@@ -46,6 +46,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -169,7 +173,7 @@ fun AsterIconButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     IconButton(
-        onClick = onClick,
+        onClick = rememberAsterClick(onClick, enabled),
         modifier = modifier,
         enabled = enabled,
         interactionSource = interactionSource
@@ -178,7 +182,7 @@ fun AsterIconButton(
             imageVector = icon,
             contentDescription = contentDescription,
             modifier = Modifier.appleSpringPressable(
-                pressedScale = 0.90f, enabled = enabled, interactionSource = interactionSource
+                pressedScale = 0.96f, enabled = enabled, enableHaptics = false, interactionSource = interactionSource
             ),
             tint = if (enabled) tint else MutedInk.copy(alpha = 0.38f)
         )
@@ -195,12 +199,12 @@ fun AsterPrimaryButton(
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val containerColor by animateColorAsState(
-        targetValue = if (enabled) Accent else Accent.copy(alpha = 0.42f),
+        targetValue = if (enabled) Ink else SurfaceInset,
         animationSpec = AsterSpring.editorial(),
         label = "PrimaryBtnColor"
     )
     val elevation by animateDpAsState(
-        targetValue = if (enabled) 3.dp else 0.dp,
+        targetValue = if (enabled) 1.dp else 0.dp,
         animationSpec = AsterSpring.snappy(),
         label = "PrimaryBtnElevation"
     )
@@ -214,18 +218,18 @@ fun AsterPrimaryButton(
                 indication = ripple(),
                 enabled = enabled,
                 role = Role.Button,
-                onClick = onClick
+                onClick = rememberAsterClick(onClick, enabled)
             ),
         propagateMinConstraints = true
     ) {
         Surface(
             color = containerColor,
-            contentColor = OnAccent,
+            contentColor = if (enabled) OnInk else MutedInk,
             shape = RoundedCornerShape(20.dp),
-            border = BorderStroke(0.5.dp, OnAccent.copy(alpha = if (enabled) 0.16f else 0f)),
+            border = null,
             shadowElevation = elevation.coerceAtLeast(0.dp),
             modifier = Modifier.appleSpringPressable(
-                pressedScale = 0.96f, enabled = enabled, interactionSource = interactionSource
+                pressedScale = 0.96f, enabled = enabled, enableHaptics = false, interactionSource = interactionSource
             )
         ) {
             Row(
@@ -722,7 +726,7 @@ fun AsterSwitch(
     val minOffsetPx = with(LocalDensity.current) { 3.dp.toPx() }
     val travelPx = with(LocalDensity.current) { 18.dp.toPx() }
     Surface(
-        onClick = { if (enabled) onCheckedChange(!checked) },
+        onClick = rememberAsterClick({ onCheckedChange(!checked) }, enabled),
         enabled = enabled,
         interactionSource = interactionSource,
         color = trackColor,
@@ -731,7 +735,11 @@ fun AsterSwitch(
         modifier = modifier
             .width(46.dp)
             .height(28.dp)
-            .appleSpringPressable(pressedScale = 0.92f, enabled = enabled, interactionSource = interactionSource)
+            .semantics {
+                role = Role.Switch
+                toggleableState = if (checked) ToggleableState.On else ToggleableState.Off
+            }
+            .appleSpringPressable(pressedScale = 0.96f, enabled = enabled, enableHaptics = false, interactionSource = interactionSource)
     ) {
         Box(contentAlignment = Alignment.CenterStart) {
             Box(
@@ -772,7 +780,7 @@ fun AsterPillButton(
     val interactionSource = remember { MutableInteractionSource() }
     val fill by animateColorAsState(
         targetValue = when {
-            primary -> if (enabled) Accent else Accent.copy(alpha = 0.42f)
+            primary -> if (enabled) Ink else SurfaceInset
             destructive -> if (enabled) DangerSoft else SurfaceInset.copy(alpha = 0.6f)
             selected -> AccentSoft
             else -> Surface
@@ -793,7 +801,7 @@ fun AsterPillButton(
     val content by animateColorAsState(
         targetValue = when {
             !enabled -> MutedInk.copy(alpha = 0.45f)
-            primary -> OnAccent
+            primary -> OnInk
             destructive -> Danger
             selected -> OnAccentSoft
             else -> Ink
@@ -801,11 +809,11 @@ fun AsterPillButton(
         animationSpec = AsterSpring.editorial(),
         label = "pill-btn-content"
     )
-    val minHeight = if (compact) 34.dp else 42.dp
+    val minHeight = 48.dp
     val horizontalPadding = if (compact) 13.dp else 16.dp
     val cornerRadius = if (compact) 17.dp else 21.dp
     Surface(
-        onClick = onClick,
+        onClick = rememberAsterClick(onClick, enabled),
         enabled = enabled,
         interactionSource = interactionSource,
         color = fill,
@@ -814,7 +822,7 @@ fun AsterPillButton(
         border = if (primary) null else BorderStroke(1.dp, stroke),
         modifier = modifier
             .heightIn(min = minHeight)
-            .appleSpringPressable(pressedScale = 0.94f, enabled = enabled, interactionSource = interactionSource)
+            .appleSpringPressable(pressedScale = 0.96f, enabled = enabled, enableHaptics = false, interactionSource = interactionSource)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = horizontalPadding, vertical = if (compact) 6.dp else 9.dp),

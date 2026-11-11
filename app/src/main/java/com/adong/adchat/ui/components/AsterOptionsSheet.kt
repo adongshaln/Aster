@@ -25,8 +25,8 @@ fun AsterOptionsSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = Canvas,
-        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
-        dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
+        shape = AsterShape.sheet,
+        dragHandle = { BottomSheetDefaults.DragHandle(width = 32.dp, height = 4.dp, color = Hairline) }
     ) {
         Column(
             Modifier
@@ -35,7 +35,7 @@ fun AsterOptionsSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             AsterSheetHeader(title, subtitle, headerIcon, onDismiss)
             content()

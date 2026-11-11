@@ -114,7 +114,7 @@ internal class IslandSurfaceView(context: Context) : FrameLayout(context) {
             paperPaint.clearShadowLayer()
         } else {
             val alpha = (((palette.shadow ushr 24) and 0xFF) * step / 32f).toInt()
-            paperPaint.setShadowLayer(14f * density, 0f, 6f * density,
+            paperPaint.setShadowLayer(12f * density, 0f, 4f * density,
                 (palette.shadow and 0x00FFFFFF) or (alpha shl 24))
         }
     }

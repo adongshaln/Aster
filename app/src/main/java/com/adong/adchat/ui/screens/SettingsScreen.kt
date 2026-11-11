@@ -965,7 +965,7 @@ private fun formatRate(rate: com.adong.adchat.data.PriceRange, symbol: String = 
 
 @Composable
 private fun SettingsGroupLabel(text: String) {
-    Text(text, Modifier.padding(start = 4.dp, top = 8.dp), color = MutedInk, style = MaterialTheme.typography.labelMedium)
+    com.adong.adchat.ui.components.AsterSectionLabel(text, Modifier.padding(horizontal = 4.dp))
 }
 
 @Composable
@@ -977,8 +977,7 @@ private fun SettingsNavigationGroup(rows: List<Pair<SettingsDestination, String>
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = Surface,
-        shape = RoundedCornerShape(22.dp),
-        border = BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
+        shape = RoundedCornerShape(20.dp)
     ) {
         Column {
             rows.forEachIndexed { index, (destination, summary) ->
@@ -991,20 +990,23 @@ private fun SettingsNavigationGroup(rows: List<Pair<SettingsDestination, String>
 
 @Composable
 private fun SettingsActionRow(title: String, summary: String, icon: ImageVector, grouped: Boolean = false, onClick: () -> Unit) {
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Surface(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth().then(if (grouped) Modifier else Modifier.appleSpringPressable(pressedScale = 0.985f)),
+        interactionSource = interaction,
+        modifier = Modifier.fillMaxWidth().appleSpringPressable(pressedScale = 0.985f,
+            enableHaptics = false, interactionSource = interaction),
         color = Surface,
         contentColor = Ink,
         shape = RoundedCornerShape(if (grouped) 0.dp else 22.dp),
-        border = if (grouped) null else BorderStroke(1.dp, Hairline.copy(alpha = 0.65f))
+        border = null
     ) {
-        Row(Modifier.heightIn(min = 72.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (grouped) SurfaceInset else AccentSoft), contentAlignment = Alignment.Center) {
-                Icon(icon, null, Modifier.size(19.dp), tint = if (grouped) MutedInk else OnAccentSoft)
+        Row(Modifier.heightIn(min = 76.dp).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(SurfaceInset.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(18.dp), tint = MutedInk)
             }
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
                 Text(summary, color = MutedInk, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             Icon(Icons.Rounded.ChevronRight, null, Modifier.size(20.dp), tint = MutedInk)

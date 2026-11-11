@@ -89,10 +89,10 @@ fun QuickModelSwitcher(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         containerColor = Canvas,
-        shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp),
+        shape = AsterShape.sheet,
         dragHandle = { BottomSheetDefaults.DragHandle(width = 42.dp, color = Hairline) }
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
             val subtitle = when (kind) {
                 RouteKind.Chat -> "切换后作用于之后的对话"
                 RouteKind.Image -> "先确认 API 路由，再选择模型"
@@ -114,7 +114,7 @@ fun QuickModelSwitcher(
             )
             Spacer(Modifier.height(18.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("API 路由", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                Text("服务", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
                 Text("${vm.profiles.size} 个配置", color = MutedInk, style = MaterialTheme.typography.labelMedium)
             }
             Spacer(Modifier.height(9.dp))
@@ -129,33 +129,25 @@ fun QuickModelSwitcher(
                             query = ""
                         },
                         interactionSource = profileInteraction,
-                        color = if (selected) AccentSoft else Surface,
+                        color = if (selected) Surface else SurfaceInset.copy(alpha = 0.5f),
                         contentColor = Ink,
-                        border = if (selected) BorderStroke(1.dp, Accent.copy(alpha = .5f)) else BorderStroke(1.dp, Hairline),
+                        border = if (selected) BorderStroke(0.7.dp, Hairline) else null,
                         shape = RoundedCornerShape(19.dp),
                         modifier = Modifier
-                            .width(228.dp)
+                            .width(184.dp)
                             .appleSpringPressable(pressedScale = 0.97f, interactionSource = profileInteraction)
                     ) {
-                        Column(Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(36.dp).clip(RoundedCornerShape(12.dp)).background(if (selected) Surface else Canvas), contentAlignment = Alignment.Center) {
-                                    Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp), tint = if (selected) OnAccentSoft else MutedInk)
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Text(profile.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(if (connection.phase == ConnectionPhase.Success) "连接可用" else connection.title, color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                                }
-                                Box(Modifier.size(9.dp).clip(CircleShape).background(when (connection.phase) {
-                                    ConnectionPhase.Success -> Sage
-                                    ConnectionPhase.Error -> Danger
-                                    ConnectionPhase.Testing -> Accent
-                                    ConnectionPhase.Idle -> MutedInk
-                                }))
+                        Row(Modifier.heightIn(min = 56.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Icon(Icons.Rounded.Dns, null, Modifier.size(18.dp), tint = if (selected) AccentInk else MutedInk)
+                            Column(Modifier.weight(1f)) {
+                                Text(profile.name, style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(if (connection.phase == ConnectionPhase.Success) "连接可用" else connection.title,
+                                    color = MutedInk, style = MaterialTheme.typography.labelSmall, maxLines = 1)
                             }
-                            Spacer(Modifier.height(11.dp))
-                            Text(profile.baseUrl, color = MutedInk, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelMedium)
+                            if (selected) Icon(Icons.Rounded.Check, "当前服务", Modifier.size(16.dp), tint = AccentInk)
                         }
                     }
                 }
@@ -223,9 +215,9 @@ fun QuickModelSwitcher(
                                     }
                                     onDismiss()
                                 },
-                                color = if (selected) AccentSoft else Surface,
+                                color = if (selected) Surface else Color.Transparent,
                                 contentColor = Ink,
-                                border = BorderStroke(1.dp, if (selected) Accent.copy(alpha = .5f) else Hairline.copy(alpha = 0.65f)),
+                                border = if (selected) BorderStroke(0.7.dp, Hairline) else null,
                                 shape = RoundedCornerShape(18.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()

@@ -2,6 +2,7 @@ package com.adong.adchat.ui.components
 
 import android.app.Activity
 import android.os.Looper
+import android.webkit.WebView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -15,12 +16,32 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.LooperMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowWebView
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28])
+@Config(sdk = [28], shadows = [OfflineArtifactViewTest.VisualStateWebViewShadow::class])
 @LooperMode(LooperMode.Mode.PAUSED)
 class OfflineArtifactViewTest {
+    /** Robolectric has no Chromium compositor: let the test explicitly deliver painted frames. */
+    @Implements(WebView::class)
+    class VisualStateWebViewShadow : ShadowWebView() {
+        private val paints = ArrayDeque<Pair<Long, WebView.VisualStateCallback>>()
+
+        @Implementation
+        protected fun postVisualStateCallback(id: Long, callback: WebView.VisualStateCallback) {
+            paints.addLast(id to callback)
+        }
+
+        fun paintNextFrame() {
+            val (id, callback) = paints.removeFirst()
+            callback.onComplete(id)
+        }
+    }
+
     private class Owner : LifecycleOwner {
         override val lifecycle = LifecycleRegistry(this)
     }
@@ -40,8 +61,8 @@ class OfflineArtifactViewTest {
         view.release()
     }
 
-    private fun render(html: String, action: ((String) -> Unit)? = null, scripts: Boolean = true) {
-        view.render(html, scripts, null, action, owner.lifecycle) { fail("WebView failed to initialize") }
+    private fun render(html: String, action: ((String) -> Unit)? = null, scripts: Boolean = true, height: ((Int) -> Unit)? = null, ready: (() -> Unit)? = null) {
+        view.render(html, scripts, null, action, height, null, owner.lifecycle, onReady = ready) { fail("WebView failed to initialize") }
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(64))
     }
 
@@ -80,7 +101,7 @@ class OfflineArtifactViewTest {
         render("<p>old panel</p>", { oldCalls++ })
         val oldBridge = shadowOf(engine).getJavascriptInterface("Aster") as OfflinePanelActionBridge
         oldBridge.onPanelAction("旧选项")
-        view.render("<p>new panel</p>", true, null, { newCalls++ }, owner.lifecycle) { fail() }
+        view.render("<p>new panel</p>", true, null, { newCalls++ }, null, null, owner.lifecycle) { fail() }
         // The old page can still hold its bridge until the deferred document load completes.
         oldBridge.onPanelAction("另一个旧选项")
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(64))
@@ -111,7 +132,7 @@ class OfflineArtifactViewTest {
     fun sandboxAndLifecycleRemainEnforcedAcrossUpdates() {
         val engine = checkNotNull(view.engine)
         render("<p>panel</p>", {})
-        assertTrue(engine.settings.blockNetworkLoads)
+        assertFalse(engine.settings.blockNetworkLoads)
         assertFalse(engine.settings.allowFileAccess)
         assertFalse(engine.settings.allowContentAccess)
         assertFalse(engine.settings.domStorageEnabled)
@@ -122,6 +143,113 @@ class OfflineArtifactViewTest {
         render("<p>static</p>", {}, scripts = false)
         assertFalse(engine.settings.javaScriptEnabled)
         assertNull(shadowOf(engine).getJavascriptInterface("Aster"))
+    }
+
+    @Test
+    fun heightBridgeBoundsAndDispatchesToMainThread() {
+        val bridge = OfflinePanelActionBridge()
+        val received = mutableListOf<Int>()
+        bridge.onHeight = {
+            assertSame(Looper.getMainLooper(), Looper.myLooper())
+            received += it
+        }
+        Thread {
+            bridge.onHeight(0)
+            bridge.onHeight(20001)
+            bridge.onHeight(640)
+        }.apply { start(); join() }
+        assertTrue(received.isEmpty())
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(640), received)
+    }
+
+    @Test
+    fun unauthorizedCardsOnlyExposeHeightAndDropOldMeasurementsOnModeChange() {
+        val engine = checkNotNull(view.engine)
+        val heights = mutableListOf<Int>()
+        var actions = 0
+        render("<details>safe</details>", action = { actions++ }, scripts = false, height = { heights += it })
+        assertTrue(engine.settings.javaScriptEnabled)
+        val heightBridge = shadowOf(engine).getJavascriptInterface("Aster") as OfflineHeightBridge
+        val exposed = heightBridge.javaClass.methods.filter { it.isAnnotationPresent(android.webkit.JavascriptInterface::class.java) }
+        assertEquals(listOf("onHeight"), exposed.map { it.name })
+        heightBridge.onHeight(120)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(120), heights)
+        heightBridge.onHeight(800)
+        view.render("<p>static</p>", false, null, null, null, null, owner.lifecycle) { fail() }
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(64))
+        heightBridge.onHeight(900)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(120), heights)
+        assertEquals(0, actions)
+        assertFalse(engine.settings.javaScriptEnabled)
+        assertNull(shadowOf(engine).getJavascriptInterface("Aster"))
+    }
+
+    @Test
+    fun heightBurstsDeliverOnlyLatestDistinctSizeAndDropInvalidatedWork() {
+        val bridge = OfflinePanelActionBridge()
+        val received = mutableListOf<Int>()
+        bridge.onHeight = received::add
+        listOf(640, 800, 800, 720).forEach(bridge::onHeight)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(720), received)
+        bridge.onHeight(720)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(720), received)
+        bridge.onHeight(900)
+        bridge.invalidate()
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(720), received)
+    }
+
+    @Test
+    fun revealWaitsForPaintAndIgnoresReplacedAndReleasedDocuments() {
+        val engine = checkNotNull(view.engine)
+        val compositor = Shadow.extract<VisualStateWebViewShadow>(engine)
+        var first = 0
+        var second = 0
+        var replacement = 0
+        render("<p>first</p>", ready = { first++ })
+        shadowOf(engine).webViewClient.onPageCommitVisible(engine, null)
+        shadowOf(engine).webViewClient.onPageFinished(engine, null)
+        assertEquals(0, first)
+        render("<p>second</p>", ready = { second++ })
+        compositor.paintNextFrame()
+        assertEquals(0, first)
+        assertEquals(0, second)
+        shadowOf(engine).webViewClient.onPageCommitVisible(engine, null)
+        assertEquals(0, second)
+        compositor.paintNextFrame()
+        assertEquals(1, second)
+        shadowOf(engine).webViewClient.onPageFinished(engine, null)
+        val loaded = shadowOf(engine).lastLoadDataWithBaseURL
+        render("<p>second</p>", ready = { replacement++ })
+        assertSame(loaded, shadowOf(engine).lastLoadDataWithBaseURL)
+        assertEquals(1, replacement)
+        render("<p>third</p>", ready = { replacement++ })
+        shadowOf(engine).webViewClient.onPageFinished(engine, null)
+        view.release()
+        compositor.paintNextFrame()
+        assertEquals(1, replacement)
+    }
+
+    @Test
+    fun heightOnlyCallbackEnablesBridgeAndInjectsReporter() {
+        val engine = checkNotNull(view.engine)
+        var heights = mutableListOf<Int>()
+        render("<p>tall</p>", height = { heights += it })
+        assertNotNull(shadowOf(engine).getJavascriptInterface("Aster"))
+        val bridge = shadowOf(engine).getJavascriptInterface("Aster") as OfflinePanelActionBridge
+        bridge.onHeight(800)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(listOf(800), heights)
+        val plain = HtmlPreviewDocument.wrap("<p>x</p>", true, false, false)
+        assertFalse(plain.contains("data-aster-height"))
+        val adaptive = HtmlPreviewDocument.wrap("<p>x</p>", true, false, true)
+        assertTrue(adaptive.contains("data-aster-height"))
+        assertTrue(adaptive.contains("asterHeight"))
     }
 
     @Test

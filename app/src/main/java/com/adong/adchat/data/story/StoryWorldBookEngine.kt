@@ -8,17 +8,19 @@ data class StoryWorldBookActivation(
 
 object StoryWorldBookEngine {
     fun activate(book: StoryWorldBook, scanText: String): StoryWorldBookActivation {
-        val haystack = scanText.lowercase()
         val candidates = book.entries.filter { it.enabled && it.content.isNotBlank() }
         val selected = linkedSetOf<StoryWorldBookEntry>()
 
+        fun contains(entry: StoryWorldBookEntry, text: String, key: String): Boolean =
+            if (entry.caseSensitive) text.contains(key) else text.lowercase().contains(key.lowercase())
+
         fun matches(entry: StoryWorldBookEntry, text: String): Boolean =
-            entry.constant || (entry.keys.isNotEmpty() && entry.keys.any { it.isNotBlank() && text.contains(it.lowercase()) })
+            entry.constant || (entry.keys.isNotEmpty() && entry.keys.any { it.isNotBlank() && contains(entry, text, it) })
 
         fun secondaryPasses(entry: StoryWorldBookEntry, text: String): Boolean {
             val secondary = entry.secondaryKeys.filter { it.isNotBlank() }
             if (secondary.isEmpty()) return true
-            val present = secondary.map { text.contains(it.lowercase()) }
+            val present = secondary.map { contains(entry, text, it) }
             return when (entry.logic) {
                 WorldLogic.AND_ANY -> present.any { it }
                 WorldLogic.NOT_ANY -> present.none { it }
@@ -29,11 +31,11 @@ object StoryWorldBookEngine {
 
         candidates.filter { it.constant }.forEach { selected += it }
         candidates.filter { !it.constant && it.keys.isNotEmpty() }
-            .filter { matches(it, haystack) && secondaryPasses(it, haystack) }
+            .filter { matches(it, scanText) && secondaryPasses(it, scanText) }
             .forEach { selected += it }
 
         if (book.recursive) {
-            var swept = selected.map { it.content }.joinToString("\n").lowercase()
+            var swept = selected.map { it.content }.joinToString("\n")
             var changed = true
             var guard = 0
             while (changed && guard++ < 3) {
@@ -42,14 +44,17 @@ object StoryWorldBookEngine {
                     .filter { matches(it, swept) && secondaryPasses(it, swept) }
                     .forEach {
                         selected += it
-                        swept += "\n" + it.content.lowercase()
+                        swept += "\n" + it.content
                         changed = true
                     }
             }
         }
 
+        // Keep higher-priority entries first when the budget runs out; insertion_order then orders placement.
         val ordered = selected.sortedWith(
-            compareByDescending<StoryWorldBookEntry> { it.constant }.thenByDescending { it.insertionOrder }
+            compareByDescending<StoryWorldBookEntry> { it.constant }
+                .thenByDescending { it.priority }
+                .thenByDescending { it.insertionOrder }
         )
         var budget = book.charBudget
         val kept = mutableListOf<StoryWorldBookEntry>()

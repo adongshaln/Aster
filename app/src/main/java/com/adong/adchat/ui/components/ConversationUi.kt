@@ -183,19 +183,19 @@ fun ConversationComposer(
         label = "composer-corner"
     )
     val elevation by animateDpAsState(
-        targetValue = if (expanded) 6.dp else 2.dp,
+        targetValue = if (expanded) 3.dp else 1.dp,
         animationSpec = if (motionEnabled) AsterSpring.spatial() else snap(),
         label = "composer-elevation"
     )
     val outline by animateColorAsState(
-        targetValue = if (expanded) Ink.copy(alpha = 0.20f) else Hairline.copy(alpha = 0.90f),
+        targetValue = if (expanded) Hairline else Hairline.copy(alpha = 0.65f),
         animationSpec = if (motionEnabled) AsterSpring.editorial() else snap(),
         label = "composer-outline"
     )
     val sendContainer by animateColorAsState(
         targetValue = when {
             loading -> Ink
-            canTrigger -> Accent
+            canTrigger -> Ink
             else -> SurfaceInset
         },
         animationSpec = if (motionEnabled) AsterSpring.editorial() else snap(),
@@ -203,7 +203,7 @@ fun ConversationComposer(
     )
     val sendInk = when {
         loading -> OnInk
-        canTrigger -> OnAccent
+        canTrigger -> OnInk
         else -> MutedInk.copy(alpha = 0.45f)
     }
     val optionsInteraction = remember { MutableInteractionSource() }
@@ -216,7 +216,7 @@ fun ConversationComposer(
         modifier.fillMaxWidth().padding(horizontal = 14.dp).padding(top = 4.dp, bottom = 10.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
-        val compactWidth = minOf(maxWidth * 0.88f, 360.dp)
+        val compactWidth = minOf(maxWidth * 0.96f, 420.dp)
         val shellWidth by animateDpAsState(
             targetValue = if (expanded || attachments.isNotEmpty()) maxWidth else compactWidth,
             animationSpec = if (motionEnabled) AsterSpring.releaseHorizontal() else snap(),
@@ -225,7 +225,7 @@ fun ConversationComposer(
         Surface(
             color = Surface,
             shape = RoundedCornerShape(corner.coerceAtLeast(0.dp)),
-            border = BorderStroke(0.8.dp, outline),
+            border = BorderStroke(0.6.dp, outline),
             shadowElevation = elevation.coerceAtLeast(0.dp),
             modifier = Modifier
                 .width(shellWidth.coerceIn(0.dp, maxWidth))
@@ -708,26 +708,31 @@ fun ConversationSheetAction(
     modifier: Modifier = Modifier,
     detail: String? = null
 ) {
+    val interaction = remember { MutableInteractionSource() }
     Surface(
-        onClick = onClick,
+        onClick = rememberAsterClick(onClick, enabled),
         enabled = enabled,
+        interactionSource = interaction,
         color = Surface,
         contentColor = if (enabled) Ink else MutedInk,
         shape = RoundedCornerShape(18.dp),
-        border = BorderStroke(0.8.dp, Hairline),
-        modifier = modifier.appleSpringPressable(pressedScale = 0.94f, enabled = enabled)
+        modifier = modifier.appleSpringPressable(pressedScale = 0.975f, enabled = enabled,
+            enableHaptics = false, interactionSource = interaction)
     ) {
-        Column(
+        Row(
             Modifier
-                .heightIn(min = 84.dp)
-                .padding(horizontal = 10.dp, vertical = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .heightIn(min = 60.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, null, Modifier.size(22.dp), tint = if (enabled) Accent else MutedInk)
-            Spacer(Modifier.height(7.dp))
-            Text(label, style = MaterialTheme.typography.labelLarge)
-            detail?.let {
-                Text(it, style = MaterialTheme.typography.labelSmall, color = MutedInk, textAlign = TextAlign.Center)
+            Icon(icon, null, Modifier.size(21.dp), tint = if (enabled) AccentInk else MutedInk)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(label, style = MaterialTheme.typography.labelLarge)
+                detail?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = MutedInk,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -837,6 +842,30 @@ fun ConversationJumpToBottom(
                     Modifier.size(22.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+fun ComposerToolToggle(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(color = Surface, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(Modifier.clickable(onClick = rememberAsterClick({ onCheckedChange(!checked) }))
+            .heightIn(min = 68.dp).padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(if (checked) AccentSoft else SurfaceInset), contentAlignment = Alignment.Center) {
+                Icon(icon, null, Modifier.size(19.dp), tint = if (checked) Accent else MutedInk)
+            }
+            Spacer(Modifier.width(11.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium, color = Ink, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = MutedInk, lineHeight = 16.sp)
+            }
+            AsterSwitch(checked = checked, onCheckedChange = onCheckedChange)
         }
     }
 }

@@ -102,6 +102,21 @@ class StoryProsePresentationTest {
         assertTrue(result.blocks.any { it.text == "后文" })
     }
 
+    @Test fun unlabeledFenceProseReadsAsTextInsteadOfCodeBlock() {
+        val result = present("```\n标题\n\n正文段落\n```")
+        val text = result.blocks.joinToString("\n") { it.text }
+        assertTrue(text.contains("标题"))
+        assertTrue(text.contains("正文段落"))
+        assertFalse(text.contains("```"))
+        assertTrue(result.blocks.none { it.html != null })
+    }
+
+    @Test fun unlabeledFenceWrappingHtmlDocumentRoutesToSandbox() {
+        val document = "<!doctype html><html><head><style>.x{color:red}</style></head><body>开场界面</body></html>"
+        val result = present("```\n$document\n```")
+        assertTrue(result.blocks.any { it.html != null && it.html!!.contains("开场界面") })
+    }
+
     @Test fun bridgedDocumentIsStrippedAndStaysStableAcrossPresentations() {
         val document = "<!doctype html><html><head><style>.a{color:red}</style></head><body><div class=\"panel\">面板</div></body></html>"
         // simulate an already-bridged document whose capture script carries the bridge token
