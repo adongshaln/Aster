@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/adongshaln/Aster/releases/latest"><img src="https://img.shields.io/badge/Release-4.3.4%20(build%2089)-D97757?style=flat-square&labelColor=262624" alt="Release 4.3.4" /></a>
+  <a href="https://github.com/adongshaln/Aster/releases/latest"><img src="https://img.shields.io/badge/Release-4.3.5%20(build%2090)-D97757?style=flat-square&labelColor=262624" alt="Release 4.3.5" /></a>
   <img src="https://img.shields.io/badge/Platform-Android%208.0%2B%20(SDK%2036)-FAF9F5?style=flat-square&labelColor=262624&color=E3E0D6" alt="Android SDK 36" />
   <img src="https://img.shields.io/badge/UI-100%25%20Kotlin%20%26%20Compose-FAF9F5?style=flat-square&labelColor=262624&color=E3E0D6" alt="Kotlin & Compose" />
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-History-FAF9F5?style=flat-square&labelColor=262624&color=E3E0D6" alt="Changelog" /></a>
@@ -33,7 +33,7 @@ Aster 的所有界面遵循同一套物理与材质法则，不允许任何生�
     </td>
     <td width="34%" valign="top">
       <h4>03 · 文学衬线与纸面</h4>
-      <p>象牙暖纸（<code>#FAF9F5</code>）与温润炭黑（<code>#262624</code>）双色调色板，搭配可变字重文学衬线标题与高易读度正文排版。输入胶囊上的原生像素伙伴 <b>Clawd</b> 实时跟随你的敲击、停顿与模型吐字律动。</p>
+      <p>暖纸画布（<code>#F5F3EF</code>）、轻盈纸面（<code>#FFFDFA</code>）与墨色主操作，搭配衬线标题和分层正文排版；深色模式单独处理表面与文字层次。输入胶囊上的原生像素伙伴 <b>Clawd</b> 跟随你的敲击、停顿与模型吐字律动。</p>
     </td>
   </tr>
 </table>
@@ -54,10 +54,12 @@ Aster 的所有界面遵循同一套物理与材质法则，不允许任何生�
 - **无干扰思考手风琴**：推理模型的思考链实时独立流式呈现，正文开始输出时自动平滑折叠，绝不混入历史上下文污染后续轮次；断流中断后支持原位安全续写。
 - **弹性输入胶囊**：聚焦弹性展开，悬浮滑轨支持连续拖动调节模型思考强度（松手吸附受支持档位，最高档绽放有限时长星芒流光），并支持最多 1M 自定义上下文预算与独立快速模型的淡色内联输入预测。
 
-### 3. 故事工作区 —— 结构化记忆与设定隔离
-专为超长篇互动叙事与共同创作打造的独立 SQLite（Schema v12）工作区：
-- **正文与讨论硬边界**：内置 `[ASTER_STORY_DISCUSSION_MODE]` 架构级隔离——在「讨论区」商讨大纲、推敲人设或选段试改绝不会污染正式小说成稿，讨论候选需经确认才可升格为设定。
-- **自动档案与冲突仲裁**：后台按完整有效版本自动沉淀人物档案、客观剧情事实、角色主观认知与关系网，自动识别结构化状态矛盾并交由创作者裁决，支持多路线快照分支与 SillyTavern 酒馆预设导入。
+### 3. 剧情 RP —— 角色卡与独立会话
+- **角色与上下文配置**：导入角色卡，选择开场白、用户人设、世界书和酒馆预设，按剧情会话保存配置。
+- **回复与会话管理**：支持重生成、回复切换、续写、代写、消息编辑和会话分支；会话按文件独立保存，生成中保存断点。
+- **卡片呈现与权限**：支持剧情 HTML 状态栏、正则、模板及本地 helper 资源；卡片脚本需要明确授权，无脚本授权的状态栏仍能正常展开与测量高度。
+
+旧故事工作区已废弃，不再作为当前功能入口。剧情 RP 与其数据结构、交互流程分别维护。
 
 ### 4. 制图与视觉流水线 —— 并发画布与原位嵌字翻译
 - **三协议绘图引擎**：统一接入 OpenAI Images、Gemini 视觉生成模型与 NovelAI Diffusion，支持多参考图编辑与多任务独立快照并发生成。
@@ -78,7 +80,7 @@ Aster 的所有界面遵循同一套物理与材质法则，不允许任何生�
 ```text
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                         Aster Native UI (Compose)                         │
-│   Chat Capsule & Clawd  ·  Story Workspace  ·  Studio  ·  Usage Console   │
+│   Chat Capsule & Clawd  ·  RP Workspace  ·  Studio  ·  Usage Console      │
 ├───────────────────────────────────┬───────────────────────────────────────┤
 │     Star Island Overlay Engine    │         Multi-API Router Layer        │
 │  · 288-Sample Continuous Contour  │  · OpenAI Responses / Chat SSE        │
@@ -87,7 +89,7 @@ Aster 的所有界面遵循同一套物理与材质法则，不允许任何生�
 │  · One-Shot A11y Screenshot Host  │  · One-Shot Replay Guard & Metering   │
 ├───────────────────────────────────┴───────────────────────────────────────┤
 │                     Local-First Persistence & Sandbox                     │
-│  · Isolated Story SQLite (v12)    · Hardened Offline Mermaid/HTML WebView │
+│  · Per-Session RP Files          · Hardened Offline Mermaid/HTML WebView │
 │  · Memory-Only Screen Crops       · Native PDFBox / Office / GIF Encoder  │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
@@ -128,7 +130,7 @@ python3 tools/mock_api.py --port 8001 --label image-api
 
 ### 持续集成与固定签名
 - 本地签名可将 `keystore.properties.example` 复制为 `keystore.properties`（已被 Git 忽略，切勿提交私钥）；升级覆盖安装需保持同一套签名证书。
-- GitHub Actions 在每次推送与 `v*` 标签发布时自动执行全量单元测试、Release Lint 静态检查与 `apksigner` 签名校验，并在版本标签推送时自动发布附带正式签名 APK 的 GitHub Release。
+- GitHub Actions 在推送与 `v*` 标签发布时执行单元测试、Release 构建与 `apksigner` 签名校验，并在版本标签构建成功后发布附带正式签名 APK 的 GitHub Release。
 
 <br/>
 
@@ -140,7 +142,8 @@ python3 tools/mock_api.py --port 8001 --label image-api
 | --- | --- |
 | 星岛轮廓拓扑、屏幕提问与无障碍边界 | [docs/STAR_ISLAND.md](docs/STAR_ISLAND.md) · [docs/ISLAND_CLAUDE_INK.md](docs/ISLAND_CLAUDE_INK.md) |
 | 输入胶囊、内联预测、思考浮层与 Clawd 物理 | [docs/COMPOSER_CAPSULE.md](docs/COMPOSER_CAPSULE.md) · [docs/CLAWD_NATIVE_PORT.md](docs/CLAWD_NATIVE_PORT.md) |
-| 故事模式架构方案、SQLite 迁移与验收矩阵 | [docs/STORY_MODE_IMPLEMENTATION_PLAN.md](docs/STORY_MODE_IMPLEMENTATION_PLAN.md) · [docs/STORY_MODE_ACCEPTANCE.md](docs/STORY_MODE_ACCEPTANCE.md) |
+| 原生视觉升级与实际覆盖记录 | [docs/ASTER_DESIGN_UPGRADE_PLAN.md](docs/ASTER_DESIGN_UPGRADE_PLAN.md) · [docs/ASTER_VISUAL_UPGRADE_DELIVERY.md](docs/ASTER_VISUAL_UPGRADE_DELIVERY.md) |
+| 旧故事模式历史方案（已废弃） | [docs/STORY_MODE_IMPLEMENTATION_PLAN.md](docs/STORY_MODE_IMPLEMENTATION_PLAN.md) · [docs/STORY_MODE_ACCEPTANCE.md](docs/STORY_MODE_ACCEPTANCE.md) |
 | Anthropic 联网搜索、委托搜索与上下文预算 | [docs/ANTHROPIC_MESSAGES.md](docs/ANTHROPIC_MESSAGES.md) · [docs/DELEGATED_SEARCH.md](docs/DELEGATED_SEARCH.md) · [docs/MODEL_CONTEXT.md](docs/MODEL_CONTEXT.md) |
 | 离线文档生成、沙盒预览与 Skill 包规范 | [docs/DOCUMENT_GENERATION.md](docs/DOCUMENT_GENERATION.md) · [docs/HTML_PREVIEW.md](docs/HTML_PREVIEW.md) · [docs/SKILLS.md](docs/SKILLS.md) |
 | 完整稳定版演进历史 | [CHANGELOG.md](CHANGELOG.md) |
