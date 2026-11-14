@@ -6,6 +6,8 @@ import android.content.Context
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.BasicTextField
+import com.adong.adchat.ui.components.composerEnterKey
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +61,26 @@ class ComposerContextInteractionTest {
         rule.runOnIdle { assertEquals(1, sends) }
         rule.onNodeWithTag("chat-input").performClick().performImeAction()
         rule.runOnIdle { assertEquals(2, sends) }
+    }
+
+    @Test fun committingCompositionOnEnterDoesNotSendOnKeyRelease() {
+        val composing = mutableStateOf(true)
+        val input = mutableStateOf("候选文字")
+        var sends = 0
+        rule.runOnUiThread {
+            rule.activity.setContent {
+                AsterTheme {
+                    BasicTextField(input.value, { input.value = it }, Modifier.testTag("composition-input")
+                        .composerEnterKey(true, composing.value) { sends++ })
+                }
+            }
+        }
+        rule.onNodeWithTag("composition-input").performClick().performKeyInput { keyDown(Key.Enter) }
+        rule.runOnIdle { composing.value = false }
+        rule.onNodeWithTag("composition-input").performKeyInput { keyUp(Key.Enter) }
+        rule.runOnIdle { assertEquals(0, sends) }
+        rule.onNodeWithTag("composition-input").performKeyInput { pressKey(Key.Enter) }
+        rule.runOnIdle { assertEquals(1, sends) }
     }
 
     @Test fun filesAndQuotesRemainCardsAndImageRemoveTargetStaysReachable() {
