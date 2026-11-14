@@ -4,6 +4,8 @@ import android.app.Activity
 import android.app.Application
 import android.app.Instrumentation
 import android.content.Intent
+import android.util.Log
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -197,19 +199,31 @@ class ChatEndNavigationInteractionTest {
         // Begin at the natural reading tail; using the capsule itself opts out of auto-follow.
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
         rule.onNodeWithContentDescription("上一个回答").assertWidthIsAtLeast(48.dp).performClick()
-        rule.mainClock.advanceTimeBy(1_600)
+        settleNavigation("after-previous-to-two")
+        screenshot("after-previous-to-two")
         rule.onNodeWithText("回答 2").assertIsDisplayed()
         rule.onNodeWithContentDescription("上一个回答").performClick()
-        rule.mainClock.advanceTimeBy(1_600)
+        settleNavigation("after-previous-to-one")
+        screenshot("after-previous-to-one")
         rule.onNodeWithText("回答 1").assertIsDisplayed()
         rule.onNodeWithContentDescription("下一个回答").performClick()
-        rule.mainClock.advanceTimeBy(1_600)
+        settleNavigation("after-next-to-two")
         rule.onNodeWithText("回答 2").assertIsDisplayed()
         screenshot("navigation-light")
         rule.runOnIdle { vm.setThemeMode(THEME_MODE_DARK); fontScale.value = 1.4f }
         rule.mainClock.advanceTimeBy(1_000)
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
         screenshot("navigation-dark-large-text")
+    }
+
+    private fun settleNavigation(stage: String) {
+        repeat(10) {
+            rule.mainClock.advanceTimeBy(300)
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            android.os.SystemClock.sleep(30)
+        }
+        val axis = rule.onNodeWithTag("chat-messages").fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        Log.i("ChatEndNav", "$stage: scroll=${axis.value()}")
     }
 
     private fun screenshot(name: String) {
