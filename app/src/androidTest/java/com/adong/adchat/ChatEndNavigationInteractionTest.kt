@@ -194,12 +194,12 @@ class ChatEndNavigationInteractionTest {
                 assertTrue(exported.get()?.getStringExtra(Intent.EXTRA_TITLE)?.endsWith(".md") == true)
             }
         } finally { instrumentation.removeMonitor(monitor) }
-        rule.onNodeWithTag("chat-messages").performTouchInput { swipeDown() }
-        rule.mainClock.advanceTimeBy(1_600)
-        rule.onNodeWithTag("chat-messages").performScrollToIndex(3)
-        rule.mainClock.advanceTimeBy(1_600)
+        // Begin at the natural reading tail; using the capsule itself opts out of auto-follow.
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
         rule.onNodeWithContentDescription("上一个回答").assertWidthIsAtLeast(48.dp).performClick()
+        rule.mainClock.advanceTimeBy(1_600)
+        rule.onNodeWithText("回答 2").assertIsDisplayed()
+        rule.onNodeWithContentDescription("上一个回答").performClick()
         rule.mainClock.advanceTimeBy(1_600)
         rule.onNodeWithText("回答 1").assertIsDisplayed()
         rule.onNodeWithContentDescription("下一个回答").performClick()
