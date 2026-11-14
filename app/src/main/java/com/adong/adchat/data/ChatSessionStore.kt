@@ -16,13 +16,16 @@ class ChatSessionStore(context: Context) {
         }
         ChatSessionState(
             drafts = drafts,
+            contexts = JSONObject(prefs.getString("contexts_v1", "{}") ?: "{}").let { root ->
+                root.keys().asSequence().associateWith { ChatComposerContext.fromJson(root.optJSONObject(it)) }
+            },
             lastActiveKey = prefs.getString(KEY_LAST_ACTIVE, NEW_CONVERSATION_KEY) ?: NEW_CONVERSATION_KEY,
             hasSavedSession = prefs.contains(KEY_LAST_ACTIVE),
             newConversationIllustrationsEnabled = prefs.getBoolean("newIllustrationsEnabled", false)
         )
     }.getOrDefault(ChatSessionState())
 
-    fun save(drafts: Map<String, String>, lastActiveKey: String, newConversationIllustrationsEnabled: Boolean = false) {
+    fun save(drafts: Map<String, String>, lastActiveKey: String, newConversationIllustrationsEnabled: Boolean = false, contexts: Map<String, ChatComposerContext> = emptyMap()) {
         val root = JSONObject()
         drafts.asSequence()
             .filter { it.value.isNotBlank() }
@@ -30,6 +33,8 @@ class ChatSessionStore(context: Context) {
             .forEach { (key, value) -> root.put(key, value.take(MAX_DRAFT_LENGTH)) }
         prefs.edit()
             .putString(KEY_DRAFTS, root.toString())
+            .putString("contexts_v1", JSONObject().apply { contexts.filterValues { !it.isEmpty }.entries.take(MAX_DRAFTS)
+                .forEach { (key, value) -> put(key, value.toJson()) } }.toString())
             .putString(KEY_LAST_ACTIVE, lastActiveKey)
             .putBoolean("newIllustrationsEnabled", newConversationIllustrationsEnabled)
             .apply()
@@ -46,6 +51,7 @@ class ChatSessionStore(context: Context) {
 
 data class ChatSessionState(
     val drafts: Map<String, String> = emptyMap(),
+    val contexts: Map<String, ChatComposerContext> = emptyMap(),
     val lastActiveKey: String = ChatSessionStore.NEW_CONVERSATION_KEY,
     val hasSavedSession: Boolean = false,
     val newConversationIllustrationsEnabled: Boolean = false

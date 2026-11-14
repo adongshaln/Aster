@@ -25,10 +25,10 @@ internal object AnthropicMessages {
 
     /** 单条历史消息 → Messages 内容。无附件时保持纯字符串，有附件用块数组。 */
     fun messageContent(message: ChatMessage): Any {
-        if (message.attachments.isEmpty()) return message.content
+        if (message.attachments.isEmpty()) return message.requestContent()
         val content = JSONArray()
-        if (message.content.isNotBlank()) {
-            content.put(JSONObject().put("type", "text").put("text", message.content))
+        if (message.requestContent().isNotBlank()) {
+            content.put(JSONObject().put("type", "text").put("text", message.requestContent()))
         }
         message.attachments.forEach { attachment ->
             val bytes = attachment.bytes ?: throw IllegalStateException("无法读取对话图片：${attachment.name}")

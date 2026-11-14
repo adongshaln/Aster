@@ -102,6 +102,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.ChatDocumentAttachment
+import com.adong.adchat.data.ChatQuote
+import com.adong.adchat.ui.components.ConversationContextCards
+import com.adong.adchat.ui.components.QuoteSelectionScope
 import com.adong.adchat.data.chatImageHeaders
 import com.adong.adchat.data.downloadChatImage
 import com.adong.adchat.data.fetchPixivPreviewUrl
@@ -229,6 +233,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         contextModel,
         vm.chatInput,
         vm.chatAttachments.toList(),
+        vm.chatDocuments.toList(), vm.chatQuotes.toList(),
         vm.appConfig.systemPrompt,
         contextLimits
     ) {
@@ -453,18 +458,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             },
                             onConfigureContext = { showContextDialog = true },
                             onQuoteReply = {
-                                val snippet = message.content
-                                    .replace(Regex("\\s+"), " ")
-                                    .trim()
-                                    .take(96)
-                                    .let { if (message.content.length > 96) "$it…" else it }
-                                val prefix = "> $snippet\n\n"
-                                val nextInput = if (vm.chatInput.isBlank()) prefix else "${vm.chatInput.trimEnd()}\n\n$prefix"
-                                vm.updateChatInput(nextInput)
-                                scope.launch {
-                                    withFrameNanos { }
-                                    composerFocusRequester.requestFocus()
-                                }
+                                vm.quoteChatMessage(message.id)
+                                scope.launch { withFrameNanos { }; composerFocusRequester.requestFocus() }
+                            },
+                            onQuoteSelection = { selected ->
+                                vm.quoteChatMessage(message.id, selected)
+                                scope.launch { withFrameNanos { }; composerFocusRequester.requestFocus() }
                             },
                             onSaveFile = { file ->
                                 pendingFileExport = file
@@ -522,6 +521,9 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     suggestion = vm.inputSuggestion,
                     onSuggestionClick = { autoFollow = true; vm.sendInputSuggestion() },
                     attachments = vm.chatAttachments,
+                    documents = vm.chatDocuments, quotes = vm.chatQuotes,
+                    onRemoveDocument = vm::removeChatDocument, onRemoveQuote = vm::removeChatQuote,
+                    sendOnEnter = vm.appConfig.sendOnEnter,
                     profileName = vm.chatProfile.name,
                     model = vm.chatProfile.chatModel,
                     loading = vm.isChatLoading,
@@ -816,6 +818,7 @@ private fun ChatMessageItem(
     onEditResend: () -> Unit = {},
     onConfigureContext: () -> Unit = {},
     onQuoteReply: () -> Unit = {},
+    onQuoteSelection: (String) -> Unit = {},
     onCancelIllustration: () -> Unit = {},
     onRetryIllustration: () -> Unit = {},
     onSaveIllustration: () -> Unit = {},
@@ -861,16 +864,22 @@ private fun ChatMessageItem(
                     color = Accent.copy(alpha = 0.08f), contentColor = Ink, shape = RoundedCornerShape(18.dp)
                 ) {
                     Column(Modifier.padding(horizontal = 13.dp, vertical = 9.dp)) {
+                        ConversationContextCards(message.documents, message.quotes)
                         if (message.attachments.isNotEmpty()) {
                             ConversationImages(message.attachments)
                         }
                         if (message.content.isNotBlank()) {
-                            ExpandableUserMessage(message.id, message.content)
+                            QuoteSelectionScope(onQuoteSelection) {
+                                ExpandableUserMessage(message.id, message.content)
+                            }
                         }
                     }
                 }
                 Row(horizontalArrangement = Arrangement.End) {
-                    if (message.content.isNotBlank()) ConversationCopyAction(message.content)
+                    if (message.content.isNotBlank()) {
+                        ConversationCopyAction(message.content)
+                        ConversationMessageAction(Icons.Rounded.FormatQuote, "引用追问", onQuoteReply)
+                    }
                     ConversationMessageAction(Icons.Rounded.Edit, "编辑重发", onEditResend)
                 }
             } else {
@@ -888,6 +897,7 @@ private fun ChatMessageItem(
                 if (waitingForFirstToken && message.reasoning.isBlank() && message.toolActivities.isEmpty()) {
                     ConversationThinkingIndicator()
                 } else {
+                    QuoteSelectionScope(onQuoteSelection) {
                     CompositionLocalProvider(LocalMessageCitations provides message.citations) {
                         RichMessageText(
                             content = message.content,
@@ -895,6 +905,7 @@ private fun ChatMessageItem(
                             error = message.isError,
                             onStreamingTextAdvanced = onStreamingTextAdvanced
                         )
+                    }
                     }
                     if (showModelWorkingFoot(
                             message.isStreaming,
@@ -2759,6 +2770,11 @@ private fun ChatComposer(
     suggestion: String?,
     onSuggestionClick: () -> Unit,
     attachments: List<ChatImageAttachment>,
+    documents: List<ChatDocumentAttachment>,
+    quotes: List<ChatQuote>,
+    onRemoveDocument: (String) -> Unit,
+    onRemoveQuote: (String) -> Unit,
+    sendOnEnter: Boolean,
     profileName: String,
     model: String,
     loading: Boolean,
@@ -2816,6 +2832,8 @@ private fun ChatComposer(
     val effortChoices = remember(model) { ReasoningPolicy.choices(model) }
     ConversationComposer(
         value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentLoading,
+        documents = documents, quotes = quotes, onRemoveDocument = onRemoveDocument, onRemoveQuote = onRemoveQuote,
+        sendOnEnter = sendOnEnter,
         onValueChange = onValueChange, onOptionsClick = { showToolsSheet = true }, onRemoveImage = onRemoveImage,
         onSend = onSend, onStop = onStop, onFocusChange = onFocusChange,
         suggestion = suggestion, onSuggestionClick = onSuggestionClick,

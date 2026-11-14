@@ -330,6 +330,81 @@ class MainViewModelStateTest {
         return conversation
     }
 
+    @Test fun documentImportKeepsDraftAndOriginalFileAndRestoresOnlyInItsConversation() {
+        val original = java.io.File(application.filesDir, "media_downloads/source.txt").apply {
+            parentFile!!.mkdirs(); writeText("文件正文不应该出现在输入栏")
+        }
+        val uri = androidx.core.content.FileProvider.getUriForFile(application, "${application.packageName}.files", original)
+        ConversationStore(application).save(listOf(
+            Conversation(id = "files", title = "文件", profileId = "test", model = "gemini-test", messages = emptyList()),
+            Conversation(id = "other", title = "其他", profileId = "test", model = "gemini-test", messages = emptyList())))
+        val vm = createViewModel()
+        vm.selectConversation("files")
+        vm.updateChatInput("分析这个文件")
+        vm.attachChatDocument(uri)
+        await { !vm.isChatAttachmentLoading }
+        assertEquals("分析这个文件", vm.chatInput)
+        val file = vm.chatDocuments.single()
+        assertEquals("文件正文不应该出现在输入栏", file.text)
+        original.delete()
+        assertEquals(file.text, java.io.File(android.net.Uri.parse(file.uri).path!!).readText())
+        await { ChatSessionStore(application).load().contexts["files"]?.documents?.size == 1 }
+        vm.selectConversation("other")
+        assertTrue(vm.chatDocuments.isEmpty())
+        vm.selectConversation("files")
+        assertEquals(listOf(file), vm.chatDocuments)
+        val restored = createViewModel()
+        assertEquals("分析这个文件", restored.chatInput)
+        assertEquals(listOf(file), restored.chatDocuments)
+    }
+
+    @Test fun wholeAndPartialQuotesAreIndependentOfDraftAndSendWithoutTruncation() {
+        server.enqueue(completion("已收到引用"))
+        val vm = createViewModel()
+        val source = "首段文字。".repeat(40) + "引用末尾"
+        vm.messages += ChatMessage(id = 700, role = "assistant", content = source)
+        vm.updateChatInput("我的问题")
+        vm.quoteChatMessage(700)
+        vm.quoteChatMessage(700, "引用末尾")
+        assertEquals("我的问题", vm.chatInput)
+        assertEquals(source, vm.chatQuotes.first().text)
+        assertTrue(vm.chatQuotes.last().partial)
+        vm.updateChatInput("")
+        vm.sendMessage()
+        await { !vm.isChatLoading && server.requestCount == 1 }
+        val user = vm.messages.first { it.role == "user" }
+        assertEquals("", user.content)
+        assertEquals(2, user.quotes.size)
+        assertTrue(vm.chatQuotes.isEmpty())
+        val request = server.takeRequest(1, TimeUnit.SECONDS)!!.body.readUtf8()
+        assertTrue(request.contains("引用末尾"))
+    }
+
+    @Test fun retryRegenerateAndEditRetainDocumentsAndQuotesWithoutMixingTheNextDraft() {
+        val vm = createViewModel()
+        val file = com.adong.adchat.data.ChatDocumentAttachment(name = "plan.txt", uri = "file:///plan.txt",
+            mimeType = "text/plain", size = 20, text = "附件原文")
+        val quote = com.adong.adchat.data.ChatQuote(messageId = 1, role = "assistant", text = "精确选区", partial = true)
+        vm.messages += ChatMessage(id = 800, role = "user", content = "分析", documents = listOf(file), quotes = listOf(quote))
+        vm.messages += ChatMessage(id = 801, role = "assistant", content = "错误", isError = true)
+        vm.updateChatInput("下一轮草稿")
+        vm.chatQuotes += quote.copy(id = "next", text = "下一轮引用")
+        server.enqueue(completion("重试成功"))
+        vm.retryMessage(801)
+        await { !vm.isChatLoading && server.requestCount == 1 }
+        assertEquals(listOf(file), vm.messages.first().documents)
+        assertEquals(listOf(quote), vm.messages.first().quotes)
+        assertEquals("下一轮引用", vm.chatQuotes.single().text)
+        server.enqueue(completion("重新回答"))
+        vm.regenerateMessage(vm.messages.last().id)
+        await { !vm.isChatLoading && server.requestCount == 2 }
+        assertEquals(listOf(file), vm.messages.first().documents)
+        vm.editUserMessage(vm.messages.first().id)
+        assertEquals("分析", vm.chatInput)
+        assertEquals(listOf(file), vm.chatDocuments)
+        assertEquals(listOf(quote), vm.chatQuotes)
+    }
+
     private fun configure(suggestions: Boolean) {
         val profile = ApiProfile(id = "test", baseUrl = server.url("/").toString(), chatModel = "gemini-test",
             suggestionModel = if (suggestions) "gemini-test" else "", autoResumeStream = false)

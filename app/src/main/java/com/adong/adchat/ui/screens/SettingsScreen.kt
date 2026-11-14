@@ -505,7 +505,7 @@ private enum class SettingsDestination(val title: String, val keywords: String =
     Search("联网搜索", "联网 搜索 网页 X Search 后端", 2),
     Suggestions("输入建议", "输入 建议 补全 预测", 2),
     Appearance("外观与阅读", "主题 深色 浅色 系统 阅读"),
-    Assistant("助手偏好", "称呼 姓名 角色 提示词 system prompt 风格"),
+    Assistant("助手偏好", "称呼 姓名 角色 提示词 system prompt 风格 回车 发送 输入 换行 Enter"),
     Island("星岛", "星岛 悬浮窗 通知 翻译 润色 解释 网页 下载"),
     Skills("技能", "技能 Skill 安装 ZIP"),
     Usage("用量与成本", "用量 token 成本 价格 统计 模型 官方"),
@@ -1028,6 +1028,9 @@ private fun SettingsContentCard(content: @Composable ColumnScope.() -> Unit) {
 
 @Composable
 private fun ColumnScope.AssistantSettings(vm: MainViewModel) {
+    SettingSwitch("回车发送", "开启后回车发送，Shift + 回车换行；关闭后回车换行。",
+        vm.appConfig.sendOnEnter, onCheckedChange = vm::setSendOnEnter)
+    HorizontalDivider(Modifier.padding(vertical = 14.dp), color = Hairline)
     var editingName by remember { mutableStateOf(false) }
     if (editingName) {
         UserNamePromptDialog(

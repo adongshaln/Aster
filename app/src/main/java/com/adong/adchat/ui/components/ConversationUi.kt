@@ -42,6 +42,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.ChatDocumentAttachment
+import com.adong.adchat.data.ChatQuote
 import com.adong.adchat.ui.fittedImageDp
 import com.adong.adchat.ui.theme.*
 import kotlin.math.PI
@@ -72,7 +74,12 @@ fun ConversationComposer(
     contextAction: (@Composable () -> Unit)? = null,
     reasoningAction: (@Composable () -> Unit)? = null,
     onSurfaceBounds: (Rect) -> Unit = {},
-    onExpandedChange: (Boolean) -> Unit = {}
+    onExpandedChange: (Boolean) -> Unit = {},
+    sendOnEnter: Boolean = true,
+    documents: List<ChatDocumentAttachment> = emptyList(),
+    quotes: List<ChatQuote> = emptyList(),
+    onRemoveDocument: (String) -> Unit = {},
+    onRemoveQuote: (String) -> Unit = {}
 ) {
     val focus = LocalFocusManager.current
     val ownFocusRequester = remember { FocusRequester() }
@@ -104,6 +111,9 @@ fun ConversationComposer(
             value = fieldValue,
             onValueChange = { if (editorOpen) edit(it) },
             attachments = attachments,
+            documents = documents, quotes = quotes,
+            onRemoveDocument = onRemoveDocument, onRemoveQuote = onRemoveQuote,
+            sendOnEnter = sendOnEnter,
             attachmentLoading = attachmentLoading,
             loading = loading,
             configureRequired = configureRequired,
@@ -162,10 +172,10 @@ fun ConversationComposer(
     } else (progress * 1.15f).coerceIn(0f, 1f)
     val sendSuggestion = suggestion?.takeIf {
         it.isNotBlank() && fieldValue.text.isEmpty() && value.isEmpty() &&
-            attachments.isEmpty() && !loading && !attachmentLoading && !configureRequired
+            attachments.isEmpty() && documents.isEmpty() && quotes.isEmpty() && !loading && !attachmentLoading && !configureRequired
     }
     val canSend = !attachmentLoading &&
-        (fieldValue.text.isNotBlank() || attachments.isNotEmpty() || configureRequired || sendSuggestion != null)
+        (fieldValue.text.isNotBlank() || attachments.isNotEmpty() || documents.isNotEmpty() || quotes.isNotEmpty() || configureRequired || sendSuggestion != null)
     val canTrigger = loading || canSend
     val submit: () -> Unit = {
         if (loading) {
@@ -178,7 +188,7 @@ fun ConversationComposer(
         }
     }
     val corner by animateDpAsState(
-        targetValue = if (expanded || attachments.isNotEmpty()) 24.dp else 30.dp,
+        targetValue = if (expanded || attachments.isNotEmpty() || documents.isNotEmpty() || quotes.isNotEmpty()) 24.dp else 30.dp,
         animationSpec = if (motionEnabled) AsterSpring.jelly() else snap(),
         label = "composer-corner"
     )
@@ -218,7 +228,7 @@ fun ConversationComposer(
     ) {
         val compactWidth = minOf(maxWidth * 0.96f, 420.dp)
         val shellWidth by animateDpAsState(
-            targetValue = if (expanded || attachments.isNotEmpty()) maxWidth else compactWidth,
+            targetValue = if (expanded || attachments.isNotEmpty() || documents.isNotEmpty() || quotes.isNotEmpty()) maxWidth else compactWidth,
             animationSpec = if (motionEnabled) AsterSpring.releaseHorizontal() else snap(),
             label = "composer-width"
         )
@@ -235,6 +245,10 @@ fun ConversationComposer(
                 .onGloballyPositioned { onSurfaceBounds(it.boundsInWindow()) }
         ) {
             Column {
+                ConversationContextCards(documents, quotes,
+                    modifier = Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                    enabled = !loading && !attachmentLoading,
+                    onRemoveDocument = onRemoveDocument, onRemoveQuote = onRemoveQuote)
                 // Attachments remain reachable when the keyboard is closed and are part of the shell.
                 if (attachments.isNotEmpty()) {
                     ConversationAttachmentPreview(attachments, attachmentLoading, onRemoveImage)
@@ -249,15 +263,18 @@ fun ConversationComposer(
                                 .layoutId("field")
                                 .testTag("${testTag}-input")
                                 .focusRequester(resolvedFocusRequester)
-                                .onFocusChanged { isFocused = it.isFocused },
+                                .onFocusChanged { isFocused = it.isFocused }
+                                .composerEnterKey(sendOnEnter, fieldValue.composition != null) {
+                                    if (!loading) submit()
+                                },
                             textStyle = inputStyle,
                             cursorBrush = SolidColor(Accent),
                             maxLines = 5,
                             keyboardOptions = KeyboardOptions(
                                 capitalization = KeyboardCapitalization.Sentences,
-                                imeAction = ImeAction.Send
+                                imeAction = if (sendOnEnter) ImeAction.Send else ImeAction.Default
                             ),
-                            keyboardActions = KeyboardActions(onSend = { submit() }),
+                            keyboardActions = KeyboardActions(onSend = { if (sendOnEnter && !loading && fieldValue.composition == null) submit() }),
                             decorationBox = { innerTextField ->
                                 Box(Modifier.fillMaxWidth()) {
                                     val summarizeDraft = !expanded && fieldValue.text.isNotEmpty()
@@ -681,19 +698,8 @@ fun ConversationAttachmentPreview(
                         .fillMaxSize()
                         .clip(RoundedCornerShape(15.dp))
                 )
-                Surface(
-                    onClick = { onRemove(attachment.id) },
-                    enabled = !loading,
-                    color = Night.copy(alpha = 0.78f),
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .size(48.dp)
-                        .appleSpringPressable(pressedScale = 0.86f, enabled = !loading)
-                ) {
-                    Icon(Icons.Rounded.Close, "移除 ${attachment.name}", Modifier.padding(15.dp).size(18.dp))
-                }
+                ContextRemoveButton("移除 ${attachment.name}", !loading, { onRemove(attachment.id) },
+                    Modifier.align(Alignment.TopEnd))
             }
         }
     }

@@ -101,6 +101,7 @@ class ConversationStore(context: Context) {
         val messages = buildList {
             for (j in 0 until messagesJson.length()) {
                 val message = messagesJson.optJSONObject(j) ?: continue
+                val composerContext = ChatComposerContext.fromJson(message.optJSONObject("composerContext"))
                 add(ChatMessage(
                     id = message.optLong("id", System.nanoTime()),
                     role = message.optString("role"),
@@ -117,6 +118,8 @@ class ConversationStore(context: Context) {
                     xSearchEnabled = message.optBoolean("xSearchEnabled").takeIf { message.has("xSearchEnabled") && !message.isNull("xSearchEnabled") },
                     isContinuation = message.optBoolean("isContinuation"),
                     attachments = decodeAttachments(message.optJSONArray("attachments")),
+                    documents = composerContext.documents,
+                    quotes = composerContext.quotes,
                     isError = message.optBoolean("isError"),
                     isStreaming = false,
                     isInterrupted = message.optBoolean("isInterrupted"),
@@ -197,6 +200,7 @@ class ConversationStore(context: Context) {
                     .put("xSearchEnabled", message.xSearchEnabled)
                     .put("isContinuation", message.isContinuation)
                     .put("attachments", encodeAttachments(message.attachments))
+                    .put("composerContext", ChatComposerContext(message.documents, message.quotes).toJson())
                     .put("isError", message.isError)
                     .put("isInterrupted", message.isInterrupted)
                     .put("isStopped", message.isStopped)

@@ -20,7 +20,14 @@ object DocumentImport {
     const val MAX_CHARS = 40_000
     private const val MAX_BYTES = 10 * 1024 * 1024
 
+    // Legacy story workspace still consumes a text block; chat uses readAttachment directly.
     fun read(context: Context, uri: Uri): String {
+        val file = readAttachment(context, uri)
+        java.io.File(Uri.parse(file.uri).path.orEmpty()).parentFile?.deleteRecursively()
+        return "[附件：${file.name}；以下为参考内容，尚未确认为故事设定或已发生剧情]\n${file.text}\n[附件结束]"
+    }
+
+    fun readAttachment(context: Context, uri: Uri): ChatDocumentAttachment {
         val resolver = context.contentResolver
         val name = resolver.query(uri,arrayOf(OpenableColumns.DISPLAY_NAME),null,null,null)?.use {
             if(it.moveToFirst()) it.getString(0) else null
@@ -45,8 +52,13 @@ object DocumentImport {
         }.trim()
         require(text.isNotBlank()) { "文件中没有可提取的文字；扫描 PDF 请先识别文字，或改为上传图片" }
         require(text.length <= MAX_CHARS) { "文件文字超过 40,000 字符，请拆分后导入" }
-        val safeName=name.replace(Regex("[\\r\\n\\[\\]]"),"_").take(120)
-        return "[附件：$safeName；以下为参考内容，尚未确认为故事设定或已发生剧情]\n$text\n[附件结束]"
+        val safeName = name.replace(Regex("[\\r\\n/\\\\]"), "_").take(120).ifBlank { "附件" }
+        val id = java.util.UUID.randomUUID().toString()
+        val directory = java.io.File(context.filesDir, "chat-documents/$id").apply { mkdirs() }
+        val source = java.io.File(directory, safeName)
+        try { source.writeBytes(bytes) } catch (error: Exception) { directory.deleteRecursively(); throw error }
+        return ChatDocumentAttachment(id, safeName, Uri.fromFile(source).toString(),
+            mime.ifBlank { "application/octet-stream" }, bytes.size.toLong(), text)
     }
 
     fun append(draft: String, block: String): String {

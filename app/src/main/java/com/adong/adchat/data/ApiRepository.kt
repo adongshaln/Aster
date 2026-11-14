@@ -172,7 +172,11 @@ class ApiRepository internal constructor(
         }
         val askUserEnabled = skillsAllowed && BuiltInSkills.isEnabled(skillLoader)
         val toolsActive = profile.webSearchEnabled || profile.fileCreationEnabled || skillLoadingEnabled || askUserEnabled
-        val initialContext = ModelContextPolicy.prepare(systemPrompt, history, profile.contextLimits(model), trimHistory)
+        val requestHistory = history.map { message ->
+            if (message.documents.isEmpty() && message.quotes.isEmpty()) message else
+                message.copy(content = message.requestContent(), documents = emptyList(), quotes = emptyList())
+        }
+        val initialContext = ModelContextPolicy.prepare(systemPrompt, requestHistory, profile.contextLimits(model), trimHistory)
         if (initialContext.omittedTurns > 0) onContextTrim(initialContext.omittedTurns)
 
         suspend fun executeAttempt(
@@ -1941,7 +1945,7 @@ class ApiRepository internal constructor(
             val anthropicApi = profile.usesAnthropicMessages(model)
             val body = if (anthropicApi) {
                 val messages = JSONArray()
-                history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
+                history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.requestContent())) }
                 messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
                 JSONObject().put("model", model).put("max_tokens", outputTokens)
                     .put("system", InputSuggester.SUGGESTION_INSTRUCTION)
@@ -1949,7 +1953,7 @@ class ApiRepository internal constructor(
             } else if (responsesApi) {
                 val input = JSONArray()
                 history.forEach { message ->
-                    input.put(JSONObject().put("role", message.role).put("content", message.content))
+                    input.put(JSONObject().put("role", message.role).put("content", message.requestContent()))
                 }
                 input.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
                 JSONObject().put("model", model).put("instructions", InputSuggester.SUGGESTION_INSTRUCTION)
@@ -1957,7 +1961,7 @@ class ApiRepository internal constructor(
             } else {
                 val messages = JSONArray()
                     .put(JSONObject().put("role", "system").put("content", InputSuggester.SUGGESTION_INSTRUCTION))
-                history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.content)) }
+                history.forEach { message -> messages.put(JSONObject().put("role", message.role).put("content", message.requestContent())) }
                 messages.put(JSONObject().put("role", "user").put("content", InputSuggester.SUGGESTION_PLACEHOLDER))
                 JSONObject().put("model", model).put("max_tokens", outputTokens).put("messages", messages)
             }
@@ -2199,12 +2203,12 @@ $query"""
         message: ChatMessage,
         explicitCacheBreakpoint: Boolean
     ): Any {
-        if (message.attachments.isEmpty() && !explicitCacheBreakpoint) return message.content
+        if (message.attachments.isEmpty() && !explicitCacheBreakpoint) return message.requestContent()
         val content = JSONArray()
-        if (message.content.isNotBlank() || message.attachments.isEmpty()) {
+        if (message.requestContent().isNotBlank() || message.attachments.isEmpty()) {
             content.put(JSONObject()
                 .put("type", "text")
-                .put("text", message.content)
+                .put("text", message.requestContent())
                 .apply {
                     if (explicitCacheBreakpoint) {
                         put("prompt_cache_breakpoint", JSONObject().put("mode", "explicit"))
@@ -2220,10 +2224,10 @@ $query"""
     }
 
     private fun responsesMessageContent(message: ChatMessage): Any {
-        if (message.attachments.isEmpty()) return message.content
+        if (message.attachments.isEmpty()) return message.requestContent()
         val content = JSONArray()
-        if (message.content.isNotBlank()) {
-            content.put(JSONObject().put("type", "input_text").put("text", message.content))
+        if (message.requestContent().isNotBlank()) {
+            content.put(JSONObject().put("type", "input_text").put("text", message.requestContent()))
         }
         message.attachments.forEach { attachment ->
             content.put(JSONObject()

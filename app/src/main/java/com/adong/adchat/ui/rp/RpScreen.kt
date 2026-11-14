@@ -334,6 +334,7 @@ fun RpScreen(
                             }
                         }
                         ConversationComposer(
+                            sendOnEnter = mainVm.appConfig.sendOnEnter,
                             value = vm.draft,
                             attachments = emptyList(),
                             loading = vm.generating,

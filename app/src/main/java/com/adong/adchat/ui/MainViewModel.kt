@@ -86,6 +86,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private set
     @Volatile private var pendingStreamRecoveryClearId: Long? = null
     private val chatDrafts = linkedMapOf<String, String>()
+    private val chatContextDrafts = linkedMapOf<String, ChatComposerContext>()
     private var lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
     private var sessionSaveJob: Job? = null
 
@@ -115,6 +116,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var chatInput by mutableStateOf("")
         private set
     val chatAttachments = mutableStateListOf<ChatImageAttachment>()
+    val chatDocuments = mutableStateListOf<ChatDocumentAttachment>()
+    val chatQuotes = mutableStateListOf<ChatQuote>()
     var isChatAttachmentLoading by mutableStateOf(false)
         private set
 
@@ -142,6 +145,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val session = chatSessionStore.load()
         newConversationIllustrationsEnabled = session.newConversationIllustrationsEnabled
         chatDrafts.putAll(session.drafts)
+        chatContextDrafts.putAll(session.contexts)
         val restoredConversation = session.lastActiveKey
             .takeUnless { it == ChatSessionStore.NEW_CONVERSATION_KEY }
             ?.let { id -> conversations.firstOrNull { it.id == id } }
@@ -157,6 +161,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         lastActiveChatKey = activeConversationId ?: ChatSessionStore.NEW_CONVERSATION_KEY
         chatInput = chatDrafts[lastActiveChatKey].orEmpty()
+        restoreComposerContext(lastActiveChatKey)
         images.addAll(artworkStore.load())
         val retainedChatImages = conversations.flatMap { it.messages }.mapNotNull { it.illustration?.source }.toSet()
         viewModelScope.launch(Dispatchers.IO) { chatIllustrationStore.pruneCache(retainedChatImages) }
@@ -562,10 +567,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.getOrNull()
         val effective = prepared?.history ?: history
         val systemTokens = ContextTokenEstimate.text(appConfig.systemPrompt) + 64
-        var historyTokens = ContextTokenEstimate.text(draft) + if (draft.isBlank()) 0 else 16
+        val draftContent = ChatMessage(role = "user", content = draft,
+            documents = chatDocuments.toList(), quotes = chatQuotes.toList()).requestContent()
+        var historyTokens = ContextTokenEstimate.text(draftContent) + if (draftContent.isBlank()) 0 else 16
         var attachmentTokens = draftAttachments.size * ContextTokenEstimate.IMAGE_TOKENS
         effective.forEach { message ->
-            historyTokens += ContextTokenEstimate.text(message.content) + 16
+            historyTokens += ContextTokenEstimate.text(message.requestContent()) + 16
             attachmentTokens += message.attachments.size * ContextTokenEstimate.IMAGE_TOKENS
             message.toolActivities.forEach { historyTokens += ContextTokenEstimate.text(it.label) + 24 }
         }
@@ -622,6 +629,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!appConfig.userNamePromptDone) {
             appConfig = appConfig.copy(userNamePromptDone = true); persist()
         }
+    }
+
+    fun setSendOnEnter(enabled: Boolean) {
+        appConfig = appConfig.copy(sendOnEnter = enabled)
+        persist()
     }
 
     /** 切换主题；未知取值一律回到浅色，与持久化解码规则一致。 */
@@ -911,18 +923,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun attachChatDocument(uri: Uri) {
         if (isChatAttachmentLoading || isChatLoading) return
+        if (chatDocuments.size >= 4) { notice = "最多添加 4 个文件"; return }
         clearInputSuggestion()
         val conversation = activeConversationId
         isChatAttachmentLoading = true
         viewModelScope.launch {
+            var imported: ChatDocumentAttachment? = null
             try {
-                val block = withContext(Dispatchers.IO) { DocumentImport.read(getApplication(), uri) }
+                val file = withContext(Dispatchers.IO) { DocumentImport.readAttachment(getApplication(), uri) }
+                imported = file
                 check(activeConversationId == conversation) { "对话已切换，请在目标对话重新选择文件" }
-                updateChatInput(DocumentImport.append(chatInput, block))
-                notice = "文件文字已加入草稿，可检查后发送"
+                require(chatDocuments.sumOf { it.text.length } + file.text.length <= DocumentImport.MAX_CHARS) {
+                    "附件文字合计超过 40,000 字符，请拆分发送"
+                }
+                chatDocuments += file
+                imported = null
+                scheduleSessionSave(immediate = true)
+                notice = "已添加 ${file.name}"
             } catch (e: Exception) { notice = e.message ?: "文件读取失败" }
-            finally { isChatAttachmentLoading = false }
+            finally {
+                imported?.let { java.io.File(Uri.parse(it.uri).path.orEmpty()).parentFile?.deleteRecursively() }
+                isChatAttachmentLoading = false
+            }
         }
+    }
+
+    fun removeChatDocument(id: String) {
+        chatDocuments.removeAll { it.id == id }
+        scheduleSessionSave(immediate = true)
+    }
+
+    fun quoteChatMessage(messageId: Long, selectedText: String? = null) {
+        val message = messages.firstOrNull { it.id == messageId } ?: return
+        val text = selectedText ?: message.content
+        if (text.isBlank()) return
+        if (chatQuotes.any { it.messageId == messageId && it.text == text }) return
+        if (chatQuotes.size >= 8) { notice = "最多引用 8 段内容，请先移除部分引用"; return }
+        clearInputSuggestion()
+        chatQuotes += ChatQuote(messageId = messageId, role = message.role, text = text,
+            partial = selectedText != null)
+        scheduleSessionSave(immediate = true)
+    }
+
+    fun removeChatQuote(id: String) {
+        chatQuotes.removeAll { it.id == id }
+        scheduleSessionSave(immediate = true)
     }
 
     fun attachChatImages(uris: List<Uri>) {
@@ -983,12 +1028,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         textOverride: String? = null,
         assistantSeed: ChatMessage? = null,
         systemNote: Boolean = false,
-        attachmentsOverride: List<ChatImageAttachment>? = null
+        attachmentsOverride: List<ChatImageAttachment>? = null,
+        contextOverride: ChatComposerContext? = null
     ) {
         val fromComposer = textOverride == null
         val text = (textOverride ?: chatInput).trim()
         val attachments = attachmentsOverride ?: if (fromComposer) chatAttachments.toList() else emptyList()
-        if ((text.isEmpty() && attachments.isEmpty()) || isChatLoading || isChatAttachmentLoading) return
+        val context = contextOverride ?: if (fromComposer) currentComposerContext() else ChatComposerContext()
+        if ((text.isEmpty() && attachments.isEmpty() && context.isEmpty) || isChatLoading || isChatAttachmentLoading) return
         // 发送即作废上一条建议：在途请求直接取消，建议条也不能撑到新回复生成期间。
         clearInputSuggestion()
         val profile = chatProfile
@@ -1007,6 +1054,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             role = "user",
             content = text,
             attachments = attachments,
+            documents = context.documents,
+            quotes = context.quotes,
             isContinuation = systemNote
         )
         persistCurrentConversation()
@@ -1278,7 +1327,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun scheduleInputSuggestion() {
         clearInputSuggestion()
         val profile = suggestionProfile
-        if (chatInput.isNotEmpty() || chatAttachments.isNotEmpty() || isChatAttachmentLoading || profile.suggestionModel.isBlank()) return
+        if (chatInput.isNotEmpty() || chatAttachments.isNotEmpty() || !currentComposerContext().isEmpty || isChatAttachmentLoading || profile.suggestionModel.isBlank()) return
         val history = InputSuggester.buildSuggestHistory(messages.toList())
         if (history.isEmpty()) return
         val source = InputSuggestionSource(currentChatKey(), messages.last().id, profile)
@@ -1328,7 +1377,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private fun isCurrentSuggestionSource(source: InputSuggestionSource): Boolean =
         currentChatKey() == source.conversationKey && messages.lastOrNull()?.id == source.messageId &&
             suggestionProfile.matchesSuggestionRequest(source.profile) && source.profile.suggestionModel.isNotBlank() &&
-            chatInput.isEmpty() && chatAttachments.isEmpty() && !isChatLoading && !isChatAttachmentLoading
+            chatInput.isEmpty() && chatAttachments.isEmpty() && currentComposerContext().isEmpty && !isChatLoading && !isChatAttachmentLoading
 
     // Cache refreshes or the chat's effort slider do not change a completed suggestion request.
     private fun ApiProfile.matchesSuggestionRequest(other: ApiProfile): Boolean =
@@ -1598,7 +1647,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         messages.removeAt(assistantIndex)
         messages.removeAt(userIndex)
         persistCurrentConversation()
-        sendMessage(user.content, assistantSeed = stash, systemNote = user.isContinuation, attachmentsOverride = user.attachments)
+        sendMessage(user.content, assistantSeed = stash, systemNote = user.isContinuation, attachmentsOverride = user.attachments,
+            contextOverride = ChatComposerContext(user.documents, user.quotes))
     }
 
     /** 编辑重发：移除该条用户消息及其后的全部对话，正文与图片载入输入框等待修改。 */
@@ -1611,10 +1661,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (index < 0 || messages[index].role != "user") return
         val content = messages[index].content
         val images = messages[index].attachments
+        val context = ChatComposerContext(messages[index].documents, messages[index].quotes)
         stashCurrentDraft()
         clearInputSuggestion()
         discardChatIllustrations(messages.drop(index))
         messages.removeRange(index, messages.size)
+        restoreComposerContext(context = context)
         updateChatInput(content)
         // 编辑历史消息时恢复该消息的附件，避免混入当前未发送草稿的图片。
         chatAttachments.clear()
@@ -1648,7 +1700,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val previousUser = messages.take(index).lastOrNull { it.role == "user" } ?: return
         messages.removeAt(index)
         messages.indexOfLast { it.id == previousUser.id }.takeIf { it >= 0 }?.let(messages::removeAt)
-        sendMessage(previousUser.content, systemNote = previousUser.isContinuation, attachmentsOverride = previousUser.attachments)
+        sendMessage(previousUser.content, systemNote = previousUser.isContinuation, attachmentsOverride = previousUser.attachments,
+            contextOverride = ChatComposerContext(previousUser.documents, previousUser.quotes))
     }
 
     fun newConversation() {
@@ -1671,10 +1724,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         chatAttachments.clear()
         if (alreadyOnNewConversation) {
             chatDrafts.remove(lastActiveChatKey)
+            chatContextDrafts.remove(lastActiveChatKey)
             chatInput = ""
         } else {
             chatInput = chatDrafts[lastActiveChatKey].orEmpty()
         }
+        restoreComposerContext(lastActiveChatKey)
         scheduleSessionSave(immediate = true)
         notice = when {
             droppedAttachments > 0 -> "已开始新对话，未发送的 $droppedAttachments 张图片已移除"
@@ -1697,6 +1752,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
         messages.clear()
         chatAttachments.clear()
+        chatDocuments.clear()
+        chatQuotes.clear()
+        chatContextDrafts.remove(lastActiveChatKey)
         val trimmedSource = source.trim()
         val trimmedResult = result.trim()
         if (trimmedSource.isNotBlank() && trimmedResult.isNotBlank()) {
@@ -1767,6 +1825,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             messages.clear()
             messages.addAll(conversation.messages)
             chatInput = chatDrafts[id].orEmpty()
+            restoreComposerContext(id)
             // 与 newConversation 同一条理由：图片属于还没发出去的那个草稿，不属于新会话。
             val droppedAttachments = chatAttachments.size
             chatAttachments.clear()
@@ -1794,13 +1853,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             } else message
         })
         recentlyDeletedDraft = chatDrafts[id].orEmpty()
+        recentlyDeletedContext = if (activeConversationId == id) currentComposerContext() else chatContextDrafts[id] ?: ChatComposerContext()
         recentlyDeletedConversation = conversations.removeAt(index) to index
         chatDrafts.remove(id)
+        chatContextDrafts.remove(id)
         if (activeConversationId == id) {
             activeConversationId = null
             lastActiveChatKey = ChatSessionStore.NEW_CONVERSATION_KEY
             messages.clear()
             chatInput = ""
+            chatDocuments.clear()
+            chatQuotes.clear()
             clearInputSuggestion()
         }
         scheduleConversationSave(conversations.toList())
@@ -1812,13 +1875,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var recentlyDeletedConversation by mutableStateOf<Pair<Conversation, Int>?>(null)
         private set
     private var recentlyDeletedDraft: String = ""
+    private var recentlyDeletedContext = ChatComposerContext()
 
     fun undoDeleteConversation() {
         val (conversation, index) = recentlyDeletedConversation ?: return
         recentlyDeletedConversation = null
         conversations.add(index.coerceAtMost(conversations.size), conversation)
         if (recentlyDeletedDraft.isNotBlank()) chatDrafts[conversation.id] = recentlyDeletedDraft
+        if (!recentlyDeletedContext.isEmpty) chatContextDrafts[conversation.id] = recentlyDeletedContext
+        recentlyDeletedContext = ChatComposerContext()
         recentlyDeletedDraft = ""
+        scheduleSessionSave(immediate = true)
         scheduleConversationSave(conversations.toList())
         notice = "已恢复对话"
     }
@@ -2552,6 +2619,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (wasNewConversation) {
             lastActiveChatKey = id
             chatDrafts.remove(ChatSessionStore.NEW_CONVERSATION_KEY)
+            chatContextDrafts.remove(ChatSessionStore.NEW_CONVERSATION_KEY)
         }
         val index = conversations.indexOfFirst { it.id == id }
         val existing = conversations.getOrNull(index)
@@ -2665,34 +2733,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun currentComposerContext() = ChatComposerContext(chatDocuments.toList(), chatQuotes.toList())
+
+    private fun restoreComposerContext(key: String? = null, context: ChatComposerContext = chatContextDrafts[key] ?: ChatComposerContext()) {
+        chatDocuments.clear()
+        chatDocuments.addAll(context.documents)
+        chatQuotes.clear()
+        chatQuotes.addAll(context.quotes)
+    }
+
+    private fun stashComposerContext() {
+        val context = currentComposerContext()
+        if (context.isEmpty) chatContextDrafts.remove(currentChatKey()) else chatContextDrafts[currentChatKey()] = context
+    }
+
     private fun currentChatKey(): String = activeConversationId ?: ChatSessionStore.NEW_CONVERSATION_KEY
 
     private fun stashCurrentDraft() {
+        stashComposerContext()
         val key = currentChatKey()
         if (chatInput.isBlank()) chatDrafts.remove(key) else chatDrafts[key] = chatInput
     }
 
     private fun clearCurrentDraft() {
+        chatDocuments.clear()
+        chatQuotes.clear()
+        chatContextDrafts.remove(currentChatKey())
         chatInput = ""
         chatDrafts.remove(currentChatKey())
         scheduleSessionSave(immediate = true)
     }
 
     private fun scheduleSessionSave(immediate: Boolean = false) {
+        stashComposerContext()
         lastActiveChatKey = currentChatKey()
         sessionSaveJob?.cancel()
         val draftsSnapshot = chatDrafts.toMap()
+        val contextSnapshot = chatContextDrafts.toMap()
         val activeKeySnapshot = lastActiveChatKey
         val illustrationsSnapshot = newConversationIllustrationsEnabled
         sessionSaveJob = viewModelScope.launch(Dispatchers.IO) {
             if (!immediate) delay(220)
-            chatSessionStore.save(draftsSnapshot, activeKeySnapshot, illustrationsSnapshot)
+            chatSessionStore.save(draftsSnapshot, activeKeySnapshot, illustrationsSnapshot, contextSnapshot)
         }
     }
 
     override fun onCleared() {
         stashCurrentDraft()
-        chatSessionStore.save(chatDrafts.toMap(), currentChatKey(), newConversationIllustrationsEnabled)
+        chatSessionStore.save(chatDrafts.toMap(), currentChatKey(), newConversationIllustrationsEnabled, chatContextDrafts.toMap())
         super.onCleared()
     }
 

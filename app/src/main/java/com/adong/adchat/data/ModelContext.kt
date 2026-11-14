@@ -50,7 +50,7 @@ object ContextTokenEstimate {
         return ((units + 2) / 3).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     }
     const val IMAGE_TOKENS = 4096
-    fun message(value: ChatMessage): Int = text(value.content) + 16 + value.attachments.size * IMAGE_TOKENS
+    fun message(value: ChatMessage): Int = text(value.requestContent()) + 16 + value.attachments.size * IMAGE_TOKENS
 }
 
 data class PreparedContext(val history: List<ChatMessage>, val omittedTurns: Int)

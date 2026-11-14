@@ -120,6 +120,7 @@ fun StoryScreen(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             key(story.id, story.currentTimelineId, storyVm.activeWorkspace) {
                 StoryWorkspaceContent(
+                sendOnEnter = mainVm.appConfig.sendOnEnter,
                     storyVm = storyVm,
                     profile = profile,
                     onOpenSettings = onOpenSettings
@@ -972,6 +973,7 @@ private const val MAX_TAVERN_PREVIEW_CHARS = 40_000
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StoryWorkspaceContent(
+    sendOnEnter: Boolean,
     storyVm: StoryViewModel,
     profile: ApiProfile?,
     onOpenSettings: () -> Unit
@@ -1496,6 +1498,7 @@ private fun StoryWorkspaceContent(
             }
             if (targetStory.setupPhase == StorySetupPhase.Discussion || targetStory.setupPhase == StorySetupPhase.Prose) {
                 StoryComposer(
+                sendOnEnter = sendOnEnter,
                 skillScope = "aster-story-${storyVm.activeStoryId}-${workspace.dbValue}",
                 value = storyVm.draft(workspace),
                 attachments = savedState.attachments,
@@ -1757,6 +1760,7 @@ private fun StoryDetailAction(
 @OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 private fun StoryComposer(
+    sendOnEnter: Boolean,
     skillScope: String,
     value: String,
     attachments: List<com.adong.adchat.data.ChatImageAttachment>,
@@ -1775,6 +1779,7 @@ private fun StoryComposer(
 ) {
     var showAttachments by remember { mutableStateOf(false) }
     ConversationComposer(
+        sendOnEnter = sendOnEnter,
         value = value, attachments = attachments, loading = loading, attachmentLoading = attachmentBusy,
         onValueChange = onValueChange, onOptionsClick = { showAttachments = true }, onRemoveImage = onRemoveImage,
         onSend = onSend, onStop = onStop, onFocusChange = onFocusChange, modifier = modifier,

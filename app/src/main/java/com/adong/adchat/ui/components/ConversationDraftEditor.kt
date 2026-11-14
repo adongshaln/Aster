@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
@@ -30,6 +31,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.adong.adchat.data.ChatImageAttachment
+import com.adong.adchat.data.ChatDocumentAttachment
+import com.adong.adchat.data.ChatQuote
 import com.adong.adchat.ui.theme.*
 
 /** A live view of the existing draft, never a second copy requiring a save step. */
@@ -45,7 +48,12 @@ fun ConversationDraftEditor(
     onDismiss: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
-    testTag: String
+    testTag: String,
+    documents: List<ChatDocumentAttachment> = emptyList(),
+    quotes: List<ChatQuote> = emptyList(),
+    onRemoveDocument: (String) -> Unit = {},
+    onRemoveQuote: (String) -> Unit = {},
+    sendOnEnter: Boolean = true
 ) {
     val motionEnabled = LocalAsterMotionEnabled.current
     var entered by remember { mutableStateOf(!motionEnabled) }
@@ -97,7 +105,7 @@ fun ConversationDraftEditor(
                     primary = true,
                     compact = true,
                     enabled = loading || (!attachmentLoading &&
-                        (value.text.isNotBlank() || attachments.isNotEmpty() || configureRequired)),
+                        (value.text.isNotBlank() || attachments.isNotEmpty() || documents.isNotEmpty() || quotes.isNotEmpty() || configureRequired)),
                     onClick = {
                         if (loading) onStop() else { focus.clearFocus(); onSend() }
                     }
@@ -122,11 +130,20 @@ fun ConversationDraftEditor(
                 ) {
                     BasicTextField(value = value, onValueChange = onValueChange,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp)
-                            .focusRequester(requester).testTag("$testTag-expanded-input"),
+                            .focusRequester(requester).testTag("$testTag-expanded-input")
+                            .composerEnterKey(sendOnEnter, value.composition != null) {
+                                if (!loading && !attachmentLoading && (value.text.isNotBlank() || attachments.isNotEmpty() ||
+                                        documents.isNotEmpty() || quotes.isNotEmpty() || configureRequired)) onSend()
+                            },
                         textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
                         cursorBrush = SolidColor(Accent),
                         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences,
-                            imeAction = ImeAction.Default),
+                            imeAction = if (sendOnEnter) ImeAction.Send else ImeAction.Default),
+                        keyboardActions = KeyboardActions(onSend = {
+                            if (sendOnEnter && value.composition == null && !loading && !attachmentLoading &&
+                                (value.text.isNotBlank() || attachments.isNotEmpty() || documents.isNotEmpty() ||
+                                    quotes.isNotEmpty() || configureRequired)) onSend()
+                        }),
                         decorationBox = { field ->
                             Box {
                                 if (value.text.isEmpty()) Text("慢慢写，把想法完整展开…", color = MutedInk,
@@ -136,6 +153,9 @@ fun ConversationDraftEditor(
                         })
                 }
             }
+            ConversationContextCards(documents, quotes, enabled = !loading && !attachmentLoading,
+                onRemoveDocument = onRemoveDocument, onRemoveQuote = onRemoveQuote,
+                modifier = Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()))
             if (attachments.isNotEmpty()) {
                 ConversationAttachmentPreview(attachments, attachmentLoading, onRemoveImage)
             }

@@ -115,7 +115,8 @@ data class AppConfig(
     /** 自定义计费表条目：`model|input|cacheRead|output`（每百万 token 单价）。 */
     val customBillingRows: List<String> = emptyList(),
     /** A separate route, initialized once from the drawing route for older installations. */
-    val activeChatIllustrationProfileId: String = activeImageProfileId
+    val activeChatIllustrationProfileId: String = activeImageProfileId,
+    val sendOnEnter: Boolean = true
 ) {
     fun chatProfile(): ApiProfile = profiles.firstOrNull { it.id == activeChatProfileId } ?: profiles.first()
     fun imageProfile(): ApiProfile = profiles.firstOrNull { it.id == activeImageProfileId } ?: profiles.first()
@@ -216,6 +217,7 @@ class ConfigStore(context: Context) {
         .put("allowXSearch", config.allowXSearch)
         .put("systemPrompt", config.systemPrompt)
         .put("themeMode", config.themeMode)
+        .put("sendOnEnter", config.sendOnEnter)
         .put("allowInsecureCertificates", config.allowInsecureCertificates)
         .put("userName", config.userName)
         .put("userNamePromptDone", config.userNamePromptDone)
@@ -318,6 +320,7 @@ class ConfigStore(context: Context) {
                 ?: root.optString("activeChatProfileId").takeIf { id -> profiles.any { it.id == id } }
                 ?: profiles.first().id,
             allowXSearch = root.optBoolean("allowXSearch", false),
+            sendOnEnter = root.optBoolean("sendOnEnter", true),
             systemPrompt = migrateSystemPrompt(root.optString("systemPrompt").ifBlank { DEFAULT_SYSTEM_PROMPT }),
             themeMode = root.optString("themeMode").takeIf { it in setOf(THEME_MODE_DARK, THEME_MODE_SYSTEM) } ?: THEME_MODE_ASTER,
             allowInsecureCertificates = root.optBoolean("allowInsecureCertificates", false),
@@ -477,7 +480,9 @@ data class ChatMessage(
     /** 「继续生成」这类由应用代发的指令：会进上下文，但不该显示成用户打过的话。 */
     val isContinuation: Boolean = false,
     /** Display-only output: never serialized into the model's conversation history. */
-    val illustration: ChatIllustration? = null
+    val illustration: ChatIllustration? = null,
+    val documents: List<ChatDocumentAttachment> = emptyList(),
+    val quotes: List<ChatQuote> = emptyList()
 )
 
 data class GeneratedFileDraft(
