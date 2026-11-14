@@ -131,7 +131,8 @@ fun ConversationDraftEditor(
                     BasicTextField(value = value, onValueChange = onValueChange,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp)
                             .focusRequester(requester).testTag("$testTag-expanded-input")
-                            .composerEnterKey(sendOnEnter, value.composition != null) {
+                            .composerEnterKey(sendOnEnter, value.composition != null,
+                                onNewLine = { onValueChange(value.withLineBreak()) }) {
                                 if (!loading && !attachmentLoading && (value.text.isNotBlank() || attachments.isNotEmpty() ||
                                         documents.isNotEmpty() || quotes.isNotEmpty() || configureRequired)) onSend()
                             },

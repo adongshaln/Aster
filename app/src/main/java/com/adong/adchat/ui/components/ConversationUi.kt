@@ -264,7 +264,8 @@ fun ConversationComposer(
                                 .testTag("${testTag}-input")
                                 .focusRequester(resolvedFocusRequester)
                                 .onFocusChanged { isFocused = it.isFocused }
-                                .composerEnterKey(sendOnEnter, fieldValue.composition != null) {
+                                .composerEnterKey(sendOnEnter, fieldValue.composition != null,
+                                    onNewLine = { edit(fieldValue.withLineBreak()) }) {
                                     if (!loading) submit()
                                 },
                             textStyle = inputStyle,

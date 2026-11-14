@@ -56,7 +56,7 @@ class ComposerContextInteractionTest {
         rule.onNodeWithTag("chat-input").performClick().performTextInputSelection(androidx.compose.ui.text.TextRange(2))
         rule.onNodeWithTag("chat-input").performKeyInput { pressKey(Key.Enter) }
         rule.runOnIdle { assertEquals(0, sends); assertEquals("草稿\n", input.value); sendOnEnter.value = true }
-        rule.onNodeWithTag("chat-input").performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Enter); keyUp(Key.ShiftLeft) }
+        rule.onNodeWithTag("chat-input").performClick().assertIsFocused().performKeyInput { keyDown(Key.ShiftLeft); pressKey(Key.Enter); keyUp(Key.ShiftLeft) }
         rule.runOnIdle { assertEquals(0, sends); assertEquals("草稿\n\n", input.value) }
         rule.onNodeWithTag("chat-input").performKeyInput { pressKey(Key.Enter) }
         rule.runOnIdle { assertEquals(1, sends) }
@@ -102,7 +102,7 @@ class ComposerContextInteractionTest {
                     LocalDensity provides Density(LocalDensity.current.density, fontScale.value)) {
                     AsterTheme(themeMode = theme.value) {
                         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                        Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding(), contentAlignment = Alignment.BottomCenter) {
                         ConversationComposer("自己的问题", images.value, false, false, {}, {}, { images.value = emptyList() }, {}, {}, {},
                             documents = documents.value, quotes = quotes.value,
                             onRemoveDocument = { documents.value = emptyList() }, onRemoveQuote = { quotes.value = emptyList() })
@@ -114,9 +114,9 @@ class ComposerContextInteractionTest {
         }
         rule.onNodeWithTag("chat-input").assertTextEquals("自己的问题")
         rule.onNodeWithText("HIDDEN_DOCUMENT_TEXT").assertDoesNotExist()
+        screenshot("cards-light")
         rule.onNodeWithTag("document-file").assertIsDisplayed()
         rule.onNodeWithTag("quote-quote").assertIsDisplayed()
-        screenshot("cards-light")
         rule.runOnIdle { theme.value = THEME_MODE_DARK; fontScale.value = 1.4f }
         rule.onNodeWithTag("document-file").assertIsDisplayed()
         screenshot("cards-dark-large-text")
@@ -160,6 +160,16 @@ class ComposerContextInteractionTest {
         val directory = java.io.File(rule.activity.getExternalFilesDir(null), "ui-preview").apply { mkdirs() }
         try {
             java.io.File(directory, "composer-$name.png").outputStream().use {
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+            }
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "composer-$name.png")
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, "Download/aster-ui-preview")
+            }
+            val resolver = rule.activity.contentResolver
+            val uri = requireNotNull(resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values))
+            requireNotNull(resolver.openOutputStream(uri)).use {
                 bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
             }
         } finally { bitmap.recycle() }
