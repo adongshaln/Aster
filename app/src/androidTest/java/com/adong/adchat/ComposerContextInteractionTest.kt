@@ -35,6 +35,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@OptIn(ExperimentalTestApi::class)
 class ComposerContextInteractionTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
 
