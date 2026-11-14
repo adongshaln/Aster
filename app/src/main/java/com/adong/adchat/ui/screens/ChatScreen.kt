@@ -127,7 +127,8 @@ import com.adong.adchat.ui.modelWorkingCaption
 import com.adong.adchat.ui.showModelWorkingFoot
 import com.adong.adchat.ui.waitingOnUser
 import com.adong.adchat.ui.ContextUsage
-import com.adong.adchat.ui.chat.questionNavigationTargets
+import com.adong.adchat.ui.chat.answerNavigationTargets
+import com.adong.adchat.ui.chat.ConversationEndPull
 import com.adong.adchat.ui.components.*
 import com.adong.adchat.ui.components.AdChoiceOption
 import com.adong.adchat.ui.components.AdSelectionSheet
@@ -264,30 +265,20 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
         if (uris.isNotEmpty()) vm.attachChatImages(uris)
     }
     val jumpToBottomVisible = rememberTowardBottomScrollVisible(listState)
-    val questionIndices by remember {
-        derivedStateOf { vm.messages.mapIndexedNotNull { index, message -> index.takeIf { message.role == "user" } } }
+    val answerIndices by remember {
+        derivedStateOf { vm.messages.mapIndexedNotNull { index, message -> index.takeIf { message.role == "assistant" } } }
     }
-    val questionTargets by remember {
+    val answerTargets by remember {
         derivedStateOf {
-            val layoutInfo = listState.layoutInfo
-            val visibleItems = layoutInfo.visibleItemsInfo
-            val viewportHeight = (layoutInfo.viewportEndOffset - layoutInfo.viewportStartOffset).coerceAtLeast(0)
-            val anchorY = layoutInfo.viewportStartOffset + (viewportHeight * .7f).toInt()
-            val anchorItemIndex = visibleItems.firstOrNull { item ->
-                anchorY >= item.offset && anchorY < item.offset + item.size
-            }?.index ?: visibleItems.minByOrNull { item ->
-                kotlin.math.abs((item.offset + item.size / 2) - anchorY)
-            }?.index ?: listState.firstVisibleItemIndex
-            questionNavigationTargets(
-                questionIndices = questionIndices,
-                anchorItemIndex = anchorItemIndex,
-                visibleQuestionIndices = visibleItems.asSequence()
-                    .map { it.index }
-                    .filter { it in questionIndices }
-                    .toSet()
-            )
+            answerNavigationTargets(answerIndices, listState.firstVisibleItemIndex,
+                listState.canScrollBackward, listState.canScrollForward)
         }
     }
+    val pullThreshold = with(density) { 96.dp.toPx() }
+    val endPull = remember(vm.activeConversationId, pullThreshold) { ConversationEndPull(pullThreshold) }
+    val pullActive by remember(endPull) { derivedStateOf { endPull.progress > .025f } }
+    val canPullNew = vm.messages.isNotEmpty() && !vm.isChatLoading && !vm.isChatAttachmentLoading &&
+        !composerFocused && imeInsets.getBottom(density) == 0
     val regeneratableMessageId by remember {
         derivedStateOf {
             vm.messages.lastOrNull()?.takeIf {
@@ -366,22 +357,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ChatHeader(
             vm, onOpenDrawer, onSwitchModel = { showSwitcher = true },
-            showNavigation = questionIndices.size > 1,
             canExportMarkdown = vm.messages.isNotEmpty() && !vm.isChatLoading,
-            previousEnabled = questionTargets.previous != null,
-            nextEnabled = questionTargets.next != null,
-            onPrevious = {
-                questionTargets.previous?.let { target ->
-                    autoFollow = false
-                    scope.launch { listState.animateScrollToItem(target) }
-                }
-            },
-            onNext = {
-                questionTargets.next?.let { target ->
-                    autoFollow = false
-                    scope.launch { listState.animateScrollToItem(target) }
-                }
-            },
             onExportMarkdown = {
                 vm.buildConversationMarkdownExport()?.let { (filename, bytes) ->
                     val file = ChatFileAttachment(
@@ -418,7 +394,12 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     val billingCurrency = vm.appConfig.billingCurrency
                     LazyColumn(
                         state = listState,
-                        modifier = Modifier.fillMaxSize().testTag("chat-messages"),
+                        modifier = Modifier.fillMaxSize().testTag("chat-messages")
+                            .conversationEndPull(endPull, canPullNew, atEnd = { !listState.canScrollForward }) {
+                                autoFollow = true
+                                keyboard?.hide()
+                                vm.newConversation()
+                            },
                         contentPadding = PaddingValues(
                             start = 22.dp,
                             end = 22.dp,
@@ -493,12 +474,33 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
             }
             ConversationReadingVeil(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(composerHeight))
             ConversationJumpToBottom(
-                visible = jumpToBottomVisible, loading = vm.isChatLoading,
+                visible = jumpToBottomVisible && !pullActive, loading = vm.isChatLoading,
                 onClick = { autoFollow = true; scope.launch { listState.animateScrollToItem(vm.messages.size) } },
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 8.dp),
                 fadeMillisIn = 220,
                 fadeMillisOut = 220
             )
+            ConversationAnswerNavigation(
+                visible = answerIndices.size > 1 && !pullActive &&
+                    (answerTargets.previous != null || answerTargets.next != null),
+                previousEnabled = answerTargets.previous != null,
+                nextEnabled = answerTargets.next != null,
+                onPrevious = {
+                    answerTargets.previous?.let { target ->
+                        autoFollow = false
+                        scope.launch { listState.animateScrollToItem(target) }
+                    }
+                },
+                onNext = {
+                    answerTargets.next?.let { target ->
+                        autoFollow = false
+                        scope.launch { listState.animateScrollToItem(target) }
+                    }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = composerHeight + 12.dp)
+            )
+            ConversationNewPullIndicator(endPull,
+                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 12.dp))
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .onSizeChanged { composerHeightPx = it.height }
@@ -666,46 +668,17 @@ private fun ChatHeader(
     vm: MainViewModel,
     onOpenDrawer: () -> Unit,
     onSwitchModel: () -> Unit,
-    showNavigation: Boolean,
     canExportMarkdown: Boolean,
-    previousEnabled: Boolean,
-    nextEnabled: Boolean,
-    onPrevious: () -> Unit,
-    onNext: () -> Unit,
     onExportMarkdown: () -> Unit
 ) {
-    var showActions by remember { mutableStateOf(false) }
     ConversationHeader(
         title = if (vm.messages.isEmpty()) "Aster" else vm.conversations.firstOrNull { it.id == vm.activeConversationId }?.title ?: "对话",
         model = vm.chatProfile.chatModel.ifBlank { "选择对话模型" },
         onOpenDrawer = onOpenDrawer, onModelClick = onSwitchModel
     ) {
-        if (showNavigation || canExportMarkdown) {
-            AsterIconButton(Icons.Rounded.MoreHoriz, "对话操作", { showActions = true })
-        }
-        AsterIconButton(Icons.Rounded.AddComment, "新建对话", { vm.newConversation() }, enabled = !vm.isChatLoading)
+        AsterIconButton(Icons.Rounded.FileDownload, "导出为 Markdown", onExportMarkdown,
+            enabled = canExportMarkdown, modifier = Modifier.testTag("conversation-export-markdown"))
     }
-    if (showActions) AdActionSheet(
-        title = "对话操作", subtitle = "按提问定位，或导出整段对话",
-        actions = buildList {
-            if (showNavigation) {
-                add(AdActionOption("previous", "回到上一个提问", icon = Icons.Rounded.KeyboardArrowUp, enabled = previousEnabled))
-                add(AdActionOption("next", "前往下一个提问", icon = Icons.Rounded.KeyboardArrowDown, enabled = nextEnabled))
-            }
-            if (canExportMarkdown) {
-                add(AdActionOption("export_md", "导出为 Markdown", "保存包含思考过程与参考来源的完整问答记录", icon = Icons.Rounded.FileDownload))
-            }
-        },
-        onAction = {
-            showActions = false
-            when (it.id) {
-                "previous" -> onPrevious()
-                "next" -> onNext()
-                "export_md" -> onExportMarkdown()
-            }
-        },
-        onDismiss = { showActions = false }
-    )
 }
 
 @Composable
