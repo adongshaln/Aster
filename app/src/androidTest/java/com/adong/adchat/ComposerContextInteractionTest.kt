@@ -115,15 +115,15 @@ class ComposerContextInteractionTest {
         rule.onNodeWithTag("chat-input").assertTextEquals("自己的问题")
         rule.onNodeWithText("HIDDEN_DOCUMENT_TEXT").assertDoesNotExist()
         screenshot("cards-light")
-        rule.onNodeWithTag("document-file").assertIsDisplayed()
+        rule.onNodeWithTag("document-file", useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag("quote-quote").assertIsDisplayed()
         rule.runOnIdle { theme.value = THEME_MODE_DARK; fontScale.value = 1.4f }
-        rule.onNodeWithTag("document-file").assertIsDisplayed()
+        rule.onNodeWithTag("document-file", useUnmergedTree = true).assertIsDisplayed()
         screenshot("cards-dark-large-text")
         rule.onNodeWithContentDescription("移除 preview.jpg").assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
         rule.onNodeWithContentDescription("移除 notes.txt").performClick()
         rule.onNodeWithContentDescription("移除引用回复 · 片段").performClick()
-        rule.onNodeWithTag("document-file").assertDoesNotExist()
+        rule.onNodeWithTag("document-file", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("quote-quote").assertDoesNotExist()
         rule.onNodeWithTag("chat-input").assertTextEquals("自己的问题")
     }
@@ -156,6 +156,8 @@ class ComposerContextInteractionTest {
     }
     private fun screenshot(name: String) {
         rule.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+        android.os.SystemClock.sleep(350)
         val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
         val directory = java.io.File(rule.activity.getExternalFilesDir(null), "ui-preview").apply { mkdirs() }
         try {
