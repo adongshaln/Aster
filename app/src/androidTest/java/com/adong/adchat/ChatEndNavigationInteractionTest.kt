@@ -200,7 +200,11 @@ class ChatEndNavigationInteractionTest {
                 assertTrue(exported.get()?.getStringExtra(Intent.EXTRA_TITLE)?.endsWith(".md") == true)
             }
         } finally { instrumentation.removeMonitor(monitor) }
-        // Begin at the natural reading tail; using the capsule itself opts out of auto-follow.
+        // Reading starts with only the edge handle; opening it opts into navigation.
+        rule.onNodeWithTag("answer-navigation-handle").assertIsDisplayed().assertWidthIsAtLeast(48.dp)
+        rule.onNodeWithContentDescription("上一个回答").assertDoesNotExist()
+        screenshot("navigation-collapsed-light")
+        expandNavigation()
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
         rule.onNodeWithContentDescription("上一个回答").assertWidthIsAtLeast(48.dp).performTouchInput { click() }
         settleNavigation("after-previous-to-two")
@@ -214,8 +218,26 @@ class ChatEndNavigationInteractionTest {
         settleNavigation("after-next-to-two")
         rule.onNodeWithText("回答 2").assertIsDisplayed()
         screenshot("navigation-light")
+        rule.onNodeWithContentDescription("收起回答导航").performTouchInput { click() }
+        rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("answer-navigation").assertDoesNotExist()
+        rule.onNodeWithTag("answer-navigation-handle").assertIsDisplayed()
+        expandNavigation()
+        rule.mainClock.advanceTimeBy(4_500)
+        rule.onNodeWithTag("answer-navigation").assertDoesNotExist()
+        rule.onNodeWithTag("answer-navigation-handle").assertIsDisplayed()
+        expandNavigation()
+        rule.onNodeWithTag("chat-messages").performTouchInput {
+            down(center); moveTo(center - Offset(0f, 120f), delayMillis = 150)
+        }
+        rule.mainClock.advanceTimeBy(100)
+        rule.onNodeWithTag("answer-navigation").assertDoesNotExist()
+        rule.onNodeWithTag("answer-navigation-handle").assertIsDisplayed()
+        rule.onNodeWithTag("chat-messages").performTouchInput { up() }
         rule.runOnIdle { vm.setThemeMode(THEME_MODE_DARK); fontScale.value = 1.4f }
         rule.mainClock.advanceTimeBy(1_000)
+        screenshot("navigation-collapsed-dark-large-text")
+        expandNavigation()
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
         screenshot("navigation-dark-large-text")
         val list = rule.onNodeWithTag("chat-messages").performScrollToIndex(vm.messages.size)
@@ -228,6 +250,7 @@ class ChatEndNavigationInteractionTest {
         rule.mainClock.advanceTimeBy(200)
         rule.onNodeWithText("松开，新建会话").assertIsDisplayed()
         rule.onNodeWithTag("answer-navigation").assertDoesNotExist()
+        rule.onNodeWithTag("answer-navigation-handle").assertDoesNotExist()
         screenshot("chat-pull-dark-large-text")
         list.performTouchInput { up() }
         rule.mainClock.advanceTimeBy(200)
@@ -236,6 +259,11 @@ class ChatEndNavigationInteractionTest {
             assertTrue(vm.messages.isEmpty())
             assertEquals(6, vm.conversations.first { it.id == "kept-conversation" }.messages.size)
         }
+    }
+
+    private fun expandNavigation() {
+        rule.onNodeWithContentDescription("展开回答导航").performTouchInput { click() }
+        rule.mainClock.advanceTimeBy(100)
     }
 
     private fun settleNavigation(stage: String) {

@@ -5,14 +5,18 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.progressSemantics
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material3.*
@@ -27,14 +31,17 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.*
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import com.adong.adchat.ui.chat.ConversationEndPull
 import com.adong.adchat.ui.theme.*
+import kotlinx.coroutines.delay
 
 /** Observe touch release without taking selection, links, or ordinary list scrolling away. */
 internal fun Modifier.conversationEndPull(
@@ -124,19 +131,61 @@ internal fun ConversationNewPullIndicator(state: ConversationEndPull, modifier: 
 @Composable
 internal fun ConversationAnswerNavigation(
     visible: Boolean, previousEnabled: Boolean, nextEnabled: Boolean,
-    onPrevious: () -> Unit, onNext: () -> Unit, modifier: Modifier = Modifier
+    onPrevious: () -> Unit, onNext: () -> Unit, modifier: Modifier = Modifier,
+    collapseRequested: Boolean = false
 ) {
     val motion = LocalAsterMotionEnabled.current
+    var expanded by remember { mutableStateOf(false) }
+    var interaction by remember { mutableIntStateOf(0) }
+    val timeout = LocalAccessibilityManager.current?.calculateRecommendedTimeoutMillis(
+        originalTimeoutMillis = 4_000L, containsIcons = true, containsText = false, containsControls = true
+    ) ?: 4_000L
+    LaunchedEffect(visible, collapseRequested) {
+        if (!visible || collapseRequested) expanded = false
+    }
+    LaunchedEffect(expanded, interaction, timeout) {
+        if (expanded) { delay(timeout); expanded = false }
+    }
     AnimatedVisibility(visible, modifier = modifier,
-        enter = if (motion) fadeIn(AsterSpring.editorial()) + scaleIn(AsterSpring.spatial(), initialScale = .92f) else EnterTransition.None,
-        exit = if (motion) fadeOut(AsterSpring.editorial()) + scaleOut(AsterSpring.spatial(), targetScale = .92f) else ExitTransition.None) {
-        Surface(color = Surface, contentColor = Ink, shape = CircleShape,
-            border = BorderStroke(.6.dp, Hairline), shadowElevation = 2.dp,
-            modifier = Modifier.testTag("answer-navigation")) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                NavigationArrow(true, previousEnabled, onPrevious)
-                VerticalDivider(Modifier.height(18.dp), color = Hairline)
-                NavigationArrow(false, nextEnabled, onNext)
+        enter = if (motion) fadeIn(AsterSpring.editorial()) else EnterTransition.None,
+        exit = if (motion) fadeOut(AsterSpring.editorial()) else ExitTransition.None) {
+        // The paper is only 14 dp wide when tucked away; retain a comfortable touch target.
+        Box(Modifier.width(48.dp).height(120.dp)) {
+            AnimatedVisibility(expanded, Modifier.align(Alignment.BottomEnd),
+                enter = if (motion) slideInHorizontally(AsterSpring.spatial()) { it } + fadeIn(AsterSpring.editorial()) else EnterTransition.None,
+                exit = if (motion) slideOutHorizontally(AsterSpring.spatial()) { it } + fadeOut(AsterSpring.editorial()) else ExitTransition.None) {
+                Box(Modifier.width(48.dp).height(120.dp).testTag("answer-navigation")) {
+                    Surface(color = Surface, shape = CircleShape,
+                        border = BorderStroke(.6.dp, Hairline), shadowElevation = 1.dp,
+                        modifier = Modifier.align(Alignment.Center).width(32.dp).fillMaxHeight()) {}
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        NavigationArrow(true, expanded && previousEnabled) { interaction++; onPrevious() }
+                        NavigationArrow(false, expanded && nextEnabled) { interaction++; onNext() }
+                        Box(Modifier.width(48.dp).height(24.dp)) {
+                            IconButton(onClick = rememberAsterClick({ expanded = false }, expanded),
+                                enabled = expanded, modifier = Modifier.fillMaxSize()) {
+                                Icon(Icons.Rounded.ChevronRight, "收起回答导航", Modifier.size(16.dp), tint = MutedInk)
+                            }
+                        }
+                    }
+                }
+            }
+            AnimatedVisibility(!expanded, Modifier.align(Alignment.BottomEnd),
+                enter = if (motion) slideInHorizontally(AsterSpring.spatial()) { it } + fadeIn(AsterSpring.editorial()) else EnterTransition.None,
+                exit = if (motion) fadeOut(AsterSpring.editorial()) else ExitTransition.None) {
+                Box(Modifier.size(48.dp).testTag("answer-navigation-handle")
+                    .semantics { contentDescription = "展开回答导航" }
+                    .clickable(enabled = !expanded, role = Role.Button,
+                        onClick = rememberAsterClick({ expanded = true }, !expanded)),
+                    contentAlignment = Alignment.CenterEnd) {
+                    Surface(color = Surface, shape = RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp),
+                        border = BorderStroke(.6.dp, Hairline),
+                        modifier = Modifier.width(14.dp).height(40.dp).testTag("answer-navigation-tab")) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(Icons.Rounded.ChevronLeft, null, Modifier.size(12.dp), tint = MutedInk)
+                        }
+                    }
+                }
             }
         }
     }
@@ -149,7 +198,7 @@ private fun NavigationArrow(previous: Boolean, enabled: Boolean, onClick: () -> 
         interactionSource = interaction, modifier = Modifier.size(48.dp)) {
         Icon(if (previous) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
             if (previous) "上一个回答" else "下一个回答",
-            Modifier.size(21.dp).appleSpringPressable(pressedScale = .9f, enabled = enabled,
+            Modifier.size(18.dp).appleSpringPressable(pressedScale = .9f, enabled = enabled,
                 enableHaptics = false, interactionSource = interaction),
             tint = if (enabled) Ink else MutedInk.copy(alpha = .35f))
     }

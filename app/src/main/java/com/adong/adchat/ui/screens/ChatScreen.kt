@@ -414,8 +414,7 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             start = 22.dp,
                             end = 22.dp,
                             top = 24.dp,
-                            bottom = composerClearance + 24.dp +
-                                if (answerIndices.size > 1) ClawdPileBandHeight else 0.dp
+                            bottom = composerClearance + 24.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(30.dp)
                     ) {
@@ -491,16 +490,19 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 fadeMillisIn = 220,
                 fadeMillisOut = 220
             )
-            ConversationAnswerNavigation(
-                visible = answerIndices.size > 1 && !pullActive &&
-                    (answerTargets.previous != null || answerTargets.next != null),
-                previousEnabled = answerTargets.previous != null,
-                nextEnabled = answerTargets.next != null,
-                onPrevious = { navigateAnswer(previous = true) },
-                onNext = { navigateAnswer(previous = false) },
-                modifier = Modifier.align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = composerHeight + ClawdPileBandHeight + 8.dp)
-            )
+            key(vm.activeConversationId) {
+                ConversationAnswerNavigation(
+                    visible = answerIndices.size > 1 && !pullActive &&
+                        (answerTargets.previous != null || answerTargets.next != null),
+                    previousEnabled = answerTargets.previous != null,
+                    nextEnabled = answerTargets.next != null,
+                    onPrevious = { navigateAnswer(previous = true) },
+                    onNext = { navigateAnswer(previous = false) },
+                    collapseRequested = userDragging || composerFocused,
+                    modifier = Modifier.align(Alignment.BottomEnd)
+                        .padding(bottom = composerHeight + ClawdPileBandHeight + 8.dp)
+                )
+            }
             ConversationNewPullIndicator(endPull,
                 Modifier.align(Alignment.BottomCenter)
                     .padding(bottom = composerHeight + ClawdPileBandHeight + 8.dp))
