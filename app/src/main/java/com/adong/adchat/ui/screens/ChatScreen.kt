@@ -274,6 +274,16 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                 listState.canScrollBackward, listState.canScrollForward)
         }
     }
+    fun navigateAnswer(previous: Boolean) {
+        // Resolve from the live reading position when each tap is accepted.
+        val targets = answerNavigationTargets(answerIndices, listState.firstVisibleItemIndex,
+            listState.canScrollBackward, listState.canScrollForward)
+        val target = if (previous) targets.previous else targets.next
+        target?.let {
+            autoFollow = false
+            scope.launch { listState.animateScrollToItem(it) }
+        }
+    }
     val pullThreshold = with(density) { 96.dp.toPx() }
     val endPull = remember(vm.activeConversationId, pullThreshold) { ConversationEndPull(pullThreshold) }
     val pullActive by remember(endPull) { derivedStateOf { endPull.progress > .025f } }
@@ -404,7 +414,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                             start = 22.dp,
                             end = 22.dp,
                             top = 24.dp,
-                            bottom = composerClearance + 24.dp
+                            bottom = composerClearance + 24.dp +
+                                if (answerIndices.size > 1) ClawdPileBandHeight else 0.dp
                         ),
                         verticalArrangement = Arrangement.spacedBy(30.dp)
                     ) {
@@ -485,19 +496,10 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     (answerTargets.previous != null || answerTargets.next != null),
                 previousEnabled = answerTargets.previous != null,
                 nextEnabled = answerTargets.next != null,
-                onPrevious = {
-                    answerTargets.previous?.let { target ->
-                        autoFollow = false
-                        scope.launch { listState.animateScrollToItem(target) }
-                    }
-                },
-                onNext = {
-                    answerTargets.next?.let { target ->
-                        autoFollow = false
-                        scope.launch { listState.animateScrollToItem(target) }
-                    }
-                },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = composerHeight + 12.dp)
+                onPrevious = { navigateAnswer(previous = true) },
+                onNext = { navigateAnswer(previous = false) },
+                modifier = Modifier.align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = composerHeight + ClawdPileBandHeight + 8.dp)
             )
             ConversationNewPullIndicator(endPull,
                 Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 12.dp))

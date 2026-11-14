@@ -171,7 +171,11 @@ class ChatEndNavigationInteractionTest {
             rule.activity.setContent {
                 CompositionLocalProvider(LocalAsterMotionEnabled provides false,
                     LocalDensity provides Density(LocalDensity.current.density, fontScale.value)) {
-                    AsterTheme(themeMode = vm.appConfig.themeMode) { ChatScreen(vm, {}, {}) }
+                    AsterTheme(themeMode = vm.appConfig.themeMode) {
+                        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                            ChatScreen(vm, {}, {})
+                        }
+                    }
                 }
             }
         }
@@ -198,15 +202,15 @@ class ChatEndNavigationInteractionTest {
         } finally { instrumentation.removeMonitor(monitor) }
         // Begin at the natural reading tail; using the capsule itself opts out of auto-follow.
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
-        rule.onNodeWithContentDescription("上一个回答").assertWidthIsAtLeast(48.dp).performClick()
+        rule.onNodeWithContentDescription("上一个回答").assertWidthIsAtLeast(48.dp).performTouchInput { click() }
         settleNavigation("after-previous-to-two")
         screenshot("after-previous-to-two")
         rule.onNodeWithText("回答 2").assertIsDisplayed()
-        rule.onNodeWithContentDescription("上一个回答").performClick()
+        rule.onNodeWithContentDescription("上一个回答").performTouchInput { click() }
         settleNavigation("after-previous-to-one")
         screenshot("after-previous-to-one")
         rule.onNodeWithText("回答 1").assertIsDisplayed()
-        rule.onNodeWithContentDescription("下一个回答").performClick()
+        rule.onNodeWithContentDescription("下一个回答").performTouchInput { click() }
         settleNavigation("after-next-to-two")
         rule.onNodeWithText("回答 2").assertIsDisplayed()
         screenshot("navigation-light")
@@ -214,6 +218,24 @@ class ChatEndNavigationInteractionTest {
         rule.mainClock.advanceTimeBy(1_000)
         rule.onNodeWithTag("answer-navigation").assertIsDisplayed()
         screenshot("navigation-dark-large-text")
+        val list = rule.onNodeWithTag("chat-messages").performScrollToIndex(vm.messages.size)
+        settleNavigation("reading-tail-before-new")
+        val density = rule.activity.resources.displayMetrics.density
+        list.performTouchInput {
+            val start = Offset(centerX, height * .65f)
+            down(start); moveTo(start - Offset(0f, 220f * density), delayMillis = 350)
+        }
+        rule.mainClock.advanceTimeBy(200)
+        rule.onNodeWithText("松开，新建会话").assertIsDisplayed()
+        rule.onNodeWithTag("answer-navigation").assertDoesNotExist()
+        screenshot("chat-pull-dark-large-text")
+        list.performTouchInput { up() }
+        rule.mainClock.advanceTimeBy(200)
+        rule.runOnIdle {
+            assertNull(vm.activeConversationId)
+            assertTrue(vm.messages.isEmpty())
+            assertEquals(6, vm.conversations.first { it.id == "kept-conversation" }.messages.size)
+        }
     }
 
     private fun settleNavigation(stage: String) {
@@ -227,6 +249,12 @@ class ChatEndNavigationInteractionTest {
     }
 
     private fun screenshot(name: String) {
+        // Layout assertions settle Compose; allow Android's renderer to present those frames too.
+        repeat(3) {
+            rule.mainClock.advanceTimeByFrame()
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            android.os.SystemClock.sleep(40)
+        }
         rule.waitForIdle()
         val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
         try {
