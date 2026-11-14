@@ -121,7 +121,7 @@ class ComposerContextInteractionTest {
         rule.onNodeWithTag("document-file", useUnmergedTree = true).assertIsDisplayed()
         screenshot("cards-dark-large-text")
         rule.onNodeWithContentDescription("移除 preview.jpg").assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
-        rule.onNodeWithContentDescription("移除 notes.txt").performClick()
+        rule.onNodeWithContentDescription("移除notes.txt").performClick()
         rule.onNodeWithContentDescription("移除引用回复 · 片段").performClick()
         rule.onNodeWithTag("document-file", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("quote-quote").assertDoesNotExist()
