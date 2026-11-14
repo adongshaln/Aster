@@ -53,7 +53,7 @@ class ChatComposerContextTest {
     }
 
     @Test fun sourceSnapshotsSurviveHistoryAndDraftRoundTrips() {
-        val application = RuntimeEnvironment.getApplication<Application>()
+        val application: Application = RuntimeEnvironment.getApplication()
         val message = ChatMessage(role = "user", content = "", documents = listOf(document), quotes = listOf(quote))
         val conversation = Conversation(id = "context-roundtrip", title = "附件", messages = listOf(message))
         ConversationStore(application).save(listOf(conversation))
@@ -70,7 +70,7 @@ class ChatComposerContextTest {
     }
 
     @Test fun enterPreferencePersistsAndOldConfigurationsKeepTheirBehavior() {
-        val application = RuntimeEnvironment.getApplication<Application>()
+        val application: Application = RuntimeEnvironment.getApplication()
         val store = ConfigStore(application)
         val profile = ApiProfile(id = "enter-test")
         store.save(AppConfig(listOf(profile), profile.id, profile.id, sendOnEnter = false))
