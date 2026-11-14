@@ -23,7 +23,6 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.*
 import androidx.compose.ui.input.pointer.*
@@ -112,9 +111,7 @@ internal fun ConversationNewPullIndicator(state: ConversationEndPull, modifier: 
                         drawArc(ink, -90f, 360f * fill.coerceIn(0f, 1f), false,
                             style = Stroke(stroke, cap = StrokeCap.Round))
                     }
-                    Icon(Icons.Rounded.Add, null, Modifier.size(19.dp).graphicsLayer {
-                        rotationZ = 90f * fill.coerceIn(0f, 1f)
-                    }, tint = ink)
+                    Icon(Icons.Rounded.Add, null, Modifier.size(19.dp), tint = ink)
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(if (armed) "松开，新建会话" else "继续滑动，新建会话",

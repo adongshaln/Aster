@@ -502,7 +502,8 @@ fun ChatScreen(vm: MainViewModel, onOpenDrawer: () -> Unit, onOpenSettings: () -
                     .padding(end = 16.dp, bottom = composerHeight + ClawdPileBandHeight + 8.dp)
             )
             ConversationNewPullIndicator(endPull,
-                Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight + 12.dp))
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(bottom = composerHeight + ClawdPileBandHeight + 8.dp))
             Box(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .onSizeChanged { composerHeightPx = it.height }
